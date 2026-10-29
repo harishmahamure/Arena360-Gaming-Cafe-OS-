@@ -2,7 +2,9 @@ use arena_proto::HubPlatform;
 
 use super::setup_codes::{INSERT_SETUP_CODE, NewSetupCode, insert_params};
 use super::tenant::LOCK_BRANCH_CODE;
-use super::{ControlDb, ControlError, SqlValue, Stmt, col_int, col_opt_int, col_text, text};
+use super::{
+    ControlDb, ControlError, SqlValue, Stmt, col_int, col_opt_int, col_opt_text, col_text, text,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewHub<'a> {
@@ -217,5 +219,99 @@ impl ControlDb {
         );
         let rows = self.query(&sql, vec![text(branch_id)]).await?;
         rows.first().map(|r| hub_from(r)).transpose()
+    }
+}
+
+/// What the cloud remembers of one Hub's change-log upload (Story 8.3).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct HubUploadView {
+    /// The epoch and `seq` of the last heartbeat the cloud found complete.
+    pub epoch_seen: Option<String>,
+    pub seq_seen: Option<i64>,
+    /// The Hub's own clock, as its heartbeat reported it.
+    pub last_upload_at: Option<i64>,
+    pub last_summary_at: Option<i64>,
+    pub last_rollup_date: Option<String>,
+    /// The last run the cloud asked the Hub to send again, with its epoch.
+    pub resend: Option<(String, arena_proto::SeqRange)>,
+    /// A run the Hub said it no longer holds.
+    pub unavailable: Option<arena_proto::ResendUnavailable>,
+    /// Gaps found for this Hub since it paired.
+    pub gaps_found: i64,
+}
+
+const VIEW_COLUMNS: &str = "last_epoch_seen, last_seq_seen, last_upload_at, last_summary_at, \
+     last_rollup_date, resend_epoch, resend_from, resend_to, unavailable_epoch, \
+     unavailable_from, unavailable_to, gaps_found";
+
+fn opt_int(v: Option<i64>) -> SqlValue {
+    v.map_or(SqlValue::Null, SqlValue::Integer)
+}
+
+fn opt_text(v: Option<&str>) -> SqlValue {
+    v.map_or(SqlValue::Null, text)
+}
+
+impl ControlDb {
+    /// The Hub's cached upload view (empty before its first checked heartbeat).
+    pub async fn hub_upload_view(&self, hub_id: &str) -> Result<HubUploadView, ControlError> {
+        let sql = format!("SELECT {VIEW_COLUMNS} FROM hubs WHERE id = ?");
+        let rows = self.query(&sql, vec![text(hub_id)]).await?;
+        let Some(r) = rows.first() else {
+            return Ok(HubUploadView::default());
+        };
+        let resend = match (col_opt_text(r, 5)?, col_opt_int(r, 6)?, col_opt_int(r, 7)?) {
+            (Some(epoch), Some(from), Some(to)) => {
+                Some((epoch, arena_proto::SeqRange { from, to }))
+            }
+            _ => None,
+        };
+        let unavailable = match (col_opt_text(r, 8)?, col_opt_int(r, 9)?, col_opt_int(r, 10)?) {
+            (Some(epoch), Some(from), Some(to)) => {
+                Some(arena_proto::ResendUnavailable { epoch, from, to })
+            }
+            _ => None,
+        };
+        Ok(HubUploadView {
+            epoch_seen: col_opt_text(r, 0)?,
+            seq_seen: col_opt_int(r, 1)?,
+            last_upload_at: col_opt_int(r, 2)?,
+            last_summary_at: col_opt_int(r, 3)?,
+            last_rollup_date: col_opt_text(r, 4)?,
+            resend,
+            unavailable,
+            gaps_found: col_int(r, 11)?,
+        })
+    }
+
+    /// Replaces the Hub's cached upload view.
+    pub async fn save_hub_upload_view(
+        &self,
+        hub_id: &str,
+        v: &HubUploadView,
+    ) -> Result<(), ControlError> {
+        self.execute(
+            "UPDATE hubs SET last_epoch_seen = ?, last_seq_seen = ?, last_upload_at = ?, \
+             last_summary_at = ?, last_rollup_date = ?, resend_epoch = ?, resend_from = ?, \
+             resend_to = ?, unavailable_epoch = ?, unavailable_from = ?, unavailable_to = ?, \
+             gaps_found = ? WHERE id = ?",
+            vec![
+                opt_text(v.epoch_seen.as_deref()),
+                opt_int(v.seq_seen),
+                opt_int(v.last_upload_at),
+                opt_int(v.last_summary_at),
+                opt_text(v.last_rollup_date.as_deref()),
+                opt_text(v.resend.as_ref().map(|(e, _)| e.as_str())),
+                opt_int(v.resend.as_ref().map(|(_, r)| r.from)),
+                opt_int(v.resend.as_ref().map(|(_, r)| r.to)),
+                opt_text(v.unavailable.as_ref().map(|u| u.epoch.as_str())),
+                opt_int(v.unavailable.as_ref().map(|u| u.from)),
+                opt_int(v.unavailable.as_ref().map(|u| u.to)),
+                SqlValue::Integer(v.gaps_found),
+                text(hub_id),
+            ],
+        )
+        .await?;
+        Ok(())
     }
 }

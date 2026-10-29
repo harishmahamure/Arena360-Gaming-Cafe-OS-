@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use arena_proto::{
     AppError, ErrorCode, HEARTBEAT_MIN_GAP_MS, HUB_TOKEN_PREFIX, HeartbeatFence, HeartbeatRequest,
-    HeartbeatResponse,
+    HeartbeatResponse, SeqRange, Tier,
 };
-use arena_store::control::{AdMetric, Beat, HubRow, RateRule};
+use arena_store::control::{AdMetric, Beat, HubRow, HubUploadView, RateRule};
 use axum::extract::State;
 use axum::http::{HeaderMap, header::AUTHORIZATION};
 use axum::routing::post;
@@ -17,7 +17,9 @@ use super::json::ApiJson;
 use super::pair::check_field;
 use super::signup::ceil_s;
 use crate::auth::AuthState;
+use crate::gaps::{first_missing, parse_batch_key};
 use crate::passwords::{dummy_hash, verify_secret};
+use crate::presign::{Epoch, MAX_SEQ, branch_prefix};
 
 const TOKEN_CACHE_MS: i64 = 5 * 60 * 1000;
 const RATE_PREFIX: &str = "hb:";
@@ -156,6 +158,11 @@ async fn heartbeat(
     let claims =
         crate::licence::claims_for(&branch.tenant_id, &branch.id, entitlement.as_ref(), now);
     let licence = st.licence.sign(&claims).map_err(ApiError::internal)?;
+    let resend = if claims.tier == Tier::Free {
+        None
+    } else {
+        check_upload(&st, &hub, &branch.tenant_id, &body).await
+    };
     // Ad totals never hold the heartbeat back: a block that cannot be recorded is simply not
     // acknowledged, and the Hub sends it again.
     let ad_impressions_through = record_ads(
@@ -185,7 +192,107 @@ async fn heartbeat(
         ad_impressions_through,
         ad_requests_through,
         setup_template,
+        resend,
     }))
+}
+
+/// Compares the heartbeat with the cloud's cached view of the Hub's upload (Story 8.3). A
+/// match costs nothing. A mismatch lists `changes/<epoch>/` and answers the first run of seqs the
+/// Hub says it uploaded that the bucket does not hold. Nothing here fails the heartbeat.
+async fn check_upload(
+    st: &AuthState,
+    hub: &HubRow,
+    tenant_id: &str,
+    body: &HeartbeatRequest,
+) -> Option<SeqRange> {
+    let epoch = Epoch::parse(&body.epoch).ok()?;
+    if !(0..=MAX_SEQ).contains(&body.last_seq_uploaded) {
+        return None;
+    }
+    let before = st
+        .db
+        .hub_upload_view(&hub.id)
+        .await
+        .inspect_err(|e| tracing::warn!(error = %e, hub_id = %hub.id, "heartbeat: no upload view"))
+        .ok()?;
+    let mut view = before.clone();
+    view.last_upload_at = body.last_upload_at.or(view.last_upload_at);
+    view.last_summary_at = body.last_summary_at.or(view.last_summary_at);
+    if let Some(day) = body.last_rollup_date.as_ref().filter(|d| d.len() <= 10) {
+        view.last_rollup_date = Some(day.clone());
+    }
+    if let Some(u) = body
+        .resend_unavailable
+        .as_ref()
+        .filter(|u| u.epoch == body.epoch && u.range().valid() && u.to <= MAX_SEQ)
+        && view.unavailable.as_ref() != Some(u)
+    {
+        view.unavailable = Some(u.clone());
+        st.gap_metrics
+            .unavailable(tenant_id, &hub.branch_id, &body.epoch, u.range());
+    }
+    let resend = find_gap(st, tenant_id, &hub.branch_id, &epoch, body, &mut view).await;
+    if view != before
+        && let Err(e) = st.db.save_hub_upload_view(&hub.id, &view).await
+    {
+        tracing::warn!(error = %e, hub_id = %hub.id, "heartbeat: upload view not saved");
+    }
+    resend
+}
+
+async fn find_gap(
+    st: &AuthState,
+    tenant_id: &str,
+    branch_id: &str,
+    epoch: &Epoch,
+    body: &HeartbeatRequest,
+    view: &mut HubUploadView,
+) -> Option<SeqRange> {
+    if view.epoch_seen.as_deref() == Some(epoch.as_str())
+        && view.seq_seen == Some(body.last_seq_uploaded)
+    {
+        return None;
+    }
+    let presigner = st.presigner.get()?;
+    let prefix = format!(
+        "{}changes/{}/",
+        branch_prefix(tenant_id, branch_id),
+        epoch.as_str()
+    );
+    let keys = presigner
+        .list(&prefix)
+        .await
+        .inspect_err(
+            |e| tracing::warn!(error = %e, branch_id, "heartbeat: could not list the change log"),
+        )
+        .ok()?;
+    let mut held: Vec<(i64, i64)> = keys
+        .iter()
+        .filter_map(|k| k.strip_prefix(&prefix).and_then(parse_batch_key))
+        .collect();
+    if let Some(u) = view.unavailable.as_ref().filter(|u| u.epoch == body.epoch) {
+        // A run the Hub no longer has is not asked for again.
+        held.push((u.from, u.to));
+    }
+    let base = body
+        .fork_seq
+        .filter(|s| (0..MAX_SEQ).contains(s))
+        .unwrap_or(0)
+        + 1;
+    let Some(gap) = first_missing(held, base, body.last_seq_uploaded) else {
+        view.epoch_seen = Some(epoch.as_str().to_owned());
+        view.seq_seen = Some(body.last_seq_uploaded);
+        view.resend = None;
+        return None;
+    };
+    let asked = (epoch.as_str().to_owned(), gap);
+    if view.resend.as_ref() != Some(&asked) {
+        view.gaps_found += 1;
+        st.gap_metrics
+            .found(tenant_id, branch_id, epoch.as_str(), gap);
+        view.resend = Some(asked);
+    }
+    Some(gap)
 }
 
 /// Adds a well-formed block under the branch's cursor and answers the stored cursor, which the

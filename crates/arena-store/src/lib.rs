@@ -249,9 +249,10 @@ pub use stock::{
 };
 pub use stock_reports::{StockLevelRow, StockMoveReportRow, StockMovesRows};
 pub use upload::{
-    BATCH_MAX_ROWS, BatchFork, BatchHeader, DecodedBatch, PendingBatch, UploadCursor,
-    count_pending_rows, decode_batch, encode_batch, read_lease_fork, read_pending_batch,
-    read_upload_cursor, write_lease_fork, write_upload_cursor,
+    BATCH_MAX_ROWS, BatchFork, BatchHeader, DecodedBatch, EpochProgress, PendingBatch, RangeRead,
+    UploadCursor, count_pending_rows, decode_batch, encode_batch, read_epoch_progress,
+    read_lease_fork, read_pending_batch, read_range_batch, read_upload_cursor, write_lease_fork,
+    write_upload_cursor,
 };
 pub use wallet::{
     NewTopupOrder, NewWalletTxn, OrderTxn, WalletRow, WalletTxnRow, adjust_wallet, find_wallet,

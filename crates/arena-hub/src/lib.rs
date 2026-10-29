@@ -476,6 +476,7 @@ async fn run(
     .concat();
     let command_poke = Arc::new(Notify::new());
     let setup_templates = arena_tasks::SetupTemplateInbox::new();
+    let resend = arena_tasks::ResendInbox::new();
     let heartbeat_job = tokio::spawn(
         HeartbeatTask::new(
             cloud.clone(),
@@ -488,6 +489,7 @@ async fn run(
         )
         .with_poke(Arc::clone(&command_poke))
         .with_templates(Arc::clone(&setup_templates))
+        .with_resend(Arc::clone(&resend))
         .with_presence({
             let presence = lan_hub.presence();
             Arc::new(move |id| presence.status(id))
@@ -505,6 +507,7 @@ async fn run(
             status_tx.clone(),
             verify_keys,
         )
+        .with_resend(resend)
         .run(),
     );
     let command_job = tokio::spawn(

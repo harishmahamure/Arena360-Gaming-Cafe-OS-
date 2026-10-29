@@ -48,6 +48,8 @@ pub struct AuthState {
     pub presigner: std::sync::OnceLock<crate::presign::Presigner>,
     /// R2 PUT links issued per tenant and branch.
     pub put_metrics: crate::presign::PutMetrics,
+    /// Upload gaps found by heartbeats per tenant and branch (Story 8.3).
+    pub gap_metrics: crate::gaps::GapMetrics,
 }
 
 impl AuthState {
@@ -69,6 +71,7 @@ impl AuthState {
             catalog_cdn: std::sync::OnceLock::new(),
             presigner: std::sync::OnceLock::new(),
             put_metrics: crate::presign::PutMetrics::default(),
+            gap_metrics: crate::gaps::GapMetrics::default(),
         }
     }
 

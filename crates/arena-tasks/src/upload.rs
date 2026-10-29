@@ -11,16 +11,17 @@
 //! A Free Hub (or one whose tier is not known yet), a follower and an unpaired Hub make no
 //! request at all. The task reads through the [`SnapshotReader`], never inside `apply()`.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use arena_core::{
     HubStatus, PairGate, PairingState, Role, SnapshotReader, UploadStatus, WriterHandle,
 };
 use arena_proto::{
-    AppError, ErrorCode, PresignBatch, PresignRequest, Tier, VerifyKey, licence::verify_claims,
+    AppError, ErrorCode, PresignBatch, PresignRequest, ResendUnavailable, SeqRange, Tier,
+    VerifyKey, licence::verify_claims,
 };
-use arena_store::{BATCH_MAX_ROWS, encode_batch};
+use arena_store::{BATCH_MAX_ROWS, RangeRead, encode_batch};
 use tokio::sync::{broadcast, watch};
 
 use crate::cloud::{CloudClient, CloudFailure};
@@ -66,6 +67,88 @@ impl Next {
     }
 }
 
+/// The run of the change log the cloud asked for again (Story 8.3) and the run the Hub could not
+/// give. The heartbeat task fills it from its answers and reports from it; the uploader empties it.
+#[derive(Default)]
+pub struct ResendInbox {
+    state: Mutex<ResendState>,
+}
+
+#[derive(Default)]
+struct ResendState {
+    pending: Option<(String, SeqRange)>,
+    unavailable: Option<ResendUnavailable>,
+}
+
+impl ResendInbox {
+    pub fn new() -> Arc<Self> {
+        Arc::default()
+    }
+
+    fn with<R>(&self, f: impl FnOnce(&mut ResendState) -> R) -> R {
+        f(&mut self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner))
+    }
+
+    /// The cloud asked for the range of the epoch. The same ask again (the answer to a heartbeat
+    /// sent before the resend landed) keeps the progress already made.
+    pub fn offer(&self, epoch: &str, range: SeqRange) {
+        if !range.valid() {
+            return;
+        }
+        self.with(|s| {
+            let same = s
+                .pending
+                .as_ref()
+                .is_some_and(|(e, r)| e == epoch && r.to == range.to && range.from <= r.from);
+            if !same {
+                s.pending = Some((epoch.to_owned(), range));
+            }
+        });
+    }
+
+    /// What is still to resend.
+    pub fn pending(&self) -> Option<(String, SeqRange)> {
+        self.with(|s| s.pending.clone())
+    }
+
+    /// Everything up to the given seq of the pending run is done.
+    fn advance(&self, through: i64) {
+        self.with(|s| {
+            if let Some((_, r)) = s.pending.as_mut() {
+                r.from = r.from.max(through.saturating_add(1));
+                if r.from > r.to {
+                    s.pending = None;
+                }
+            }
+        });
+    }
+
+    fn drop_pending(&self) {
+        self.with(|s| s.pending = None);
+    }
+
+    pub(crate) fn report_unavailable(&self, u: ResendUnavailable) {
+        self.with(|s| s.unavailable = Some(u));
+    }
+
+    /// The run to tell the cloud about in the next heartbeat.
+    pub fn unavailable(&self) -> Option<ResendUnavailable> {
+        self.with(|s| s.unavailable.clone())
+    }
+
+    /// The heartbeat that carried the run was answered: it is not reported again.
+    pub fn acknowledge(&self, sent: &ResendUnavailable) {
+        self.with(|s| {
+            if s.unavailable.as_ref() == Some(sent) {
+                s.unavailable = None;
+            }
+        });
+    }
+}
+
 /// A batch read and encoded, ready to presign and PUT.
 struct Built {
     epoch: String,
@@ -102,6 +185,7 @@ pub struct UploadTask {
     trigger_rows: i64,
     trigger_gap: Duration,
     fails: u32,
+    resend: Arc<ResendInbox>,
 }
 
 impl UploadTask {
@@ -126,7 +210,14 @@ impl UploadTask {
             trigger_rows: BACKLOG_TRIGGER_ROWS,
             trigger_gap: MIN_UPLOAD_INTERVAL,
             fails: 0,
+            resend: ResendInbox::new(),
         }
+    }
+
+    /// Where the heartbeat leaves the runs the cloud asked for again (Story 8.3).
+    pub fn with_resend(mut self, inbox: Arc<ResendInbox>) -> Self {
+        self.resend = inbox;
+        self
     }
 
     /// Tests: the rows per batch.
@@ -197,7 +288,7 @@ impl UploadTask {
             let s = self.status.borrow();
             (s.role, s.lease.clone(), s.pairing, s.tier, s.schema_version)
         };
-        let (Some(writer), Some(_), Role::Primary) = (self.writer.clone(), lease, role) else {
+        let (Some(writer), Some(lease), Role::Primary) = (self.writer.clone(), lease, role) else {
             return Next::idle(TIER_RECHECK);
         };
         if pairing == PairingState::Revoked {
@@ -215,6 +306,13 @@ impl UploadTask {
             }
         };
         let interval = self.interval(&writer, tier).await;
+        if let Some(next) = self
+            .resend_pass(&token, &lease.epoch().to_string(), interval, schema)
+            .await
+        {
+            self.refresh_progress().await;
+            return next;
+        }
         loop {
             let snapshots = Arc::clone(&self.snapshots);
             let rows = self.batch_rows;
@@ -247,15 +345,77 @@ impl UploadTask {
         }
     }
 
-    /// Presigns, PUTs and records one batch. `None` when the cursor moved; otherwise what to do
-    /// instead.
-    async fn send(
+    /// Sends again the run the cloud asked for (Story 8.3), batch by batch under keys for exactly
+    /// its seqs, and never touches the cursor. Rows that were pruned are left for the next
+    /// heartbeat to report. `None` when nothing is left to do; otherwise what to do instead.
+    async fn resend_pass(
         &mut self,
-        writer: &WriterHandle,
         token: &str,
-        batch: Built,
+        lease_epoch: &str,
         interval: Duration,
+        schema: u32,
     ) -> Option<Next> {
+        while let Some((epoch, range)) = self.resend.pending() {
+            if epoch != lease_epoch {
+                tracing::info!(%epoch, "upload: dropping a resend of another epoch");
+                self.resend.drop_pending();
+                return None;
+            }
+            let snapshots = Arc::clone(&self.snapshots);
+            let rows = self.batch_rows;
+            let read_epoch = epoch.clone();
+            let read = tokio::task::spawn_blocking(move || {
+                snapshots.range_batch(&read_epoch, range.from, range.to, rows)
+            })
+            .await;
+            match read {
+                Ok(Ok(RangeRead::Unavailable { from, to })) => {
+                    tracing::warn!(%epoch, from, to, "upload: rows to resend are no longer held");
+                    self.resend
+                        .report_unavailable(ResendUnavailable { epoch, from, to });
+                    self.resend.advance(to);
+                }
+                Ok(Ok(RangeRead::Batch(batch))) => {
+                    let bytes = match encode_batch(schema, &batch) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            tracing::warn!(
+                                code = e.code.as_str(),
+                                "upload: could not encode a resend"
+                            );
+                            return Some(self.failed(interval));
+                        }
+                    };
+                    let built = Built {
+                        rows: batch.rows.len(),
+                        epoch: batch.epoch,
+                        first: batch.first,
+                        last: batch.last,
+                        bytes,
+                    };
+                    let (first, last, count) = (built.first, built.last, built.rows);
+                    if let Err(next) = self.put(token, built, interval).await {
+                        return Some(next);
+                    }
+                    tracing::info!(%epoch, first, last, rows = count, "change log batch resent");
+                    self.fails = 0;
+                    self.resend.advance(last);
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(code = e.code.as_str(), error = %e, "upload: could not read a resend");
+                    return Some(self.failed(interval));
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "upload: resend read task failed");
+                    return Some(self.failed(interval));
+                }
+            }
+        }
+        None
+    }
+
+    /// Presigns and PUTs one batch; the error is what to do instead of going on.
+    async fn put(&mut self, token: &str, batch: Built, interval: Duration) -> Result<(), Next> {
         let req = PresignRequest {
             epoch: batch.epoch.clone(),
             batch: Some(PresignBatch {
@@ -266,22 +426,38 @@ impl UploadTask {
         };
         let links = match self.cloud.presign(token, &req).await {
             Ok(links) => links,
-            Err(f) => return Some(self.refused(f, interval)),
+            Err(f) => return Err(self.refused(f, interval)),
         };
         let Some(url) = links.batch_url else {
             tracing::warn!("upload: the cloud issued no batch link");
-            return Some(self.failed(interval));
+            return Err(self.failed(interval));
         };
         if let Err(f) = self.cloud.put_object(&url, batch.bytes).await {
-            return Some(self.refused(f, interval));
+            return Err(self.refused(f, interval));
         }
-        match writer.record_upload(batch.epoch.clone(), batch.last).await {
+        Ok(())
+    }
+
+    /// Presigns, PUTs and records one batch. `None` when the cursor moved; otherwise what to do
+    /// instead.
+    async fn send(
+        &mut self,
+        writer: &WriterHandle,
+        token: &str,
+        batch: Built,
+        interval: Duration,
+    ) -> Option<Next> {
+        let (epoch, first, last, rows) = (batch.epoch.clone(), batch.first, batch.last, batch.rows);
+        if let Err(next) = self.put(token, batch, interval).await {
+            return Some(next);
+        }
+        match writer.record_upload(epoch.clone(), last).await {
             Ok(()) => {
                 tracing::info!(
-                    epoch = %batch.epoch,
-                    first = batch.first,
-                    last = batch.last,
-                    rows = batch.rows,
+                    epoch = %epoch,
+                    first,
+                    last,
+                    rows,
                     "change log batch uploaded"
                 );
                 self.fails = 0;
@@ -734,7 +910,9 @@ mod tests {
             progress(&f),
             UploadStatus {
                 last_upload_at: Some(T0),
-                pending_rows: 0
+                pending_rows: 0,
+                last_seq_uploaded: 3,
+                fork_seq: None,
             }
         );
 
@@ -924,7 +1102,9 @@ mod tests {
             progress(&f),
             UploadStatus {
                 last_upload_at: None,
-                pending_rows: 3
+                pending_rows: 3,
+                last_seq_uploaded: 0,
+                fork_seq: None,
             }
         );
 
@@ -1184,5 +1364,175 @@ mod tests {
         assert!(done, "{:?}", status.borrow().upload);
         assert_eq!(status.borrow().upload.last_upload_at, Some(T0));
         job.abort();
+    }
+
+    fn with_inbox(f: &mut Fx, batch_rows: usize) -> Arc<ResendInbox> {
+        let inbox = ResendInbox::new();
+        let task = std::mem::replace(
+            &mut f.task,
+            UploadTask::new(
+                CloudClient::new(&CloudEndpoint::parse("http://127.0.0.1:9", true).unwrap())
+                    .unwrap(),
+                Arc::new(Mem(Mutex::new(None))),
+                None,
+                Arc::new(SnapshotReader::open(&f.path).unwrap()),
+                PairGate::new(false),
+                f.status.clone(),
+                Vec::new(),
+            ),
+        );
+        f.task = task
+            .with_resend(Arc::clone(&inbox))
+            .with_batch_rows(batch_rows);
+        inbox
+    }
+
+    #[tokio::test]
+    async fn a_resend_ships_exactly_the_asked_seqs_first_and_leaves_the_cursor_alone() {
+        let (port, seen) = serve(cloud).await;
+        let mut f = fx(port, Tier::Basic).await;
+        let inbox = with_inbox(&mut f, 3);
+        add_rows(&f.writer, EPOCH, 12).await;
+        f.task.cycle().await;
+        let before = cursor(&f).unwrap();
+        assert_eq!(before.last_seq_uploaded, 12);
+        let sent_before = puts(&seen).len();
+
+        inbox.offer(EPOCH, arena_proto::SeqRange { from: 4, to: 8 });
+        add_rows(&f.writer, EPOCH, 2).await;
+        f.task.cycle().await;
+
+        let keys: Vec<String> = puts(&seen)
+            .iter()
+            .skip(sent_before)
+            .map(|(k, _)| k.clone())
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                format!("/put/{EPOCH}/4-6"),
+                format!("/put/{EPOCH}/7-8"),
+                format!("/put/{EPOCH}/13-14"),
+            ],
+            "the resend first, then the new rows"
+        );
+        let resent = decode_batch(&puts(&seen)[sent_before].1).unwrap();
+        assert_eq!((resent.header.first, resent.header.last), (4, 6));
+        assert_eq!(resent.rows.len(), 3);
+        assert_eq!(inbox.pending(), None);
+        assert_eq!(cursor(&f).unwrap().last_seq_uploaded, 14);
+        assert_eq!(cursor(&f).unwrap().uploaded_at, before.uploaded_at);
+    }
+
+    #[tokio::test]
+    async fn pruned_rows_are_reported_not_resent() {
+        let (port, seen) = serve(cloud).await;
+        let mut f = fx(port, Tier::Basic).await;
+        let inbox = with_inbox(&mut f, 5);
+        add_rows(&f.writer, EPOCH, 3).await;
+        f.task.cycle().await;
+        let sent_before = puts(&seen).len();
+
+        inbox.offer(EPOCH, arena_proto::SeqRange { from: 5, to: 9 });
+        f.task.cycle().await;
+
+        assert_eq!(puts(&seen).len(), sent_before, "nothing to send");
+        assert_eq!(
+            inbox.unavailable(),
+            Some(arena_proto::ResendUnavailable {
+                epoch: EPOCH.into(),
+                from: 5,
+                to: 9
+            })
+        );
+        assert_eq!(inbox.pending(), None, "not asked for again by the Hub");
+    }
+
+    #[tokio::test]
+    async fn rows_missing_in_the_middle_are_sent_where_held_and_reported_where_not() {
+        let (port, seen) = serve(cloud).await;
+        let mut f = fx(port, Tier::Basic).await;
+        let inbox = with_inbox(&mut f, 5);
+        add_rows(&f.writer, EPOCH, 3).await;
+        f.task.cycle().await;
+        let sent_before = puts(&seen).len();
+
+        // Rows 1..=3 are held; 4..=6 are not.
+        inbox.offer(EPOCH, arena_proto::SeqRange { from: 2, to: 6 });
+        f.task.cycle().await;
+
+        let keys: Vec<String> = puts(&seen)
+            .iter()
+            .skip(sent_before)
+            .map(|(k, _)| k.clone())
+            .collect();
+        assert_eq!(keys, [format!("/put/{EPOCH}/2-3")]);
+        assert_eq!(inbox.unavailable().map(|u| (u.from, u.to)), Some((4, 6)));
+        assert_eq!(inbox.pending(), None);
+    }
+
+    #[tokio::test]
+    async fn a_resend_of_another_epoch_is_dropped() {
+        let (port, seen) = serve(cloud).await;
+        let mut f = fx(port, Tier::Basic).await;
+        let inbox = with_inbox(&mut f, 5);
+        inbox.offer("9:OTHER", arena_proto::SeqRange { from: 1, to: 4 });
+        f.task.cycle().await;
+        assert_eq!(inbox.pending(), None);
+        assert!(presigns(&seen).is_empty());
+        assert_eq!(inbox.unavailable(), None);
+    }
+
+    #[tokio::test]
+    async fn a_failed_resend_put_keeps_the_run_for_the_next_cycle() {
+        let mut puts_seen = 0;
+        let (port, seen) = serve(move |port| {
+            let mut ok = cloud(port);
+            Box::new(move |line, body| {
+                if line.starts_with("PUT ") {
+                    puts_seen += 1;
+                    if puts_seen == 3 {
+                        return refused(503, "INTERNAL");
+                    }
+                }
+                ok(line, body)
+            })
+        })
+        .await;
+        let mut f = fx(port, Tier::Basic).await;
+        let inbox = with_inbox(&mut f, 3);
+        add_rows(&f.writer, EPOCH, 6).await;
+        f.task.cycle().await;
+        assert_eq!(puts(&seen).len(), 2, "6 rows in two batches of 3");
+
+        inbox.offer(EPOCH, arena_proto::SeqRange { from: 1, to: 6 });
+        let next = f.task.cycle().await;
+        assert!(!next.early && next.active, "{next:?}");
+        assert_eq!(
+            inbox.pending().map(|(_, r)| (r.from, r.to)),
+            Some((1, 6)),
+            "the first batch of the resend failed"
+        );
+
+        f.task.cycle().await;
+        assert_eq!(inbox.pending(), None);
+        let keys: Vec<String> = puts(&seen).iter().map(|(k, _)| k.clone()).collect();
+        assert_eq!(keys.last().unwrap(), &format!("/put/{EPOCH}/4-6"));
+        assert_eq!(cursor(&f).unwrap().last_seq_uploaded, 6);
+    }
+
+    #[test]
+    fn the_same_ask_again_keeps_the_progress_already_made() {
+        let inbox = ResendInbox::new();
+        inbox.offer("1:A", arena_proto::SeqRange { from: 1, to: 10 });
+        inbox.advance(4);
+        inbox.offer("1:A", arena_proto::SeqRange { from: 1, to: 10 });
+        assert_eq!(inbox.pending().map(|(_, r)| r.from), Some(5));
+        inbox.offer("1:A", arena_proto::SeqRange { from: 20, to: 30 });
+        assert_eq!(inbox.pending().map(|(_, r)| r.from), Some(20));
+        inbox.offer("1:A", arena_proto::SeqRange { from: 9, to: 3 });
+        assert_eq!(inbox.pending().map(|(_, r)| r.from), Some(20), "invalid");
+        inbox.advance(30);
+        assert_eq!(inbox.pending(), None);
     }
 }

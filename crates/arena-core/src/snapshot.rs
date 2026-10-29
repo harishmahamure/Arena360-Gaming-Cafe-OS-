@@ -1755,11 +1755,30 @@ impl SnapshotReader {
             .lock()
             .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
         store.read_with(|conn| {
+            let progress = arena_store::read_epoch_progress(conn)?;
             Ok(crate::UploadStatus {
                 last_upload_at: arena_store::read_upload_cursor(conn)?.map(|c| c.uploaded_at),
                 pending_rows: arena_store::count_pending_rows(conn)?,
+                last_seq_uploaded: progress.last_seq_uploaded,
+                fork_seq: progress.fork_seq,
             })
         })
+    }
+
+    /// The next batch of a resend (Story 8.3): rows of `epoch` from `from` to at most `to`,
+    /// or the run that is no longer in the log. Blocking (SQLite).
+    pub fn range_batch(
+        &self,
+        epoch: &str,
+        from: i64,
+        to: i64,
+        limit: usize,
+    ) -> Result<arena_store::RangeRead, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_with(|conn| arena_store::read_range_batch(conn, epoch, from, to, limit))
     }
 
     /// The branch's setup file (Story 5.36): groups with rates, products, bundles, plans, pricing

@@ -117,6 +117,11 @@ pub struct UploadStatus {
     pub last_upload_at: Option<i64>,
     /// Change rows not yet in an accepted batch.
     pub pending_rows: i64,
+    /// The last `seq` of the lease's epoch the cloud has accepted (the fork parent's, or 0,
+    /// while the cursor is in an older epoch) (Story 8.3).
+    pub last_seq_uploaded: i64,
+    /// The `seq` the lease's epoch was forked from, if it was.
+    pub fork_seq: Option<i64>,
 }
 
 impl HubStatus {

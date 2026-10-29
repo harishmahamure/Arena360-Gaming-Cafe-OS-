@@ -45,7 +45,7 @@ pub use catalog::{
 pub use commands::{CommandRow, NewCommand};
 pub use dump::{DUMP_HEADER, DUMP_PAGE_ROWS, Dump, DumpManifest, RestoreReport, read_manifest};
 pub use entitlement::{CompGrant, Entitlement, FreeTierOutcome, GrantOutcome, OpsAuditRow};
-pub use hubs::{Beat, HubRow, NewHub, PairOutcome};
+pub use hubs::{Beat, HubRow, HubUploadView, NewHub, PairOutcome};
 pub use mfa::{BackupCodeRow, NewBackupCode, OwnerMfa};
 pub use otp::{
     NewOtpChallenge, OTP_PURPOSE_SIGNUP, OTP_RETENTION_MS, OtpChallenge, SignupCompletion,
@@ -154,6 +154,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 17,
         sql: include_str!("../control-migrations/0017_catalog.sql"),
+    },
+    ControlMigration {
+        version: 18,
+        sql: include_str!("../control-migrations/0018_hub_upload_view.sql"),
     },
 ];
 

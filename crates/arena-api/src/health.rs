@@ -518,6 +518,7 @@ mod tests {
             s.upload = arena_core::UploadStatus {
                 last_upload_at: Some(777),
                 pending_rows: 12,
+                ..Default::default()
             }
         });
         assert_eq!(

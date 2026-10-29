@@ -317,6 +317,94 @@ pub fn read_pending_batch(
     }))
 }
 
+/// How far the upload has got in the lease's own epoch, as the heartbeat reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct EpochProgress {
+    /// The cursor's `seq` when it is in the lease's epoch, else the fork parent's (or 0).
+    pub last_seq_uploaded: i64,
+    /// The parent `seq` the lease's epoch was forked from.
+    pub fork_seq: Option<i64>,
+}
+
+/// The upload position in the lease's epoch (Story 8.3).
+pub fn read_epoch_progress(conn: &Connection) -> Result<EpochProgress, AppError> {
+    let fork = read_lease_fork(conn)?.map(|f| f.parent_seq);
+    let lease = lease_epoch(conn)?;
+    let cursor = read_upload_cursor(conn)?;
+    let last_seq_uploaded = match (&lease, cursor) {
+        (Some(l), Some(c)) if &c.epoch == l => c.last_seq_uploaded,
+        _ => fork.unwrap_or(0),
+    };
+    Ok(EpochProgress {
+        last_seq_uploaded,
+        fork_seq: fork,
+    })
+}
+
+/// What a resend of `epoch` `from..=to` finds in the log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RangeRead {
+    /// The rows from `from` on, with no gap, at most `limit` of them and none past `to`.
+    Batch(PendingBatch),
+    /// Nothing at `from`: the rows `from..=to` are gone (pruned).
+    Unavailable { from: i64, to: i64 },
+}
+
+/// Reads the next batch of a resend: rows of `epoch` from `from`, in `seq` order with no gap,
+/// at most `limit` and none after `to`. When there is no row at `from`, the run up to the next
+/// row (or `to`) is [`RangeRead::Unavailable`]. The first batch of a forked epoch carries its
+/// fork, like the normal upload.
+pub fn read_range_batch(
+    conn: &Connection,
+    epoch: &str,
+    from: i64,
+    to: i64,
+    limit: usize,
+) -> Result<RangeRead, AppError> {
+    let limit = i64::try_from(limit.clamp(1, BATCH_MAX_ROWS)).unwrap_or(i64::MAX);
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {CHANGE_COLUMNS} FROM changes WHERE epoch = ?1 AND seq >= ?2 AND seq <= ?3
+             ORDER BY seq LIMIT ?4"
+        ))
+        .map_err(db_error)?;
+    let found = stmt
+        .query_map(params![epoch, from, to, limit], change_from)
+        .map_err(db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)?;
+    let Some(head) = found.first() else {
+        return Ok(RangeRead::Unavailable { from, to });
+    };
+    if head.seq != from {
+        return Ok(RangeRead::Unavailable {
+            from,
+            to: head.seq - 1,
+        });
+    }
+    let mut rows: Vec<ChangeRecord> = Vec::with_capacity(found.len());
+    for row in found {
+        if row.seq != rows.last().map_or(from, |r| r.seq + 1) {
+            break;
+        }
+        rows.push(row);
+    }
+    let last = rows.last().map_or(from, |r| r.seq);
+    let fork = match read_lease_fork(conn)? {
+        Some(f) if f.parent_seq + 1 == from && lease_epoch(conn)?.as_deref() == Some(epoch) => {
+            Some(f)
+        }
+        _ => None,
+    };
+    Ok(RangeRead::Batch(PendingBatch {
+        epoch: epoch.to_owned(),
+        first: from,
+        last,
+        fork,
+        rows,
+    }))
+}
+
 /// How many change rows are still to upload.
 pub fn count_pending_rows(conn: &Connection) -> Result<i64, AppError> {
     let cursor = read_upload_cursor(conn)?;
@@ -968,5 +1056,123 @@ mod tests {
             .read_with(|c| read_pending_batch(c, 5000))
             .unwrap_err();
         assert!(err.message.contains("gap"), "{err}");
+    }
+
+    fn range(store: &Store, epoch: &str, from: i64, to: i64, limit: usize) -> RangeRead {
+        store
+            .read_with(|c| read_range_batch(c, epoch, from, to, limit))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_resend_reads_the_asked_rows_up_to_the_limit_and_the_end() {
+        let (_d, mut store) = store();
+        put(&mut store, "1:A", 1..=12);
+        let RangeRead::Batch(b) = range(&store, "1:A", 4, 9, 5000) else {
+            panic!("rows are held");
+        };
+        assert_eq!((b.first, b.last, b.rows.len(), b.fork), (4, 9, 6, None));
+        let RangeRead::Batch(b) = range(&store, "1:A", 4, 12, 3) else {
+            panic!("rows are held");
+        };
+        assert_eq!((b.first, b.last, b.rows.len()), (4, 6, 3));
+        let RangeRead::Batch(b) = range(&store, "1:A", 11, 99, 5000) else {
+            panic!("rows are held");
+        };
+        assert_eq!((b.first, b.last), (11, 12), "never past what the log holds");
+    }
+
+    #[test]
+    fn pruned_rows_are_unavailable_up_to_the_next_row_or_the_end() {
+        let (_d, mut store) = store();
+        put(&mut store, "1:A", 6..=9);
+        assert_eq!(
+            range(&store, "1:A", 2, 8, 5000),
+            RangeRead::Unavailable { from: 2, to: 5 }
+        );
+        assert_eq!(
+            range(&store, "1:A", 10, 14, 5000),
+            RangeRead::Unavailable { from: 10, to: 14 }
+        );
+        assert_eq!(
+            range(&store, "2:B", 1, 3, 5000),
+            RangeRead::Unavailable { from: 1, to: 3 },
+            "another epoch has nothing"
+        );
+    }
+
+    #[test]
+    fn a_hole_inside_the_log_ends_the_resend_batch() {
+        let (_d, mut store) = store();
+        put(&mut store, "1:A", [1, 2, 3, 5, 6]);
+        let RangeRead::Batch(b) = range(&store, "1:A", 1, 6, 5000) else {
+            panic!("rows are held");
+        };
+        assert_eq!((b.first, b.last), (1, 3));
+        assert_eq!(
+            range(&store, "1:A", 4, 6, 5000),
+            RangeRead::Unavailable { from: 4, to: 4 }
+        );
+    }
+
+    #[test]
+    fn the_first_resend_batch_of_a_forked_epoch_carries_the_fork() {
+        let (_d, mut store) = store();
+        put(&mut store, "2:B", 6..=9);
+        lease(&mut store, 2, "B");
+        let fork = BatchFork {
+            parent_epoch: "1:A".into(),
+            parent_seq: 5,
+        };
+        store
+            .write_tx(|tx| write_lease_fork(tx, Some(&fork)))
+            .unwrap();
+        let RangeRead::Batch(b) = range(&store, "2:B", 6, 7, 5000) else {
+            panic!("rows are held");
+        };
+        assert_eq!(b.fork, Some(fork));
+        let RangeRead::Batch(b) = range(&store, "2:B", 7, 9, 5000) else {
+            panic!("rows are held");
+        };
+        assert_eq!(b.fork, None);
+    }
+
+    #[test]
+    fn the_heartbeat_position_is_the_cursor_in_the_leases_epoch_else_the_forks_parent() {
+        let (_d, mut store) = store();
+        lease(&mut store, 2, "B");
+        let progress = |store: &Store| store.read_with(read_epoch_progress).unwrap();
+        assert_eq!(progress(&store), EpochProgress::default());
+
+        cursor(&mut store, "1:A", 40);
+        assert_eq!(progress(&store).last_seq_uploaded, 0, "an older epoch");
+
+        store
+            .write_tx(|tx| {
+                write_lease_fork(
+                    tx,
+                    Some(&BatchFork {
+                        parent_epoch: "1:A".into(),
+                        parent_seq: 40,
+                    }),
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            progress(&store),
+            EpochProgress {
+                last_seq_uploaded: 40,
+                fork_seq: Some(40)
+            }
+        );
+
+        cursor(&mut store, "2:B", 55);
+        assert_eq!(
+            progress(&store),
+            EpochProgress {
+                last_seq_uploaded: 55,
+                fork_seq: Some(40)
+            }
+        );
     }
 }

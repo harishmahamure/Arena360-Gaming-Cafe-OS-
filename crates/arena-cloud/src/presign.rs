@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use arena_proto::PRESIGN_TTL_S;
@@ -15,7 +15,7 @@ use aws_sdk_s3::error::DisplayErrorContext;
 use aws_sdk_s3::presigning::PresigningConfig;
 
 use crate::config::get_env;
-use crate::store::{S3Config, s3_client};
+use crate::store::{MemoryStore, ObjectStore, S3Config, S3Store, s3_client};
 
 /// The variable-name prefix of the data bucket: `ARENA_DATA_S3_ENDPOINT`, `_BUCKET`,
 /// `_ACCESS_KEY_ID` (a secret) and `_SECRET_ACCESS_KEY` (a secret).
@@ -141,6 +141,10 @@ pub struct Presigner {
     bucket: String,
     /// The credentials, only to scrub them from error text.
     redact: [String; 2],
+    /// Lists the bucket (Story 8.3): the same bucket and credentials as the links.
+    lister: S3Store,
+    /// Tests: keys listed from memory instead of the bucket.
+    listing: Option<Arc<MemoryStore>>,
 }
 
 impl std::fmt::Debug for Presigner {
@@ -157,7 +161,24 @@ impl Presigner {
             client: s3_client(cfg),
             bucket: cfg.bucket.clone(),
             redact: [cfg.access_key_id.clone(), cfg.secret_access_key.clone()],
+            lister: S3Store::new(cfg),
+            listing: None,
         }
+    }
+
+    /// Tests: lists the keys of `keys` instead of the bucket.
+    pub fn with_memory_listing(mut self, keys: Arc<MemoryStore>) -> Self {
+        self.listing = Some(keys);
+        self
+    }
+
+    /// Every key under `prefix` in the data bucket, in any order (Story 8.3).
+    pub async fn list(&self, prefix: &str) -> Result<Vec<String>, String> {
+        match &self.listing {
+            Some(mem) => mem.list(prefix).await,
+            None => self.lister.list(prefix).await,
+        }
+        .map_err(|e| e.to_string())
     }
 
     /// The presigner for the `ARENA_DATA_S3_*` bucket. With none of the four variables set,

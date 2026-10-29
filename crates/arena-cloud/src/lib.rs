@@ -22,6 +22,7 @@ pub mod catalog;
 pub mod client_ip;
 pub mod config;
 pub mod crypto;
+pub mod gaps;
 pub mod gstin;
 pub mod health;
 pub mod licence;

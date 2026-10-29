@@ -286,8 +286,30 @@ pub struct HeartbeatRequest {
     pub epoch: String,
     pub version: String,
     pub schema_version: u32,
+    /// The last change `seq` of `epoch` the Hub has had accepted: its upload cursor when that is
+    /// in `epoch`, else the fork parent's `seq` (or 0).
     #[ts(type = "number")]
     pub last_seq_uploaded: i64,
+    /// When the Hub last had a batch accepted (Hub clock, ms) (Story 8.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub last_upload_at: Option<i64>,
+    /// When the Hub last published its branch summary (Story 8.4); absent until then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub last_summary_at: Option<i64>,
+    /// The business day of the last rollup the Hub published (Story 8.5); absent until then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_rollup_date: Option<String>,
+    /// The `seq` `epoch` was forked from, when it was: the first row it uploads is one more.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub fork_seq: Option<i64>,
+    /// A range the cloud asked for that the Hub no longer holds (Story 8.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub resend_unavailable: Option<ResendUnavailable>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub setup: Option<crate::BranchSetup>,
@@ -300,6 +322,42 @@ pub struct HeartbeatRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub ad_requests: Option<crate::AdCounts>,
+}
+
+/// A run of change-log `seq`s of the heartbeat's epoch, both ends included.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SeqRange {
+    #[ts(type = "number")]
+    pub from: i64,
+    #[ts(type = "number")]
+    pub to: i64,
+}
+
+impl SeqRange {
+    pub fn valid(&self) -> bool {
+        1 <= self.from && self.from <= self.to
+    }
+}
+
+/// A range of `epoch` the Hub cannot resend because its rows were pruned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ResendUnavailable {
+    pub epoch: String,
+    #[ts(type = "number")]
+    pub from: i64,
+    #[ts(type = "number")]
+    pub to: i64,
+}
+
+impl ResendUnavailable {
+    pub fn range(&self) -> SeqRange {
+        SeqRange {
+            from: self.from,
+            to: self.to,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -333,6 +391,11 @@ pub struct HeartbeatResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub setup_template: Option<crate::setup_file::SetupTemplateLink>,
+    /// The first run of the request's epoch the cloud does not hold; the Hub sends it again
+    /// before anything else (Story 8.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub resend: Option<SeqRange>,
 }
 
 impl std::fmt::Debug for HeartbeatResponse {

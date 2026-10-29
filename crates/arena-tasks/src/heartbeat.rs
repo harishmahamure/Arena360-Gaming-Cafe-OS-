@@ -45,6 +45,7 @@ pub struct HeartbeatTask {
     poke: Option<Arc<Notify>>,
     presence: Option<Presence>,
     templates: Option<Arc<crate::SetupTemplateInbox>>,
+    resend: Option<Arc<crate::ResendInbox>>,
 }
 
 pub type Presence = Arc<dyn Fn(&str) -> (bool, Option<i64>) + Send + Sync>;
@@ -72,7 +73,15 @@ impl HeartbeatTask {
             poke: None,
             presence: None,
             templates: None,
+            resend: None,
         }
+    }
+
+    /// Where a resend request in the answer is left for the uploader, and where the uploader
+    /// leaves the run it could not resend (Story 8.3).
+    pub fn with_resend(mut self, inbox: Arc<crate::ResendInbox>) -> Self {
+        self.resend = Some(inbox);
+        self
     }
 
     /// Where a setup template link in a heartbeat answer is left for the Hub to apply
@@ -171,9 +180,9 @@ impl HeartbeatTask {
     }
 
     async fn exchange(&mut self) -> Duration {
-        let (live, schema_version, role, lease) = {
+        let (live, schema_version, role, lease, upload) = {
             let s = self.status.borrow();
-            (s.live, s.schema_version, s.role, s.lease.clone())
+            (s.live, s.schema_version, s.role, s.lease.clone(), s.upload)
         };
         let setup = match (&self.writer, live) {
             (Some(w), false) => w
@@ -220,7 +229,12 @@ impl HeartbeatTask {
             epoch: lease.epoch().to_string(),
             version: self.version.clone(),
             schema_version,
-            last_seq_uploaded: 0,
+            last_seq_uploaded: upload.last_seq_uploaded,
+            last_upload_at: upload.last_upload_at,
+            last_summary_at: None,
+            last_rollup_date: None,
+            fork_seq: upload.fork_seq,
+            resend_unavailable: self.resend.as_ref().and_then(|r| r.unavailable()),
             setup,
             ad_impressions: ads.impressions,
             ad_requests: ads.requests,
@@ -234,6 +248,14 @@ impl HeartbeatTask {
                     req.ad_impressions.as_ref().and(res.ad_impressions_through),
                     req.ad_requests.as_ref().and(res.ad_requests_through),
                 );
+                if let Some(inbox) = &self.resend {
+                    if let Some(sent) = &req.resend_unavailable {
+                        inbox.acknowledge(sent);
+                    }
+                    if let Some(range) = res.resend {
+                        inbox.offer(&req.epoch, range);
+                    }
+                }
                 self.accept(&writer, &lease, res, at).await;
                 if ack != (None, None)
                     && let Err(e) = writer.ad_ack(ack.0, ack.1).await
@@ -1403,5 +1425,87 @@ mod tests {
         ] {
             assert!(!blocks.contains(word), "{word} in {blocks}");
         }
+    }
+
+    fn with_resend_answer(reply: (u16, String), from: i64, to: i64) -> (u16, String) {
+        let mut v = serde_json::from_str::<serde_json::Value>(&reply.1).unwrap();
+        v["resend"] = serde_json::json!({"from": from, "to": to});
+        (reply.0, v.to_string())
+    }
+
+    #[tokio::test]
+    async fn the_upload_position_rides_the_heartbeat() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let port = serve_with(vec![answer(true, Tier::Basic)], false, Arc::clone(&seen)).await;
+        let mut f = fx(port).await;
+        f.status.send_modify(|s| {
+            s.upload = arena_core::UploadStatus {
+                last_upload_at: Some(5_000),
+                pending_rows: 0,
+                last_seq_uploaded: 42,
+                fork_seq: Some(10),
+            }
+        });
+        f.task.beat().await;
+        let body = sent(&seen, 0);
+        assert_eq!(body["last_seq_uploaded"], 42);
+        assert_eq!(body["last_upload_at"], 5_000);
+        assert_eq!(body["fork_seq"], 10);
+        for absent in ["last_summary_at", "last_rollup_date", "resend_unavailable"] {
+            assert!(body.get(absent).is_none(), "{absent} in {body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_resend_in_the_answer_is_left_for_the_uploader_under_the_request_epoch() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let port = serve_with(
+            vec![
+                with_resend_answer(answer(true, Tier::Basic), 3, 9),
+                with_resend_answer(answer(true, Tier::Basic), 0, 9),
+            ],
+            false,
+            Arc::clone(&seen),
+        )
+        .await;
+        let mut f = fx(port).await;
+        let inbox = crate::ResendInbox::new();
+        f.task.resend = Some(Arc::clone(&inbox));
+        f.task.beat().await;
+        let epoch = sent(&seen, 0)["epoch"].as_str().unwrap().to_owned();
+        let (got_epoch, range) = inbox.pending().expect("the run is left");
+        assert_eq!((got_epoch, range.from, range.to), (epoch, 3, 9));
+        // An invalid range is not taken over the good one.
+        f.task.beat().await;
+        assert_eq!(inbox.pending().map(|(_, r)| r.from), Some(3));
+    }
+
+    #[tokio::test]
+    async fn a_run_the_hub_cannot_resend_is_reported_until_a_heartbeat_is_answered() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let port = serve_with(
+            vec![refused(503, "INTERNAL"), answer(true, Tier::Basic)],
+            false,
+            Arc::clone(&seen),
+        )
+        .await;
+        let mut f = fx(port).await;
+        let inbox = crate::ResendInbox::new();
+        f.task.resend = Some(Arc::clone(&inbox));
+        let epoch = format!("1:{}", OWN.to_ascii_lowercase());
+        inbox.report_unavailable(arena_proto::ResendUnavailable {
+            epoch: epoch.clone(),
+            from: 5,
+            to: 9,
+        });
+        f.task.beat().await;
+        assert_eq!(
+            sent(&seen, 0)["resend_unavailable"],
+            serde_json::json!({"epoch": epoch, "from": 5, "to": 9})
+        );
+        assert!(inbox.unavailable().is_some(), "a failed beat reports again");
+        f.task.beat().await;
+        assert_eq!(sent(&seen, 1)["resend_unavailable"]["from"], 5);
+        assert_eq!(inbox.unavailable(), None, "an answered beat is the ack");
     }
 }

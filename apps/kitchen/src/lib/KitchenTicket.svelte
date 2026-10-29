@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { StatusBadge, t } from "@arena/ui";
+  import { AlertBadge, StatusBadge, t } from "@arena/ui";
   import type { KitchenBoardTicket } from "@arena/ui/generated";
   import { COLUMN_LABELS, elapsed, nextStage, stageLabel, ticketLabel, type Column } from "./board";
 
@@ -7,18 +7,23 @@
   // each line with its notes beneath. It names no player. Ready has a green edge and a READY tag;
   // Served is muted; Cancelled is muted with struck-through lines and a CANCELLED badge in place of
   // the stage tag, and cannot be acted on. A New, Preparing or Ready ticket is one big button:
-  // a tap, Enter or Space asks to move it to the next stage (Story 7.8).
+  // a tap, Enter or Space asks to move it to the next stage (Story 7.8). A `fresh` ticket in New
+  // carries the NEW badge and a danger edge until it is advanced (Story 7.9).
   let {
     ticket,
     column,
     now,
+    fresh = false,
     onadvance,
   }: {
     ticket: KitchenBoardTicket;
     column: Column;
     now: number;
+    fresh?: boolean;
     onadvance?: (ticket: KitchenBoardTicket) => void;
   } = $props();
+
+  const isNew = $derived(fresh && column === "new" && ticket.stage === "new");
 
   const cancelled = $derived(ticket.stage === "cancelled");
   const waited = $derived(elapsed(ticket.placed_at, now));
@@ -53,6 +58,7 @@
 <div
   class="ticket"
   class:ready={column === "ready" && !cancelled}
+  class:fresh={isNew}
   class:muted={column === "served" || cancelled}
   class:cancelled
   class:actionable
@@ -62,6 +68,7 @@
   data-testid="kitchen-ticket"
   data-ticket={ticket.id}
   data-stage={ticket.stage}
+  data-new={isNew ? "" : undefined}
   aria-label={actionable ? undefined : label}
   aria-describedby={actionable ? hintId : undefined}
   onclick={() => actionable && onadvance?.(ticket)}
@@ -73,7 +80,9 @@
   </header>
   <div class="meta type-hub-label">
     <span class="number" data-testid="ticket-number">{ticketLabel(ticket.number)}</span>
-    {#if cancelled}
+    {#if isNew}
+      <span data-testid="ticket-new"><AlertBadge tag="new" /></span>
+    {:else if cancelled}
       <StatusBadge state="offline" label="kitchen.ticket.cancelled" />
     {:else if column === "ready"}
       <span class="tag type-hub-micro" data-testid="ticket-ready">{t("kitchen.ticket.ready")}</span>
@@ -111,6 +120,10 @@
 
   .ticket.ready {
     border-left-color: var(--kitchen-ticket-ready-accent);
+  }
+
+  .ticket.fresh {
+    border-left-color: var(--danger);
   }
 
   .ticket.actionable {
@@ -172,6 +185,10 @@
   :global([data-theme="hc"]) .ticket {
     border: 2px solid var(--text);
     border-left-width: 6px;
+  }
+
+  :global([data-theme="hc"]) .ticket.fresh {
+    border-left-color: var(--danger);
   }
 
   :global([data-theme="hc"]) .ticket.ready {

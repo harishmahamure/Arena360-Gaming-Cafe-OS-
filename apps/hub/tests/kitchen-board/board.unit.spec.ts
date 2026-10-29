@@ -7,6 +7,7 @@ import {
   applyPending,
   changes,
   elapsed,
+  freshTickets,
   hubNow,
   nextStage,
   openSummary,
@@ -176,4 +177,37 @@ test("the Undo seconds count down from 8 and stop at 0", () => {
   expect(secondsLeft(NOW + UNDO_MS, NOW + 1)).toBe(8);
   expect(secondsLeft(NOW + UNDO_MS, NOW + 7_001)).toBe(1);
   expect(secondsLeft(NOW + UNDO_MS, NOW + 9_000)).toBe(0);
+});
+
+test("a ticket that arrives in New takes the NEW badge; the first board badges without counting arrivals", () => {
+  const first = freshTickets(null, [ticket(1, "new"), ticket(2, "preparing")], new Set());
+  expect([...first.ids]).toEqual(["T1"]);
+  expect(first.arrived).toBe(0);
+
+  const next = freshTickets(
+    [ticket(1, "new")],
+    [ticket(1, "new"), ticket(2, "new"), ticket(3, "new"), ticket(4, "preparing")],
+    first.ids,
+  );
+  expect([...next.ids].sort()).toEqual(["T1", "T2", "T3"]);
+  expect(next.arrived).toBe(2);
+});
+
+test("the NEW badge stays until the board shows the ticket past New, and Undo back to New does not restore it", () => {
+  const kept = freshTickets([ticket(1, "new")], [ticket(1, "new", { rev: 2 })], new Set(["T1"]));
+  expect([...kept.ids]).toEqual(["T1"]);
+
+  const advanced = freshTickets([ticket(1, "new")], [ticket(1, "preparing")], kept.ids);
+  expect(advanced.ids.size).toBe(0);
+
+  const undone = freshTickets([ticket(1, "preparing")], [ticket(1, "new")], advanced.ids);
+  expect(undone.ids.size).toBe(0);
+  expect(undone.arrived).toBe(0);
+});
+
+test("a ticket that arrives past New, or leaves the board, holds no badge", () => {
+  const skipped = freshTickets([], [ticket(1, "preparing"), ticket(2, "cancelled")], new Set());
+  expect(skipped.ids.size).toBe(0);
+  expect(skipped.arrived).toBe(0);
+  expect(freshTickets([ticket(1, "new")], [], new Set(["T1"])).ids.size).toBe(0);
 });

@@ -49,6 +49,9 @@
   "kitchen.toast.failed": "The Hub could not move that ticket",
   "kitchen.toast.undo_late": "Too late to undo",
   "kitchen.toast.undo_failed": "Could not undo. Try again.",
+  "kitchen.chime.on": "Chime on",
+  "kitchen.chime.off": "Chime off",
+  "kitchen.chime.unlock": "Tap to turn on the chime",
 
   "common.retry": "Retry",
   "common.dismiss": "Dismiss",

@@ -308,6 +308,7 @@ fn content_type(path: &Path) -> &'static str {
         Some("ico") => "image/x-icon",
         Some("woff2") => "font/woff2",
         Some("woff") => "font/woff",
+        Some("wav") => "audio/wav",
         Some("txt") => "text/plain; charset=utf-8",
         _ => "application/octet-stream",
     }
@@ -455,6 +456,14 @@ fetch('/kitchen/status').then(function(r){return r.json()}).then(function(s){
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_chime_is_served_as_audio() {
+        assert_eq!(
+            content_type(Path::new("sounds/new-ticket.wav")),
+            "audio/wav"
+        );
+    }
 
     #[test]
     fn safe_join_keeps_every_path_inside_the_root() {

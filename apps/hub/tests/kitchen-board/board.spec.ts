@@ -270,7 +270,7 @@ test("a cancelled ticket greys out, shows CANCELLED, cannot be acted on and leav
   // It stays in the column it was in, and the board has no cancel (or any) control.
   await expect(column(page, "preparing").locator('[data-ticket="T2"]')).toHaveCount(1);
   await expect(cancelled).not.toHaveAttribute("role", "button");
-  await expect(page.getByRole("button")).toHaveCount(1); // only the Preparing ticket takes a tap
+  await expect(page.locator('[data-testid="kitchen-ticket"][role="button"]')).toHaveCount(1); // only the Preparing ticket takes a tap
   await expect(page.getByTestId("board-open")).toHaveText("1 open · oldest 5 min");
 
   await page.clock.runFor(61_000);
@@ -308,6 +308,7 @@ test("tickets take keyboard focus and are at least 44px tall", async ({ page }) 
   await connectDisplay(page, board([ticket(1, "new"), ticket(2, "ready")]));
   await page.goto("/kitchen/");
   await expect(page.getByTestId("kitchen-board")).toBeVisible();
+  await page.getByTestId("chime-toggle").focus();
   await page.keyboard.press("Tab");
   const first = page.getByTestId("kitchen-ticket").first();
   await expect(first).toBeFocused();
@@ -324,6 +325,7 @@ test("high contrast uses 2px outlines and the yellow focus ring", async ({ page 
   await expect(page.locator("html")).toHaveAttribute("data-theme", "hc");
   const t = page.getByTestId("kitchen-ticket");
   await expect(t).toHaveCSS("border-top-width", "2px");
+  await page.getByTestId("chime-toggle").focus();
   await page.keyboard.press("Tab");
   await expect(t).toBeFocused();
   await expect(t).toHaveCSS("outline-style", "solid");
@@ -413,6 +415,7 @@ test("Enter on a focused ticket advances it, and a ticket that moved keeps keybo
   const stub = await connectDisplay(page, board([ticket(1, "ready")]));
   await page.goto("/kitchen/");
   await expect(page.getByTestId("kitchen-board")).toBeVisible();
+  await page.getByTestId("chime-toggle").focus();
   await page.keyboard.press("Tab");
   await expect(page.getByTestId("kitchen-ticket")).toBeFocused();
   await page.keyboard.press("Enter");
@@ -425,6 +428,7 @@ test("Space on a focused ticket advances it once", async ({ page }) => {
   const stub = await connectDisplay(page, board([ticket(1, "new")]));
   await page.goto("/kitchen/");
   await expect(page.getByTestId("kitchen-board")).toBeVisible();
+  await page.getByTestId("chime-toggle").focus();
   await page.keyboard.press("Tab");
   await expect(page.getByTestId("kitchen-ticket")).toBeFocused();
   await page.keyboard.press("Space");
@@ -564,4 +568,216 @@ test("the board with a toast has no accessibility violations", async ({ page }) 
   await expect(page.getByTestId("undo-toast")).toBeVisible();
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations).toEqual([]);
+});
+
+// Story 7.9: the new-ticket chime, the NEW badge and the mute toggle. The browser's audio is a stub
+// that records each play and, when `blocked`, refuses until the page has been tapped.
+const MUTE_KEY = "arena.kitchen.chime-muted";
+
+async function stubAudio(page: Page, blocked = false) {
+  await page.addInitScript((blockedAtStart) => {
+    const w = window as unknown as { __plays: number[]; __gesture: boolean };
+    w.__plays = [];
+    w.__gesture = !blockedAtStart;
+    addEventListener("pointerdown", () => (w.__gesture = true), true);
+    HTMLMediaElement.prototype.play = function (this: HTMLMediaElement) {
+      if (!w.__gesture) return Promise.reject(new DOMException("blocked", "NotAllowedError"));
+      w.__plays.push(this.volume);
+      return Promise.resolve();
+    };
+    HTMLMediaElement.prototype.pause = () => {};
+    if (blockedAtStart) {
+      (navigator as unknown as { getAutoplayPolicy: () => string }).getAutoplayPolicy = () =>
+        "disallowed";
+    }
+  }, blocked);
+}
+
+/** How many times the chime sounded (a silent unlock play has volume 0). */
+const chimes = (page: Page) =>
+  page.evaluate(
+    () => (window as unknown as { __plays: number[] }).__plays.filter((v) => v === 1).length,
+  );
+
+const push = (stub: Stub, tickets: KitchenBoardTicket[]) =>
+  stub.push({ kind: "kitchen.board", ...board(tickets) });
+
+test("a new ticket arrives with the NEW badge, a danger edge, one chime and an announcement", async ({
+  page,
+}) => {
+  await stubAudio(page);
+  const stub = await connectDisplay(page, board([ticket(1, "new")]));
+  await page.goto("/kitchen/");
+  await expect(page.getByTestId("kitchen-board")).toBeVisible();
+  // Tickets already on the board when it loads are badged but do not chime.
+  await expect(page.locator('[data-ticket="T1"]').getByTestId("ticket-new")).toHaveText("NEW");
+  expect(await chimes(page)).toBe(0);
+
+  push(stub, [ticket(2, "new", { placed_at: HUB_NOW }), ticket(1, "new")]);
+  const fresh = page.locator('[data-ticket="T2"]');
+  await expect(fresh.getByTestId("ticket-new")).toHaveText("NEW");
+  await expect(fresh).toHaveAttribute("data-new", "");
+  await expect(column(page, "new").getByTestId("kitchen-ticket").first()).toHaveAttribute(
+    "data-ticket",
+    "T2",
+  );
+  const edge = await fresh.evaluate((el) => getComputedStyle(el).borderLeftColor);
+  const danger = await page.evaluate(() => {
+    const probe = document.createElement("i");
+    probe.style.color = "var(--danger)";
+    document.body.append(probe);
+    const colour = getComputedStyle(probe).color;
+    probe.remove();
+    return colour;
+  });
+  expect(edge).toBe(danger);
+  await expect.poll(() => chimes(page)).toBe(1);
+  await expect(page.getByTestId("board-announce")).toHaveText("New ticket K-2 for PC 02");
+});
+
+test("several tickets arriving together chime once and each gets its own badge", async ({
+  page,
+}) => {
+  await stubAudio(page);
+  const stub = await connectDisplay(page, board([]));
+  await page.goto("/kitchen/");
+  await expect(page.getByTestId("kitchen-board")).toBeVisible();
+
+  push(stub, [ticket(1, "new"), ticket(2, "new"), ticket(3, "new")]);
+  await expect(page.getByTestId("ticket-new")).toHaveCount(3);
+  // A second board in the same second shares the chime; one a few seconds later has its own.
+  push(stub, [ticket(1, "new"), ticket(2, "new"), ticket(3, "new"), ticket(4, "new")]);
+  await expect(page.getByTestId("ticket-new")).toHaveCount(4);
+  expect(await chimes(page)).toBe(1);
+  await page.clock.runFor(2_000);
+  push(
+    stub,
+    [1, 2, 3, 4, 5].map((n) => ticket(n, "new")),
+  );
+  await expect(page.getByTestId("ticket-new")).toHaveCount(5);
+  await expect.poll(() => chimes(page)).toBe(2);
+});
+
+test("advancing clears the badge for good: Undo back to New does not bring it back", async ({
+  page,
+}) => {
+  await stubAudio(page);
+  const stub = await connectDisplay(page, board([ticket(1, "new")]));
+  await page.goto("/kitchen/");
+  const badge = page.locator('[data-ticket="T1"]').getByTestId("ticket-new");
+  await expect(badge).toBeVisible();
+
+  await page.locator('[data-ticket="T1"]').click();
+  await expect(badge).toHaveCount(0);
+  await expect(page.locator('[data-ticket="T1"]')).not.toHaveAttribute("data-new", "");
+  push(stub, [ticket(1, "preparing", { rev: 2, stage_at: HUB_NOW })]);
+  await page.getByRole("button", { name: "Undo" }).click();
+  push(stub, [ticket(1, "new", { rev: 3 })]);
+  await expect(column(page, "new").locator('[data-ticket="T1"]')).toHaveCount(1);
+  await expect(page.getByTestId("ticket-new")).toHaveCount(0);
+  expect(await chimes(page)).toBe(0);
+});
+
+test("a ticket the Hub refuses to advance keeps its NEW badge", async ({ page }) => {
+  await stubAudio(page);
+  const stub = await connectDisplay(page, board([ticket(1, "new")]));
+  stub.refuse("kitchen.advance", "STALE");
+  await page.goto("/kitchen/");
+  await page.locator('[data-ticket="T1"]').click();
+  await expect(page.getByTestId("undo-notice")).toBeVisible();
+  await expect(page.locator('[data-ticket="T1"]').getByTestId("ticket-new")).toBeVisible();
+});
+
+test("the mute toggle silences the chime, keeps the badges, and is kept for this tablet", async ({
+  page,
+}) => {
+  await stubAudio(page);
+  const stub = await connectDisplay(page, board([]));
+  await page.goto("/kitchen/");
+  const toggle = page.getByTestId("chime-toggle");
+  expect((await toggle.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  await expect(toggle).toHaveText("Chime on");
+
+  await toggle.click();
+  await expect(toggle).toHaveText("Chime off");
+  expect(await page.evaluate((k) => localStorage.getItem(k), MUTE_KEY)).toBe("1");
+  push(stub, [ticket(1, "new")]);
+  await expect(page.getByTestId("ticket-new")).toHaveCount(1);
+  expect(await chimes(page)).toBe(0);
+
+  // Unmuted again: the next ticket chimes.
+  await toggle.click();
+  await expect(toggle).toHaveText("Chime on");
+  expect(await page.evaluate((k) => localStorage.getItem(k), MUTE_KEY)).toBeNull();
+  await page.clock.runFor(2_000);
+  push(stub, [ticket(1, "new"), ticket(2, "new")]);
+  await expect.poll(() => chimes(page)).toBe(1);
+});
+
+test("the mute choice survives a reload", async ({ page }) => {
+  await stubAudio(page);
+  await connectDisplay(page, board([]));
+  await page.goto("/kitchen/");
+  await page.getByTestId("chime-toggle").click();
+  await page.reload();
+  await expect(page.getByTestId("chime-toggle")).toHaveText("Chime off");
+});
+
+test("with browser storage unavailable the board starts unmuted", async ({ page }) => {
+  await stubAudio(page);
+  await connectDisplay(page, board([]));
+  await page.addInitScript((key) => {
+    const get = Storage.prototype.getItem;
+    Storage.prototype.getItem = function (this: Storage, k: string) {
+      if (k === key) throw new DOMException("denied", "SecurityError");
+      return get.call(this, k);
+    };
+  }, MUTE_KEY);
+  await page.goto("/kitchen/");
+  await expect(page.getByTestId("chime-toggle")).toHaveText("Chime on");
+});
+
+test("a browser that blocks audio shows the tap bar until the first tap, and badges work either way", async ({
+  page,
+}) => {
+  await stubAudio(page, true);
+  const stub = await connectDisplay(page, board([]));
+  await page.goto("/kitchen/");
+  const bar = page.getByTestId("chime-unlock");
+  await expect(bar).toHaveText("Tap to turn on the chime");
+
+  push(stub, [ticket(1, "new")]);
+  await expect(page.getByTestId("ticket-new")).toHaveCount(1);
+  expect(await chimes(page)).toBe(0);
+
+  await page.getByTestId("board-branch").click();
+  await expect(bar).toHaveCount(0);
+  await page.clock.runFor(2_000);
+  push(stub, [ticket(1, "new"), ticket(2, "new")]);
+  await expect.poll(() => chimes(page)).toBe(1);
+  await expect(page.getByTestId("ticket-new")).toHaveCount(2);
+});
+
+test("the tap bar does not show when the browser allows sound", async ({ page }) => {
+  await stubAudio(page);
+  await connectDisplay(page, board([]));
+  await page.goto("/kitchen/");
+  await expect(page.getByTestId("kitchen-board")).toBeVisible();
+  await expect(page.getByTestId("chime-unlock")).toHaveCount(0);
+});
+
+test("the board with NEW badges, the toggle and the tap bar has no accessibility violations", async ({
+  page,
+}) => {
+  await stubAudio(page, true);
+  await connectDisplay(page, board([ticket(2, "new"), ticket(1, "ready")]));
+  await page.goto("/kitchen/");
+  await expect(page.getByTestId("chime-unlock")).toBeVisible();
+  await expect(page.getByTestId("ticket-new")).toHaveCount(1);
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+  await page.getByTestId("chime-toggle").click();
+  await expect(page.getByTestId("chime-toggle")).toHaveText("Chime off");
+  const muted = await new AxeBuilder({ page }).analyze();
+  expect(muted.violations).toEqual([]);
 });

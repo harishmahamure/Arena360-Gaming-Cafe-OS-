@@ -212,3 +212,36 @@ export function changes(
   }
   return out;
 }
+
+export type Fresh = {
+  /** The tickets that hold the NEW badge now. */
+  ids: Set<string>;
+  /** How many tickets arrived in New on this board (none for the first board). */
+  arrived: number;
+};
+
+/**
+ * Which tickets hold the NEW badge (Story 7.9). A ticket takes it when it shows up in New and
+ * keeps it until a board shows it past New; Undo back to New never gives it back. The first
+ * board a display loads badges the tickets already in New but counts none as arrived, so a
+ * reload does not chime.
+ */
+export function freshTickets(
+  before: KitchenBoardTicket[] | null,
+  after: KitchenBoardTicket[],
+  fresh: ReadonlySet<string>,
+): Fresh {
+  const known = new Set((before ?? []).map((t) => t.id));
+  const ids = new Set<string>();
+  let arrived = 0;
+  for (const ticket of after) {
+    if (ticket.stage !== "new") continue;
+    if (fresh.has(ticket.id)) ids.add(ticket.id);
+    else if (before === null) ids.add(ticket.id);
+    else if (!known.has(ticket.id)) {
+      ids.add(ticket.id);
+      arrived += 1;
+    }
+  }
+  return { ids, arrived };
+}

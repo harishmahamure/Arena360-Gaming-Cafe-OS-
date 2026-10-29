@@ -904,3 +904,12 @@ Each entry gives the story, the decision point, the choice taken (the recommende
 - **Accessibility.** A tappable ticket is `role="button"` named by its content with the move as its description (an aria-label tripped axe `label-content-name-mismatch`); other tickets keep the label.
 - **Offline.** A tap with no link is refused with a note; queueing is Story 7.10.
 - **Verification.** See the spec's Auto Run Result.
+
+## Story 7.9: new tickets chime and hold a NEW badge, with a mute toggle
+
+- **Display only.** The Hub already pushes the whole board after any ticket change, so the page derives arrivals by comparing boards. The one Hub change is serving `.wav` as `audio/wav` from the Kitchen directory.
+- **Badge rule.** A ticket takes the badge when it first appears in New (or is in New on the display's first board, silently) and loses it when a board shows it past New or the Hub accepts a local advance. A refused advance keeps it. Undo back to New is not an arrival, so no badge and no chime.
+- **Burst.** One chime per 1 s window (`BURST_MS`), measured on the page's monotonic clock.
+- **Audio gate.** `navigator.getAutoplayPolicy("mediaelement")` where it exists, plus any `NotAllowedError` from a real play, raises the "Tap to turn on the chime" bar; the first pointer or key press anywhere plays the chime at volume 0 to unlock it. A muted tablet never shows the bar.
+- **Tab order.** The mute toggle is in the top bar, so it is the first Tab stop; the existing keyboard specs focus it first.
+- **Verification.** See the spec's Verification section.

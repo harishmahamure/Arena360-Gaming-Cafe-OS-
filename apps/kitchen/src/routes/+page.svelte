@@ -8,6 +8,7 @@
     UNDO_MS,
     applyPending,
     changes,
+    freshTickets,
     hubNow,
     nextStage,
     placeTickets,
@@ -31,6 +32,7 @@
     storeToken,
     type Connection,
   } from "../lib/display";
+  import { BURST_MS, createChime, readMuted, storeMuted } from "../lib/chime";
   import { ulid } from "../lib/ulid";
   import BoardScreen from "../lib/BoardScreen.svelte";
 
@@ -39,7 +41,9 @@
   // refused token shows the pairing screen again; on a Free branch the page says the kitchen
   // display is available on Basic. Once connected it shows the kitchen board (Story 7.7): the
   // Hub's tickets in four columns, with every elapsed time counted on the Hub's clock. A tap on
-  // a ticket moves it to the next stage at once and shows an Undo toast for 8 s (Story 7.8).
+  // a ticket moves it to the next stage at once and shows an Undo toast for 8 s (Story 7.8). A new
+  // ticket holds a NEW badge until it is advanced and plays the bundled chime once per burst,
+  // unless this tablet is muted (Story 7.9).
 
   const NOTICE_MS = 5000;
 
@@ -67,6 +71,14 @@
   let lastColumn: Map<string, Column> = $state(new Map());
   let announcement = $state("");
   let ticker: ReturnType<typeof setInterval> | undefined;
+
+  // The NEW badges, the mute choice and whether the browser still wants a first tap before it
+  // lets the page make sound.
+  const chime = createChime();
+  let fresh: Set<string> = $state(new Set());
+  let muted = $state(false);
+  let needsTap = $state(false);
+  let lastChime = -Infinity;
 
   // Moves sent and not yet shown back by the Hub, the ticket pinned to the top of its column and
   // the one toast (the last advance, until its 8 s are up or another advance replaces it).
@@ -114,11 +126,38 @@
       return t("kitchen.announce.stage", { number, stage });
     });
     if (said.length > 0) announcement = said.join(". ");
+    const badges = freshTickets(feed?.tickets ?? null, board.tickets, fresh);
+    fresh = badges.ids;
+    if (badges.arrived > 0) void ring();
     lastColumn = rememberColumns(board.tickets, lastColumn);
     pending = stillPending(board.tickets, pending);
     receivedAt = performance.now();
     tick = receivedAt;
     feed = board;
+  }
+
+  /** Plays the chime for new tickets, once for a burst; a muted tablet stays quiet. */
+  async function ring() {
+    const at = performance.now();
+    if (muted || at - lastChime < BURST_MS) return;
+    lastChime = at;
+    if (!(await chime.play())) needsTap = true;
+  }
+
+  function toggleMute() {
+    muted = !muted;
+    storeMuted(muted);
+    // The tap that unmutes is a gesture, so the browser lets the page make sound from here on.
+    if (!muted) void unlock();
+  }
+
+  /** The first tap anywhere: the browser now allows sound, so the bar goes. */
+  async function unlock() {
+    if (await chime.unlock()) needsTap = false;
+  }
+
+  function firstTap() {
+    if (needsTap) void unlock();
   }
 
   function showToast(next: Toast, lastsMs: number) {
@@ -193,7 +232,13 @@
     );
     void focusTicket(ticket.id);
     const result = await conn.advance(ticket.id, to, ticket.rev, key);
-    if (result.ok) return;
+    if (result.ok) {
+      // Past New for good: Undo back to New does not bring the badge back.
+      const rest = new Set(fresh);
+      rest.delete(ticket.id);
+      fresh = rest;
+      return;
+    }
     snap(ticket.id);
     void focusTicket(ticket.id);
     if (toast?.key === key) {
@@ -231,7 +276,10 @@
     conn?.close();
     mode = "connecting";
     conn = connect(token, {
-      onReady: () => (mode = "connected"),
+      onReady: () => {
+        if (mode === "connecting") needsTap = !muted && chime.needsTap();
+        mode = "connected";
+      },
       onLost: () => (mode = "lost"),
       onHighContrast: setTheme,
       onBoard: takeBoard,
@@ -240,6 +288,7 @@
         feed = null;
         pending = new Map();
         pinned = null;
+        fresh = new Set();
         toast = null;
         clearTimeout(toastTimer);
         lastColumn = new Map();
@@ -278,6 +327,7 @@
   }
 
   onMount(async () => {
+    muted = readMuted();
     ticker = setInterval(() => (tick = performance.now()), 1000);
     const token = readToken();
     if (token) return start(token);
@@ -293,6 +343,8 @@
   });
 </script>
 
+<svelte:window onpointerdown={firstTap} onkeydown={firstTap} />
+
 <svelte:head>
   <title>{t("app.title", { surface: t("surface.kitchen") })}</title>
 </svelte:head>
@@ -304,7 +356,12 @@
       {columns}
       {now}
       connected={mode === "connected"}
+      {fresh}
+      {muted}
+      {needsTap}
       onadvance={advance}
+      onmute={toggleMute}
+      onunlock={() => void unlock()}
     />
     {#if toast}
       <div class="toast" data-testid="kitchen-toast">

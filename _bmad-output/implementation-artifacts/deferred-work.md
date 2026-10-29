@@ -564,3 +564,11 @@
 - Ticket numbers are `MAX + 1`: undoing the newest placement frees its number for the next ticket.
 - Existing branches get `kitchen.use` for the Counter role from `branch.seed_defaults`; custom roles are untouched.
 - No Rust test drives a refused `kitchen.advance` through the LAN `kds` scope (the board does not exist yet).
+
+## Deferred from: Story 7.4 (READY tile and chime)
+
+- The kiosk side of an undone Ready (remove the ready message from `messages-bell`, restore the HUD "Ordered" tag) still relies on the next session tick clearing `ready_at`; no kiosk change was made.
+- `HubSnapshot.counter_tickets` and `order_ready` alerts are not pushed as their own events; the Hub reloads the snapshot on `devices.changed`/`alert` events as before.
+- The POS strip advances one stage per tap and does not offer Undo; the board (Stories 7.7 and 7.8) owns that.
+- A first snapshot load after a Hub UI reload chimes once for each order-ready alert that is still open.
+- The fulfilment setting is read from `/ui/settings` by the order section rather than carried in the snapshot.

@@ -656,6 +656,7 @@ fn raise_expiring(tx: &StoreTx<'_>, now: i64) -> Result<Written, AppError> {
             product_id: None,
             qty: None,
             threshold: None,
+            ticket_id: None,
         },
     )?;
     Ok(write(RowKey::Alerts { id }, ChangeOp::Insert, None))
@@ -992,6 +993,7 @@ fn raise_low(
             product_id: Some(product_id),
             qty: Some(qty),
             threshold: Some(threshold),
+            ticket_id: None,
         },
     )?;
     Ok(write(RowKey::Alerts { id }, ChangeOp::Insert, None))

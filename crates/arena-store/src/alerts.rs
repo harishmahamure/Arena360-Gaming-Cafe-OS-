@@ -18,6 +18,8 @@ pub struct AlertRow {
     pub qty: Option<i64>,
     /// The threshold a low-stock alert crossed.
     pub threshold: Option<i64>,
+    /// The walk-up kitchen ticket an order-ready alert is about (Story 7.4).
+    pub ticket_id: Option<String>,
 }
 
 pub struct NewAlert<'a> {
@@ -28,10 +30,10 @@ pub struct NewAlert<'a> {
     pub product_id: Option<&'a str>,
     pub qty: Option<i64>,
     pub threshold: Option<i64>,
+    pub ticket_id: Option<&'a str>,
 }
 
-const COLUMNS: &str =
-    "id, kind, device_id, raised_at, acked_at, acked_by, rev, product_id, qty, threshold";
+const COLUMNS: &str = "id, kind, device_id, raised_at, acked_at, acked_by, rev, product_id, qty, threshold, ticket_id";
 
 fn from(r: &rusqlite::Row<'_>) -> rusqlite::Result<AlertRow> {
     Ok(AlertRow {
@@ -45,14 +47,15 @@ fn from(r: &rusqlite::Row<'_>) -> rusqlite::Result<AlertRow> {
         product_id: r.get(7)?,
         qty: r.get(8)?,
         threshold: r.get(9)?,
+        ticket_id: r.get(10)?,
     })
 }
 
 pub fn insert_alert(conn: &Connection, a: &NewAlert<'_>) -> Result<(), AppError> {
     conn.execute(
-        "INSERT INTO alerts (id, kind, device_id, raised_at, product_id, qty, threshold, rev,
-                             created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 0, 0)",
+        "INSERT INTO alerts (id, kind, device_id, raised_at, product_id, qty, threshold, ticket_id,
+                             rev, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, 0, 0)",
         params![
             a.id,
             a.kind,
@@ -60,7 +63,8 @@ pub fn insert_alert(conn: &Connection, a: &NewAlert<'_>) -> Result<(), AppError>
             a.raised_at,
             a.product_id,
             a.qty,
-            a.threshold
+            a.threshold,
+            a.ticket_id
         ],
     )
     .map_err(db_error)?;
@@ -107,6 +111,24 @@ pub fn find_open_alert_for_product(
              WHERE kind = ?1 AND product_id = ?2 AND acked_at IS NULL"
         ),
         params![kind, product_id],
+        from,
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+/// The open order-ready alert about the walk-up ticket `ticket_id`, if any.
+pub fn find_open_alert_for_ticket(
+    conn: &Connection,
+    kind: &str,
+    ticket_id: &str,
+) -> Result<Option<AlertRow>, AppError> {
+    conn.query_row(
+        &format!(
+            "SELECT {COLUMNS} FROM alerts
+             WHERE kind = ?1 AND ticket_id = ?2 AND acked_at IS NULL"
+        ),
+        params![kind, ticket_id],
         from,
     )
     .optional()

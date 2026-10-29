@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Locator, type Page, type Route, type TestInfo } from "@playwright/test";
 import type {
+  KitchenTicketView,
   PaymentRow,
   PlayerHit,
   PosSaleView,
@@ -394,6 +395,8 @@ type Hub = {
   sessions?: SnapshotSession[];
   /** The open bills the snapshot lists, e.g. unpaid kiosk orders (Story 6.32). */
   bills?: SnapshotBill[];
+  /** The open walk-up kitchen tickets the snapshot lists (Story 7.4). */
+  counterTickets?: KitchenTicketView[];
   /** What `/ui/printer/ready` answers (Story 5.17); absent means the Hub does not answer. */
   printer?: PrinterReady;
 };
@@ -445,6 +448,7 @@ async function openHub(page: Page, hub: Hub, products: Product[] = PRODUCTS, pat
         snap.shift = hub.shift;
         snap.sessions = hub.sessions ?? [];
         snap.bills = hub.bills ?? [];
+        snap.counter_tickets = hub.counterTickets ?? [];
         return ok(route, snap);
       }
       case "/ui/me":
@@ -1246,4 +1250,51 @@ test("Open orders says so when no kiosk order waits", async ({ page }) => {
   await expect(page.getByTestId("open-toggle")).toHaveText(en["hub.pos.open.toggle"]);
   await page.getByTestId("open-toggle").click();
   await expect(page.getByTestId("open-orders-empty")).toHaveText(en["hub.pos.open.empty"]);
+});
+
+const counterTicket = (number: number, stage: string, rev = 3): KitchenTicketView => ({
+  id: `T-${number}`,
+  order_id: `O-${number}`,
+  number,
+  seat: "Counter",
+  stage,
+  placed_at: Date.now() - 60_000,
+  rev,
+  lines: [{ line_id: `L-${number}`, label: "Burger", qty: 2, notes: ["No onion"] }],
+});
+
+test("the open-tickets strip lists walk-up tickets and a Ready one moves on from its detail", async ({
+  page,
+}) => {
+  const hub = newHub({
+    permissions: ["pos.sell", "kitchen.use"],
+    counterTickets: [counterTicket(2042, "preparing"), counterTicket(2043, "ready", 5)],
+  });
+  await openHub(page, hub);
+  const strip = page.getByTestId("open-tickets");
+  await expect(strip.getByTestId("open-ticket")).toHaveCount(2);
+  await expect(strip.getByTestId("open-ticket").nth(1)).toHaveText("K-2043 READY");
+  await expect(strip.getByTestId("open-ticket").nth(0)).toHaveText("K-2042 PREPARING");
+  await strip.getByTestId("open-ticket").nth(1).click();
+  await expect(strip.getByTestId("open-ticket-detail")).toContainText("2 × Burger");
+  await expect(strip.getByTestId("open-ticket-detail")).toContainText("No onion");
+  await strip
+    .getByTestId("open-ticket-detail")
+    .getByRole("button", { name: en["hub.order.mark_served"] })
+    .click();
+  await expect.poll(() => hub.sent.length).toBe(1);
+  expect(hub.sent[0].payload).toEqual({
+    kind: "kitchen.advance",
+    ticket_id: "T-2043",
+    to: "served",
+  });
+  expect(hub.sent[0].rev).toBe(5);
+});
+
+test("the open-tickets strip is absent when no walk-up ticket is open (a Free branch)", async ({
+  page,
+}) => {
+  await openHub(page, newHub());
+  await expect(page.getByTestId("pos")).toBeVisible();
+  await expect(page.getByTestId("open-tickets")).toHaveCount(0);
 });

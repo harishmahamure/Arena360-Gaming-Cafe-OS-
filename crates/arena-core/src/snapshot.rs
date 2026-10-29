@@ -36,6 +36,7 @@ pub fn build_snapshot(
         group_bills: Vec::new(),
         shift: None,
         alerts: Vec::new(),
+        counter_tickets: Vec::new(),
         locale,
         ui,
         // The probe's state is the Hub status's, not the database's: the snapshot handler
@@ -424,9 +425,19 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
     }
     snapshot.bills = bills(&sessions, &segments, orders, &tickets, &rules, now_ms);
     snapshot.group_bills = group_bills(group_rows, &sessions, ended_group, &rules, now_ms);
+    snapshot.counter_tickets = tickets
+        .iter()
+        .filter(|(t, _)| t.device_id.is_none())
+        .map(|(t, lines)| ticket_view(t, lines))
+        .collect();
     snapshot.alerts = alerts
         .into_iter()
         .filter_map(|(a, product)| {
+            let ticket_number = a
+                .ticket_id
+                .as_deref()
+                .and_then(|id| tickets.iter().find(|(t, _)| t.id == id))
+                .map(|(t, _)| t.number);
             Some(arena_proto::SnapshotAlert {
                 kind: arena_proto::AlertKind::parse(&a.kind)?,
                 id: a.id,
@@ -436,6 +447,8 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
                 product,
                 qty: a.qty,
                 threshold: a.threshold,
+                ticket_id: a.ticket_id,
+                ticket_number,
             })
         })
         .collect();
@@ -2057,6 +2070,7 @@ mod tests {
                     carried_minor: 0,
                 }),
                 alerts: vec![],
+                counter_tickets: vec![],
                 devices: vec![SnapshotDevice {
                     device_id: "D1".into(),
                     label: "Front PC".into(),
@@ -2145,6 +2159,7 @@ mod tests {
                     carried_minor: 0,
                 }),
                 alerts: vec![],
+                counter_tickets: vec![],
                 devices: vec![],
                 locale: None,
                 ui: SnapshotUi::default(),

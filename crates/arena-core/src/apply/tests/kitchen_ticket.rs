@@ -189,10 +189,16 @@ async fn a_walk_up_sale_opens_a_counter_ticket_and_only_its_stage_moves() {
 
     for to in ["preparing", "ready", "served"] {
         let a = advance(&f, &id, to).await.unwrap();
-        // Only the ticket changes: the sale was served and settled at the counter.
+        // Only the ticket (and its order-ready alert, Story 7.4) changes: the sale was served
+        // and settled at the counter.
+        let expect: &[&str] = if to == "preparing" {
+            &["kitchen_tickets"]
+        } else {
+            &["kitchen_tickets", "alerts"]
+        };
         assert_eq!(
             a.changes.iter().map(|c| c.tbl.as_str()).collect::<Vec<_>>(),
-            ["kitchen_tickets"],
+            expect,
             "{to}"
         );
     }
@@ -612,4 +618,131 @@ async fn the_kitchen_role_a_counter_and_a_display_may_advance_and_nobody_else() 
     .await
     .unwrap();
     assert_eq!(stage(&f, &id), "served");
+}
+
+// ---- Story 7.4: the order-ready alert ----
+
+fn ready_alerts(f: &Fixture) -> Vec<Row> {
+    table(f, Table::Alerts)
+        .into_iter()
+        .filter(|a| text(a, "kind") == "order_ready" && a["acked_at"] == RowValue::Null)
+        .collect()
+}
+
+#[tokio::test]
+async fn a_device_ticket_reaching_ready_raises_one_alert_on_its_device_and_the_undo_closes_it() {
+    let f = bootstrapped().await;
+    let (b, session) = basic(&f).await;
+    place(&f, owner(), place_of(&session, &[(&b, 1)]))
+        .await
+        .unwrap();
+    let id = text(&tickets(&f)[0], "id");
+    advance(&f, &id, "preparing").await.unwrap();
+    assert!(ready_alerts(&f).is_empty());
+
+    advance(&f, &id, "ready").await.unwrap();
+    let open = ready_alerts(&f);
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0]["ticket_id"], RowValue::Null);
+    assert_eq!(
+        text(&open[0], "device_id"),
+        text(&tickets(&f)[0], "device_id")
+    );
+    let snap = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
+    assert_eq!(snap.alerts[0].kind, arena_proto::AlertKind::OrderReady);
+
+    undo(&f, &id).await.unwrap();
+    assert!(ready_alerts(&f).is_empty());
+    assert_eq!(stage(&f, &id), "preparing");
+
+    advance(&f, &id, "ready").await.unwrap();
+    assert_eq!(ready_alerts(&f).len(), 1);
+    advance(&f, &id, "served").await.unwrap();
+    assert!(ready_alerts(&f).is_empty(), "serving closes the alert");
+}
+
+#[tokio::test]
+async fn a_walk_up_ticket_raises_a_branch_alert_per_ticket() {
+    let f = bootstrapped().await;
+    flags(&f, "kitchen").await;
+    let b = burger(&f, 5).await;
+    let sale = || PosSale {
+        kiosk: None,
+        business: None,
+        coupon: None,
+        discount: None,
+        lines: vec![burger_line(&b, 1, &[])],
+        payments: vec![pay(Cash, 9_000, None)],
+        player_id: None,
+        credit_override: None,
+        stock_override: None,
+        receipt: None,
+    };
+    submit(&f, owner(), IntentPayload::PosSale(sale()))
+        .await
+        .unwrap();
+    submit(&f, owner(), IntentPayload::PosSale(sale()))
+        .await
+        .unwrap();
+    let ids: Vec<String> = tickets(&f).iter().map(|t| text(t, "id")).collect();
+    for id in &ids {
+        advance(&f, id, "preparing").await.unwrap();
+        advance(&f, id, "ready").await.unwrap();
+    }
+    let open = ready_alerts(&f);
+    assert_eq!(open.len(), 2);
+    assert!(open.iter().all(|a| a["device_id"] == RowValue::Null));
+
+    undo(&f, &ids[1]).await.unwrap();
+    let open = ready_alerts(&f);
+    assert_eq!(open.len(), 1);
+    assert_eq!(text(&open[0], "ticket_id"), ids[0]);
+    let snap = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
+    assert_eq!(snap.counter_tickets.len(), 2);
+    assert_eq!(snap.alerts[0].ticket_number, Some(1));
+}
+
+#[tokio::test]
+async fn a_device_alert_stays_while_another_ticket_of_the_device_is_ready() {
+    let f = bootstrapped().await;
+    let (b, session) = basic(&f).await;
+    place(&f, owner(), place_of(&session, &[(&b, 1)]))
+        .await
+        .unwrap();
+    place(&f, owner(), place_of(&session, &[(&b, 1)]))
+        .await
+        .unwrap();
+    let ids: Vec<String> = tickets(&f).iter().map(|t| text(t, "id")).collect();
+    assert_eq!(ids.len(), 2);
+    for id in &ids {
+        advance(&f, id, "preparing").await.unwrap();
+        advance(&f, id, "ready").await.unwrap();
+    }
+    assert_eq!(ready_alerts(&f).len(), 1, "one alert per device");
+    advance(&f, &ids[0], "served").await.unwrap();
+    assert_eq!(ready_alerts(&f).len(), 1, "the other ticket is still ready");
+    advance(&f, &ids[1], "served").await.unwrap();
+    assert!(ready_alerts(&f).is_empty());
+}
+
+#[tokio::test]
+async fn a_free_branch_raises_no_order_ready_alert_for_the_epic_six_mark_ready() {
+    let f = bootstrapped().await;
+    let b = burger(&f, 10).await;
+    let session = running(&f).await;
+    place(&f, owner(), place_of(&session, &[(&b, 1)]))
+        .await
+        .unwrap();
+    let order = text(&order_of(&f, &session).unwrap(), "id");
+    submit(
+        &f,
+        owner(),
+        IntentPayload::OrderReady(OrderReady { order_id: order }),
+    )
+    .await
+    .unwrap();
+    assert!(tickets(&f).is_empty());
+    assert!(ready_alerts(&f).is_empty());
+    let snap = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
+    assert!(snap.alerts.is_empty() && snap.counter_tickets.is_empty());
 }

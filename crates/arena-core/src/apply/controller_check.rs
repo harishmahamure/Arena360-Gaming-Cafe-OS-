@@ -102,6 +102,7 @@ pub(super) fn mutate(
                 product_id: None,
                 qty: None,
                 threshold: None,
+                ticket_id: None,
             },
         )?;
         written.push(Written {

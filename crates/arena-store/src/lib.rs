@@ -60,7 +60,8 @@ pub use admin::{
 };
 pub use alerts::{
     AlertRow, NewAlert, ack_alert, find_alert, find_open_alert, find_open_alert_for_product,
-    insert_alert, latest_branch_alert_at, list_open_alerts, set_alert_qty, set_alert_threshold,
+    find_open_alert_for_ticket, insert_alert, latest_branch_alert_at, list_open_alerts,
+    set_alert_qty, set_alert_threshold,
 };
 pub use audit::{
     AuditCursor, AuditFilter, AuditRow, find_change, list_audit, list_device_labels,

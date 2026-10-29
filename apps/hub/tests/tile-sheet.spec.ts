@@ -59,6 +59,8 @@ type Hub = {
   ack: boolean;
   online: boolean;
   hc: boolean;
+  /** The `branch.fulfilment` the Hub answers (Story 7.4); absent means the setting is not listed. */
+  fulfilment?: string;
   /** The launch times the Hub answers (Story 6.25). */
   launchTimes?: LaunchTimesView;
 };
@@ -155,7 +157,10 @@ async function open(page: Page, token: string, over: Partial<Hub> = {}): Promise
       case "/ui/me":
         return json(route, STAFF[token]);
       case "/ui/settings":
-        return json(route, []);
+        return json(
+          route,
+          hub.fulfilment ? [{ key: "branch.fulfilment", value: hub.fulfilment, rev: 1 }] : [],
+        );
       case "/ui/games/launch-times":
         return json(route, hub.launchTimes ?? { devices: [] });
       case "/ui/elevate": {
@@ -910,6 +915,32 @@ test("a New ticket marked ready takes its two steps, Preparing first", async ({ 
   await expect
     .poll(() => hub.sent.map((s) => [s.payload, s.base_rev]))
     .toContainEqual([{ kind: "kitchen.advance", ticket_id: "T-7", to: "preparing" }, 3]);
+});
+
+test("a Ready ticket reads deliver to the seat, or waiting for pick-up when orders are collected", async ({
+  page,
+}) => {
+  await open(page, "cook-token", { bills: [ticketedBill("ready", 6)] });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("ticket-ready-copy")).toHaveText(
+    en["hub.order.ready_deliver"].replace("{seat}", "PC 2"),
+  );
+});
+
+test("a Ready ticket on a pick-up branch reads waiting for pick-up", async ({ page }) => {
+  await open(page, "cook-token", { bills: [ticketedBill("ready", 6)], fulfilment: "counter" });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("ticket-ready-copy")).toHaveText(en["hub.order.ready_pickup"]);
+});
+
+test("a preparing ticket shows no ready copy", async ({ page }) => {
+  await open(page, "cook-token", { bills: [ticketedBill("preparing")] });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("kitchen-ticket")).toBeVisible();
+  await expect(page.getByTestId("ticket-ready-copy")).toHaveCount(0);
 });
 
 test("cancelling an unserved line asks why, then whether it was already made", async ({ page }) => {

@@ -18,17 +18,17 @@
 use std::collections::BTreeMap;
 
 use arena_proto::{
-    AppError, ErrorCode, FLAG_KITCHEN, Intent, KitchenAdvance, KitchenAdvanceReverted, MOVE_SALE,
-    STAGE_READY, STAGE_SERVED, next_stage, previous_stage,
+    AlertKind, AppError, ErrorCode, FLAG_KITCHEN, Intent, KitchenAdvance, KitchenAdvanceReverted,
+    MOVE_SALE, STAGE_READY, STAGE_SERVED, next_stage, previous_stage,
 };
 use arena_store::{
-    ChangeOp, HoldRow, LotRow, MoveRow, NewTicket, NewTicketLine, OrderRow, RowKey, StockRow,
-    StoreTx, Table, TicketRow, count_unserved_lines, delete_row, find_device, find_device_meta,
-    find_order, find_stock, find_ticket, insert_ticket, insert_ticket_line,
-    list_line_holds_released_at, list_lots, list_order_moves, list_order_tickets,
-    list_ticket_lines, list_ticket_lines_served_at, next_ticket_number, read_row, reopen_hold,
-    restore_ticket_stage, set_order_ready, set_ticket_cancelled, set_ticket_stage,
-    unmark_line_served,
+    ChangeOp, HoldRow, LotRow, MoveRow, NewAlert, NewTicket, NewTicketLine, OrderRow, RowKey,
+    StockRow, StoreTx, Table, TicketRow, ack_alert, count_unserved_lines, delete_row, find_device,
+    find_device_meta, find_open_alert, find_open_alert_for_ticket, find_order, find_stock,
+    find_ticket, insert_alert, insert_ticket, insert_ticket_line, list_line_holds_released_at,
+    list_lots, list_open_tickets, list_order_moves, list_order_tickets, list_ticket_lines,
+    list_ticket_lines_served_at, next_ticket_number, read_row, reopen_hold, restore_ticket_stage,
+    set_order_ready, set_ticket_cancelled, set_ticket_stage, unmark_line_served,
 };
 
 use super::mutate::Written;
@@ -120,6 +120,72 @@ pub(super) fn open(
     Ok(out)
 }
 
+/// Raises the order-ready alert of a ticket that reached Ready (Story 7.4). A device ticket
+/// raises one per device (a second Ready ticket of the same device adds none); a walk-up ticket
+/// raises a branch-level alert that records the ticket.
+fn raise_ready_alert(
+    tx: &StoreTx<'_>,
+    ticket: &TicketRow,
+    now_ms: i64,
+    out: &mut Vec<Written>,
+) -> Result<(), AppError> {
+    let kind = AlertKind::OrderReady.as_str();
+    let open = match ticket.device_id.as_deref() {
+        Some(d) => find_open_alert(tx, kind, Some(d))?,
+        None => find_open_alert_for_ticket(tx, kind, &ticket.id)?,
+    };
+    if open.is_some() {
+        return Ok(());
+    }
+    let id = ulid::Ulid::generate().to_string();
+    insert_alert(
+        tx,
+        &NewAlert {
+            id: &id,
+            kind,
+            device_id: ticket.device_id.as_deref(),
+            raised_at: now_ms,
+            product_id: None,
+            qty: None,
+            threshold: None,
+            ticket_id: ticket.device_id.is_none().then_some(ticket.id.as_str()),
+        },
+    )?;
+    out.push(written(RowKey::Alerts { id }, ChangeOp::Insert));
+    Ok(())
+}
+
+/// Closes the order-ready alert a ticket left behind once the ticket is no longer Ready (served,
+/// cancelled or its Ready undone): a walk-up ticket's own alert, or a device's alert when none of
+/// the device's tickets is still Ready. Call it after the ticket's stage has been written.
+pub(super) fn close_ready_alert(
+    tx: &StoreTx<'_>,
+    ticket_id: &str,
+    device_id: Option<&str>,
+    by: &str,
+    now_ms: i64,
+    out: &mut Vec<Written>,
+) -> Result<(), AppError> {
+    let kind = AlertKind::OrderReady.as_str();
+    let open = match device_id {
+        Some(d) => {
+            if list_open_tickets(tx)?
+                .iter()
+                .any(|t| t.device_id.as_deref() == Some(d) && t.stage == STAGE_READY)
+            {
+                return Ok(());
+            }
+            find_open_alert(tx, kind, Some(d))?
+        }
+        None => find_open_alert_for_ticket(tx, kind, ticket_id)?,
+    };
+    if let Some(a) = open {
+        ack_alert(tx, &a.id, now_ms, by)?;
+        out.push(written(RowKey::Alerts { id: a.id }, ChangeOp::Update));
+    }
+    Ok(())
+}
+
 /// Deletes a ticket's lines (the ticket row stays, or is deleted by the caller).
 fn delete_lines(tx: &StoreTx<'_>, ticket_id: &str, out: &mut Vec<Written>) -> Result<(), AppError> {
     for l in list_ticket_lines(tx, ticket_id)? {
@@ -179,9 +245,10 @@ pub(super) fn cancel_order_tickets(
         delete_lines(tx, &t.id, out)?;
         set_ticket_cancelled(tx, &t.id, reason, now_ms, by)?;
         out.push(written(
-            RowKey::KitchenTickets { id: t.id },
+            RowKey::KitchenTickets { id: t.id.clone() },
             ChangeOp::Update,
         ));
+        close_ready_alert(tx, &t.id, t.device_id.as_deref(), by, now_ms, out)?;
     }
     Ok(())
 }
@@ -299,10 +366,19 @@ pub(super) fn mutate_advance(
                 ChangeOp::Update,
             ));
         }
+        raise_ready_alert(tx, ticket, now_ms, &mut out)?;
     } else if a.to == STAGE_SERVED {
         for line in &t.serves {
             out.extend(serve_line(tx, by, line, now_ms)?);
         }
+        close_ready_alert(
+            tx,
+            &ticket.id,
+            ticket.device_id.as_deref(),
+            by,
+            now_ms,
+            &mut out,
+        )?;
     }
     Ok(out)
 }
@@ -483,5 +559,16 @@ pub(super) fn mutate_advance_reverted(
         },
         ChangeOp::Update,
     ));
+    if ticket.stage == STAGE_READY {
+        let by = intent.actor.id.as_str();
+        close_ready_alert(
+            tx,
+            &ticket.id,
+            ticket.device_id.as_deref(),
+            by,
+            now_ms,
+            &mut out,
+        )?;
+    }
     Ok(out)
 }

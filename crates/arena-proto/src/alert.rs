@@ -38,11 +38,15 @@ pub enum AlertKind {
     /// device alert, one open per device: it sounds, the tile shows `order`, and it closes by
     /// itself once every line of the session's bill is served (or staff acknowledge it).
     KioskOrder,
+    /// A kitchen ticket reached Ready (raised by `kitchen.advance`; Story 7.4). A device ticket
+    /// raises one per device; a walk-up ticket raises a branch-level alert that records its ticket.
+    /// It sounds once and closes when staff acknowledge it or the Ready is undone.
+    OrderReady,
 }
 
 impl AlertKind {
     /// Every kind.
-    pub const ALL: [AlertKind; 10] = [
+    pub const ALL: [AlertKind; 11] = [
         Self::Fixture,
         Self::TimeUp,
         Self::ControllerMissing,
@@ -53,6 +57,7 @@ impl AlertKind {
         Self::CheckPc,
         Self::CallStaff,
         Self::KioskOrder,
+        Self::OrderReady,
     ];
 
     /// The stored and wire form, e.g. `time_up`.
@@ -68,6 +73,7 @@ impl AlertKind {
             Self::CheckPc => "check_pc",
             Self::CallStaff => "call_staff",
             Self::KioskOrder => "kiosk_order",
+            Self::OrderReady => "order_ready",
         }
     }
 
@@ -89,6 +95,7 @@ impl AlertKind {
             Self::CheckPc => "check-pc",
             Self::CallStaff => "call",
             Self::KioskOrder => "order",
+            Self::OrderReady => "ready",
         }
     }
 }
@@ -149,6 +156,14 @@ pub struct SnapshotAlert {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(type = "number", optional)]
     pub threshold: Option<i64>,
+    /// The walk-up kitchen ticket an order-ready alert is about (Story 7.4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ticket_id: Option<String>,
+    /// That ticket's number (`K-<n>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number", optional)]
+    pub ticket_number: Option<i64>,
 }
 
 #[cfg(test)]
@@ -201,5 +216,7 @@ mod tests {
         assert_eq!(AlertKind::CallStaff.tag(), "call");
         assert_eq!(AlertKind::KioskOrder.as_str(), "kiosk_order");
         assert_eq!(AlertKind::KioskOrder.tag(), "order");
+        assert_eq!(AlertKind::OrderReady.as_str(), "order_ready");
+        assert_eq!(AlertKind::OrderReady.tag(), "ready");
     }
 }

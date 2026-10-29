@@ -33,6 +33,7 @@
   import { isTextEntry } from "../../lib/nav";
   import { sessionStaff, snapshotOf } from "../../lib/operating";
   import PlayerLookup from "../../lib/players/PlayerLookup.svelte";
+  import CounterTickets from "../../lib/CounterTickets.svelte";
   import OpenOrders from "../../lib/OpenOrders.svelte";
   import { openCounterOrders } from "../../lib/open-orders";
   import RefundPanel from "../../lib/RefundPanel.svelte";
@@ -1065,6 +1066,12 @@
           >{view === "refund" ? t("hub.pos.recent.back") : t("hub.refund.toggle")}</button
         >
       </div>
+
+      <CounterTickets
+        tickets={snapshot?.counter_tickets ?? []}
+        {staff}
+        onchanged={() => void invalidate(SESSION_DEPENDENCY)}
+      />
 
       {#if view === "recent"}
         <div class="results">{@render recentSales()}</div>

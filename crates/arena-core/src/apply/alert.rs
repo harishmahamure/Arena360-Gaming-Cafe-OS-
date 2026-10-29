@@ -58,6 +58,12 @@ pub(super) fn validate(intent: &Intent, t: &AlertTarget) -> Result<(), AppError>
                         "low stock is raised by stock changes",
                     ));
                 }
+                Some(AlertKind::OrderReady) => {
+                    return Err(invalid(
+                        "alert_kind",
+                        "order ready is raised by kitchen tickets",
+                    ));
+                }
                 Some(_) => {}
             }
             if r.device_id.is_some() && !t.device {
@@ -107,6 +113,7 @@ pub(super) fn mutate(
                     product_id: None,
                     qty: None,
                     threshold: None,
+                    ticket_id: None,
                 },
             )?;
             Ok(vec![Written {

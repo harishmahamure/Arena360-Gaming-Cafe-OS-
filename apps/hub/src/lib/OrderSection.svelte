@@ -7,6 +7,8 @@
     SnapshotLocale,
   } from "@arena/ui/generated";
   import { onMount, tick } from "svelte";
+  import { loadSettings } from "./auth";
+  import { KEY_FULFILMENT } from "./operating";
   import type { MessageKey } from "@arena/ui/messages";
   import { CANCEL_LABELS, CANCEL_REASONS, VOID_LABELS, VOID_REASONS } from "./tile-actions.svelte";
 
@@ -60,6 +62,16 @@
     served: "hub.order.ticket_stage.served",
     cancelled: "hub.order.ticket_stage.cancelled",
   };
+
+  /** How the branch fulfils orders (`seat` or `counter`); read once a ticket is Ready. */
+  let fulfilment: string | null = $state(null);
+  $effect(() => {
+    if (fulfilment !== null || !tickets.some((tk) => tk.stage === "ready")) return;
+    void loadSettings().then((r) => {
+      if (r.kind === "ok")
+        fulfilment = r.settings.find((s) => s.key === KEY_FULFILMENT)?.value ?? "seat";
+    });
+  });
 
   let now = $state(Date.now());
   onMount(() => {
@@ -137,6 +149,13 @@
               >{t("hub.order.ticket_elapsed", { minutes: minutes(tk) })}</span
             >
           </div>
+          {#if tk.stage === "ready"}
+            <p class="muted" data-testid="ticket-ready-copy">
+              {fulfilment === "counter"
+                ? t("hub.order.ready_pickup")
+                : t("hub.order.ready_deliver", { seat: tk.seat })}
+            </p>
+          {/if}
           <ul class="ticket-lines">
             {#each tk.lines as l (l.line_id)}
               <li data-testid="ticket-line">

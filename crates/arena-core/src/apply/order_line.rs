@@ -245,6 +245,14 @@ pub(super) fn mutate_served(
         written.push(update(RowKey::KitchenTickets {
             id: ticket.id.clone(),
         }));
+        super::kitchen_ticket::close_ready_alert(
+            tx,
+            &ticket.id,
+            ticket.device_id.as_deref(),
+            &intent.actor.id,
+            now_ms,
+            &mut written,
+        )?;
     }
     Ok(written)
 }
@@ -406,6 +414,14 @@ fn drop_from_ticket(
     written.push(update(RowKey::KitchenTickets {
         id: ticket.id.clone(),
     }));
+    super::kitchen_ticket::close_ready_alert(
+        tx,
+        &ticket.id,
+        ticket.device_id.as_deref(),
+        by,
+        now_ms,
+        written,
+    )?;
     Ok(())
 }
 

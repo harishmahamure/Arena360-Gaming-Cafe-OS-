@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import type { SnapshotAlert } from "@arena/ui/generated";
+import type { KitchenTicketView, SnapshotAlert, SnapshotBill } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { CORS, HUB, MANAGER, device, json, snapshot } from "./floor-fixture";
 
@@ -15,6 +15,7 @@ const MIN = 60_000;
 
 type Stub = {
   alerts: SnapshotAlert[];
+  bills: SnapshotBill[];
   licence: boolean;
   acks: string[];
   queue: string[];
@@ -25,7 +26,7 @@ const raised = (id: string, device_id: string, extra: Partial<SnapshotAlert> = {
   ({ id, kind: "fixture", device_id, raised_at: Date.now() - 2 * MIN, ...extra }) as SnapshotAlert;
 
 async function open(page: Page, alerts: SnapshotAlert[] = []): Promise<Stub> {
-  const hub: Stub = { alerts, licence: false, acks: [], queue: [], locks: 0 };
+  const hub: Stub = { alerts, bills: [], licence: false, acks: [], queue: [], locks: 0 };
   await page.addInitScript(() => {
     sessionStorage.setItem("arena.hub.token", "manager-token");
     const w = window as unknown as { __plays: string[] };
@@ -43,6 +44,7 @@ async function open(page: Page, alerts: SnapshotAlert[] = []): Promise<Stub> {
       case "/ui/snapshot": {
         const snap = snapshot([device(1, {}), device(2, {}), device(3, {})]);
         snap.alerts = hub.alerts;
+        snap.bills = hub.bills;
         if (hub.licence) snap.licence_unverified = true;
         return json(route, snap);
       }
@@ -165,6 +167,91 @@ test("a kiosk order tags the tile ORDER, sounds and names the alert in the list"
   await expect.poll(async () => (await plays(page)).length).toBe(1);
   await headerButton(page).click();
   await expect(page.getByTestId("alert-row")).toContainText(en["hub.alerts.kind.kiosk_order"]);
+});
+
+/** A running bill on PC 1 whose kitchen ticket K-5 is at `stage`. */
+const ticketBill = (...stages: string[]): SnapshotBill => ({
+  session_id: "S1",
+  device_id: PC1,
+  session_rev: 1,
+  lines: [],
+  items: [],
+  tickets: stages.map((stage, i): KitchenTicketView => ({
+    id: `T-${i}`,
+    order_id: "O1",
+    number: 5 + i,
+    seat: "PC 1",
+    stage,
+    placed_at: Date.now() - MIN,
+    rev: 2,
+    lines: [{ line_id: `L-${i}`, label: "Burger", qty: 1, notes: [] }],
+  })),
+  subtotal_minor: 0,
+  paid_minor: 0,
+  remaining_minor: 0,
+});
+
+const badge = (page: Page, label: string) =>
+  tile(page, label).locator("[data-component=alert-badge]");
+
+test("a ticket reaching Ready turns the tile READY, chimes once and is announced once", async ({
+  page,
+}) => {
+  const hub = await open(page);
+  hub.bills = [ticketBill("preparing")];
+  hub.queue.push("event: devices.changed\ndata: {}\n\n");
+  await expect(badge(page, "PC 1")).toHaveText(en["ui.alert.tag.order"]);
+  expect(await plays(page)).toEqual([]);
+
+  hub.bills = [ticketBill("ready")];
+  raise(hub, raised("R1", PC1, { kind: "order_ready" }));
+  await expect(badge(page, "PC 1")).toHaveText(en["ui.alert.tag.ready"]);
+  await expect.poll(async () => (await plays(page)).length).toBe(1);
+  expect((await plays(page))[0]).toMatch(/\/sounds\/order-ready\.wav$/);
+  await expect(page.getByTestId("alert-announce").locator("p")).toHaveText(
+    en["hub.alerts.announce"]
+      .replace("{where}", "PC 1")
+      .replace("{what}", en["hub.alerts.kind.order_ready"]),
+  );
+  // It never repeats.
+  await page.clock.runFor(60_000);
+  expect(await plays(page)).toHaveLength(1);
+  await expect(page.getByTestId("alert-announce").locator("p")).toHaveCount(1);
+});
+
+test("the READY tag follows the ticket stages: ORDER while another is cooking, none when all close", async ({
+  page,
+}) => {
+  const hub = await open(page);
+  hub.bills = [ticketBill("ready", "new")];
+  raise(hub, raised("R1", PC1, { kind: "order_ready" }));
+  await expect(badge(page, "PC 1")).toHaveText(en["ui.alert.tag.ready"]);
+
+  // The ready one is served (its alert acknowledged): the other is still New.
+  hub.alerts = [];
+  hub.bills = [ticketBill("served", "new")];
+  hub.queue.push("event: devices.changed\ndata: {}\n\n");
+  await expect(badge(page, "PC 1")).toHaveText(en["ui.alert.tag.order"]);
+
+  // An undone Ready returns the tile to ORDER and makes no sound.
+  hub.bills = [ticketBill("preparing")];
+  hub.queue.push("event: devices.changed\ndata: {}\n\n");
+  await expect(badge(page, "PC 1")).toHaveText(en["ui.alert.tag.order"]);
+
+  hub.bills = [];
+  hub.queue.push("event: devices.changed\ndata: {}\n\n");
+  await expect(badge(page, "PC 1")).toHaveCount(0);
+  // Only the Ready itself chimed: the served ticket and the undone Ready made no sound.
+  expect(await plays(page)).toHaveLength(1);
+});
+
+test("a Free branch's ready order (no ticket, no alert) keeps the plain tile", async ({ page }) => {
+  const hub = await open(page);
+  hub.bills = [{ ...ticketBill(), tickets: [], ready: true }];
+  hub.queue.push("event: devices.changed\ndata: {}\n\n");
+  await page.waitForTimeout(800);
+  await expect(badge(page, "PC 1")).toHaveCount(0);
+  expect(await plays(page)).toEqual([]);
 });
 
 test("a screen reader hears each new alert once", async ({ page }) => {

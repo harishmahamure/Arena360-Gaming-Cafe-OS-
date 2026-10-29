@@ -25,4 +25,12 @@ export type SnapshotAlert = {
    * The threshold a low-stock alert crossed.
    */
   threshold?: number;
+  /**
+   * The walk-up kitchen ticket an order-ready alert is about (Story 7.4).
+   */
+  ticket_id?: string;
+  /**
+   * That ticket's number (`K-<n>`).
+   */
+  ticket_number?: number;
 };

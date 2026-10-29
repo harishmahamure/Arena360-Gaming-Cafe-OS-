@@ -10,6 +10,8 @@ import { newIdempotencyKey, submitIntent } from "./auth";
 
 /** The bundled sound (a file in `static/sounds`, never fetched from anywhere else). */
 export const SOUND_URL = "/sounds/alert.wav";
+/** The bundled order-ready chime (Story 7.4): it plays once for each new order-ready alert. */
+export const READY_SOUND_URL = "/sounds/order-ready.wav";
 /** How often the sound repeats while a device alert stays open. */
 export const SOUND_REPEAT_MS = 30_000;
 
@@ -24,10 +26,12 @@ export const KIND_LABELS: Record<AlertKind, MessageKey> = {
   check_pc: "hub.alerts.kind.check_pc",
   call_staff: "hub.alerts.kind.call_staff",
   kiosk_order: "hub.alerts.kind.kiosk_order",
+  order_ready: "hub.alerts.kind.order_ready",
 };
 
 /** The tags a device alert puts on its tile (the tile badge's `AlertTag` subset). */
-type TileTag = "new" | "call" | "time-up" | "controllers" | "locked-out" | "check-pc" | "order";
+type TileTag =
+  "new" | "call" | "time-up" | "controllers" | "locked-out" | "check-pc" | "order" | "ready";
 
 // A branch-level alert (no device) has no tile tag.
 export const KIND_TAGS: Record<AlertKind, TileTag | null> = {
@@ -41,6 +45,7 @@ export const KIND_TAGS: Record<AlertKind, TileTag | null> = {
   check_pc: "check-pc",
   call_staff: "call",
   kiosk_order: "order",
+  order_ready: "ready",
 };
 
 /** Branch-level kinds that also sound, and the screen a pick on them opens. */
@@ -48,11 +53,22 @@ const BRANCH_SOUNDS = new Set<AlertKind>(["stock_expiring", "stock_low"]);
 const KIND_HREFS: Partial<Record<AlertKind, string>> = {
   stock_expiring: "/inventory/expiring",
   stock_low: "/inventory/low-stock",
+  order_ready: "/pos",
 };
 
 /** The values a kind's label shows (the low-stock text names the product and what is left). */
 const labelParams = (a: SnapshotAlert): Record<string, string | number> | undefined =>
-  a.kind === "stock_low" ? { product: a.product ?? "", qty: a.qty ?? 0 } : undefined;
+  a.kind === "stock_low"
+    ? { product: a.product ?? "", qty: a.qty ?? 0 }
+    : a.kind === "order_ready" && a.ticket_number != null
+      ? { number: a.ticket_number }
+      : undefined;
+
+/** The label of an alert: a walk-up order-ready alert names its ticket. */
+const labelOf = (a: SnapshotAlert): MessageKey =>
+  a.kind === "order_ready" && a.ticket_number != null
+    ? "hub.alerts.kind.order_ready_ticket"
+    : KIND_LABELS[a.kind];
 
 const CONDITIONS = {
   licence: "hub.licence.unverified",
@@ -95,10 +111,35 @@ export const requestSheet = (deviceId: string) => {
 
 export const openFor = (deviceId: string) => alerts.open.filter((a) => a.device_id === deviceId);
 
-/** The tag a device's tile shows: its oldest open alert's. */
+/**
+ * The kitchen tag of each device with open tickets (Story 7.4): `ready` while any of its tickets
+ * is Ready, else `order` while one is New or Preparing. It comes from the ticket stages, so it
+ * follows the stage change and clears when the last ticket closes.
+ */
+const ticketTags: Map<string, "ready" | "order"> = $state(new Map());
+
+/**
+ * The tag a device's tile shows: READY while a ticket is Ready (it replaces ORDER), else its
+ * oldest open alert's, else ORDER while a ticket is in the kitchen.
+ */
 export const tagOf = (deviceId: string): TileTag | undefined => {
   const first = openFor(deviceId)[0];
-  return first ? (KIND_TAGS[first.kind] ?? undefined) : undefined;
+  const alert = first ? (KIND_TAGS[first.kind] ?? undefined) : undefined;
+  const kitchen = ticketTags.get(deviceId);
+  if (kitchen === "ready" && (alert === undefined || alert === "order")) return "ready";
+  return alert ?? kitchen;
+};
+
+const takeTicketTags = (snapshot: HubSnapshot | null) => {
+  ticketTags.clear();
+  for (const bill of snapshot?.bills ?? []) {
+    if (!bill.device_id) continue;
+    for (const tk of bill.tickets ?? []) {
+      if (tk.stage === "ready") ticketTags.set(bill.device_id, "ready");
+      else if (!ticketTags.has(bill.device_id) && (tk.stage === "new" || tk.stage === "preparing"))
+        ticketTags.set(bill.device_id, "order");
+    }
+  }
 };
 
 /** The header list: open alerts oldest first, then the branch conditions. */
@@ -109,7 +150,7 @@ export function listRows(): AlertRow[] {
       alertId: a.id,
       deviceId: a.device_id ?? null,
       href: KIND_HREFS[a.kind] ?? null,
-      label: KIND_LABELS[a.kind],
+      label: labelOf(a),
       params: labelParams(a),
       since: a.raised_at,
     })),
@@ -142,6 +183,7 @@ export function ageOf(since: number, now: number): string {
 }
 
 let audio: HTMLAudioElement | undefined;
+let readyAudio: HTMLAudioElement | undefined;
 let timer: ReturnType<typeof setInterval> | undefined;
 let heard = new Set<string>();
 let told = new Set<string>();
@@ -159,18 +201,28 @@ function play() {
   void Promise.resolve(audio.play()).catch(() => {});
 }
 
+/** The order-ready chime: once per new alert, never repeated. */
+function playReady() {
+  if (typeof Audio === "undefined") return;
+  readyAudio ??= new Audio(READY_SOUND_URL);
+  readyAudio.currentTime = 0;
+  void Promise.resolve(readyAudio.play()).catch(() => {});
+}
+
 function settleSound() {
-  const ids = new Set(
-    alerts.open.filter((a) => a.device_id || BRANCH_SOUNDS.has(a.kind)).map((a) => a.id),
+  const sounding = alerts.open.filter(
+    (a) => a.device_id || BRANCH_SOUNDS.has(a.kind) || a.kind === "order_ready",
   );
-  const fresh = [...ids].some((id) => !heard.has(id));
-  heard = ids;
-  if (ids.size === 0) {
+  const fresh = sounding.filter((a) => !heard.has(a.id));
+  heard = new Set(sounding.map((a) => a.id));
+  if (fresh.some((a) => a.kind === "order_ready")) playReady();
+  const ids = sounding.filter((a) => a.kind !== "order_ready");
+  if (ids.length === 0) {
     clearInterval(timer);
     timer = undefined;
     return;
   }
-  if (!fresh && timer) return;
+  if (!fresh.some((a) => a.kind !== "order_ready") && timer) return;
   clearInterval(timer);
   play();
   timer = setInterval(play, SOUND_REPEAT_MS);
@@ -189,8 +241,12 @@ function announce(snapshot: HubSnapshot) {
     if (told.has(a.id)) continue;
     say(
       a.id,
-      a.device_id ? (names.get(a.device_id) ?? "") : t("hub.alerts.branch"),
-      t(KIND_LABELS[a.kind], labelParams(a)),
+      a.device_id
+        ? (names.get(a.device_id) ?? "")
+        : a.ticket_number != null
+          ? t("hub.alerts.ticket_where", { number: a.ticket_number })
+          : t("hub.alerts.branch"),
+      a.kind === "order_ready" ? t(KIND_LABELS.order_ready) : t(labelOf(a), labelParams(a)),
     );
   }
   for (const c of alerts.conditions) {
@@ -213,6 +269,7 @@ export function syncAlerts(snapshot: HubSnapshot | null) {
     ...(usable?.licence_unverified ? (["licence"] as const) : []),
     ...(usable?.clock_wrong ? (["clock"] as const) : []),
   ];
+  takeTicketTags(usable);
   settleSound();
   if (usable) announce(usable);
 }

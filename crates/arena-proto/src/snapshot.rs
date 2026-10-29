@@ -33,6 +33,11 @@ pub struct HubSnapshot {
     #[serde(default)]
     #[ts(optional, as = "Option<Vec<crate::SnapshotAlert>>")]
     pub alerts: Vec<crate::SnapshotAlert>,
+    /// The open walk-up kitchen tickets (seat "Counter"), oldest first: the POS open-tickets strip
+    /// (Story 7.4).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<crate::KitchenTicketView>>")]
+    pub counter_tickets: Vec<crate::KitchenTicketView>,
     /// The branch's shift: who has the drawer open, and the float to prefill for the next one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -407,6 +412,7 @@ mod tests {
             bills: vec![],
             group_bills: vec![],
             alerts: vec![],
+            counter_tickets: vec![],
             shift: None,
             devices: vec![SnapshotDevice {
                 device_id: "D".into(),

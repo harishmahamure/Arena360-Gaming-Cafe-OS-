@@ -2,7 +2,15 @@
   import type { MessageKey } from "../messages/index.js";
 
   export type AlertTag =
-    "new" | "call" | "time-up" | "request" | "controllers" | "locked-out" | "check-pc" | "order";
+    | "new"
+    | "call"
+    | "time-up"
+    | "request"
+    | "controllers"
+    | "locked-out"
+    | "check-pc"
+    | "order"
+    | "ready";
 
   export const ALERT_TAGS: Record<AlertTag, MessageKey> = {
     new: "ui.alert.tag.new",
@@ -13,6 +21,7 @@
     "locked-out": "ui.alert.tag.locked_out",
     "check-pc": "ui.alert.tag.check_pc",
     order: "ui.alert.tag.order",
+    ready: "ui.alert.tag.ready",
   };
 </script>
 

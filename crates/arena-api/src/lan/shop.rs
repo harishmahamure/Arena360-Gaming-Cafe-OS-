@@ -47,9 +47,11 @@ fn not_primary() -> AppError {
 
 /// The product a refusal's `lines[i]` field names, if it names one of the cart's lines.
 fn refused_product(field: Option<&str>, lines: &[PosSaleLine]) -> Option<String> {
+    // `lines[i]` or a field of it (`lines[i].kitchen_notes`).
     let at: usize = field?
         .strip_prefix("lines[")?
-        .strip_suffix(']')?
+        .split_once(']')?
+        .0
         .parse()
         .ok()?;
     lines.get(at).map(|l| l.product_id.clone())

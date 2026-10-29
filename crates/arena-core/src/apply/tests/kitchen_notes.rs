@@ -224,6 +224,26 @@ async fn lines_of_one_product_stay_apart_only_when_their_notes_differ() {
         (ErrorCode::ValidationFailed, Some("lines[1]"))
     );
 
+    // The same set in another order, or padded, is the same line.
+    let (code, field) = refusal(
+        submit(
+            &f,
+            counter.clone(),
+            place(
+                &session,
+                vec![
+                    line(&id, 1, &["No ice", "Less sugar"]),
+                    line(&id, 1, &[" Less sugar", "No ice"]),
+                ],
+            ),
+        )
+        .await,
+    );
+    assert_eq!(
+        (code, field.as_deref()),
+        (ErrorCode::ValidationFailed, Some("lines[1]"))
+    );
+
     submit(
         &f,
         counter,

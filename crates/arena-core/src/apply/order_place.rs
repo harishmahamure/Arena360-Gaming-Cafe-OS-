@@ -108,9 +108,8 @@ pub(super) fn validate_place(
     if intent.base_rev.is_some() {
         return Err(invalid("base_rev", "order.place takes no base_rev"));
     }
-    super::kitchen_notes::check_lines(intent.actor.kind, &p.lines, &t.basket)?;
     if p.counter.is_some() {
-        return validate_counter(p, t);
+        return validate_counter(intent, p, t);
     }
     let Some(s) = &t.session else {
         return Err(AppError::with_field(
@@ -134,6 +133,7 @@ pub(super) fn validate_place(
         ));
     }
     check_lines(&p.lines, &t.basket)?;
+    super::kitchen_notes::check_lines(intent.actor.kind, &p.lines, &t.basket)?;
     price(&p.lines, &t.basket)?;
     plan_stock(
         &p.lines,
@@ -147,7 +147,7 @@ pub(super) fn validate_place(
 /// An unpaid counter order (Story 6.32): the lines are tied to a PC, not a session, and nothing is
 /// paid yet. The PC and the player (when named) must exist, no stock override applies, and the
 /// lines follow the same rules as any order.
-fn validate_counter(p: &OrderPlace, t: &PlaceTarget) -> Result<(), AppError> {
+fn validate_counter(intent: &Intent, p: &OrderPlace, t: &PlaceTarget) -> Result<(), AppError> {
     if !p.session_id.is_empty() {
         return Err(invalid("session_id", "a counter order names no session"));
     }
@@ -172,6 +172,7 @@ fn validate_counter(p: &OrderPlace, t: &PlaceTarget) -> Result<(), AppError> {
         ));
     }
     check_lines(&p.lines, &t.basket)?;
+    super::kitchen_notes::check_lines(intent.actor.kind, &p.lines, &t.basket)?;
     price(&p.lines, &t.basket)?;
     plan_stock(&p.lines, &t.basket, false, &deferred(t))?;
     Ok(())

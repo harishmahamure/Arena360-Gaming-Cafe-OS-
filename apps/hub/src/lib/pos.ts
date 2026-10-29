@@ -253,13 +253,26 @@ export const cartTotal = (
   tax: Tax = DEFAULT_TAX,
 ): number => cartBill(cart, byId, tax).total_minor;
 
-/** The cart as the lines of `pos.sale`; `withNotes` off (no kitchen on the plan) leaves notes out. */
-export const saleLines = (cart: CartLine[], withNotes = true): PosSaleLine[] =>
-  cart.map((l) =>
-    withNotes && l.notes?.length
-      ? { product_id: l.productId, qty: l.qty, kitchen_notes: l.notes }
-      : { product_id: l.productId, qty: l.qty },
-  );
+/**
+ * The cart as the lines of `pos.sale`. `withNotes` off (no kitchen on the plan) leaves notes out,
+ * and lines of one product that differed only by their notes become one line.
+ */
+export const saleLines = (cart: CartLine[], withNotes = true): PosSaleLine[] => {
+  if (withNotes) {
+    return cart.map((l) =>
+      l.notes?.length
+        ? { product_id: l.productId, qty: l.qty, kitchen_notes: l.notes }
+        : { product_id: l.productId, qty: l.qty },
+    );
+  }
+  const byProduct = new Map<string, PosSaleLine>();
+  for (const l of cart) {
+    const seen = byProduct.get(l.productId);
+    if (seen) seen.qty += l.qty;
+    else byProduct.set(l.productId, { product_id: l.productId, qty: l.qty });
+  }
+  return [...byProduct.values()];
+};
 
 /**
  * Tells a barcode scanner (a keyboard wedge) from a person: printable keys under

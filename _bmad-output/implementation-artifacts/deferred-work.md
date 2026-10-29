@@ -543,3 +543,13 @@
 - A cart restored by Undo keeps its notes, but a preset renamed meanwhile shows as a free-text note and may trip the one-free-note rule on re-send.
 - Preset notes are compared case-sensitively; "no ice" and "No ice" are two notes.
 - No Playwright test for the Counter PIN path on a product save with notes, or for the `FIELD_TOO_LONG` message on the product form.
+
+## Deferred from: code review of Story 7.2
+
+- Merging two note lines clamps the sum at 99 without telling the user (Hub POS and kiosk `renote`).
+- Hub POS notes panel: stale `noting` key after a line is removed, a removed preset's note counts as the free note, and `FIELD_TOO_LONG`/`TIER_LOCKED` show the generic lines error.
+- Notes panels lack `aria-controls`, focus moves and Escape-to-close; the inventory notes list is keyed by index.
+- `normNotes`/`lineKey`/`renote` are duplicated between the Hub and the kiosk and sort with `localeCompare`.
+- `parse_notes` reads corrupt stored JSON as no notes; a serialise failure falls back to an empty value.
+- Kiosk `Cart.svelte` checks stock per line, so two lines of one product that together exceed stock show no inline problem (the Hub still refuses).
+- Setup-file export/import and `shop::menu` (a settings read on every poll) do not carry or cache the presets.

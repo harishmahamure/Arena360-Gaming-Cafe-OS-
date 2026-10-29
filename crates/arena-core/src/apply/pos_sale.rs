@@ -190,7 +190,7 @@ pub(super) fn check_lines(lines: &[PosSaleLine], t: &Basket) -> Result<(), AppEr
         if !(1..=MAX_SALE_QTY).contains(&line.qty) {
             return Err(invalid(&field, "quantity must be 1 to 999"));
         }
-        if !seen.insert((line.product_id.as_str(), &line.kitchen_notes)) {
+        if !seen.insert(line.line_key()) {
             return Err(invalid(
                 &field,
                 "a product repeats only with different kitchen notes",

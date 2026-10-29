@@ -182,12 +182,22 @@ export const placeLines = (
  * left the menu keeps its last listing (its stock problem is then `out_of_stock`).
  */
 export function refreshLines(lines: CartLine[], menu: ShopItem[]): CartLine[] {
-  return lines.map((l) => {
+  const fresh = lines.map((l): CartLine => {
     const live = menu.find((i) => i.id === l.item.id);
-    return live
-      ? { ...l, item: live }
-      : { ...l, item: { ...l.item, available: false, max_qty: 0 } };
+    if (!live) return { ...l, item: { ...l.item, available: false, max_qty: 0 } };
+    // A note the product no longer offers as a preset cannot be sent (the Hub refuses free text
+    // from a kiosk) and its chip is gone, so the player could not untick it.
+    const notes = normNotes(l.notes).filter((n) => live.kitchen_notes.includes(n));
+    return notes.length ? { ...l, item: live, notes } : { item: live, qty: l.qty };
   });
+  // Lines whose notes became equal are one line.
+  const merged = new Map<string, CartLine>();
+  for (const l of fresh) {
+    const key = lineKey(l);
+    const twin = merged.get(key);
+    merged.set(key, twin ? { ...twin, qty: Math.min(twin.qty + l.qty, MAX_LINE_QTY) } : l);
+  }
+  return [...merged.values()];
 }
 
 /** The outcome in the service's answer to `shop_place` (`shop.place_result`). */

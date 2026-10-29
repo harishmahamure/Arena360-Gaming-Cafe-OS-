@@ -33,6 +33,17 @@ pub struct PosSaleLine {
     pub kitchen_notes: Vec<String>,
 }
 
+impl PosSaleLine {
+    /// The line's identity within an order: the product and its notes as a trimmed, sorted set,
+    /// so `["A","B"]` and `[" B","A"]` are one line.
+    pub fn line_key(&self) -> (&str, Vec<&str>) {
+        let mut notes: Vec<&str> = self.kitchen_notes.iter().map(|n| n.trim()).collect();
+        notes.sort_unstable();
+        notes.dedup();
+        (self.product_id.as_str(), notes)
+    }
+}
+
 /// The payload of `pos.sale`: a walk-up sale settled in the same intent. The payments sum to the
 /// total the Hub computes from the lines (tax included). A `player_id` attaches the sale to a
 /// profile, which allows wallet and credit rows. `stock_override` lets a short bundle sell by

@@ -332,10 +332,8 @@ test("cart lines of one product are apart by kitchen notes and merge when the no
     { product_id: "tea", qty: 1 },
   ]);
   // No kitchen on the plan: notes stay out of the intent.
-  expect(saleLines(two.cart, false)).toEqual([
-    { product_id: "tea", qty: 1 },
-    { product_id: "tea", qty: 1 },
-  ]);
+  // Lines that differed only by their notes become one, so the server sees no repeat.
+  expect(saleLines(two.cart, false)).toEqual([{ product_id: "tea", qty: 2 }]);
   expect(renote(two.cart, "tea", [], ["No ice"])).toEqual([
     { productId: "tea", qty: 2, notes: ["No ice"] },
   ]);

@@ -615,6 +615,21 @@ test("toggling a preset moves the line and merges it with a line that has the sa
   expect(renote(added, "P9", ["Less sugar", "No ice"], [])).toEqual([{ item: tea, qty: 3 }]);
 });
 
+test("a refresh drops notes the product no longer offers and merges the lines left equal", () => {
+  const tea = item("P9", "Tea", { kitchen_notes: ["No ice", "Less sugar"] });
+  const lines: CartLine[] = [
+    { item: tea, qty: 1, notes: ["No ice"] },
+    { item: tea, qty: 2 },
+    { item: tea, qty: 1, notes: ["Less sugar"] },
+  ];
+  const gone = refreshLines(lines, [{ ...tea, kitchen_notes: ["Less sugar"] }]);
+  expect(gone.map((l) => [l.qty, l.notes])).toEqual([
+    [3, undefined],
+    [1, ["Less sugar"]],
+  ]);
+  expect(refreshLines(lines, [{ ...tea, kitchen_notes: [] }])).toHaveLength(1);
+});
+
 // ---- kitchen notes (Story 7.2) ----
 
 const WITH_NOTES: Menu = {

@@ -2,7 +2,7 @@
 title: 'Story 7.2: Kitchen notes on order lines from the POS and the kiosk cart'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: 'a85c722'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -93,4 +93,13 @@ context:
 
 ## Review Triage Log
 
-Not yet reviewed (story in `review`).
+Code review (Blind Hunter, Edge Case Hunter, Acceptance Auditor), 2026-10-29. Patched:
+
+- Duplicate-line check compared raw note vectors; now `PosSaleLine::line_key()` (trimmed, sorted, de-duplicated set) is used by `pos.sale`, `order.place` and `ShopPlace::validate`, with a test for a reordered and padded repeat.
+- `order.place` ran the notes check before the line, product and session checks; it now runs after `check_lines`, as `pos.sale` does.
+- `refused_product` did not recognise `lines[i].kitchen_notes`, so the kiosk refusal named no product.
+- Kiosk `refreshLines` kept notes the product no longer offers (the player could not untick them); they are dropped and lines left equal merge (test added).
+- Hub `saleLines` with the kitchen flag off left two lines of one product that differed only by notes, which the server refuses as a repeat; they now merge (unit test updated).
+- `ShopPlace::validate` bounds the note count and length at the frame boundary.
+
+Deferred (deferred-work.md): silent quantity clamp at 99 on a note merge; POS notes panel state and error-message mapping for `FIELD_TOO_LONG`/`TIER_LOCKED`; accessibility polish of the notes panels; helper duplication between Hub and kiosk; store-level handling of corrupt notes JSON; per-line stock display across lines of one product on the kiosk.

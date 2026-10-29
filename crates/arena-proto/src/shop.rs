@@ -10,6 +10,7 @@ use ts_rs::TS;
 use crate::error::{AppError, ErrorCode};
 use crate::intent::IntentPayload;
 use crate::pos::{PosSale, PosSaleLine};
+use crate::{MAX_LINE_NOTE_CHARS, MAX_LINE_NOTES};
 
 /// The licence flag that lets a kiosk show the Shop and place orders (Basic and above).
 pub const FLAG_KIOSK_ORDERS: &str = "kiosk_orders";
@@ -142,7 +143,11 @@ impl ShopPlace {
         for l in &self.lines {
             if !(1..=MAX_SHOP_ID_LEN).contains(&l.product_id.len())
                 || !(1..=MAX_CART_QTY).contains(&l.qty)
-                || !seen.insert((l.product_id.as_str(), &l.kitchen_notes))
+                || l.kitchen_notes.len() > MAX_LINE_NOTES
+                || l.kitchen_notes
+                    .iter()
+                    .any(|n| n.chars().count() > MAX_LINE_NOTE_CHARS * 2)
+                || !seen.insert(l.line_key())
             {
                 return bad("malformed shop.place");
             }

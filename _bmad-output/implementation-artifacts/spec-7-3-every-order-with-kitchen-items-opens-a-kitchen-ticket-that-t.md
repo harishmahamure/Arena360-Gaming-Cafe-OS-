@@ -2,7 +2,7 @@
 title: 'Story 7.3: Every order with kitchen items opens a kitchen ticket that the Hub can move'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '5ddd8f4'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -105,3 +105,9 @@ Self-review while building (no separate reviewer run in the unattended loop):
 - A reverted placement or sale would leave a ticket behind; both now delete it and refuse once it is past New.
 
 Deferred (deferred-work.md): see the Story 7.3 entry.
+
+## Code Review (unattended)
+
+Reviewed the 7.3 commit (core apply paths, store, scope, API push, Hub). No blocking findings; no code changes.
+Checks: `cargo fmt --check`, clippy `-D warnings` on the story crates, Rust unit/integration tests, `pnpm --filter @arena/hub check`, `check:strings`, `check:layers`, `check:protocol`, `format:check` all pass.
+Not caused by this story (the `arena-replay` one fails identically on the parent commit): `arena-cloud` `binary` timeout test (known sandbox failure) and `arena-replay` `replaying_the_seeded_log_reproduces_branch_and_settings`, whose seed has no `library_entries` row since Story 6.3 and also seeds no kitchen ticket rows.

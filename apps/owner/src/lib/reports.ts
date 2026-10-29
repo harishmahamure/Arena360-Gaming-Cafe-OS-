@@ -335,7 +335,12 @@ export function stockViews(
         p = { key, name: l.name, category: l.category ?? "", cells: {}, total: 0 };
         view.products.push(p);
       }
-      p.cells[branch.id] = { qty: l.qty, low: l.low_qty ?? null };
+      // Two products of one branch sharing a name and category add up into one cell.
+      const cell = p.cells[branch.id];
+      p.cells[branch.id] = {
+        qty: (cell?.qty ?? 0) + l.qty,
+        low: cell?.low ?? l.low_qty ?? null,
+      };
       p.total += l.qty;
       if (l.low_qty != null && l.qty <= l.low_qty) {
         view.low.push({ branch: branch.name, name: l.name, qty: l.qty, low: l.low_qty });

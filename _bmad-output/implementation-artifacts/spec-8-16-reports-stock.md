@@ -2,7 +2,7 @@
 title: 'Story 8.16: Reports — stock'
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 baseline_commit: 'd9e957346ceb77f38d861ef429eedefef0c2c865'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -70,7 +70,7 @@ deferred: []
 
 ## Review Triage Log
 
-Not yet reviewed.
+Reviewed 2026-10-30: one fix — products sharing a name and category at one branch now add into one cell (total matched). No other blocking findings.
 
 ## Design Notes
 
@@ -83,7 +83,7 @@ See the Story 8.16 entry in `epic-8-context.md`.
 
 ## Auto Run Result
 
-Status: review.
+Status: done.
 
 - Summary: Reports → Stock on the Owner app, with the cloud range answer carrying stock and the Hub's rollup levels carrying the product category.
 - Verification: fmt and clippy clean; arena-proto (272), arena-store and arena-core (1280) tests pass; cloud `owner_read` (16) and `branches` pass; owner app `check` 0 errors and Playwright 328 passed (7 new for Stock, axe on the tab in all themes); `check:strings`, `check:layers`, `check:protocol`, `check:no-manifest`, `format:check` ok; `check:generated` lists the new generated files until they are committed.

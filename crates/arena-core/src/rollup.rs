@@ -113,6 +113,9 @@ pub fn fold_rollup(
                 variance: s.variance_minor.unwrap_or(0),
                 reason: s.variance_reason.clone(),
                 approver_name: s.approver.clone(),
+                over_threshold: rows
+                    .variance_threshold
+                    .map(|limit| s.variance_minor.unwrap_or(0).abs() > limit),
             })
         })
         .collect();

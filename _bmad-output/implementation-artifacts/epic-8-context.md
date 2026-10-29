@@ -31,3 +31,13 @@ The café owner sees every branch and changes it from a phone or laptop, without
 - **Polling.** Today re-reads the branches every 60 s while visible and while some branch is in setup, and on Refresh/pull; a branch that turns live is fetched at once. With no live paid branch the Refresh bar and Needs attention are hidden.
 - **Open dashboard.** The onboarding done screen and the wizard URL of a live branch now open the Owner app root (Today).
 - **Standby.** Unchanged: the Standby item is already advisory in the Go live view.
+
+## Story 8.15: Reports — revenue and cash reconciliation
+
+- **Shifts in the range.** `OwnerRange` gains `shifts` (`business_day` + the rollup's `RollupShift`, oldest closing first) from the accepted days; the rollup already carries the figures the Cash list needs, so the cloud only passes them through.
+- **Over threshold.** `RollupShift` gains optional `over_threshold`, set by the Hub's rollup fold from the branch threshold at build time (`RollupRows.variance_threshold`). It is additive, so no schema bump: older files lack it and the app never flags them.
+- **Per-branch calls.** The app asks `summary` and `live` for each live paid branch and sums per currency in the browser, rather than using `all`, so setup branches never enter totals or "partial" and the shared `liveBranches()` list stays the one source. Free live branches get a tier lock beside the picker.
+- **So far today.** The branch's live `business_day` row ("So far today", net of refunds, with its data age) is shown in the by-day list when its rollup does not exist yet, and that day is not a missing day. It is not added to the rollup totals, which are gross and split by type and method.
+- **Totals.** Labelled "Revenue, days with data"; "Partial" shows when any other day has no rollup. Refunds, discounts and voids are negative lines.
+- **Dates.** Today/week/month use the date in the first picked branch's time zone; weeks start on Monday; Custom is capped at 400 days and refuses an inverted range before any call.
+- **Badge colours.** `StatusBadge` takes its background from the dark Hub tile, which fails contrast on the paper theme, so Reports sets `--status-badge-background` to the surface. The same flaw exists on Today's badges (not changed here).

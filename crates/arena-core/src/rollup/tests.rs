@@ -313,3 +313,21 @@ fn a_date_that_does_not_exist_is_refused() {
     assert_eq!(e.code, ErrorCode::ValidationFailed);
     assert_eq!(e.field.as_deref(), Some("business_day"));
 }
+
+#[test]
+fn a_shift_is_flagged_over_threshold_only_when_the_hub_knows_the_threshold() {
+    let flags = |limit: Option<i64>| {
+        let mut rows = fixture();
+        rows.variance_threshold = limit;
+        fold_rollup(&rows, &ctx(), &day_of)
+            .shifts
+            .iter()
+            .map(|s| s.over_threshold)
+            .collect::<Vec<_>>()
+    };
+    // The fixture shift is 1 000 short: beyond 500, within 1 000 and 5 000.
+    assert_eq!(flags(Some(500)), [Some(true)]);
+    assert_eq!(flags(Some(1_000)), [Some(false)]);
+    assert_eq!(flags(Some(5_000)), [Some(false)]);
+    assert_eq!(flags(None), [None]);
+}

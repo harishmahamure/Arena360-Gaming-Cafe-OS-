@@ -67,6 +67,8 @@ pub struct RollupRows {
     pub segments: Vec<SegmentSpan>,
     /// Closed shifts with `closed_at` in the window.
     pub shifts: Vec<ShiftDetail>,
+    /// The branch's shift variance threshold (minor units); `None` leaves shifts unflagged.
+    pub variance_threshold: Option<i64>,
     pub levels: Vec<ThresholdRow>,
     /// Waste moves and expired write-offs in the window.
     pub moves: StockMovesRows,
@@ -219,6 +221,7 @@ pub fn load_rollup_rows(
         session_count: session_count(conn, day)?,
         segments: reports::segment_spans(conn, day, day, now_ms)?,
         shifts: crate::shifts::closed_shifts_between(conn, from_ms, to_ms)?,
+        variance_threshold: Some(crate::shifts::variance_threshold(conn)?),
         levels: crate::stock::list_tracked_thresholds(conn)?,
         moves: StockMovesRows {
             moves: crate::stock_reports::stock_moves_between(

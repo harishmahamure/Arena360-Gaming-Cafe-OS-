@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::rollup::{RollupAmount, RollupRevenue, RollupSessions, RollupV1};
+use crate::rollup::{RollupAmount, RollupRevenue, RollupSessions, RollupShift, RollupV1};
 use crate::summary::BranchSummary;
 
 /// How long the cloud serves a branch's summary or a month of rollups from memory before it asks
@@ -201,6 +201,14 @@ pub struct OwnerRangeRow {
     pub totals: OwnerRangeTotals,
 }
 
+/// A shift closed on a business day of a range (Story 8.15), straight from that day's rollup.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OwnerRangeShift {
+    pub business_day: String,
+    pub shift: RollupShift,
+}
+
 /// `GET /v1/branches/{id}/summary`: one branch over `from`..`to`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
@@ -214,6 +222,8 @@ pub struct OwnerRange {
     pub rows: Vec<OwnerRangeRow>,
     /// Days in the range with no accepted rollup (absent, or `ROLLUP_SCHEMA_OLD`), oldest first.
     pub missing_days: Vec<String>,
+    /// Shifts closed on the accepted days, oldest closing first.
+    pub shifts: Vec<OwnerRangeShift>,
 }
 
 /// The branches of one currency over a range, added up.

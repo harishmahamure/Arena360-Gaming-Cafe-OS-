@@ -118,7 +118,17 @@ test("branch-scoped screens say a branch in setup is available after it goes liv
   page,
 }) => {
   await stubCloud(page, [PAID[0], inSetup({ ...PAID[1], tier: "basic" })]);
-  for (const path of ["/reports", "/manage", "/alerts"]) {
+  // Reports draws its own branch list (picker plus gates); the others use the section list.
+  await page.goto("/reports");
+  const gate = page.getByRole("region", { name: PAID[1].name });
+  await expect(gate.getByText(t("owner.setup.after_live", { branch: PAID[1].name }))).toBeVisible();
+  await expect(gate.getByRole("link", { name: t("owner.branches.continue") })).toHaveAttribute(
+    "href",
+    "https://start.arena360.cloud/setup?branch=b2",
+  );
+  await expect(page.getByLabel(t("owner.reports.branch"))).toContainText(PAID[0].name);
+  await expect(page.getByLabel(t("owner.reports.branch"))).not.toContainText(PAID[1].name);
+  for (const path of ["/manage", "/alerts"]) {
     await page.goto(path);
     const gated = page.getByRole("listitem").filter({ hasText: PAID[1].name });
     await expect(

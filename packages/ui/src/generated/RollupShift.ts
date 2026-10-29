@@ -17,4 +17,9 @@ export type RollupShift = {
   variance: number;
   reason?: string;
   approver_name?: string;
+  /**
+   * The variance was beyond the branch's threshold when the file was built (Story 8.15);
+   * absent in files built before the Hub wrote it, which the Owner app never flags.
+   */
+  over_threshold?: boolean;
 };

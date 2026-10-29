@@ -13,7 +13,7 @@ use arena_cloud::store::{MemoryStore, ObjectStore, S3Config, StoreCalls};
 use arena_cloud::{Clock, app_with_auth, auth_state};
 use arena_proto::{
     BranchSummary, RollupAmount, RollupByMethod, RollupByType, RollupCredit, RollupRevenue,
-    RollupSessions, RollupStock, RollupV1, SUMMARY_SCHEMA, SummaryCatalogue, Tier,
+    RollupSessions, RollupShift, RollupStock, RollupV1, SUMMARY_SCHEMA, SummaryCatalogue, Tier,
 };
 use arena_store::control::{CompGrant, ControlDb, LATEST_CONTROL_VERSION, NewBackupCode};
 use axum::body::{Body, to_bytes};
@@ -348,6 +348,19 @@ impl Harness {
     }
 
     async fn put_rollup_in(&self, c: &Cafe, date: &str, schema: u32, total: i64, currency: &str) {
+        self.put_rollup_shifts(c, date, schema, total, currency, vec![])
+            .await;
+    }
+
+    async fn put_rollup_shifts(
+        &self,
+        c: &Cafe,
+        date: &str,
+        schema: u32,
+        total: i64,
+        currency: &str,
+        shifts: Vec<RollupShift>,
+    ) {
         let r = RollupV1 {
             schema,
             branch_id: c.branch.clone(),
@@ -374,7 +387,7 @@ impl Harness {
                 count: 2,
                 minutes: 90,
             },
-            shifts: vec![],
+            shifts,
             stock: RollupStock::default(),
             credit: RollupCredit::default(),
             play_hours: vec![],
@@ -582,6 +595,85 @@ async fn a_range_is_summed_per_period_and_lists_the_missing_days() {
         .await;
     assert_eq!(r.body["group_by"], "day");
     assert_eq!(r.body["rows"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_range_lists_the_shifts_closed_on_its_accepted_days_oldest_first() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    let shift = |id: &str, closed_at: i64, variance: i64, over: Option<bool>| RollupShift {
+        shift_id: id.into(),
+        staff_name: "Asha".into(),
+        opened_at: closed_at - 1_000,
+        closed_at,
+        float: 100_000,
+        expected: 120_000,
+        counted: 120_000 + variance,
+        variance,
+        reason: (variance != 0).then(|| "short".to_owned()),
+        approver_name: over.map(|_| "Ravi".to_owned()),
+        over_threshold: over,
+    };
+    h.put_rollup_shifts(
+        &a,
+        "2026-10-27",
+        1,
+        1_000,
+        "INR",
+        vec![
+            shift("late", 9_000, -500, None),
+            shift("early", 5_000, 0, None),
+        ],
+    )
+    .await;
+    h.put_rollup_shifts(
+        &a,
+        "2026-10-26",
+        1,
+        1_000,
+        "INR",
+        vec![shift("monday", 1_000, -20_000, Some(true))],
+    )
+    .await;
+    // A day at a schema the cloud does not read contributes neither figures nor shifts.
+    h.put_rollup_shifts(
+        &a,
+        "2026-10-28",
+        7,
+        1_000,
+        "INR",
+        vec![shift("ghost", 99_000, 1, None)],
+    )
+    .await;
+
+    let r = h
+        .get(&a, &summary(&a, "from=2026-10-26&to=2026-10-28"))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let ids: Vec<(&str, &str)> = r.body["shifts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            (
+                s["business_day"].as_str().unwrap(),
+                s["shift"]["shift_id"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            ("2026-10-26", "monday"),
+            ("2026-10-27", "early"),
+            ("2026-10-27", "late")
+        ]
+    );
+    let first = &r.body["shifts"][0]["shift"];
+    assert_eq!(first["variance"], -20_000);
+    assert_eq!(first["over_threshold"], true);
+    assert_eq!(first["approver_name"], "Ravi");
+    assert!(r.body["shifts"][1]["shift"].get("over_threshold").is_none());
 }
 
 #[tokio::test]

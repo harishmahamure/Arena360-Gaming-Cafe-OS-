@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import type { BranchSummary, OwnerBranch, OwnerLive } from "@arena/ui/generated";
+import type { BranchSummary, OwnerBranch, OwnerLive, OwnerRange } from "@arena/ui/generated";
 import { t } from "../../../packages/ui/src/messages/index.js";
 
 export { t };
@@ -104,7 +104,36 @@ export function liveOf(
   };
 }
 
+/** The `summary` answer for a branch: one rollup-less range unless `over` says otherwise. */
+export function rangeOfBranch(id: string, over: Partial<OwnerRange> = {}): OwnerRange {
+  return {
+    branch_id: id,
+    currency: "INR",
+    from: "2026-10-26",
+    to: "2026-10-30",
+    group_by: "day",
+    totals: {
+      days: 0,
+      revenue: {
+        total: 0,
+        by_type: { play: 0, products: 0, plans: 0, other: 0 },
+        by_method: { cash: 0, upi: 0, card: 0, wallet: 0, credit: 0 },
+      },
+      refunds: { count: 0, amount: 0 },
+      discounts: { count: 0, amount: 0 },
+      voids: { count: 0, amount: 0 },
+      sessions: { count: 0, minutes: 0 },
+    },
+    rows: [],
+    missing_days: [],
+    shifts: [],
+    ...over,
+  };
+}
+
 export type StubOptions = {
+  /** The `summary` answer per branch id; a function gets the request's query string. */
+  range?: Record<string, OwnerRange | ((query: URLSearchParams) => OwnerRange)>;
   /** The `live` answer per branch id (a function is called on every request); default: online. */
   live?: Record<string, OwnerLive | (() => OwnerLive)>;
 };
@@ -144,6 +173,12 @@ export async function stubCloud(
     if (live && req.method() === "GET") {
       const given = opts.live?.[live[1]];
       return json(typeof given === "function" ? given() : (given ?? liveOf(live[1])));
+    }
+    const range = path.match(/^\/v1\/branches\/([^/]+)\/summary$/);
+    if (range && req.method() === "GET") {
+      const given = opts.range?.[range[1]];
+      const query = new URL(req.url()).searchParams;
+      return json(typeof given === "function" ? given(query) : (given ?? rangeOfBranch(range[1])));
     }
     const age = path.match(/^\/v1\/branches\/([^/]+)\/data-age$/);
     if (age && req.method() === "POST") {

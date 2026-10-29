@@ -293,6 +293,7 @@ export type { OwnerRange } from "./OwnerRange";
 export type { OwnerRangeAll } from "./OwnerRangeAll";
 export type { OwnerRangeCurrency } from "./OwnerRangeCurrency";
 export type { OwnerRangeRow } from "./OwnerRangeRow";
+export type { OwnerRangeShift } from "./OwnerRangeShift";
 export type { OwnerRangeTotals } from "./OwnerRangeTotals";
 export type { PairHubOk } from "./PairHubOk";
 export type { PairHubRequest } from "./PairHubRequest";

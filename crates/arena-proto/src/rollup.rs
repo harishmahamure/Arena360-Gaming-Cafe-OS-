@@ -158,6 +158,11 @@ pub struct RollupShift {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub approver_name: Option<String>,
+    /// The variance was beyond the branch's threshold when the file was built (Story 8.15);
+    /// absent in files built before the Hub wrote it, which the Owner app never flags.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub over_threshold: Option<bool>,
 }
 
 /// A tracked product's stock at the end of the build.
@@ -343,9 +348,14 @@ mod tests {
             variance: 0,
             reason: None,
             approver_name: None,
+            over_threshold: None,
         };
         let json = serde_json::to_value(&s).unwrap();
-        assert!(json.get("reason").is_none() && json.get("approver_name").is_none());
+        assert!(
+            json.get("reason").is_none()
+                && json.get("approver_name").is_none()
+                && json.get("over_threshold").is_none()
+        );
         assert_eq!(serde_json::from_value::<RollupShift>(json).unwrap(), s);
     }
 }

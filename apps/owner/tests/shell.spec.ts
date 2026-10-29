@@ -100,7 +100,7 @@ test("on Free the four data sections show only the tier-lock, with no Upgrade li
 
 test("with only paid branches the sections are not locked", async ({ page }) => {
   await stubCloud(page, [{ ...PAID[0] }]);
-  await page.goto("/reports");
+  await page.goto("/alerts");
   await expect(page.getByText(t("owner.section.soon"))).toBeVisible();
   await expect(page.getByText(t("staff.tier.available_on", { tier: "Basic" }))).toHaveCount(0);
 });
@@ -109,7 +109,7 @@ test("a mixed tenant locks the Free branch and leaves the paid branch working", 
   page,
 }) => {
   const calls = await stubCloud(page);
-  for (const k of ["today", "reports", "alerts", "manage"] as const) {
+  for (const k of ["today", "alerts", "manage"] as const) {
     await page.goto(k === "today" ? "/" : `/${k}`);
     const paid = page.getByRole("listitem").filter({ hasText: PAID[0].name });
     const free = page.getByRole("listitem").filter({ hasText: PAID[1].name });
@@ -123,11 +123,22 @@ test("a mixed tenant locks the Free branch and leaves the paid branch working", 
     await expect(free.getByText(t("owner.today.revenue"))).toHaveCount(0);
     await expect(page.getByRole("link", { name: /upgrade/i })).toHaveCount(0);
   }
+  // Reports picks from the paid branches and locks the Free one beside it.
+  await page.goto("/reports");
+  await expect(page.getByLabel(t("owner.reports.branch"))).toContainText(PAID[0].name);
+  await expect(page.getByLabel(t("owner.reports.branch"))).not.toContainText(PAID[1].name);
+  await expect(
+    page
+      .getByRole("region", { name: PAID[1].name })
+      .getByText(t("staff.tier.available_on", { tier: "Basic" })),
+  ).toBeVisible();
   // Only the paid branch is ever read: the Free branch makes no owner read call.
   await expect.poll(() => calls.some((c) => c.endsWith("/b1/data-age"))).toBe(true);
+  await expect.poll(() => calls.some((c) => c.endsWith("/b1/summary"))).toBe(true);
   expect([...new Set(calls)].sort()).toEqual([
     "GET /v1/branches",
     "GET /v1/branches/b1/live",
+    "GET /v1/branches/b1/summary",
     "GET /v1/session",
     "POST /v1/branches/b1/data-age",
   ]);
@@ -145,7 +156,7 @@ test("a Free branch that upgrades unlocks on the next open without signing out",
   page,
 }) => {
   await stubCloud(page, FREE);
-  await page.goto("/reports");
+  await page.goto("/alerts");
   await expect(page.getByText(t("staff.tier.available_on", { tier: "Basic" }))).toBeVisible();
   await page.unroute("**/v1/**");
   await stubCloud(page, [{ ...FREE[0], tier: "basic" }]);

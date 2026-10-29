@@ -99,6 +99,9 @@ pub struct Ctx {
     /// Ends the player's programs for the session-end cleanup; set by the process enforcer
     /// while it runs (Story 6.11).
     pub closer: Mutex<Option<crate::procs::Closer>>,
+    /// Freezes and thaws the player's programs for the Staff-handles lock; set by the process
+    /// enforcer while it runs (Story 6.22).
+    pub freezer: Mutex<Option<crate::procs::Freezer>>,
     /// The session-end cleanup: dirty flag, cancel epoch, worker wake-up.
     pub cleanup: crate::cleanup::CleanupState,
 }
@@ -233,6 +236,7 @@ impl Runtime {
             test_session: watch::channel(None).0,
             pc,
             closer: Mutex::new(None),
+            freezer: Mutex::new(None),
             cleanup,
         });
         let (stop, stop_rx) = watch::channel(false);

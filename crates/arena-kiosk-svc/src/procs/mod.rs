@@ -285,6 +285,10 @@ pub trait ProcessKiller: Send + Sync {
     /// image path, token user and session), so a reused pid is never hit. A process that is
     /// gone or changed is `NotFound`.
     fn kill(&self, facts: &ProcFacts) -> io::Result<()>;
+    /// Suspends (`true`) or resumes (`false`) every thread of `facts.pid`, on the same terms
+    /// as [`kill`](Self::kill): a process that is gone or changed is `NotFound`. Resuming a
+    /// process that is not suspended changes nothing (Story 6.22).
+    fn set_suspended(&self, facts: &ProcFacts, suspended: bool) -> io::Result<()>;
 }
 
 /// The three platform halves.
@@ -322,6 +326,11 @@ pub struct CloseReport {
 /// `programs` step, Story 6.11). Registered on [`Ctx::closer`] by the enforcer once it runs;
 /// it reuses the enforcer's safety rules and kill path.
 pub type Closer = Arc<dyn Fn(CloseScope<'_>) -> io::Result<CloseReport> + Send + Sync>;
+
+/// Freezes (`true`) or thaws (`false`) every unprotected program of the player's session (the
+/// Staff-handles time-up lock, Story 6.22); how many programs it reached. Registered on
+/// [`Ctx::freezer`] by the enforcer once it runs, with the same safety rules as the [`Closer`].
+pub type Freezer = Arc<dyn Fn(bool) -> io::Result<usize> + Send + Sync>;
 
 /// Which of the player's programs a [`Closer`] ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -999,14 +1008,54 @@ impl Inner {
         kill: bool,
         scope: CloseScope<'_>,
     ) -> io::Result<(usize, usize, usize)> {
+        let (mut found, mut killed, mut failed) = (0, 0, 0);
+        for facts in self.unprotected(scope)? {
+            found += 1;
+            if !kill {
+                failed += 1;
+                continue;
+            }
+            match self.api.killer.kill(&facts) {
+                Ok(()) => killed += 1,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => found -= 1,
+                Err(err) => {
+                    failed += 1;
+                    tracing::warn!(pid = facts.pid, error = %err, "cleanup could not end a program");
+                }
+            }
+        }
+        Ok((found, killed, failed))
+    }
+
+    /// Freezes or thaws every unprotected program of the player's session (the Staff-handles
+    /// lock, Story 6.22); how many it reached. The rules are the cleanup's: never the kiosk app,
+    /// its WebView2, the service or a protected System32 image.
+    fn freeze(&self, suspend: bool) -> io::Result<usize> {
+        let mut reached = 0;
+        for facts in self.unprotected(CloseScope::All)? {
+            match self.api.killer.set_suspended(&facts, suspend) {
+                Ok(()) => reached += 1,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    tracing::warn!(pid = facts.pid, suspend, error = %err, "could not freeze a program");
+                }
+            }
+        }
+        Ok(reached)
+    }
+
+    /// The facts of every process of the player's session that is not the kiosk app, a WebView2
+    /// process descending from it, the service itself or a protected System32 image, and that
+    /// `scope` takes.
+    fn unprotected(&self, scope: CloseScope<'_>) -> io::Result<Vec<ProcFacts>> {
         self.refresh_app();
         let Some(player) = self.player() else {
-            return Ok((0, 0, 0));
+            return Ok(Vec::new());
         };
         let entries = self.api.watcher.running()?;
         self.note_snapshot(&entries, Instant::now());
         let app = lock(&self.app).clone();
-        let (mut found, mut killed, mut failed) = (0, 0, 0);
+        let mut out = Vec::new();
         for e in entries {
             if e.pid == 0 || e.pid == 4 || e.pid == std::process::id() {
                 continue;
@@ -1030,21 +1079,9 @@ impl Inner {
             if !scope.takes(file_name(&path)) {
                 continue;
             }
-            found += 1;
-            if !kill {
-                failed += 1;
-                continue;
-            }
-            match self.api.killer.kill(&facts) {
-                Ok(()) => killed += 1,
-                Err(err) if err.kind() == io::ErrorKind::NotFound => found -= 1,
-                Err(err) => {
-                    failed += 1;
-                    tracing::warn!(pid = e.pid, error = %err, "cleanup could not end a program");
-                }
-            }
+            out.push(facts);
         }
-        Ok((found, killed, failed))
+        Ok(out)
     }
 
     /// Ends every unprotected program of the player's session (Story 6.11), trying again a
@@ -1312,6 +1349,13 @@ pub(crate) async fn run(
                 .close_unprotected(scope)
         });
         *lock(&ctx.closer) = Some(closer);
+        let weak = Arc::downgrade(&inner);
+        let freezer: Freezer = Arc::new(move |suspend| {
+            weak.upgrade()
+                .ok_or_else(|| io::Error::other("the process enforcer stopped"))?
+                .freeze(suspend)
+        });
+        *lock(&ctx.freezer) = Some(freezer);
     }
     let sweep_now = Arc::new(Notify::new());
     let checks = Arc::new(Semaphore::new(MAX_IN_FLIGHT));
@@ -1380,6 +1424,7 @@ pub(crate) async fn run(
     }
     sweeps.abort();
     *lock(&ctx.closer) = None;
+    *lock(&ctx.freezer) = None;
 }
 
 #[cfg(test)]

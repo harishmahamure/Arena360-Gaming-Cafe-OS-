@@ -80,20 +80,42 @@ fn next_mark(
     })
 }
 
+/// When the grace after a prepaid session's end time begins, if that is still ahead (Story 6.22).
+/// The screen is told then too, so the HUD draws its grace card on the kiosk's own clock with
+/// the Hub unreachable.
+fn grace_start(s: &ScreenSession, now: Instant) -> Option<Instant> {
+    s.ends_at?;
+    (s.grace_ms > 0)
+        .then(|| s.lock_at.checked_sub(Duration::from_millis(s.grace_ms)))
+        .flatten()
+        .filter(|at| *at > now)
+}
+
 pub(crate) async fn run(ctx: Arc<Ctx>, mut stop: watch::Receiver<bool>) {
     let mut rx = ctx.pc.deadline.subscribe();
     let mut screen = ctx.pc.screen.subscribe();
     loop {
         let deadline = *rx.borrow_and_update();
         let marks = operating(&ctx).marks();
-        let mark = {
+        let (mark, grace_at) = {
             let v = screen.borrow_and_update();
-            v.session
-                .as_ref()
-                .filter(|_| !v.locked)
-                .and_then(|s| next_mark(&marks, s.ends_at?, Instant::now(), s.warning_min))
+            let session = v.session.as_ref().filter(|_| !v.locked);
+            (
+                session.and_then(|s| next_mark(&marks, s.ends_at?, Instant::now(), s.warning_min)),
+                session.and_then(|s| grace_start(s, Instant::now())),
+            )
         };
         tokio::select! {
+            () = async {
+                match grace_at {
+                    Some(at) => tokio::time::sleep_until(at).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                tracing::info!("the grace began on the kiosk clock");
+                // No value changes; the watchers are told so the app learns the grace began.
+                ctx.pc.screen.send_modify(|_| {});
+            }
             () = async {
                 match mark {
                     Some((_, at)) => tokio::time::sleep_until(at).await,
@@ -157,6 +179,36 @@ mod tests {
         assert_eq!(next_mark(&MARKS, at(now, 420), now, None).unwrap().0, 5);
         // 30 s left: nothing is ahead.
         assert_eq!(next_mark(&MARKS, at(now, 30), now, None), None);
+    }
+
+    fn session(now: Instant, ends_in: Option<u64>, lock_in: u64, grace_ms: u64) -> ScreenSession {
+        ScreenSession {
+            device_name: "PC".into(),
+            started: now,
+            warning_min: None,
+            lock_at: at(now, lock_in),
+            grace_ms,
+            ordered_items: 0,
+            username: None,
+            guest_no: None,
+            ends_at: ends_in.map(|s| at(now, s)),
+            balance_minor: None,
+            plan_name: None,
+            low_balance_minor: None,
+            hold: false,
+        }
+    }
+
+    #[test]
+    fn the_grace_begins_one_grace_before_the_lock() {
+        let now = Instant::now();
+        // Ends in 60 s, locks in 180 s: a 120 s grace starts at the end time.
+        let s = session(now, Some(60), 180, 120_000);
+        assert_eq!(grace_start(&s, now), Some(at(now, 60)));
+        // Already in the grace, or no grace, or postpaid: nothing ahead.
+        assert_eq!(grace_start(&s, at(now, 60)), None);
+        assert_eq!(grace_start(&session(now, Some(60), 60, 0), now), None);
+        assert_eq!(grace_start(&session(now, None, 180, 120_000), now), None);
     }
 
     #[test]

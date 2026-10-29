@@ -69,6 +69,7 @@ fn ctx_in(dir: &std::path::Path, lists: ProcessLists) -> Arc<Ctx> {
         test_session: watch::channel(None).0,
         pc,
         closer: Mutex::new(None),
+        freezer: Mutex::new(None),
         cleanup,
     })
 }

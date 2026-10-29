@@ -8,7 +8,10 @@ import {
   WARNING_KEY,
   clock,
   dropWarning,
+  graceClock,
+  graceMilestone,
   graceMinutes,
+  graceSecondsLeft,
   hasContent,
   lifetime,
   live,
@@ -51,6 +54,7 @@ async function openHud(page: Page) {
       };
       w.__layouts = [] as Array<[number, number]>;
       w.__collapses = 0;
+      w.__expands = 0;
       w.__ends = [] as unknown[];
       w.__endAnswers = [] as unknown[];
       w.__TAURI_INTERNALS__ = {
@@ -71,6 +75,9 @@ async function openHud(page: Page) {
                 args.width as number,
                 args.height as number,
               ]);
+              return null;
+            case commands.hudExpand:
+              (w.__expands as number)++;
               return null;
             case commands.hudCollapse:
               (w.__collapses as number)++;
@@ -719,4 +726,162 @@ test("each warning kind is dropped by its own key", () => {
   expect(both[1]).toMatchObject({ hotkey: true, hotkeyLabel: "player.low_balance.hotkey" });
   expect(dropWarning(both).map((x) => x.id)).toEqual([2]);
   expect(dropWarning(both, LOW_BALANCE_KEY).map((x) => x.id)).toEqual([1]);
+});
+
+// ---- Story 6.22: the grace card ----
+
+/** A prepaid session at zero, `left_s` seconds into a `grace_ms` grace. */
+const inGrace = (over: Record<string, unknown> = {}) =>
+  shown({
+    username: "asha",
+    balance_minor: 10_000,
+    remaining_ms: 0,
+    grace_in_ms: 0,
+    grace_ms: 120_000,
+    ...over,
+  });
+
+test("the grace is a solid card: Time's up, the countdown, the wrap-up line, Extend and its key caps", async ({
+  page,
+}) => {
+  await openHud(page);
+  await attract(page);
+  await emit(page, names.events.pcScreen, prepaid(1));
+  await expect(page.getByTestId("toast")).toHaveCount(1);
+  await emit(page, names.events.pcScreen, inGrace());
+  await expect(page.getByTestId("grace")).toBeVisible();
+  await expect(page.getByTestId("grace-title")).toHaveText(en["player.grace.title"]);
+  await expect(page.getByTestId("grace-body")).toHaveText(en["player.grace.body"]);
+  await expect(page.getByTestId("grace-clock")).toHaveText(/^(2:00|1:59)$/);
+  expect(
+    await page.getByTestId("grace-clock").evaluate((el) => getComputedStyle(el).fontVariantNumeric),
+  ).toContain("tabular-nums");
+  await expect(page.getByTestId("grace-keys").locator("kbd")).toHaveText(["Ctrl", "Shift", "E"]);
+  await expect(page.getByTestId("grace-extend")).toHaveText(en["player.extend.button"]);
+  // The time warning is moot now, and the pill gives way to the card's clock.
+  await expect(page.getByTestId("toast")).toHaveCount(0);
+  await expect(page.getByTestId("hud-pill")).toHaveCount(0);
+  // Solid: no blur, no transparency.
+  const style = await page
+    .getByTestId("grace")
+    .evaluate(
+      (el) => getComputedStyle(el).backdropFilter + "|" + getComputedStyle(el).backgroundColor,
+    );
+  expect(style).toMatch(/^(none)?\|rgb\(/);
+  // It never takes the keyboard from the game.
+  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+  expect(await serious(page)).toEqual([]);
+});
+
+test("the grace counts down on the kiosk clock and the window is told its size", async ({
+  page,
+}) => {
+  await openHud(page);
+  await emit(page, names.events.pcScreen, inGrace({ grace_ms: 3_000 }));
+  await expect(page.getByTestId("grace-clock")).toHaveText(/^0:0[23]$/);
+  await expect(page.getByTestId("grace-clock")).toHaveText("0:00", { timeout: 5000 });
+  const box = (await page.getByTestId("hud").boundingBox())!;
+  const reported = (await lastLayout(page))!;
+  expect(reported[0]).toBeGreaterThanOrEqual(Math.round(box.width));
+  expect(reported[1]).toBeGreaterThanOrEqual(Math.round(box.height));
+});
+
+test("the card is there before the grace begins only as the pill, and begins on the clock", async ({
+  page,
+}) => {
+  await openHud(page);
+  await emit(page, names.events.pcScreen, inGrace({ remaining_ms: 1_500, grace_in_ms: 1_500 }));
+  await expect(page.getByTestId("grace")).toHaveCount(0);
+  await expect(page.getByTestId("hud-pill")).toBeVisible();
+  await expect(page.getByTestId("grace")).toBeVisible({ timeout: 4000 });
+  await expect(page.getByTestId("hud-pill")).toHaveCount(0);
+});
+
+test("Extend on the card opens the panel through the shell; the panel replaces the card", async ({
+  page,
+}) => {
+  await openHud(page);
+  await emit(page, names.events.pcScreen, inGrace());
+  await page.getByTestId("grace-extend").click();
+  await expect
+    .poll(() => page.evaluate(() => (window as never as { __expands: number }).__expands))
+    .toBe(1);
+  // The shell answers Ctrl+Shift+E and the button alike with the expand event.
+  await emit(page, names.events.hudExpand);
+  await expect(page.getByTestId("hud-panel")).toBeVisible();
+  await expect(page.getByTestId("grace")).toHaveCount(0);
+});
+
+test("a successful Extend ends the grace: the card goes and the pill is back", async ({ page }) => {
+  await openHud(page);
+  await emit(page, names.events.pcScreen, inGrace());
+  await expect(page.getByTestId("grace")).toBeVisible();
+  await emit(
+    page,
+    names.events.pcScreen,
+    inGrace({ remaining_ms: 1_800_000, grace_in_ms: 1_680_000 }),
+  );
+  await expect(page.getByTestId("grace")).toHaveCount(0);
+  await expect(page.getByTestId("hud-pill")).toBeVisible();
+});
+
+test("a guest, or a player with no wallet, sees the card with no Extend and no key caps", async ({
+  page,
+}) => {
+  await openHud(page);
+  await emit(
+    page,
+    names.events.pcScreen,
+    inGrace({ username: null, guest_no: 2, balance_minor: null }),
+  );
+  await expect(page.getByTestId("grace")).toBeVisible();
+  await expect(page.getByTestId("grace-extend")).toHaveCount(0);
+  await expect(page.getByTestId("grace-keys")).toHaveCount(0);
+});
+
+test("no grace configured, postpaid, a lock and the end of the session draw no card", async ({
+  page,
+}) => {
+  await openHud(page);
+  await emit(page, names.events.pcScreen, inGrace({ grace_ms: 0, grace_in_ms: null }));
+  await expect(page.getByTestId("grace")).toHaveCount(0);
+  await emit(page, names.events.pcScreen, shown({ guest_no: 1, elapsed_ms: 60_000 }));
+  await expect(page.getByTestId("grace")).toHaveCount(0);
+  await emit(page, names.events.pcScreen, inGrace());
+  await expect(page.getByTestId("grace")).toBeVisible();
+  await emit(page, names.events.pcScreen, { ...inGrace(), locked: true, reason: "times_up" });
+  await expect(page.getByTestId("grace")).toHaveCount(0);
+  await emit(page, names.events.pcScreen, inGrace());
+  await emit(page, names.events.pcScreen, shown(null));
+  await expect(page.getByTestId("grace")).toHaveCount(0);
+  await expect.poll(() => lastLayout(page)).toEqual([0, 0]);
+});
+
+test("a screen reader is told at 30 and at 10 seconds, once each", async ({ page }) => {
+  await openHud(page);
+  await emit(page, names.events.pcScreen, inGrace({ grace_ms: 120_000 }));
+  await expect(page.getByTestId("grace-milestone")).toHaveText("");
+  await emit(page, names.events.pcScreen, inGrace({ grace_ms: 8_000 }));
+  await expect(page.getByTestId("grace-milestone")).toHaveText(
+    en["player.grace.milestone"].replace("{seconds}", "10"),
+  );
+  await expect(page.getByTestId("grace-milestone")).toHaveAttribute("aria-live", "polite");
+});
+
+test("the grace card passes axe in the high-contrast theme", async ({ page }) => {
+  await openHud(page);
+  await emit(page, names.events.theme, { hc: true });
+  await emit(page, names.events.pcScreen, inGrace());
+  await expect(page.getByTestId("grace")).toBeVisible();
+  expect(await serious(page)).toEqual([]);
+});
+
+test("the grace clock never goes below zero and milestones are 30 and 10 seconds", () => {
+  expect(graceSecondsLeft(1_000, 120_000, 1_000)).toBe(120);
+  expect(graceSecondsLeft(1_000, 120_000, 60_500)).toBe(61);
+  expect(graceSecondsLeft(1_000, 120_000, 500_000)).toBe(0);
+  expect(graceClock(120)).toBe("2:00");
+  expect(graceClock(59)).toBe("0:59");
+  expect(graceClock(-3)).toBe("0:00");
+  expect([120, 31, 30, 11, 10, 0].map(graceMilestone)).toEqual([null, null, 30, 30, 10, 10]);
 });

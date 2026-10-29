@@ -79,6 +79,12 @@ pub fn warning_flash(previous: Option<u8>, now: Option<u8>, exclusive_fullscreen
     exclusive_fullscreen && previous != now && matches!(now, Some(1..=5))
 }
 
+/// Whether the grace card must be a taskbar flash instead (Story 6.22): the grace has just begun
+/// (`was` false, `now` true) while a fullscreen-exclusive game hides the HUD.
+pub fn grace_flash(was: bool, now: bool, exclusive_fullscreen: bool) -> bool {
+    exclusive_fullscreen && !was && now
+}
+
 /// The HUD window's rectangle in physical px: `content` (logical px, clamped to the monitor and
 /// [`MAX_WIDTH`]) at the top-right of `monitor`, `MARGIN` in from both edges, at `scale`.
 pub fn place(monitor: Rect, scale: f64, content: (f64, f64)) -> Rect {
@@ -134,6 +140,15 @@ mod tests {
             !warning_flash(Some(5), None, true),
             "an extension clears it"
         );
+    }
+
+    #[test]
+    fn only_the_start_of_a_grace_over_an_exclusive_game_flashes() {
+        assert!(grace_flash(false, true, true));
+        assert!(!grace_flash(true, true, true), "once");
+        assert!(!grace_flash(false, true, false), "the HUD draws the card");
+        assert!(!grace_flash(true, false, true), "an extension ends it");
+        assert!(!grace_flash(false, false, true));
     }
 
     #[test]

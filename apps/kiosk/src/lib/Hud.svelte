@@ -2,7 +2,7 @@
   import { formatMoney, formatTime, t } from "@arena/ui";
   import type { MessageKey } from "@arena/ui/messages";
   import type { SnapshotLocale } from "@arena/ui/generated";
-  import { onMount, tick } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import {
     applyTheme,
     currentAttract,
@@ -28,7 +28,10 @@
     EXTEND_KEYS,
     clock,
     dropWarning,
+    graceClock,
+    graceMilestone,
     graceMinutes,
+    graceSecondsLeft,
     hasContent,
     live,
     LOW_BALANCE_KEY,
@@ -49,6 +52,9 @@
     until: number | null;
     balance: number | null;
     plan: string | null;
+    /** When the grace after prepaid time begins, on the monotonic clock (`null`: no grace). */
+    graceFrom: number | null;
+    graceMs: number;
   };
 
   let session = $state<Running | null>(null);
@@ -79,6 +85,27 @@
   const canExtend = $derived(prepaid && session?.balance != null);
   /** The Hub link is up, or not told yet: the extend panel disables itself on anything else. */
   const linked = $derived(hub === null || hub === "connected");
+  /** The grace after the end time is running (Story 6.22): a prepaid session at zero. */
+  const inGrace = $derived(
+    shown &&
+      session !== null &&
+      session.until !== null &&
+      session.graceFrom !== null &&
+      session.graceMs > 0 &&
+      now >= session.graceFrom,
+  );
+  const graceSeconds = $derived(
+    session === null || session.graceFrom === null
+      ? 0
+      : graceSecondsLeft(session.graceFrom, session.graceMs, now),
+  );
+  const graceTime = $derived(graceClock(graceSeconds));
+  /** What the live region says: set at 30 and 10 seconds, so it is spoken once each. */
+  const milestone = $derived(
+    inGrace && graceMilestone(graceSeconds) !== null
+      ? t("player.grace.milestone", { seconds: graceMilestone(graceSeconds) ?? 0 })
+      : "",
+  );
   const seconds = $derived(
     session === null
       ? 0
@@ -114,6 +141,8 @@
           // A guest has no wallet: the pill shows time only.
           balance: v.username === null ? null : v.balance_minor,
           plan: v.plan_name,
+          graceFrom: v.remaining_ms === null || v.grace_in_ms === null ? null : now + v.grace_in_ms,
+          graceMs: v.grace_ms,
         }
       : null;
     // A session that ends or locks closes the panel; the shell must make the window
@@ -336,9 +365,25 @@
     };
   });
 
+  // The grace begins (Story 6.22): any time warning is moot, so it goes, and the card sounds the
+  // warning chime once. Over a fullscreen-exclusive game the window is hidden and the shell flashes
+  // the taskbar instead.
+  let wasGrace = false;
+  $effect(() => {
+    const grace = inGrace;
+    if (grace && !wasGrace) {
+      untrack(() => {
+        toasts = dropWarning(toasts);
+        chime("warning");
+      });
+    }
+    wasGrace = grace;
+  });
+
   // Content appearing or going (a session, a lock, a toast) changes the size or empties it.
   $effect(() => {
     void shown;
+    void inGrace;
     void toasts.length;
     void expanded;
     void tick().then(report);
@@ -397,7 +442,55 @@
       </div>
     {/each}
   </div>
-  {#if shown && !expanded}
+  {#if inGrace && !expanded}
+    <!-- The grace card (Story 6.22): solid, never focused; the window is only this big, so the
+         game gets every click and key outside it. -->
+    <section class="grace" aria-labelledby="grace-title" data-testid="grace">
+      <div class="words">
+        <div role="alert">
+          <p class="title type-kiosk-label" id="grace-title" data-testid="grace-title">
+            {t("player.grace.title")}
+          </p>
+          <p class="type-kiosk-body" data-testid="grace-body">{t("player.grace.body")}</p>
+        </div>
+        <p
+          class="clock type-kiosk-display tabular-nums"
+          role="timer"
+          aria-live="off"
+          aria-label={t("player.grace.timer", { time: graceTime })}
+          data-testid="grace-clock"
+        >
+          {graceTime}
+        </p>
+        <p class="sr-only" aria-live="polite" data-testid="grace-milestone">{milestone}</p>
+        {#if canExtend}
+          <p
+            class="keys"
+            role="img"
+            aria-label={t("player.warning.hotkey")}
+            data-testid="grace-keys"
+          >
+            {#each EXTEND_KEYS as key, i (key)}
+              {#if i > 0}<span aria-hidden="true">+</span>{/if}
+              <kbd class="cap type-kiosk-label" aria-hidden="true">{key}</kbd>
+            {/each}
+          </p>
+        {/if}
+      </div>
+      {#if canExtend}
+        <div class="buttons">
+          <button
+            type="button"
+            class="extend type-kiosk-label"
+            data-testid="grace-extend"
+            onclick={hudExpand}
+          >
+            {t("player.extend.button")}
+          </button>
+        </div>
+      {/if}
+    </section>
+  {:else if shown && !expanded}
     <p class="pill" role="timer" aria-label={pillLabel} data-testid="hud-pill">
       <span class="num type-hud-numeric tabular-nums" data-testid="hud-time">{time}</span>
       {#if balance !== null}
@@ -585,6 +678,38 @@
     border-radius: var(--radius-md);
     background: transparent;
     color: var(--hud-toast-foreground);
+  }
+
+  .grace {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-5);
+    box-sizing: border-box;
+    width: 640px;
+    max-width: 100%;
+    padding: var(--space-5);
+    border: 2px solid var(--hud-toast-title);
+    border-radius: var(--radius-xl);
+    background-color: var(--hud-toast-background);
+    color: var(--hud-toast-foreground);
+  }
+
+  .grace p {
+    margin: 0;
+  }
+
+  .grace .clock {
+    color: var(--hud-toast-title);
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
   }
 
   .panel {

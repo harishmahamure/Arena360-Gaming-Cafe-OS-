@@ -510,7 +510,20 @@ fn main() {
                                 .as_ref()
                                 .filter(|_| running)
                                 .and_then(|s| s.warning_min);
-                            if hud.note_warning(mark) {
+                            let in_grace =
+                                screen
+                                    .session
+                                    .as_ref()
+                                    .filter(|_| running)
+                                    .is_some_and(|s| {
+                                        s.grace_ms > 0
+                                            && s.grace_in_ms == Some(0)
+                                            && s.remaining_ms == Some(0)
+                                    });
+                            // A mark and a grace start are different moments; either one over a
+                            // fullscreen-exclusive game is one taskbar flash and one sound.
+                            let flash = hud.note_warning(mark);
+                            if hud.note_grace(in_grace) || flash {
                                 hud::flash_taskbar(&handle);
                             }
                             handle.emit(PC_SCREEN_EVENT, screen)

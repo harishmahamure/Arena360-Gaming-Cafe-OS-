@@ -61,7 +61,7 @@ use windows::Win32::System::RemoteDesktop::{
 };
 use windows::Win32::System::Threading::{
     OpenProcess, OpenProcessToken, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_TERMINATE, QueryFullProcessImageNameW, TerminateProcess,
+    PROCESS_SUSPEND_RESUME, PROCESS_TERMINATE, QueryFullProcessImageNameW, TerminateProcess,
 };
 use windows::Win32::System::Variant::{VARIANT, VariantClear, VariantToUInt32};
 use windows::Win32::System::Wmi::{
@@ -83,6 +83,14 @@ const NEXT_TIMEOUT_MS: i32 = 500;
 /// `RPC_C_AUTHN_WINNT` / `RPC_C_AUTHZ_NONE` (not worth the `Win32_System_Rpc` feature).
 const RPC_C_AUTHN_WINNT: u32 = 10;
 const RPC_C_AUTHZ_NONE: u32 = 0;
+
+// Both are exported by ntdll and take a process handle opened with `PROCESS_SUSPEND_RESUME`;
+// each returns an `NTSTATUS` (negative: failed).
+#[link(name = "ntdll")]
+unsafe extern "system" {
+    fn NtSuspendProcess(process: HANDLE) -> i32;
+    fn NtResumeProcess(process: HANDLE) -> i32;
+}
 
 /// A kernel handle closed on drop.
 struct Owned(HANDLE);
@@ -406,6 +414,45 @@ impl ProcessKiller for WinProcesses {
                 ));
             }
             TerminateProcess(process.0, KILLED_EXIT_CODE).map_err(win)
+        }
+    }
+
+    fn set_suspended(&self, facts: &ProcFacts, suspended: bool) -> io::Result<()> {
+        // SAFETY: the handle is closed by its guard; it pins the process while it is open.
+        unsafe {
+            let process = Owned(
+                OpenProcess(
+                    PROCESS_SUSPEND_RESUME | PROCESS_QUERY_LIMITED_INFORMATION,
+                    false,
+                    facts.pid,
+                )
+                .map_err(|e| {
+                    if is_gone(&e) {
+                        io::Error::new(io::ErrorKind::NotFound, e.to_string())
+                    } else {
+                        win(e)
+                    }
+                })?,
+            );
+            let same = session_of(facts.pid) == Some(facts.session_id)
+                && user_and_path(process.0).is_ok_and(|(sid, path)| {
+                    sid.eq_ignore_ascii_case(&facts.user_sid) && path == facts.path
+                });
+            if !same {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "the process changed since it was inspected; not changed",
+                ));
+            }
+            let status = if suspended {
+                NtSuspendProcess(process.0)
+            } else {
+                NtResumeProcess(process.0)
+            };
+            if status < 0 {
+                return Err(io::Error::other(format!("NTSTATUS {status:#010x}")));
+            }
+            Ok(())
         }
     }
 }

@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use arena_proto::{LockReason, PcAction};
 use tokio::sync::{broadcast, watch};
@@ -9,6 +10,9 @@ use crate::queue::QueueDb;
 use crate::runtime::Ctx;
 
 const LOCKED_KEY: &str = "pc.locked";
+/// Kept in the queue kv while the player's programs are suspended (Story 6.22), so a restart
+/// still thaws them on the next unlock.
+const FROZEN_KEY: &str = "pc.frozen";
 const SEEN_MAX: usize = 64;
 /// The most staff messages one session keeps; the oldest go first.
 pub const INBOX_MAX: usize = 50;
@@ -73,6 +77,8 @@ pub struct PcState {
     pub deadline: watch::Sender<Option<Instant>>,
     seen: Mutex<VecDeque<String>>,
     inbox: Mutex<Inbox>,
+    /// The player's programs are suspended under a Staff-handles time-up lock.
+    frozen: AtomicBool,
     /// Each message as it arrives (the supervisor forwards it as a fresh `staff_message`).
     pub notes: broadcast::Sender<StaffNote>,
 }
@@ -80,7 +86,9 @@ pub struct PcState {
 impl PcState {
     pub fn load(queue: &QueueDb) -> Self {
         let locked = matches!(queue.kv_get(LOCKED_KEY), Ok(Some((v, _))) if v == "1");
+        let frozen = matches!(queue.kv_get(FROZEN_KEY), Ok(Some((v, _))) if v == "1");
         Self {
+            frozen: AtomicBool::new(frozen),
             screen: watch::channel(Screen {
                 locked,
                 ..Screen::default()
@@ -207,6 +215,57 @@ fn apply_lock(ctx: &Ctx, locked: bool, asked: Option<LockReason>, shown: Option<
         }
         changed
     });
+    follow_freeze(ctx, locked, shown);
+}
+
+/// Staff handles (Story 6.22): the time-up lock holds the game suspended behind it. It thaws on
+/// an unlock or a new session (a staff Extend); a staff End lock keeps it frozen while the
+/// cleanup runs, which ends the programs, and the lock shown afterwards thaws whatever is left.
+fn follow_freeze(ctx: &Ctx, locked: bool, shown: Option<LockReason>) {
+    let frozen = ctx.pc.frozen.load(Ordering::SeqCst);
+    let want = locked
+        && match shown {
+            Some(LockReason::TimesUpSeeCounter) => true,
+            Some(LockReason::PreparingPc) => frozen,
+            _ => false,
+        };
+    if want == frozen {
+        return;
+    }
+    let freezer = ctx
+        .freezer
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .clone();
+    let Some(freezer) = freezer else {
+        tracing::warn!(
+            want,
+            "process control is not running; programs not frozen or thawed"
+        );
+        return;
+    };
+    match freezer(want) {
+        Ok(n) => tracing::info!(
+            want,
+            programs = n,
+            "the player's programs were frozen or thawed"
+        ),
+        Err(e) => {
+            tracing::warn!(want, error = %e, "could not freeze or thaw the player's programs");
+            // Nothing changed as far as we know: a thaw is tried again at the next unlock, and a
+            // freeze that could not list the programs is not remembered.
+            return;
+        }
+    }
+    ctx.pc.frozen.store(want, Ordering::SeqCst);
+    let saved = ctx.queue.lock().unwrap_or_else(|p| p.into_inner()).kv_set(
+        FROZEN_KEY,
+        if want { "1" } else { "0" },
+        0,
+    );
+    if let Err(e) = saved {
+        tracing::error!(error = %e, "could not save the frozen state");
+    }
 }
 
 pub fn apply(

@@ -68,6 +68,7 @@ fn ctx_in(dir: &std::path::Path, retry: Duration) -> Arc<Ctx> {
         test_session: watch::channel(None).0,
         pc,
         closer: Mutex::new(None),
+        freezer: Mutex::new(None),
         cleanup,
     })
 }
@@ -387,6 +388,106 @@ async fn staff_handles_grace_end_does_not_clean_until_staff_end() {
     assert_eq!(t.reason(), Some(LockReason::PreparingPc));
     t.shows(LockReason::PayAtCounter).await;
     assert_eq!(t.host.calls().len(), 4);
+    t.stop();
+}
+
+/// A table with the kiosk's own processes and a game with a child (Story 6.22).
+fn game_table() -> Arc<FakeSystem> {
+    let sys = sys();
+    sys.add_running(10, proc(APP, None));
+    sys.add_running(12, proc(SVC, None));
+    sys.add_running(13, proc(r"C:\Windows\System32\ctfmon.exe", None));
+    sys.add_running(20, proc(r"C:\Games\Game\game.exe", Some(10)));
+    sys.add_running(21, proc(r"C:\Games\Game\helper.exe", Some(20)));
+    sys
+}
+
+#[tokio::test]
+async fn staff_handles_suspends_the_game_and_a_staff_extend_resumes_it() {
+    let sys = game_table();
+    let t = start_in(
+        tempfile::tempdir().unwrap(),
+        Duration::from_millis(10),
+        Arc::clone(&sys),
+    )
+    .await;
+    t.start_session();
+    t.lock(LockReason::TimesUpSeeCounter);
+    assert_eq!(t.reason(), Some(LockReason::TimesUpSeeCounter));
+    // The player's programs are frozen, never ended; the kiosk, the service and the protected
+    // image keep running.
+    assert_eq!(sys.suspended(), [20, 21]);
+    assert!(sys.killed().is_empty());
+    assert_eq!(t.kv("pc.frozen").as_deref(), Some("1"));
+    // A repeated lock (the Hub's after the local one) freezes nothing twice.
+    t.lock(LockReason::TimesUpSeeCounter);
+    assert_eq!(sys.suspended(), [20, 21]);
+    // Staff Extend: the Hub's session start lifts the lock and thaws the game.
+    t.start_session();
+    assert!(!t.locked());
+    assert!(sys.suspended().is_empty());
+    assert!(sys.alive(20) && sys.alive(21));
+    assert_eq!(t.kv("pc.frozen").as_deref(), Some("0"));
+    t.stop();
+}
+
+#[tokio::test]
+async fn a_staff_end_after_the_hold_ends_the_frozen_game() {
+    let sys = game_table();
+    let t = start_in(
+        tempfile::tempdir().unwrap(),
+        Duration::from_millis(10),
+        Arc::clone(&sys),
+    )
+    .await;
+    t.start_session();
+    t.lock(LockReason::TimesUpSeeCounter);
+    assert_eq!(sys.suspended(), [20, 21]);
+    t.lock(LockReason::PayAtCounter);
+    t.shows(LockReason::PayAtCounter).await;
+    // The cleanup ended the programs while they were still frozen; nothing is left to thaw.
+    assert!(!sys.alive(20) && !sys.alive(21));
+    assert!(sys.suspended().is_empty());
+    assert!(sys.alive(10) && sys.alive(12) && sys.alive(13));
+    assert_eq!(t.kv("pc.frozen").as_deref(), Some("0"));
+    t.stop();
+}
+
+#[tokio::test]
+async fn clean_up_mode_ends_the_game_without_freezing_it() {
+    let sys = game_table();
+    let t = start_in(
+        tempfile::tempdir().unwrap(),
+        Duration::from_millis(10),
+        Arc::clone(&sys),
+    )
+    .await;
+    t.start_session();
+    t.lock(LockReason::TimesUp);
+    t.shows(LockReason::TimesUp).await;
+    assert!(!sys.alive(20) && !sys.alive(21));
+    assert_eq!(t.kv("pc.frozen"), None, "nothing was ever frozen");
+    t.stop();
+}
+
+#[tokio::test]
+async fn a_program_that_will_not_freeze_does_not_stop_the_others() {
+    let sys = game_table();
+    sys.fail_suspend(20);
+    let t = start_in(
+        tempfile::tempdir().unwrap(),
+        Duration::from_millis(10),
+        Arc::clone(&sys),
+    )
+    .await;
+    t.start_session();
+    t.lock(LockReason::TimesUpSeeCounter);
+    assert_eq!(
+        t.reason(),
+        Some(LockReason::TimesUpSeeCounter),
+        "still locked"
+    );
+    assert_eq!(sys.suspended(), [21]);
     t.stop();
 }
 

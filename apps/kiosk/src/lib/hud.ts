@@ -57,6 +57,28 @@ export function raise(
   ];
 }
 
+/** Seconds left of the grace at `now` (never below zero); `from` is when it began. */
+export function graceSecondsLeft(from: number, graceMs: number, now: number): number {
+  return Math.max(0, Math.ceil((from + graceMs - now) / 1000));
+}
+
+/** "m:ss" for the grace countdown. */
+export function graceClock(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; // i18n-ignore (a clock)
+}
+
+/**
+ * The milestone a screen reader is told about while the grace runs (Story 6.22): 30 and 10 seconds
+ * left. `null` before the first one. The text changes only at a milestone, so a polite live region
+ * speaks it once.
+ */
+export function graceMilestone(seconds: number): 30 | 10 | null {
+  if (seconds <= 10) return 10;
+  if (seconds <= 30) return 30;
+  return null;
+}
+
 /** The key every time warning shares, so a newer one replaces the older (Story 6.19). */
 export const WARNING_KEY = "time-warning"; // i18n-ignore (a toast key)
 

@@ -28,3 +28,21 @@ deaf and hard-of-hearing players.** What still applies to them:
   windowed or borderless.
 
 Borderless-fullscreen games are not affected: the HUD draws over them like any window.
+
+## The grace at time-up (Story 6.22)
+
+- When a prepaid session reaches zero and the branch has a grace period, the HUD shows a solid
+  **Time's up** card at the top right: the grace countdown in large figures, "Wrap up your round.
+  This PC locks when the timer hits 0:00.", and (for a player with a wallet) **Extend** with the
+  **Ctrl+Shift+E** key caps. It plays the warning sound, never takes keyboard focus and covers only
+  its own corner, so the game keeps every click and key elsewhere.
+- Screen readers are told once when it appears, and again at 30 and 10 seconds left.
+- The kiosk counts the grace on its own monotonic clock, so the card and the lock at its end still
+  happen with the Hub unreachable.
+- In a Direct3D fullscreen-exclusive game nothing can be drawn: the taskbar flashes and the warning
+  sound plays once when the grace begins. As with the 5- and 1-minute warnings, this may be
+  sound-only for deaf and hard-of-hearing players; the PC still locks when the grace ends.
+- When the grace ends, "Clean up" mode ends the player's programs and returns to the attract screen.
+  "Staff handles" mode shows "Time's up — see the counter." and **suspends** the player's programs
+  (the game is frozen, not closed) until staff act: an Extend from the Hub thaws them and lifts the
+  lock; End ends them as part of the session-end cleanup.

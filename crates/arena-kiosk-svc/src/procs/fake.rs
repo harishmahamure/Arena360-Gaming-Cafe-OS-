@@ -34,6 +34,8 @@ struct State {
     unreadable: HashMap<u32, (Option<u32>, &'static str)>,
     fail_kill: HashSet<u32>,
     kill_attempts: usize,
+    suspended: HashSet<u32>,
+    fail_suspend: HashSet<u32>,
     visible: HashSet<u32>,
     sink: Option<EventSink>,
 }
@@ -133,6 +135,18 @@ impl FakeSystem {
     /// The pids killed so far, in order.
     pub fn killed(&self) -> Vec<u32> {
         self.state().killed.clone()
+    }
+
+    /// Every suspend of `pid` fails with access denied.
+    pub fn fail_suspend(&self, pid: u32) {
+        self.state().fail_suspend.insert(pid);
+    }
+
+    /// The pids suspended now, ascending.
+    pub fn suspended(&self) -> Vec<u32> {
+        let mut v: Vec<u32> = self.state().suspended.iter().copied().collect();
+        v.sort_unstable();
+        v
     }
 
     /// How many kills were attempted (including failed ones).
@@ -253,7 +267,33 @@ impl ProcessKiller for FakeSystem {
             ));
         }
         s.procs.remove(&facts.pid);
+        s.suspended.remove(&facts.pid);
         s.killed.push(facts.pid);
+        Ok(())
+    }
+
+    fn set_suspended(&self, facts: &ProcFacts, suspended: bool) -> io::Result<()> {
+        let mut s = self.state();
+        if s.fail_suspend.contains(&facts.pid) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "fake: access denied",
+            ));
+        }
+        let same = s.procs.get(&facts.pid).is_some_and(|p| {
+            p.path == facts.path && p.user_sid == facts.user_sid && p.session_id == facts.session_id
+        });
+        if !same {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "fake: not the process that was inspected",
+            ));
+        }
+        if suspended {
+            s.suspended.insert(facts.pid);
+        } else {
+            s.suspended.remove(&facts.pid);
+        }
         Ok(())
     }
 }

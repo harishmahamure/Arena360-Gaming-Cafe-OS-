@@ -15,7 +15,7 @@
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
-use arena_kiosk_core::hud::{place, warning_flash, window_visible};
+use arena_kiosk_core::hud::{grace_flash, place, warning_flash, window_visible};
 use arena_kiosk_core::monitors::Rect;
 use tauri::{
     AppHandle, Emitter, EventTarget, Manager, PhysicalPosition, PhysicalSize, Runtime,
@@ -43,6 +43,8 @@ pub struct Hud {
     session: AtomicBool,
     /// The time-warning mark last seen on the session (minutes; 0: none), so a mark flashes once.
     warned: AtomicU8,
+    /// The session is in its grace (Story 6.22), so the start of one flashes once.
+    in_grace: AtomicBool,
 }
 
 impl Hud {
@@ -74,6 +76,13 @@ impl Hud {
             mark,
             self.exclusive.load(Ordering::SeqCst),
         )
+    }
+
+    /// The session's grace is running (`true`) or not (Story 6.22). Whether the taskbar must
+    /// flash: the grace has just begun while a fullscreen-exclusive game hides the HUD.
+    pub fn note_grace(&self, grace: bool) -> bool {
+        let was = self.in_grace.swap(grace, Ordering::SeqCst);
+        grace_flash(was, grace, self.exclusive.load(Ordering::SeqCst))
     }
 
     fn set_exclusive(&self, now: bool) -> bool {
@@ -318,6 +327,21 @@ mod tests {
         assert!(
             hud.note_warning(Some(5)),
             "after an extension the mark can come again"
+        );
+    }
+
+    #[test]
+    fn a_grace_flashes_once_and_only_over_an_exclusive_game() {
+        let hud = Hud::default();
+        assert!(!hud.note_grace(true), "the HUD draws the card: no flash");
+        assert!(!hud.note_grace(false));
+        hud.set_exclusive(true);
+        assert!(hud.note_grace(true), "a new grace over the game flashes");
+        assert!(!hud.note_grace(true), "once");
+        assert!(!hud.note_grace(false));
+        assert!(
+            hud.note_grace(true),
+            "after an extension a grace can come again"
         );
     }
 

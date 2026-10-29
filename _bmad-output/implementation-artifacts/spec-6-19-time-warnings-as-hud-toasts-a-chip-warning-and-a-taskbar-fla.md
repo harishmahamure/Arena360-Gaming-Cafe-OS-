@@ -2,7 +2,7 @@
 title: 'Story 6.19: Time warnings as HUD toasts, a chip warning, and a taskbar flash in fullscreen games'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '4f7942c8e2eaae1925a1d3b7abc107124b70b40b'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'

@@ -26,10 +26,21 @@ pub fn is_rollup_date(s: &str) -> bool {
     }
     let num =
         |r: std::ops::Range<usize>| s.get(r).filter(|p| p.bytes().all(|c| c.is_ascii_digit()));
-    let (Some(_), Some(m), Some(d)) = (num(0..4), num(5..7), num(8..10)) else {
+    let (Some(y), Some(m), Some(d)) = (num(0..4), num(5..7), num(8..10)) else {
         return false;
     };
-    matches!(m.parse::<u8>(), Ok(1..=12)) && matches!(d.parse::<u8>(), Ok(1..=31))
+    let (Ok(y), Ok(m), Ok(d)) = (y.parse::<u32>(), m.parse::<u32>(), d.parse::<u32>()) else {
+        return false;
+    };
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let last = match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    y >= 1 && (1..=last).contains(&d)
 }
 
 /// The most credit players one rollup lists (largest balance first); the totals cover everyone.
@@ -258,6 +269,11 @@ mod tests {
         assert!(is_rollup_date("2026-10-29"));
         assert!(!is_rollup_date("latest"));
         assert!(!is_rollup_date("2026-13-01"));
+        assert!(!is_rollup_date("2026-02-31"));
+        assert!(!is_rollup_date("2026-04-31"));
+        assert!(!is_rollup_date("0000-01-01"));
+        assert!(is_rollup_date("2028-02-29"));
+        assert!(!is_rollup_date("2027-02-29"));
         assert!(!is_rollup_date("2026-1-001"));
         assert_eq!(rollup_object_key("2026-10-29"), "rollups/2026-10-29.json");
     }

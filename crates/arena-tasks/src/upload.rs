@@ -246,7 +246,8 @@ impl UploadTask {
             summary: true,
             rollups: true,
             heard: Vec::new(),
-            rescan: false,
+            // A restart forgets the changes heard before it: look at the recent days once.
+            rescan: true,
             dirty: BTreeSet::new(),
         }
     }
@@ -330,9 +331,14 @@ impl UploadTask {
                                 if self.rollups && next.active {
                                     self.hear(&applied);
                                     shift_closed |= applied.changes.iter().any(|c| c.tbl == "shifts");
+                                } else if self.rollups {
+                                    // Not listening now: look at the recent days on resuming.
+                                    self.rescan = true;
                                 }
                             }
                             Err(broadcast::error::RecvError::Lagged(_)) => {
+                                // Dropped events may hold a late ledger change.
+                                self.rescan |= self.rollups;
                                 if let Some(p) = self.progress().await {
                                     pending = p.pending_rows;
                                 }
@@ -718,15 +724,20 @@ impl UploadTask {
             }
         };
         self.dirty = plan.dirty.clone();
-        for day in plan.due.iter().take(ROLLUPS_PER_CYCLE) {
-            if let Some(next) = self
-                .publish_rollup(writer, token, epoch, interval, day)
-                .await
-            {
-                return Err(next);
+        // A day that cannot be built costs nothing, so it never starves the days behind it.
+        let mut sent = 0;
+        let mut more = false;
+        for day in &plan.due {
+            if sent >= ROLLUPS_PER_CYCLE {
+                more = true;
+                break;
             }
+            sent += usize::from(
+                self.publish_rollup(writer, token, epoch, interval, day)
+                    .await?,
+            );
         }
-        if plan.due.len() > ROLLUPS_PER_CYCLE {
+        if more {
             return Ok(Some(ROLLUP_CATCH_UP_WAIT));
         }
         // The next day to fall due by the clock: wake for it rather than a whole interval later.
@@ -736,8 +747,9 @@ impl UploadTask {
         }))
     }
 
-    /// One daily rollup: build, presign `kind: rollup`, PUT, then `rollup.publish`. `None` when
-    /// the pass goes on; otherwise what to do instead.
+    /// One daily rollup: build, presign `kind: rollup`, PUT, then `rollup.publish`. `Ok(false)`
+    /// when the day could not be built (skipped), `Ok(true)` when it went to the cloud; otherwise
+    /// what to do instead.
     async fn publish_rollup(
         &mut self,
         writer: &WriterHandle,
@@ -745,7 +757,7 @@ impl UploadTask {
         epoch: &str,
         interval: Duration,
         day: &str,
-    ) -> Option<Next> {
+    ) -> Result<bool, Next> {
         let built_at = writer.now_ms();
         let snapshots = Arc::clone(&self.snapshots);
         let build_day = day.to_owned();
@@ -755,21 +767,24 @@ impl UploadTask {
         .await
         {
             Ok(Ok(Some(doc))) => doc,
-            Ok(Ok(None)) => return None,
+            Ok(Ok(None)) => {
+                tracing::warn!(day, "rollup: nothing to build for the day");
+                return Ok(false);
+            }
             Ok(Err(e)) => {
                 tracing::warn!(day, code = e.code.as_str(), error = %e, "rollup: could not build");
-                return None;
+                return Ok(false);
             }
             Err(e) => {
                 tracing::warn!(day, error = %e, "rollup: build task failed");
-                return None;
+                return Ok(false);
             }
         };
         let bytes = match serde_json::to_vec(&doc) {
             Ok(b) => b,
             Err(e) => {
                 tracing::warn!(day, error = %e, "rollup: could not encode");
-                return None;
+                return Ok(false);
             }
         };
         let req = PresignRequest {
@@ -780,14 +795,14 @@ impl UploadTask {
         };
         let links = match self.cloud.presign(token, &req).await {
             Ok(l) => l,
-            Err(f) => return Some(self.refused(f, interval)),
+            Err(f) => return Err(self.refused(f, interval)),
         };
         let Some(url) = links.url else {
             tracing::warn!(day, "rollup: the cloud issued no rollup link");
-            return Some(self.failed(interval));
+            return Err(self.failed(interval));
         };
         if let Err(f) = self.cloud.put_object(&url, bytes).await {
-            return Some(self.refused(f, interval));
+            return Err(self.refused(f, interval));
         }
         self.fails = 0;
         match writer
@@ -802,11 +817,11 @@ impl UploadTask {
             Ok(_) => {
                 self.dirty.remove(day);
                 tracing::info!(day, "daily rollup published");
-                None
+                Ok(true)
             }
             Err(e) if e.code == ErrorCode::NotPrimary => {
                 tracing::info!("rollup: this hub is no longer the primary");
-                Some(Next::idle(TIER_RECHECK))
+                Err(Next::idle(TIER_RECHECK))
             }
             Err(e) => {
                 tracing::warn!(
@@ -814,7 +829,7 @@ impl UploadTask {
                     code = e.code.as_str(),
                     "rollup: could not record the publish"
                 );
-                None
+                Ok(true)
             }
         }
     }

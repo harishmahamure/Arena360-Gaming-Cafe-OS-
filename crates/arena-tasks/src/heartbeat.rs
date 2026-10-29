@@ -1476,6 +1476,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_date_of_the_last_rollup_rides_the_heartbeat() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let port = serve_with(vec![answer(true, Tier::Basic)], false, Arc::clone(&seen)).await;
+        let mut f = fx(port).await;
+        f.status
+            .send_modify(|s| s.upload.last_rollup_date = Some("2026-10-29".to_owned()));
+        f.task.beat().await;
+        assert_eq!(sent(&seen, 0)["last_rollup_date"], "2026-10-29");
+    }
+
+    #[tokio::test]
     async fn a_resend_in_the_answer_is_left_for_the_uploader_under_the_request_epoch() {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let port = serve_with(

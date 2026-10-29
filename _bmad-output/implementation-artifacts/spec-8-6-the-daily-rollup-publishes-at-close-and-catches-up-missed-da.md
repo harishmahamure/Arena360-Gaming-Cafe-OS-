@@ -2,7 +2,7 @@
 title: 'Story 8.6: The daily rollup publishes at close and catches up missed days'
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 baseline_commit: '3b47e5b'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -74,6 +74,9 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+- Fixed: broadcast lag, idle periods and restart now trigger a two-day rescan so a late change is not lost; a day that cannot be built no longer uses the 10-per-cycle budget (and is logged); `is_rollup_date` rejects impossible calendar dates; heartbeat test for `last_rollup_date`.
+- Deferred: migration 0075 backfills `first_uploaded_at` with the last upload (documented decision, no earlier marker exists); own-row day lookup limited to orders/refunds/sessions; shift-close wake and rescan-overflow paths have no loop-level test.
 
 ## Design Notes
 

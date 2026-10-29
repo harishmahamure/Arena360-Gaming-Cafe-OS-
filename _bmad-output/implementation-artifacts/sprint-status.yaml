@@ -227,7 +227,7 @@ development_status:
   8-3-the-heartbeat-detects-upload-gaps-and-the-hub-resends-them: done
   8-4-the-hub-publishes-a-branch-summary-every-cadence: done
   8-5-rollup-schema-v1-and-the-daily-rollup-at-close: done
-  8-6-the-daily-rollup-publishes-at-close-and-catches-up-missed-da: review
+  8-6-the-daily-rollup-publishes-at-close-and-catches-up-missed-da: done
   8-7-rollups-regenerate-after-a-schema-bump-and-the-cloud-accepts: backlog
   8-8-the-hub-uploads-a-daily-snapshot-after-close: backlog
   8-9-the-owner-read-api-serves-the-live-summary-and-rollup-ranges: backlog

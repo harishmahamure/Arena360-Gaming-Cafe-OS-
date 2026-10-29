@@ -2,7 +2,7 @@
 title: 'Story 6.10: A new player signs up at the kiosk with one consent box'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: 'a888ce77cdc57b21e88a919225a8b8e22f275e3f'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -121,3 +121,7 @@ The Terms and Privacy pages are short bundled catalogue text so the kiosk never 
 - `IpcMsg::PlayerSignup{rid, form: SignupFields}`; `SignupFields` has a redacted `Debug` and a `SecretPin` password. The shell command takes `username, password, phone, name, consent`.
 - The signup form keeps the legal pages inside the same component (the form is `hidden`, not unmounted), so fields are kept on Back. The field-error rows keep their height (two lines for the username rule) so a blur message never moves the consent box out from under a click; the fields sit in two columns so the form fits 1366x768.
 - Not run on this Windows host: the `cfg(unix)` `arena-kiosk-svc/tests/runtime.rs` tests added here (checked with the cfg lifted, which fails only on the pre-existing unix-only items). `arena-e2e` and `arena-kiosk-svc/tests/discovery.rs` do not build here, and 14 `arena-kiosk-svc` lib tests fail on SYSTEM ownership, all before this story. `pnpm check:generated` reports the new generated types as untracked until they are committed.
+
+## Code Review (2026-10-29)
+
+Reviewed the implementation commit (Rust Hub handler, rbac device rule, IPC/shell, Svelte form, tests) against the acceptance criteria. No blocking findings; no code changes. Verified: arena-proto/core/api/kiosk-core tests, fmt, check:strings/hex/no-blur/generated/protocol, prettier, svelte-check (0 errors), Playwright signup/login/attract (53 pass). Clippy errors remain only in pre-existing unix-only `arena-kiosk-svc/tests/discovery.rs` and `arena-e2e` (not part of this story). Note: app-side 10 s timeout could precede a slow Hub create; retry would show "username taken" (accepted, low risk).

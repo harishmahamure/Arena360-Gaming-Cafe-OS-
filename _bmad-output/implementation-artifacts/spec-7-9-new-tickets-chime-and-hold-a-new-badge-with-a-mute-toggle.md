@@ -2,7 +2,7 @@
 title: 'Story 7.9: New tickets chime and hold a NEW badge, with a mute toggle'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '51c30d5'
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-7-context.md'
@@ -49,3 +49,11 @@ context:
 - A refused advance keeps the badge (the badge is cleared only when the Hub accepts the advance or a board shows the ticket past New).
 - The top bar's toggle is now the first Tab stop; existing keyboard specs focus it first.
 - Residual risk: the audio unlock is exercised only against a stubbed audio element; the real autoplay policy of the kitchen tablet's browser (e.g. Safari) is covered by Story 7.11's hardware run.
+
+### Review Findings
+
+Code review (2026-10-29): no blocking findings. 0 decision-needed, 0 patch, 0 defer.
+
+Rejected:
+- Concurrent `unlock()` calls (window pointerdown plus the button click): the second call's play is aborted by the first's pause, reports `AbortError`, which is treated as allowed, so the outcome is the same. Not a defect.
+- Muting while the tap bar shows leaves the bar up: harmless, and unmuting runs `unlock()` from a tap. Low and not worth a new branch.

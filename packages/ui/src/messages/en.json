@@ -2623,6 +2623,7 @@
   "hub.alerts.ticket_where": "K-{number}",
   "hub.alerts.kind.order_ready": "Order ready",
   "hub.alerts.kind.order_ready_ticket": "Order ready: K-{number}",
+  "hub.alerts.kind.backup_disk": "Not enough disk space for backup",
   "hub.audit.intent.alert.raise": "Alert raised",
   "hub.audit.intent.alert.ack": "Alert acknowledged",
   "hub.settings.nav.rules": "Pricing rules",

@@ -4,6 +4,7 @@ pub mod catalog;
 pub mod cloud;
 pub mod commands;
 pub mod connectivity;
+pub mod disk;
 pub mod heartbeat;
 pub mod housekeeping;
 pub mod invoice;

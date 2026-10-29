@@ -1734,6 +1734,44 @@ impl SnapshotReader {
         })
     }
 
+    /// The business day a daily snapshot is due for (Story 8.8): the latest day whose rollup has
+    /// published, when no snapshot of that day or a later one is stored. Only that latest day:
+    /// the days a Hub missed while it was offline or the WAN was down are skipped, not caught up.
+    /// Blocking (SQLite).
+    pub fn snapshot_due(&self) -> Result<Option<String>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_with(|conn| {
+            let rolled = arena_store::last_rollup_date(conn)?;
+            let stored = arena_store::latest_snapshot_date(conn)?;
+            Ok(rolled.filter(|day| stored.as_ref().is_none_or(|s| day > s)))
+        })
+    }
+
+    /// The scratch directory for a snapshot (the database's own folder, so the disk that is
+    /// checked is the disk that is written) and the bytes the database occupies there.
+    pub fn snapshot_scratch(&self) -> Result<(std::path::PathBuf, u64), AppError> {
+        let path = self.db_path()?;
+        let dir = path
+            .parent()
+            .map_or_else(|| std::path::PathBuf::from("."), Path::to_path_buf);
+        Ok((dir, arena_store::database_bytes(&path)))
+    }
+
+    /// Copies the database for the snapshot of `date` into `dir` (Story 8.8): `VACUUM INTO`, the
+    /// player key table dropped, zstd. Runs on a connection of its own, so the shared reader stays
+    /// free for the UI and `apply()` keeps committing. Blocking (disk).
+    pub fn snapshot_file(
+        &self,
+        dir: &Path,
+        date: &str,
+    ) -> Result<arena_store::SnapshotFile, AppError> {
+        let path = self.db_path()?;
+        arena_store::build_snapshot_file(&path, dir, date)
+    }
+
     /// The next change-log batch to upload (Story 8.2): up to `limit` rows of one epoch after the
     /// upload cursor, `None` when everything is uploaded. Blocking (SQLite).
     pub fn pending_batch(

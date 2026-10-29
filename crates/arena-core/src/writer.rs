@@ -278,6 +278,50 @@ impl WriterHandle {
         .await
     }
 
+    /// Story 8.8: records that the daily snapshot of `row.date` was stored in the cloud, in
+    /// `snapshot_log`. Like [`Self::record_upload`], a maintenance write outside `apply()` that
+    /// writes no change rows and only while this writer is primary and holds its epoch
+    /// (`NOT_PRIMARY` otherwise). The day's row is replaced when it is stored again.
+    pub async fn record_snapshot(&self, row: arena_store::SnapshotLogRow) -> Result<(), AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        self.run(move |store| {
+            let ctx = ctx_from(clock.as_ref(), &status);
+            store.write_tx(|tx| {
+                crate::apply::check_epoch(tx, &ctx)?;
+                arena_store::write_snapshot_log(tx, &row)
+            })
+        })
+        .await
+    }
+
+    /// Story 8.8: raises the branch-level alert `kind` as the system (`alert.raise`, so it shows
+    /// in the Hub header list and writes an audit row). `STALE` when one is already open.
+    pub async fn raise_branch_alert(
+        &self,
+        kind: arena_proto::AlertKind,
+        actor_id: &str,
+    ) -> Result<Applied, AppError> {
+        let now = self.clock.now_ms();
+        self.submit_intent(Intent {
+            intent_id: ulid::Ulid::generate().to_string(),
+            kind: arena_proto::IntentKind::AlertRaise,
+            idempotency_key: ulid::Ulid::generate().to_string(),
+            issued_at: now,
+            base_rev: None,
+            actor: arena_proto::Actor {
+                kind: arena_proto::ActorKind::System,
+                id: actor_id.to_owned(),
+            },
+            elevated_by: None,
+            reason: None,
+            payload: arena_proto::IntentPayload::AlertRaise(arena_proto::AlertRaise::new(
+                kind, None,
+            )),
+        })
+        .await
+    }
+
     pub async fn record_pairing(
         &self,
         identity: arena_store::HubIdentity,

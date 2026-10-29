@@ -28,6 +28,7 @@ export const KIND_LABELS: Record<AlertKind, MessageKey> = {
   call_staff: "hub.alerts.kind.call_staff",
   kiosk_order: "hub.alerts.kind.kiosk_order",
   order_ready: "hub.alerts.kind.order_ready",
+  backup_disk: "hub.alerts.kind.backup_disk",
 };
 
 /** The tags a device alert puts on its tile (the tile badge's `AlertTag` subset). */
@@ -47,6 +48,7 @@ export const KIND_TAGS: Record<AlertKind, TileTag | null> = {
   call_staff: "call",
   kiosk_order: "order",
   order_ready: "ready",
+  backup_disk: null,
 };
 
 /** Branch-level kinds that also sound, and the screen a pick on them opens. */

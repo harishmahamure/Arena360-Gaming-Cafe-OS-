@@ -42,11 +42,15 @@ pub enum AlertKind {
     /// raises one per device; a walk-up ticket raises a branch-level alert that records its ticket.
     /// It sounds once and closes when staff acknowledge it or the Ready is undone.
     OrderReady,
+    /// The daily snapshot was skipped because the disk has less than twice the database's size
+    /// free (raised by the Hub's snapshot task; Story 8.8). A branch-level alert, one open at a
+    /// time; it does not sound.
+    BackupDisk,
 }
 
 impl AlertKind {
     /// Every kind.
-    pub const ALL: [AlertKind; 11] = [
+    pub const ALL: [AlertKind; 12] = [
         Self::Fixture,
         Self::TimeUp,
         Self::ControllerMissing,
@@ -58,6 +62,7 @@ impl AlertKind {
         Self::CallStaff,
         Self::KioskOrder,
         Self::OrderReady,
+        Self::BackupDisk,
     ];
 
     /// The stored and wire form, e.g. `time_up`.
@@ -74,6 +79,7 @@ impl AlertKind {
             Self::CallStaff => "call_staff",
             Self::KioskOrder => "kiosk_order",
             Self::OrderReady => "order_ready",
+            Self::BackupDisk => "backup_disk",
         }
     }
 
@@ -96,6 +102,7 @@ impl AlertKind {
             Self::CallStaff => "call",
             Self::KioskOrder => "order",
             Self::OrderReady => "ready",
+            Self::BackupDisk => "backup",
         }
     }
 }

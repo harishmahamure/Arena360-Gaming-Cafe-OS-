@@ -40,6 +40,7 @@ mod reports;
 mod rollup;
 mod sessions;
 mod shifts;
+mod snapshot;
 mod staff;
 mod stock;
 mod stock_reports;
@@ -237,6 +238,10 @@ pub use shifts::{
     insert_shift, last_opening_float, list_closed_shifts, open_sales_of_order, open_shift,
     open_shift_id, shift_breakdown, shift_count, shift_of_order_sale, staff_display_name,
     variance_threshold,
+};
+pub use snapshot::{
+    SnapshotFile, SnapshotLogRow, build_snapshot_file, database_bytes, find_snapshot_log,
+    latest_snapshot_date, write_snapshot_log,
 };
 pub use staff::{
     PinCandidate, RoleRow, StaffListing, StaffRow, StaffWrite, count_active_staff,

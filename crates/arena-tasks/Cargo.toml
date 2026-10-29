@@ -26,7 +26,11 @@ sha2.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [dev-dependencies]
+zstd.workspace = true
 arena-proto = { workspace = true, features = ["dev-keys"] }
 arena-replay.workspace = true
 arena-core = { workspace = true, features = ["test-jobs"] }

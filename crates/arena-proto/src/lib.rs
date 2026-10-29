@@ -363,6 +363,7 @@ pub use rollup::{
     RollupByType, RollupCredit, RollupCreditPlayer, RollupExpiring, RollupPlayHours, RollupPublish,
     RollupRevenue, RollupSessions, RollupShift, RollupStock, RollupStockLevel, RollupV1,
     RollupWaste, emitted_rollup_schema, is_rollup_date, rollup_object_key, rollup_schema_accepted,
+    snapshot_object_key,
 };
 pub use scan::{
     DeviceScanView, KEY_BRANCH_TZ, KioskScanReported, LibraryScansView, MAX_SCAN_ENTRIES,

@@ -8,10 +8,14 @@
 //! answered 2xx; a failed cycle leaves it, so the next one rebuilds the same batch under the
 //! same key (a repeated PUT of the same bytes is harmless).
 //!
+//! After a day's rollup has published, the same cycle stores that day's snapshot (Story 8.8): a
+//! zstd copy of the database without the player key table, PUT to `snapshots/<date>.db.zst`.
+//!
 //! A Free Hub (or one whose tier is not known yet), a follower and an unpaired Hub make no
 //! request at all. The task reads through the [`SnapshotReader`], never inside `apply()`.
 
 use std::collections::{BTreeSet, VecDeque};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -19,11 +23,14 @@ use arena_core::{
     HubStatus, PairGate, PairingState, Role, SnapshotReader, UploadStatus, WriterHandle,
 };
 use arena_proto::{
-    AppError, ErrorCode, PRESIGN_KIND_ROLLUP, PRESIGN_TTL_S, PresignBatch, PresignRequest,
-    ROLLUP_SCHEMA, ResendUnavailable, RollupV1, SUMMARY_OBJECT_KEY, SeqRange, Tier, VerifyKey,
-    emitted_rollup_schema, licence::verify_claims, rollup_object_key,
+    AlertKind, AppError, ErrorCode, PRESIGN_KIND_ROLLUP, PRESIGN_KIND_SNAPSHOT, PRESIGN_TTL_S,
+    PresignBatch, PresignRequest, ROLLUP_SCHEMA, ResendUnavailable, RollupV1, SUMMARY_OBJECT_KEY,
+    SeqRange, Tier, VerifyKey, emitted_rollup_schema, licence::verify_claims, rollup_object_key,
+    snapshot_object_key,
 };
-use arena_store::{BATCH_MAX_ROWS, ChangedRow, ROLLUP_LEDGER_TABLES, RangeRead, encode_batch};
+use arena_store::{
+    BATCH_MAX_ROWS, ChangedRow, ROLLUP_LEDGER_TABLES, RangeRead, SnapshotLogRow, encode_batch,
+};
 use tokio::sync::{broadcast, watch};
 
 use crate::cloud::{CloudClient, CloudFailure};
@@ -44,6 +51,8 @@ const ROLLUP_CATCH_UP_WAIT: Duration = Duration::from_secs(60);
 /// The most old-schema days one Hub regenerates in a minute (Story 8.7).
 const REGENERATIONS_PER_MINUTE: usize = 10;
 const REGENERATION_WINDOW_MS: i64 = 60_000;
+/// The daily snapshot needs this many times the database's size free on its disk (Story 8.8).
+const SNAPSHOT_DISK_FACTOR: u64 = 2;
 /// The most ledger changes remembered between two rollup plans; more means a rescan.
 const MAX_HEARD_CHANGES: usize = 5_000;
 /// How long to wait when the cloud limits the calls but names no time.
@@ -229,6 +238,13 @@ pub struct UploadTask {
     regenerated: VecDeque<i64>,
     /// Old-schema days that could not be built this run; they do not hold up the days behind.
     unbuildable: BTreeSet<String>,
+    /// Whether the cycle also stores the daily snapshot (Story 8.8).
+    daily_snapshot: bool,
+    /// The free bytes on the disk holding a folder; tests swap it.
+    free_space: fn(&Path) -> Option<u64>,
+    /// The day the "not enough disk space" alert was already raised for in this run, so a disk
+    /// that stays full does not raise one every cycle.
+    disk_alerted: Option<String>,
 }
 
 impl UploadTask {
@@ -266,6 +282,9 @@ impl UploadTask {
             build_rollup: SnapshotReader::daily_rollup,
             regenerated: VecDeque::new(),
             unbuildable: BTreeSet::new(),
+            daily_snapshot: true,
+            free_space: crate::disk::free_bytes,
+            disk_alerted: None,
         }
     }
 
@@ -279,6 +298,19 @@ impl UploadTask {
     pub fn without_summary(mut self) -> Self {
         self.summary = false;
         self.rollups = false;
+        self.daily_snapshot = false;
+        self
+    }
+
+    /// Tests: the cycle does not store the daily snapshot.
+    pub fn without_snapshot(mut self) -> Self {
+        self.daily_snapshot = false;
+        self
+    }
+
+    /// Tests: how the free room on a disk is read.
+    pub fn with_free_space(mut self, free_space: fn(&Path) -> Option<u64>) -> Self {
+        self.free_space = free_space;
         self
     }
 
@@ -456,6 +488,15 @@ impl UploadTask {
                     return next;
                 }
             }
+        }
+        // The snapshot follows the day's rollup, never ahead of it.
+        if self.daily_snapshot
+            && let Err(next) = self
+                .publish_snapshot(&writer, &token, &epoch, interval)
+                .await
+        {
+            self.refresh_progress().await;
+            return next;
         }
         self.refresh_progress().await;
         Next {
@@ -928,6 +969,147 @@ impl UploadTask {
                 .max(Duration::from_secs(1))
             });
         Ok(Some(wake))
+    }
+
+    /// Stores the daily snapshot of the latest published business day (Story 8.8): `VACUUM INTO`
+    /// a scratch file beside the database, player keys dropped, zstd, the scratch file deleted,
+    /// then PUT to `snapshots/<date>.db.zst` via presign `kind: snapshot` and recorded in
+    /// `snapshot_log`. Only the latest day is stored: days missed while offline are skipped, and a
+    /// failed PUT leaves no row, so the next cycle takes the snapshot again. Skipped, with an
+    /// alert, when the disk has less than twice the database free. Off the writer's path: the copy
+    /// is read on a connection of its own. `Ok` when the cycle goes on; `Err` what to do instead.
+    async fn publish_snapshot(
+        &mut self,
+        writer: &WriterHandle,
+        token: &str,
+        epoch: &str,
+        interval: Duration,
+    ) -> Result<(), Next> {
+        let snapshots = Arc::clone(&self.snapshots);
+        let due = {
+            let snapshots = Arc::clone(&snapshots);
+            tokio::task::spawn_blocking(move || {
+                let Some(date) = snapshots.snapshot_due()? else {
+                    return Ok(None);
+                };
+                let (dir, db_bytes) = snapshots.snapshot_scratch()?;
+                Ok::<_, AppError>(Some((date, dir, db_bytes)))
+            })
+            .await
+        };
+        let (date, dir, db_bytes) = match due {
+            Ok(Ok(Some(due))) => due,
+            Ok(Ok(None)) => return Ok(()),
+            Ok(Err(e)) => {
+                tracing::warn!(code = e.code.as_str(), error = %e, "snapshot: could not plan");
+                return Ok(());
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "snapshot: plan task failed");
+                return Ok(());
+            }
+        };
+        let free = (self.free_space)(&dir);
+        let needed = db_bytes.saturating_mul(SNAPSHOT_DISK_FACTOR);
+        if free.is_some_and(|f| f < needed) {
+            tracing::warn!(
+                date,
+                free,
+                needed,
+                "snapshot: not enough disk space, skipped"
+            );
+            self.alert_disk_low(writer, &date).await;
+            return Ok(());
+        }
+        let build_date = date.clone();
+        let built = tokio::task::spawn_blocking(move || {
+            let file = snapshots.snapshot_file(&dir, &build_date)?;
+            let bytes = file.read()?;
+            // The scratch file goes as soon as its bytes are held.
+            Ok::<_, AppError>((bytes, file.epoch.clone(), file.last_seq))
+        })
+        .await;
+        let (bytes, snapshot_epoch, last_seq) = match built {
+            Ok(Ok(built)) => built,
+            Ok(Err(e)) => {
+                tracing::warn!(date, code = e.code.as_str(), error = %e, "snapshot: could not build");
+                return Ok(());
+            }
+            Err(e) => {
+                tracing::warn!(date, error = %e, "snapshot: build task failed");
+                return Ok(());
+            }
+        };
+        let req = PresignRequest {
+            epoch: epoch.to_owned(),
+            kind: Some(PRESIGN_KIND_SNAPSHOT.to_owned()),
+            date: Some(date.clone()),
+            ..PresignRequest::default()
+        };
+        let links = match self.cloud.presign(token, &req).await {
+            Ok(l) => l,
+            Err(f) => return Err(self.refused(f, interval)),
+        };
+        let Some(url) = links.url else {
+            tracing::warn!(date, "snapshot: the cloud issued no snapshot link");
+            return Err(self.failed(interval));
+        };
+        let size = bytes.len();
+        if let Err(f) = self.cloud.put_object(&url, bytes).await {
+            return Err(self.refused(f, interval));
+        }
+        self.fails = 0;
+        let row = SnapshotLogRow {
+            key: snapshot_object_key(&date),
+            date: date.clone(),
+            epoch: snapshot_epoch,
+            last_seq,
+            bytes: i64::try_from(size).unwrap_or(i64::MAX),
+            uploaded_at: writer.now_ms(),
+        };
+        match writer.record_snapshot(row).await {
+            Ok(()) => {
+                tracing::info!(date, last_seq, bytes = size, "daily snapshot stored");
+                Ok(())
+            }
+            Err(e) if e.code == ErrorCode::NotPrimary => {
+                tracing::info!("snapshot: this hub is no longer the primary");
+                Err(Next::idle(TIER_RECHECK))
+            }
+            Err(e) => {
+                // The cloud has the file; the next cycle sends it again under the same key.
+                tracing::warn!(
+                    date,
+                    code = e.code.as_str(),
+                    "snapshot: could not record the upload"
+                );
+                Ok(())
+            }
+        }
+    }
+
+    /// Raises the "not enough disk space for backup" alert (it shows in the Hub's header list and
+    /// writes an audit row), once for a day's snapshot per run.
+    async fn alert_disk_low(&mut self, writer: &WriterHandle, date: &str) {
+        if self.disk_alerted.as_deref() == Some(date) {
+            return;
+        }
+        self.disk_alerted = Some(date.to_owned());
+        match writer
+            .raise_branch_alert(AlertKind::BackupDisk, "hub-snapshot")
+            .await
+        {
+            Ok(_) => tracing::info!(date, "snapshot: the not-enough-disk alert is raised"),
+            // Already open: staff have not acknowledged the last one.
+            Err(e) if e.code == ErrorCode::Stale => {}
+            Err(e) => {
+                tracing::warn!(
+                    code = e.code.as_str(),
+                    "snapshot: could not raise the alert"
+                );
+                self.disk_alerted = None;
+            }
+        }
     }
 
     /// The schema to emit: the licence's pinned `rollup_schema` (the tier's default when it
@@ -2192,6 +2374,15 @@ mod tests {
     /// A cloud that issues batch and rollup links; `up` false makes the bucket refuse every
     /// rollup PUT.
     fn cloud_with_rollups(up: Arc<std::sync::atomic::AtomicBool>) -> impl FnOnce(u16) -> Handler {
+        cloud_with_snapshots(up, Arc::new(std::sync::atomic::AtomicBool::new(true)))
+    }
+
+    /// As [`cloud_with_rollups`], and it issues snapshot links; snapshot PUTs fail while
+    /// `snapshots_up` is false.
+    fn cloud_with_snapshots(
+        up: Arc<std::sync::atomic::AtomicBool>,
+        snapshots_up: Arc<std::sync::atomic::AtomicBool>,
+    ) -> impl FnOnce(u16) -> Handler {
         move |port| {
             Box::new(move |line, body| {
                 if line.starts_with("POST /v1/presign") {
@@ -2209,6 +2400,16 @@ mod tests {
                             .into(),
                         );
                     }
+                    if req["kind"] == "snapshot" {
+                        links.insert(
+                            "url".into(),
+                            format!(
+                                "http://127.0.0.1:{port}/put/snapshots/{}.db.zst",
+                                req["date"].as_str().unwrap()
+                            )
+                            .into(),
+                        );
+                    }
                     if req["kind"] == "rollup" {
                         links.insert(
                             "url".into(),
@@ -2220,8 +2421,10 @@ mod tests {
                         );
                     }
                     (200, serde_json::Value::Object(links).to_string())
-                } else if line.starts_with("PUT /put/rollups/")
-                    && !up.load(std::sync::atomic::Ordering::SeqCst)
+                } else if (line.starts_with("PUT /put/rollups/")
+                    && !up.load(std::sync::atomic::Ordering::SeqCst))
+                    || (line.starts_with("PUT /put/snapshots/")
+                        && !snapshots_up.load(std::sync::atomic::Ordering::SeqCst))
                 {
                     (503, "{}".into())
                 } else {
@@ -2647,6 +2850,295 @@ mod tests {
             rollup_asks(&seen).len(),
             before,
             "the stuck day is not retried every cycle"
+        );
+    }
+
+    // ---- the daily snapshot (Story 8.8) ----
+
+    async fn snapshot_fx(tier: Tier) -> (Fx, Seen, Arc<std::sync::atomic::AtomicBool>) {
+        let snapshots_up = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let (port, seen) = serve(cloud_with_snapshots(
+            Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            Arc::clone(&snapshots_up),
+        ))
+        .await;
+        let mut f = fx(port, tier).await;
+        f.task.rollups = true;
+        f.task.daily_snapshot = true;
+        f.task.free_space = |_| Some(u64::MAX);
+        (f, seen, snapshots_up)
+    }
+
+    fn snapshot_asks(seen: &Seen) -> Vec<String> {
+        presigns(seen)
+            .into_iter()
+            .filter(|p| p["kind"] == "snapshot")
+            .map(|p| p["date"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    fn snapshot_puts(seen: &Seen) -> Vec<(String, Vec<u8>)> {
+        puts(seen)
+            .into_iter()
+            .filter(|(k, _)| k.starts_with("/put/snapshots/"))
+            .collect()
+    }
+
+    fn snapshot_row(f: &Fx, day: &str) -> Option<arena_store::SnapshotLogRow> {
+        Store::open_reader(&f.path)
+            .unwrap()
+            .read_with(|c| arena_store::find_snapshot_log(c, day))
+            .unwrap()
+    }
+
+    /// The files a snapshot leaves beside the database.
+    fn scratch_files(f: &Fx) -> Vec<String> {
+        std::fs::read_dir(f.path.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("snapshot-"))
+            .collect()
+    }
+
+    fn count(f: &Fx, sql: &'static str) -> i64 {
+        Store::open_reader(&f.path)
+            .unwrap()
+            .read_with(|c| Ok(c.query_row(sql, [], |r| r.get(0)).unwrap()))
+            .unwrap()
+    }
+
+    /// Opens a downloaded snapshot as a database.
+    fn open_snapshot(dir: &std::path::Path, bytes: &[u8]) -> arena_store::DbConn {
+        let plain = zstd::decode_all(bytes).expect("a zstd file");
+        let path = dir.join("opened.db");
+        std::fs::write(&path, plain).unwrap();
+        arena_store::DbConn::open(path).unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_snapshot_follows_the_days_rollup_and_is_recorded_after_its_put() {
+        let (mut f, seen, _) = snapshot_fx(Tier::Basic).await;
+        paid_since(&f, 1).await;
+
+        f.task.cycle().await;
+        assert_eq!(rollup_asks(&seen), ["2027-01-14"]);
+        assert_eq!(snapshot_asks(&seen), ["2027-01-14"]);
+        let sent = snapshot_puts(&seen);
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].0, "/put/snapshots/2027-01-14.db.zst");
+
+        let out = tempfile::tempdir().unwrap();
+        let copy = open_snapshot(out.path(), &sent[0].1);
+        let (epoch, last): (String, i64) = copy
+            .query_row(
+                "SELECT epoch, MAX(seq) FROM changes
+                 WHERE epoch_counter = (SELECT MAX(epoch_counter) FROM changes)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let row = snapshot_row(&f, "2027-01-14").expect("recorded after the PUT");
+        assert_eq!(
+            (row.epoch.as_str(), row.last_seq, row.key.as_str()),
+            (epoch.as_str(), last, "snapshots/2027-01-14.db.zst")
+        );
+        assert_eq!(row.epoch, EPOCH);
+        assert_eq!(row.bytes, i64::try_from(sent[0].1.len()).unwrap());
+        assert_eq!(row.uploaded_at, T0);
+        // The copy holds the day's rollup publish, so it is taken after the rollup.
+        let published: i64 = copy
+            .query_row(
+                "SELECT COUNT(*) FROM rollup_log WHERE date = '2027-01-14'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(published, 1);
+        assert!(scratch_files(&f).is_empty(), "{:?}", scratch_files(&f));
+
+        // Taken once: the next cycle asks for nothing.
+        f.task.cycle().await;
+        assert_eq!(snapshot_asks(&seen).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_snapshot_holds_player_data_only_as_ciphertext_and_no_key_table() {
+        let (mut f, seen, _) = snapshot_fx(Tier::Basic).await;
+        paid_since(&f, 1).await;
+        f.writer
+            .submit(|tx| {
+                tx.execute_batch(
+                    "INSERT INTO players (player_id, username, password_hash, phone_lookup,
+                                          name_enc, phone_enc, tags, rev, created_at, updated_at)
+                     VALUES ('P1', 'asha', 'argon-hash', 'lookup-hash', 'v1.CIPHERTEXT-NAME',
+                             'v1.CIPHERTEXT-PHONE', '[]', 0, 0, 0);
+                     INSERT INTO player_keys (player_id, dek_wrapped)
+                     VALUES ('P1', 'WRAPPED-DEK-MUST-NOT-LEAVE');",
+                )
+                .map_err(|e| arena_proto::AppError::new(ErrorCode::Internal, e.to_string()))
+            })
+            .await
+            .unwrap();
+
+        f.task.cycle().await;
+        let sent = snapshot_puts(&seen);
+        assert_eq!(sent.len(), 1);
+        let plain = zstd::decode_all(&sent[0].1[..]).unwrap();
+        let text = String::from_utf8_lossy(&plain);
+        assert!(!text.contains("WRAPPED-DEK-MUST-NOT-LEAVE"), "no key bytes");
+
+        let out = tempfile::tempdir().unwrap();
+        let copy = open_snapshot(out.path(), &sent[0].1);
+        let tables: i64 = copy
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'player_keys'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 0, "the player key table is not in the file");
+        let (name, phone): (String, String) = copy
+            .query_row(
+                "SELECT name_enc, phone_enc FROM players WHERE player_id = 'P1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (name.as_str(), phone.as_str()),
+            ("v1.CIPHERTEXT-NAME", "v1.CIPHERTEXT-PHONE")
+        );
+        // The live database keeps its keys.
+        assert_eq!(count(&f, "SELECT COUNT(*) FROM player_keys"), 1);
+    }
+
+    #[tokio::test]
+    async fn after_a_long_outage_only_the_latest_missed_day_is_stored() {
+        let (mut f, seen, _) = snapshot_fx(Tier::Basic).await;
+        paid_since(&f, 3).await;
+        f.task.cycle().await;
+        assert_eq!(
+            rollup_asks(&seen),
+            ["2027-01-12", "2027-01-13", "2027-01-14"]
+        );
+        assert_eq!(snapshot_asks(&seen), ["2027-01-14"]);
+        assert!(snapshot_row(&f, "2027-01-12").is_none());
+        assert!(snapshot_row(&f, "2027-01-13").is_none());
+        assert!(snapshot_row(&f, "2027-01-14").is_some());
+    }
+
+    #[tokio::test]
+    async fn a_failed_snapshot_put_leaves_no_row_and_the_next_cycle_takes_it_again() {
+        let (mut f, seen, snapshots_up) = snapshot_fx(Tier::Basic).await;
+        snapshots_up.store(false, std::sync::atomic::Ordering::SeqCst);
+        paid_since(&f, 1).await;
+
+        let next = f.task.cycle().await;
+        assert!(next.active && !next.early, "{next:?}");
+        assert_eq!(snapshot_asks(&seen), ["2027-01-14"]);
+        assert!(snapshot_row(&f, "2027-01-14").is_none());
+        assert!(
+            rollup_row(&f, "2027-01-14").is_some(),
+            "the rollup is not held back"
+        );
+        assert!(scratch_files(&f).is_empty(), "{:?}", scratch_files(&f));
+
+        snapshots_up.store(true, std::sync::atomic::Ordering::SeqCst);
+        f.task.cycle().await;
+        assert_eq!(snapshot_asks(&seen), ["2027-01-14", "2027-01-14"]);
+        assert!(snapshot_row(&f, "2027-01-14").is_some());
+    }
+
+    #[tokio::test]
+    async fn with_too_little_disk_the_snapshot_is_skipped_with_one_alert_and_an_audit_row() {
+        let (mut f, seen, _) = snapshot_fx(Tier::Basic).await;
+        paid_since(&f, 1).await;
+        // Under twice the database free.
+        f.task.free_space = |_| Some(1);
+
+        f.task.cycle().await;
+        assert!(snapshot_asks(&seen).is_empty(), "no link asked for");
+        assert!(snapshot_row(&f, "2027-01-14").is_none());
+        assert_eq!(
+            count(
+                &f,
+                "SELECT COUNT(*) FROM alerts WHERE kind = 'backup_disk' AND acked_at IS NULL"
+            ),
+            1,
+            "the alert is open"
+        );
+        let audit = "SELECT COUNT(*) FROM changes WHERE tbl = 'alerts'
+                       AND intent_kind = 'alert.raise' AND actor_kind = 'system'";
+        assert_eq!(count(&f, audit), 1, "and it is in the audit");
+        assert!(scratch_files(&f).is_empty());
+
+        // A disk that stays full raises nothing more.
+        f.task.cycle().await;
+        f.task.cycle().await;
+        assert_eq!(count(&f, audit), 1);
+        assert!(snapshot_asks(&seen).is_empty());
+
+        // Room again: the snapshot goes, the alert stays for staff to acknowledge.
+        f.task.free_space = |_| Some(u64::MAX);
+        f.task.cycle().await;
+        assert_eq!(snapshot_asks(&seen), ["2027-01-14"]);
+        assert!(snapshot_row(&f, "2027-01-14").is_some());
+    }
+
+    #[tokio::test]
+    async fn the_disk_rule_is_twice_the_database() {
+        let (mut f, seen, _) = snapshot_fx(Tier::Basic).await;
+        paid_since(&f, 1).await;
+        let db = arena_store::database_bytes(&f.path);
+        assert!(db > 0);
+        // Just under twice what the database occupies is not enough; far over it is.
+        f.task.free_space = |_| Some(1);
+        f.task.cycle().await;
+        assert!(snapshot_asks(&seen).is_empty());
+        f.task.free_space = |_| Some(1 << 40);
+        f.task.cycle().await;
+        assert_eq!(snapshot_asks(&seen).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_free_hub_stores_no_snapshot() {
+        let (mut f, seen, _) = snapshot_fx(Tier::Free).await;
+        paid_since(&f, 1).await;
+        f.task.cycle().await;
+        assert!(presigns(&seen).is_empty());
+        assert!(snapshot_row(&f, "2027-01-14").is_none());
+    }
+
+    #[tokio::test]
+    async fn trading_goes_on_while_a_snapshot_is_taken() {
+        let (f, _, _) = snapshot_fx(Tier::Basic).await;
+        // A database big enough for the copy to take a moment.
+        add_rows(&f.writer, EPOCH, 30_000).await;
+        let reader = Arc::clone(&f.task.snapshots);
+        let (dir, _) = reader.snapshot_scratch().unwrap();
+        let copying = tokio::task::spawn_blocking(move || {
+            let mut sizes = Vec::new();
+            for _ in 0..3 {
+                let file = reader.snapshot_file(&dir, "2027-01-14").unwrap();
+                sizes.push(file.bytes);
+            }
+            sizes
+        });
+        let mut slowest = Duration::ZERO;
+        let mut writes = 0;
+        while !copying.is_finished() {
+            let started = std::time::Instant::now();
+            add_rows(&f.writer, EPOCH, 1).await;
+            slowest = slowest.max(started.elapsed());
+            writes += 1;
+            tokio::task::yield_now().await;
+        }
+        let sizes = copying.await.unwrap();
+        assert!(sizes.iter().all(|s| *s > 0));
+        assert!(writes > 0);
+        assert!(
+            slowest < Duration::from_secs(2),
+            "a write waited {slowest:?} behind the copy"
         );
     }
 }

@@ -15,4 +15,5 @@ export type AlertKind =
   | "check_pc"
   | "call_staff"
   | "kiosk_order"
-  | "order_ready";
+  | "order_ready"
+  | "backup_disk";

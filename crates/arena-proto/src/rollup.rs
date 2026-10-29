@@ -35,6 +35,12 @@ pub fn rollup_object_key(date: &str) -> String {
     format!("rollups/{date}.json")
 }
 
+/// The object key of the daily snapshot of `date` (`yyyy-mm-dd`) under the branch's prefix of the
+/// data bucket (Story 8.8); what `snapshot_log.key` records for that day.
+pub fn snapshot_object_key(date: &str) -> String {
+    format!("snapshots/{date}.db.zst")
+}
+
 /// Whether `s` is a `rollup_log.date` of a daily rollup (`yyyy-mm-dd`, month 01–12, day 01–31), as
 /// opposed to the summary's `latest`.
 pub fn is_rollup_date(s: &str) -> bool {
@@ -294,6 +300,10 @@ mod tests {
         assert!(!is_rollup_date("2027-02-29"));
         assert!(!is_rollup_date("2026-1-001"));
         assert_eq!(rollup_object_key("2026-10-29"), "rollups/2026-10-29.json");
+        assert_eq!(
+            snapshot_object_key("2026-10-29"),
+            "snapshots/2026-10-29.db.zst"
+        );
     }
 
     #[test]

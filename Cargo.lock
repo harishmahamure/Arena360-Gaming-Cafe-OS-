@@ -407,6 +407,7 @@ dependencies = [
  "arena-replay",
  "arena-store",
  "if-addrs",
+ "libc",
  "mdns-sd",
  "rcgen",
  "reqwest",
@@ -421,6 +422,7 @@ dependencies = [
  "ulid",
  "webpki-roots 1.0.9",
  "windows",
+ "zstd",
 ]
 
 [[package]]

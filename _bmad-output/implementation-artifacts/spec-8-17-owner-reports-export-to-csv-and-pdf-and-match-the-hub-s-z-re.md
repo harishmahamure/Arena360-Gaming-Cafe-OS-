@@ -2,7 +2,7 @@
 title: 'Story 8.17: Owner reports export to CSV and PDF and match the Hub''s Z-reports exactly'
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 baseline_commit: 'b120d2f'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -86,8 +86,12 @@ See the Story 8.17 entry in `epic-8-context.md`.
 
 ## Auto Run Result
 
-Status: review.
+Status: done.
 
 - Summary: Export CSV/PDF for Revenue, Cash reconciliation and Stock, an Exports tab, and the 30-day proof that summed rollups equal the Hub's Z-reports.
 - Verification: fmt and clippy clean; arena-proto (276), arena-store and arena-core (1281) tests pass; cloud `owner_read` (19) and `branches` pass; owner app `check` 0 errors and Playwright 346 passed; `check:strings`, `check:layers`, `check:protocol`, `check:no-manifest`, `check:hex`, `format:check` ok. `check:tokens-used` reports `--ad-reserved` in `apps/hub/.../floor/+page.svelte`, which this story does not touch.
 - Residual risks: the NFR10 test builds the rollups at an in-process Hub and sums them with the same `OwnerRangeTotals::add_rollup` the cloud uses; it does not go through MinIO, so the CI job that uploads to MinIO is not added. The PDF is the browser's print-to-PDF, not a generated file, so it is not covered outside the print-media and `window.print` checks.
+
+## Code review (2026-10-30)
+
+Four layers (blind, edge-case, verification-gap, acceptance). Fixed: export forces `group_by=day`; revenue `missing_days` no longer overwrites real rows; empty `branches=` entries ignored; Cash CSV keeps rollup days that have no closed shift; PDF export no longer prints a failed report, guards re-entry, and waits for the refreshed "Generated" time; added unit tests for stock CSV alignment and multi-shift/rollup-only cash days. Deferred (non-blocking): server CSV text is English-only literals; the PDF "Generated" zone label; export-failed alert is not cleared on tab change; download() 401 retry has no dedicated test.

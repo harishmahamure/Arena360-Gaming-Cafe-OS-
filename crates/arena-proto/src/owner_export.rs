@@ -181,7 +181,7 @@ fn revenue(out: &mut String, branches: &[(String, OwnerRange)]) {
             );
         }
         for d in &r.missing_days {
-            days.insert(d, Vec::new());
+            days.entry(d).or_default();
         }
         for (day, cells) in days {
             let mut cols = vec![day.to_owned(), name.clone(), r.currency.clone()];
@@ -235,7 +235,15 @@ fn cash(out: &mut String, branches: &[(String, OwnerRange)]) {
         }
         let mut dates: Vec<&str> = days.keys().copied().collect();
         dates.extend(r.missing_days.iter().map(String::as_str));
+        // A day with a rollup but no closed shift still gets its row (zero shifts).
+        dates.extend(
+            r.rows
+                .iter()
+                .filter(|p| p.totals.days > 0)
+                .map(|p| p.period.as_str()),
+        );
         dates.sort_unstable();
+        dates.dedup();
         for day in dates {
             let mut cols = vec![day.to_owned(), name.clone(), r.currency.clone()];
             if let Some(d) = days.get(day) {
@@ -248,9 +256,13 @@ fn cash(out: &mut String, branches: &[(String, OwnerRange)]) {
                     if d.over { "Yes" } else { "No" }.into(),
                     "Rollup".into(),
                 ]);
-            } else {
+            } else if r.missing_days.iter().any(|m| m == day) {
                 cols.extend(std::iter::repeat_n(String::new(), 6));
                 cols.push("No figures".into());
+            } else {
+                cols.push("0".into());
+                cols.extend(std::iter::repeat_n(String::new(), 5));
+                cols.push("Rollup".into());
             }
             row(out, &cols);
         }
@@ -411,5 +423,70 @@ mod tests {
         let csv = owner_csv(ExportReport::Cash, &[("Main".into(), range("INR"))], 0);
         assert!(csv.contains("2026-10-29,Main,INR,1,100.00,500.00,497.00,-3.00,Yes,Rollup"));
         assert!(csv.contains("2026-10-28,Main,INR,,,,,,,No figures"));
+    }
+
+    #[test]
+    fn cash_adds_up_a_days_shifts_and_keeps_rollup_days_without_shifts() {
+        let mut r = range("INR");
+        let mut second = r.shifts[0].clone();
+        second.shift.shift_id = "s2".into();
+        second.shift.float = 5_000;
+        second.shift.expected = 20_000;
+        second.shift.counted = 20_000;
+        second.shift.variance = 0;
+        second.shift.over_threshold = Some(false);
+        r.shifts.push(second);
+        let mut quiet = r.rows[0].clone();
+        quiet.period = "2026-10-30".into();
+        r.rows.push(quiet);
+        r.missing_days = vec!["2026-10-28".into()];
+        let csv = owner_csv(ExportReport::Cash, &[("Main".into(), r)], 0);
+        assert!(csv.contains("2026-10-29,Main,INR,2,150.00,700.00,697.00,-3.00,Yes,Rollup"));
+        assert!(csv.contains("2026-10-30,Main,INR,0,,,,,,Rollup"));
+        assert!(csv.contains("2026-10-28,Main,INR,,,,,,,No figures"));
+    }
+
+    #[test]
+    fn stock_rows_line_up_with_the_header() {
+        use crate::owner_read::{OwnerRangeExpiring, OwnerRangeWaste};
+        use crate::rollup::RollupStockLevel;
+        let mut r = range("INR");
+        r.stock = OwnerRangeStock {
+            levels_as_of: Some("2026-10-29".into()),
+            levels: vec![RollupStockLevel {
+                product_id: "p1".into(),
+                name: "Cola".into(),
+                category: Some("Drinks".into()),
+                qty: 12,
+                low_qty: Some(5),
+            }],
+            waste: vec![OwnerRangeWaste {
+                product_id: "p1".into(),
+                name: "Cola".into(),
+                category: None,
+                reason: "Spilled".into(),
+                qty: 2,
+                value: 4_000,
+            }],
+            expiring: vec![OwnerRangeExpiring {
+                product_id: "p2".into(),
+                name: "Milk".into(),
+                lot: "L7".into(),
+                qty: 3,
+                expires_on: "2026-11-01".into(),
+            }],
+        };
+        let csv = owner_csv(ExportReport::Stock, &[("Main".into(), r)], 0);
+        let lines: Vec<&str> = csv.lines().skip(5).collect();
+        assert_eq!(
+            lines[0],
+            "Section,Branch,Currency,Product,Category,Reason or lot,Quantity,Low at,Value,Date"
+        );
+        assert_eq!(lines[1], "Level,Main,INR,Cola,Drinks,,12,5,,2026-10-29");
+        assert_eq!(
+            lines[2],
+            "Waste,Main,INR,Cola,,Spilled,2,,40.00,2026-10-28 to 2026-10-30"
+        );
+        assert_eq!(lines[3], "Expiring,Main,INR,Milk,,L7,3,,,2026-11-01");
     }
 }

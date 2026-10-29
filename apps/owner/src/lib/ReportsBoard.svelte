@@ -54,6 +54,7 @@
   let failed = $state(false);
   let loading = $state(false);
   let exporting = $state(false);
+  let printing = false;
   let exportFailed = $state(false);
   let now = $state(Date.now());
   let ticket = 0;
@@ -149,14 +150,18 @@
 
   // Export → PDF: the report is shown with its print header, and the browser prints it to PDF.
   async function exportPdf(kind: ExportKind) {
+    if (printing) return;
+    printing = true;
     tab = kind;
     await tick();
     for (let i = 0; i < 100 && (loading || (kind === "stock" && !windowsLoaded)); i++) {
       await new Promise((r) => setTimeout(r, 100));
     }
-    await tick();
     now = Date.now();
-    window.print();
+    await tick();
+    // A report that failed to load is not worth printing under a valid-looking header.
+    if (!failed) window.print();
+    printing = false;
   }
 
   const generated = $derived(

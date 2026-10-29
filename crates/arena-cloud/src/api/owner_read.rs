@@ -324,12 +324,16 @@ async fn export(
     };
     let report =
         report.ok_or_else(|| ApiError::validation("report", "Choose revenue, cash or stock."))?;
-    let range = parse_range(query)?;
+    // One row per day, whatever `group_by` the caller sent.
+    let range = Range {
+        group_by: GroupBy::Day,
+        ..parse_range(query)?
+    };
     let now = st.now();
     let mut branches = branches_for(&st, &signed.owner.id, &id, now).await?;
     // `all` may be narrowed to the branches the app is showing (ids the owner is allowed anyway).
     if let Some(only) = only.filter(|_| id == OWNER_ALL_BRANCHES) {
-        let ids: Vec<&str> = only.split(',').collect();
+        let ids: Vec<&str> = only.split(',').filter(|s| !s.is_empty()).collect();
         branches.retain(|b| ids.contains(&b.id.as_str()));
         if branches.is_empty() {
             return Err(not_entitled());

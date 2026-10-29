@@ -2,7 +2,7 @@
 title: 'Story 6.15: Volume control and calling staff from the top bar'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '4839ef8'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'

@@ -15,6 +15,7 @@
   import { playerLogout } from "./bridge";
   import Login from "./Login.svelte";
   import PlanPicker from "./PlanPicker.svelte";
+  import Signup from "./Signup.svelte";
 
   let {
     view,
@@ -34,11 +35,13 @@
   /** The login panel is open over the media. */
   let panel = $state(false);
   /**
-   * The player who logged in, while the plan picker is open (Stories 6.8 and 6.9). Memory only: it
+   * The player who logged in or signed up, while the plan picker is open (Stories 6.8-6.10). Memory only: it
    * is never saved, and it goes with the panel or when a session starts (the session screen
    * replaces this whole screen). The Hub holds the login; this is only who to greet.
    */
   let player: PlayerContext | null = $state(null);
+  /** The sign-up form is open in the panel instead of the login form (Story 6.10). */
+  let signingUp = $state(false);
   /** The logo could not be decoded: the Arena 360 mark shows instead. */
   let brokenLogo: string | null = $state(null);
   let idle: ReturnType<typeof setTimeout> | undefined;
@@ -75,12 +78,14 @@
     if (player !== null) playerLogout();
     panel = false;
     player = null;
+    signingUp = false;
   }
 
   /** A correct login: the plan picker opens for this player, with its own 60 s without input. */
   function hold(who: PlayerContext) {
     // The panel closed while the Hub was still checking: nobody is waiting for this answer.
     if (!panel) return;
+    signingUp = false;
     player = who;
     touch();
     void tick().then(() => dialog?.focus());
@@ -228,8 +233,10 @@
       >
         {#if player}
           <PlanPicker {view} {hub} {player} onlogout={close} />
+        {:else if signingUp}
+          <Signup {hub} onplayer={hold} onback={() => (signingUp = false)} />
         {:else}
-          <Login {view} {hub} onplayer={hold} onclose={close} />
+          <Login {view} {hub} onplayer={hold} oncreate={() => (signingUp = true)} onclose={close} />
         {/if}
       </div>
     </div>

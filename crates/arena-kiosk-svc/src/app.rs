@@ -550,6 +550,14 @@ async fn serve(
                     let _ = out.send(reply).await;
                 });
             }
+            Ok(IpcMsg::PlayerSignup { rid, form }) => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(rid, crate::player_signup::request(&ctx, form).await);
+                    let _ = out.send(reply).await;
+                });
+            }
             Ok(IpcMsg::PlayerPlans { rid }) => {
                 let ctx = Arc::clone(&ctx);
                 let out = out_tx.clone();

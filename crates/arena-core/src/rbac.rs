@@ -118,6 +118,16 @@ fn device_starts_own_session(p: Permission, intent: &Intent) -> bool {
         )
 }
 
+/// Whether a paired device may apply `intent` itself (Story 6.10): the one player right a device
+/// holds is creating a profile with the consent box ticked (`player.signup` at the kiosk). The Hub
+/// builds that intent; `player.create` is outside the paired scope, so a kiosk cannot send it. A
+/// `consent: false` create, an update, a password reset and an import stay denied.
+fn device_creates_player(p: Permission, intent: &Intent) -> bool {
+    use arena_proto::IntentPayload;
+    p == Permission::PlayerManage
+        && matches!(&intent.payload, IntentPayload::PlayerCreate(c) if c.consent)
+}
+
 /// **permission.** Checks the intent's [`Requirement`] against its actor. The kind is taken
 /// from the payload, so a mislabelled envelope cannot borrow another kind's requirement.
 pub fn check(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
@@ -150,7 +160,9 @@ pub fn check(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
             ActorKind::Staff => staff_allows(tx, &actor.id, p)?,
             ActorKind::System => is_pairing(intent),
             ActorKind::Admin => false,
-            ActorKind::Device => device_starts_own_session(p, intent),
+            ActorKind::Device => {
+                device_starts_own_session(p, intent) || device_creates_player(p, intent)
+            }
         },
     };
     if ok { Ok(()) } else { Err(denied()) }

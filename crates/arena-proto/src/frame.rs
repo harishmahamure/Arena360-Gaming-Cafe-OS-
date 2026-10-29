@@ -17,6 +17,7 @@ use crate::intent::Intent;
 use crate::pc_command::{LockReason, PcAck, PcAction};
 use crate::player_login::{PlayerAuthResult, PlayerAuthenticate};
 use crate::player_session::{PlayerPlansResult, PlayerStartResult, PlayerStartSession};
+use crate::player_signup::{PlayerSignup, PlayerSignupResult};
 use crate::scope::ClientClass;
 use crate::session::SessionScreen;
 use crate::ui_auth::SettingEntry;
@@ -96,13 +97,19 @@ pub enum FrameBody {
     /// The kiosk forgets the player (paired sessions only); the Hub drops its login record.
     #[serde(rename = "player.logout")]
     PlayerLogout,
+    /// A new player's sign-up typed at the kiosk (paired sessions only; Story 6.10).
+    #[serde(rename = "player.signup")]
+    PlayerSignup(PlayerSignup),
+    /// The Hub's typed answer to `player.signup`.
+    #[serde(rename = "player.signup_result")]
+    PlayerSignupResult(PlayerSignupResult),
     /// The Hub's empty reply to a request that has nothing to return.
     #[serde(rename = "ack")]
     Ack,
 }
 
 /// Every known `kind`.
-pub const FRAME_KINDS: [&str; 22] = [
+pub const FRAME_KINDS: [&str; 24] = [
     "hello",
     "hello.ok",
     "intent.submit",
@@ -124,6 +131,8 @@ pub const FRAME_KINDS: [&str; 22] = [
     "player.start_session",
     "player.start_result",
     "player.logout",
+    "player.signup",
+    "player.signup_result",
     "ack",
 ];
 
@@ -152,6 +161,8 @@ impl FrameBody {
             Self::PlayerStartSession(_) => "player.start_session",
             Self::PlayerStartResult(_) => "player.start_result",
             Self::PlayerLogout => "player.logout",
+            Self::PlayerSignup(_) => "player.signup",
+            Self::PlayerSignupResult(_) => "player.signup_result",
             Self::Ack => "ack",
         }
     }

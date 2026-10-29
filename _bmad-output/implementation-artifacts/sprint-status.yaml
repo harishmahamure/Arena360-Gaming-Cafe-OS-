@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-30-2026 00:00
+last_updated: 10-29-2026 00:00
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -176,7 +176,7 @@ development_status:
   6-7-the-attract-screen-shows-branding-rates-and-the-active-rule: done
   6-8-a-player-logs-in-at-the-kiosk-with-username-and-password: done
   6-9-the-plan-picker-starts-a-prepaid-session-from-the-kiosk: done
-  6-10-a-new-player-signs-up-at-the-kiosk-with-one-consent-box: backlog
+  6-10-a-new-player-signs-up-at-the-kiosk-with-one-consent-box: review
   6-11-session-end-cleanup-ends-the-player-s-programs-and-clears-th: backlog
   6-12-session-end-cleanup-signs-out-launchers-discord-and-browsers: backlog
   6-13-the-player-shell-with-top-bar-pill-nav-and-time-chip: backlog

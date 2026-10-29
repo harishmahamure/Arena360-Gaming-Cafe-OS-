@@ -2890,6 +2890,337 @@ async fn a_follower_answers_the_picker_frames_with_an_error() {
     }
 }
 
+// ---- Story 6.10: sign-up at the kiosk ----
+
+fn signup_body(
+    username: &str,
+    password: &str,
+    phone: &str,
+    name: &str,
+    consent: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "username": username,
+        "password": password,
+        "phone": phone,
+        "name": name,
+        "consent": consent,
+    })
+}
+
+async fn signup(
+    client: &HubClient,
+    body: serde_json::Value,
+) -> Result<arena_proto::PlayerSignupResult, ClientError> {
+    match client.request("player.signup", body).await?.body {
+        FrameBody::PlayerSignupResult(r) => Ok(r),
+        other => panic!("{other:?}"),
+    }
+}
+
+fn refused_with(r: arena_proto::PlayerSignupResult) -> (ErrorCode, Option<String>) {
+    match r {
+        arena_proto::PlayerSignupResult::Refused { code, field } => (code, field),
+        other => panic!("{other:?}"),
+    }
+}
+
+fn players_written(hub: &TestHub) -> usize {
+    Store::open_reader(&hub.path)
+        .unwrap()
+        .rows(arena_store::Table::Players)
+        .unwrap()
+        .len()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_new_player_signs_up_is_logged_in_and_the_log_shows_the_device_and_no_personal_data() {
+    use arena_proto::{PLAYER_POLICY_VERSION, PlayerAuthResult, PlayerSignupResult};
+    let hub = start("0.1.0", true).await;
+    rated_pc(&hub, 6_000).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let started = Instant::now();
+    let result = signup(
+        &client,
+        signup_body(
+            " Asha_9 ",
+            "hunter2-secret",
+            "+91 98765-43210",
+            "Asha Rao",
+            true,
+        ),
+    )
+    .await
+    .unwrap();
+    assert!(started.elapsed() < Duration::from_secs(3));
+    let PlayerSignupResult::Ok { player } = result else {
+        panic!("{result:?}")
+    };
+    assert_eq!(player.name, "Asha Rao");
+    let reader = Store::open_reader(&hub.path).unwrap();
+    // Player, wallet and a granted transactional consent row with the Hub's policy version.
+    let players = reader.rows(arena_store::Table::Players).unwrap();
+    assert_eq!(players.len(), 1);
+    assert_eq!(
+        players[0]["player_id"],
+        arena_store::RowValue::Text(player.player_id.clone())
+    );
+    assert_eq!(
+        players[0]["username"],
+        arena_store::RowValue::Text("asha_9".into())
+    );
+    assert_eq!(reader.wallet_balance(&player.player_id).unwrap(), 0);
+    let consents = reader.rows(arena_store::Table::Consents).unwrap();
+    assert_eq!(consents.len(), 1);
+    assert_eq!(
+        consents[0]["purpose"],
+        arena_store::RowValue::Text("transactional".into())
+    );
+    assert_eq!(consents[0]["granted"], arena_store::RowValue::Integer(1));
+    assert_eq!(
+        consents[0]["policy_version"],
+        arena_store::RowValue::Text(PLAYER_POLICY_VERSION.into())
+    );
+    // The change log shows the kiosk device and the player id, and carries no name or phone.
+    let changes = reader.changes().unwrap();
+    let change = changes.iter().rev().find(|c| c.tbl == "players").unwrap();
+    assert_eq!(
+        (
+            change.actor_kind.as_str(),
+            change.actor_id.as_str(),
+            change.row_id.as_str()
+        ),
+        ("device", hub.paired_id.as_str(), player.player_id.as_str())
+    );
+    let log: Vec<u8> = changes.into_iter().flat_map(|c| c.row).collect();
+    let log = String::from_utf8_lossy(&log).into_owned();
+    for plain in ["Asha Rao", "9876543210", "hunter2"] {
+        assert!(!log.contains(plain), "{plain}");
+    }
+    assert!(device_events(&hub, "kiosk.player_login").is_empty());
+    let text = log_text();
+    for plain in ["hunter2", "Asha Rao", "9876543210", "asha_9"] {
+        assert!(
+            !text.contains(plain),
+            "{plain} must never be logged:\n{text}"
+        );
+    }
+    // Logged in at once: the picker works on this connection with no further login.
+    let options = plans(&client).await.unwrap();
+    assert!(options.wallet.is_some());
+    // The password works for a later login.
+    assert!(matches!(
+        login(&client, "asha_9", "hunter2-secret").await,
+        PlayerAuthResult::Ok { .. }
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_sign_up_without_the_consent_box_is_refused_and_writes_nothing() {
+    let hub = start("0.1.0", true).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let before = Store::open_reader(&hub.path)
+        .unwrap()
+        .changes()
+        .unwrap()
+        .len();
+    let r = signup(
+        &client,
+        signup_body("asha", "secret1", "+919876543210", "Asha", false),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        refused_with(r),
+        (ErrorCode::ValidationFailed, Some("consent".into()))
+    );
+    assert_eq!(players_written(&hub), 0);
+    assert_eq!(
+        Store::open_reader(&hub.path)
+            .unwrap()
+            .changes()
+            .unwrap()
+            .len(),
+        before
+    );
+    // Not logged in either.
+    assert!(login_required(plans(&client).await.unwrap_err()));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_taken_username_or_phone_and_bad_fields_come_back_typed_and_write_nothing() {
+    let hub = start("0.1.0", true).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    assert!(matches!(
+        signup(
+            &client,
+            signup_body("asha", "secret1", "+91 98765 43210", "Asha", true)
+        )
+        .await
+        .unwrap(),
+        arena_proto::PlayerSignupResult::Ok { .. }
+    ));
+    let before = Store::open_reader(&hub.path)
+        .unwrap()
+        .changes()
+        .unwrap()
+        .len();
+    let cases = [
+        (
+            signup_body("ASHA", "secret1", "+919000000002", "Other", true),
+            ErrorCode::UsernameTaken,
+            "username",
+        ),
+        (
+            signup_body("other", "secret1", "+91-98765-43210", "Other", true),
+            ErrorCode::PhoneTaken,
+            "phone",
+        ),
+        (
+            signup_body("ab", "secret1", "+919000000002", "Other", true),
+            ErrorCode::ValidationFailed,
+            "username",
+        ),
+        (
+            signup_body("other", "12345", "+919000000002", "Other", true),
+            ErrorCode::ValidationFailed,
+            "password",
+        ),
+        (
+            signup_body("other", "secret1", "+12", "Other", true),
+            ErrorCode::ValidationFailed,
+            "phone",
+        ),
+        (
+            signup_body("other", "secret1", "+919000000002", "   ", true),
+            ErrorCode::ValidationFailed,
+            "name",
+        ),
+    ];
+    for (body, code, field) in cases {
+        let r = signup(&client, body).await.unwrap();
+        assert_eq!(refused_with(r), (code, Some(field.to_owned())), "{field}");
+    }
+    assert_eq!(players_written(&hub), 1);
+    assert_eq!(
+        Store::open_reader(&hub.path)
+            .unwrap()
+            .changes()
+            .unwrap()
+            .len(),
+        before
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_oversized_sign_up_frame_is_bad_frame_and_a_hub_that_cannot_create_answers_an_error() {
+    let hub = start("0.1.0", true).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    match signup(
+        &client,
+        signup_body("asha", &"p".repeat(2000), "+919876543210", "Asha", true),
+    )
+    .await
+    {
+        Err(ClientError::Hub(e)) => assert_eq!(e.code, ErrorCode::BadFrame),
+        other => panic!("{other:?}"),
+    }
+    let bare = start_full("0.1.0", true, None, false).await;
+    let client = HubClient::connect(&bare.url(), &bare.fingerprint, bare.paired())
+        .await
+        .unwrap();
+    match signup(
+        &client,
+        signup_body("asha", "secret1", "+919876543210", "Asha", true),
+    )
+    .await
+    {
+        Err(ClientError::Hub(e)) => assert_eq!(e.code, ErrorCode::Unsupported),
+        other => panic!("{other:?}"),
+    }
+    let follower = start("0.1.0", false).await;
+    let client = HubClient::connect(&follower.url(), &follower.fingerprint, follower.paired())
+        .await
+        .unwrap();
+    match signup(
+        &client,
+        signup_body("asha", "secret1", "+919876543210", "Asha", true),
+    )
+    .await
+    {
+        Err(ClientError::Hub(e)) => assert_eq!(e.code, ErrorCode::NotPrimary),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn only_a_paired_session_may_sign_a_player_up_and_a_kiosk_cannot_send_player_create() {
+    let hub = start("0.1.0", true).await;
+    let mut ws = hub.plain().await;
+    let hello = Frame::new(
+        "h",
+        FrameBody::Hello(hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0")),
+    );
+    send_frame(&mut ws, &hello).await;
+    assert!(matches!(
+        recv(&mut ws).await.unwrap().body,
+        FrameBody::HelloOk(_)
+    ));
+    send(
+        &mut ws,
+        r#"{"v":1,"kind":"player.signup","rid":"v","username":"asha","password":"secret1","phone":"+919876543210","name":"Asha","consent":true}"#,
+    )
+    .await;
+    let frame = recv(&mut ws).await.unwrap();
+    assert_eq!(error_of(&frame).1, ErrorCode::Forbidden);
+    assert_eq!(players_written(&hub), 0);
+
+    // A paired kiosk cannot send player.create itself (the paired scope is unchanged).
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let form = arena_proto::PlayerForm {
+        username: "asha".into(),
+        password: "secret1".into(),
+        phone: "+919876543210".into(),
+        name: "Asha".into(),
+        email: String::new(),
+        dob: String::new(),
+        notes: String::new(),
+        tags: vec![],
+        consent: true,
+        policy_version: "1".into(),
+    };
+    let sealed = arena_core::players::seal(
+        &PLAYER_KEK,
+        &form,
+        &ulid::Ulid::generate().to_string(),
+        arena_core::staff::hash_secret("secret1").unwrap(),
+    )
+    .unwrap();
+    let create = intent(
+        Actor {
+            kind: ActorKind::Device,
+            id: hub.paired_id.clone(),
+        },
+        IntentPayload::PlayerCreate(sealed),
+        None,
+    );
+    match client.submit(create).await {
+        Err(ClientError::Hub(e)) => assert_eq!(e.code, ErrorCode::Forbidden),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(players_written(&hub), 0);
+}
+
 fn http_body(resp: &str) -> serde_json::Value {
     let (_, body) = resp.split_once("\r\n\r\n").unwrap();
     serde_json::from_str(body).unwrap()

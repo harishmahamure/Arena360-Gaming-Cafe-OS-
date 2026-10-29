@@ -401,7 +401,9 @@ test("a player already playing elsewhere is told which PC", async ({ page }) => 
   await expect(username(page)).toBeEnabled();
 });
 
-test("Forgot password and Create account answer in place", async ({ page }) => {
+test("Forgot password answers in place and Create account opens the sign-up form (Story 6.10)", async ({
+  page,
+}) => {
   await open(page);
   await openPanel(page);
   const note = page.getByTestId("login-note");
@@ -409,10 +411,17 @@ test("Forgot password and Create account answer in place", async ({ page }) => {
   await page.getByTestId("login-forgot").click();
   await expect(note).toHaveText("Ask staff at the counter to reset it.");
   await expect(panel(page)).toBeVisible();
+  // The old counter-only line is gone: the form opens in the same panel.
   await page.getByTestId("login-create").click();
-  await expect(note).toHaveText("Ask at the counter to sign up.");
   await expect(panel(page)).toBeVisible();
+  await expect(page.getByTestId("signup-form")).toBeVisible();
+  await expect(page.getByTestId("login-form")).toHaveCount(0);
+  await expect(panel(page)).not.toContainText("Ask at the counter to sign up.");
   expect((await logins(page)).length).toBe(0);
+  // And back to the login form.
+  await page.getByRole("button", { name: en["player.signup.back"] }).click();
+  await expect(page.getByTestId("login-form")).toBeVisible();
+  await expect(username(page)).toBeFocused();
   // Underlined, like links.
   await expect(page.getByTestId("login-forgot")).toHaveCSS("text-decoration-line", "underline");
   await expect(page.getByTestId("login-create")).toHaveCSS("text-decoration-line", "underline");

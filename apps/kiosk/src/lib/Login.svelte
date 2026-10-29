@@ -7,13 +7,14 @@
 
   /**
    * The login form (Story 6.8): username and password, "Log in", the two help links and the
-   * footer. The password goes to the Kiosk service and nowhere else, and is cleared from the
+   * footer ("Create account" opens the sign-up form, Story 6.10). The password goes to the Kiosk service and nowhere else, and is cleared from the
    * field the moment it is sent.
    */
   let {
     view,
     hub,
     onplayer,
+    oncreate,
     onclose,
   }: {
     view: AttractView | null;
@@ -21,6 +22,8 @@
     hub: KioskHubState | null;
     /** A correct login: the player to hold for. */
     onplayer: (player: PlayerContext) => void;
+    /** "Create account": open the sign-up form in this panel (Story 6.10). */
+    oncreate: () => void;
     onclose: () => void;
   } = $props();
 
@@ -35,8 +38,8 @@
   /** Why the last try did not log in (shown once, under the fields). */
   let problem: "rejected" | "busy" | "unreachable" | null = $state(null);
   let busyName = $state("");
-  /** The help link last pressed: its line shows in place. */
-  let note: "forgot" | "create" | null = $state(null);
+  /** "Forgot password?" was pressed: its line shows in place. */
+  let note: "forgot" | null = $state(null);
   /** Whole seconds of lock left (0: open). */
   let left = $state(lockLeftS(performance.now()));
 
@@ -230,12 +233,11 @@
       type="button"
       class="link type-kiosk-label"
       data-testid="login-create"
-      onclick={() => (note = "create")}>{t("player.login.create")}</button
+      onclick={oncreate}>{t("player.login.create")}</button
     >
   </div>
   <p class="note type-kiosk-body" data-testid="login-note" role="status">
     {#if note === "forgot"}{t("player.login.forgot_password")}{/if}
-    {#if note === "create"}{t("player.login.create_hint")}{/if}
   </p>
 
   <!-- Said once when the lock starts; the visible countdown is not a live region. -->

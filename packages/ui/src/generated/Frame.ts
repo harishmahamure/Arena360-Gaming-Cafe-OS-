@@ -11,6 +11,8 @@ import type { PcAck } from "./PcAck";
 import type { PlayerAuthResult } from "./PlayerAuthResult";
 import type { PlayerAuthenticate } from "./PlayerAuthenticate";
 import type { PlayerPlansResult } from "./PlayerPlansResult";
+import type { PlayerSignup } from "./PlayerSignup";
+import type { PlayerSignupResult } from "./PlayerSignupResult";
 import type { PlayerStartResult } from "./PlayerStartResult";
 import type { PlayerStartSession } from "./PlayerStartSession";
 import type { SettingsGet } from "./SettingsGet";
@@ -51,5 +53,7 @@ export type Frame = {
   | ({ kind: "player.start_session" } & PlayerStartSession)
   | ({ kind: "player.start_result" } & PlayerStartResult)
   | { kind: "player.logout" }
+  | ({ kind: "player.signup" } & PlayerSignup)
+  | ({ kind: "player.signup_result" } & PlayerSignupResult)
   | { kind: "ack" }
 );

@@ -18,6 +18,7 @@ import type {
 import names from "../../src-tauri/ipc-names.json" with { type: "json" };
 import { LOGIN_TIMEOUT_MS, outcomeOf, type LoginOutcome } from "./login";
 import { PICKER_TIMEOUT_MS, plansOf, startOf, type PlansOutcome, type StartOutcome } from "./plans";
+import { SIGNUP_TIMEOUT_MS, signupOutcomeOf, type SignupOutcome } from "./signup";
 
 export const HUB_STATUS_EVENT = names.events.hubStatus;
 export const RESTORE_STATE_EVENT = names.events.restoreState;
@@ -386,6 +387,38 @@ export async function playerLogin(username: string, password: string): Promise<L
       }),
     ]);
     return outcomeOf(answer);
+  } catch {
+    return { kind: "unreachable" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** What a new player typed at the sign-up form (Story 6.10). */
+export type SignupFields = {
+  username: string;
+  password: string;
+  phone: string;
+  name: string;
+  consent: boolean;
+};
+
+/**
+ * A new player's sign-up for the Hub to create (Story 6.10). The fields go to the Kiosk service
+ * through the shell and nowhere else; the caller drops its own copy. Outside Tauri, on an error or
+ * when nothing answers in time the outcome is `unreachable`.
+ */
+export async function playerSignup(fields: SignupFields): Promise<SignupOutcome> {
+  if (!inTauri()) return { kind: "unreachable" };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const answer = await Promise.race([
+      invoke<unknown>(CMD.playerSignup, { ...fields }),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), SIGNUP_TIMEOUT_MS);
+      }),
+    ]);
+    return signupOutcomeOf(answer);
   } catch {
     return { kind: "unreachable" };
   } finally {

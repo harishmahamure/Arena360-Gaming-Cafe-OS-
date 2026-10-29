@@ -33,6 +33,7 @@ pub mod paths;
 pub mod pc;
 pub mod player_login;
 pub mod player_session;
+pub mod player_signup;
 pub mod power;
 pub mod procs;
 pub mod queue;

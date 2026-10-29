@@ -33,6 +33,7 @@
     "playerLogin": "player_login",
     "playerPlans": "player_plans",
     "playerStart": "player_start",
-    "playerLogout": "player_logout"
+    "playerLogout": "player_logout",
+    "playerSignup": "player_signup"
   }
 }

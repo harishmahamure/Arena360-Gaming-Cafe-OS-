@@ -277,6 +277,8 @@ export type { PlayerPasswordForm } from "./PlayerPasswordForm";
 export type { PlayerPasswordReset } from "./PlayerPasswordReset";
 export type { PlayerPlansResult } from "./PlayerPlansResult";
 export type { PlayerProfile } from "./PlayerProfile";
+export type { PlayerSignup } from "./PlayerSignup";
+export type { PlayerSignupResult } from "./PlayerSignupResult";
 export type { PlayerSpend } from "./PlayerSpend";
 export type { PlayerStartResult } from "./PlayerStartResult";
 export type { PlayerStartSession } from "./PlayerStartSession";

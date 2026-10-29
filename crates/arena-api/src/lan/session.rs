@@ -29,6 +29,10 @@
 //! answers `player.auth_result{outcome}`; see [`super::player_login`]. The credentials are never
 //! logged.
 //!
+//! **Player sign-up (Story 6.10).** `player.signup{username, password, phone, name, consent}`
+//! (paired sessions only) answers `player.signup_result{outcome}`; see [`super::player_signup`].
+//! Nothing personal is logged.
+//!
 //! **Queues.** Replies and pushes share one bounded queue drained by the session's writer
 //! task, so a slow client only ever stalls itself; the fan-out drops a session whose queue is
 //! full.
@@ -612,6 +616,13 @@ impl Ctx<'_> {
                 }
                 Err(e) => self.reply(Frame::error(rid, e)).await,
             },
+            "player.signup" => match self.check_player_signup(value) {
+                Ok((device, request)) => {
+                    self.spawn_player_signup(rid, device, request, permits, tasks)
+                        .await
+                }
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
             "player.logout" => {
                 let reply = match self.paired_device("player.logout") {
                     Ok(device) => {
@@ -816,6 +827,19 @@ impl Ctx<'_> {
         Ok((device, request))
     }
 
+    fn check_player_signup(
+        &self,
+        value: Value,
+    ) -> Result<(String, arena_proto::PlayerSignup), AppError> {
+        let device = self.paired_device("player.signup")?;
+        let frame = parse_frame_value(value).map_err(|e| e.error)?;
+        let FrameBody::PlayerSignup(request) = frame.body else {
+            return Err(app(ErrorCode::BadFrame, "malformed player.signup"));
+        };
+        request.validate()?;
+        Ok((device, request))
+    }
+
     fn check_player_start(
         &self,
         value: Value,
@@ -868,6 +892,30 @@ impl Ctx<'_> {
             let reply =
                 match super::player_session::start_session(&hub, &device, conn, choice).await {
                     Ok(result) => Frame::new(rid, FrameBody::PlayerStartResult(result)),
+                    Err(e) => Frame::error(rid, e),
+                };
+            let _ = out.send(text(&reply)).await;
+        });
+    }
+
+    async fn spawn_player_signup(
+        &self,
+        rid: String,
+        device: String,
+        request: arena_proto::PlayerSignup,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let (hub, out, conn) = (Arc::clone(self.hub), self.out.clone(), self.conn);
+        tasks.spawn(async move {
+            let _permit = permit;
+            let reply =
+                match super::player_signup::signup_player(&hub, &device, conn, request).await {
+                    Ok(result) => Frame::new(rid, FrameBody::PlayerSignupResult(result)),
                     Err(e) => Frame::error(rid, e),
                 };
             let _ = out.send(text(&reply)).await;

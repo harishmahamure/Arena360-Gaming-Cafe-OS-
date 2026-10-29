@@ -88,6 +88,25 @@ impl std::fmt::Debug for SecretPin {
     }
 }
 
+/// What a new player typed at the sign-up form (Story 6.10), on its way from the app to the service.
+/// Nothing in it shows in `Debug` output; the password is cleared once it is sent.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignupFields {
+    pub username: String,
+    pub password: SecretPin,
+    pub phone: String,
+    pub name: String,
+    pub consent: bool,
+}
+
+impl std::fmt::Debug for SignupFields {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SignupFields")
+            .field("consent", &self.consent)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PcSession {
     pub device_name: String,
@@ -193,6 +212,13 @@ pub enum IpcMsg {
     /// App → service: forget the player (Story 6.9). Answered with `reply` `rid` (an empty body).
     PlayerLogout {
         rid: String,
+    },
+    /// App → service: a new player's sign-up (Story 6.10). The answer is `reply` `rid`: the Hub's
+    /// `player.signup_result` as the body (`{outcome, ...}`), or an `error` when the Hub could not
+    /// be asked or could not answer.
+    PlayerSignup {
+        rid: String,
+        form: SignupFields,
     },
     /// Service → app: an admin exit runs until `until` (UTC ms): drop topmost and the keyboard
     /// lockdown and show the countdown badge. Also sent on every connection while one runs.
@@ -475,6 +501,30 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn the_player_signup_message_never_prints_the_fields() {
+        let msg = IpcMsg::PlayerSignup {
+            rid: "s".into(),
+            form: SignupFields {
+                username: "asha_9".into(),
+                password: SecretPin::new("hunter2-secret"),
+                phone: "+919876543210".into(),
+                name: "Asha Rao".into(),
+                consent: true,
+            },
+        };
+        let shown = format!("{msg:?}");
+        for secret in ["asha_9", "hunter2", "9876543210", "Asha"] {
+            assert!(!shown.contains(secret), "{shown}");
+        }
+        assert_eq!(
+            msg.to_line(),
+            "{\"type\":\"player_signup\",\"rid\":\"s\",\"form\":{\"username\":\"asha_9\",\"password\":\"hunter2-secret\",\"phone\":\"+919876543210\",\"name\":\"Asha Rao\",\"consent\":true}}
+"
+        );
+        assert_eq!(IpcMsg::parse(&msg.to_line()).unwrap(), msg);
     }
 
     #[test]

@@ -15,6 +15,7 @@ mod media;
 mod pair;
 mod player_login;
 mod player_session;
+mod player_signup;
 pub(crate) mod registry;
 mod scan_match;
 mod session;

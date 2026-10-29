@@ -2045,6 +2045,78 @@ async fn the_plan_picker_with_the_hub_down_is_hub_slow() {
     assert_eq!(reply_code(&reply), Some(arena_proto::ErrorCode::HubSlow));
 }
 
+fn signup_msg(rid: &str, username: &str, phone: &str, consent: bool) -> IpcMsg {
+    IpcMsg::PlayerSignup {
+        rid: rid.into(),
+        form: arena_kiosk_core::ipc::SignupFields {
+            username: username.into(),
+            password: arena_kiosk_core::ipc::SecretPin::new("sample secret phrase"),
+            phone: phone.into(),
+            name: "Asha Rao".into(),
+            consent,
+        },
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_player_signup_is_forwarded_to_the_hub_and_logs_the_player_in_without_the_fields_in_the_log()
+ {
+    let mut hub = Hub::seeded().await;
+    hub.up().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.start();
+    kiosk.wait_state(KioskHubState::Connected).await;
+    let mut app = kiosk.app().await;
+
+    let reply = app
+        .picker(signup_msg("su", "asha_9", "+919876543210", true), "su")
+        .await;
+    let IpcMsg::Reply { body, error, .. } = &reply else {
+        unreachable!()
+    };
+    assert!(error.is_none(), "{reply:?}");
+    assert_eq!(body["outcome"], "ok");
+    assert_eq!(body["player"]["name"], "Asha Rao");
+    // The Hub holds the login: the picker no longer answers "log in again".
+    let reply = app
+        .picker(IpcMsg::PlayerPlans { rid: "pl".into() }, "pl")
+        .await;
+    assert_eq!(reply_code(&reply), None, "{reply:?}");
+
+    // A taken username is a typed refusal, not an error.
+    let reply = app
+        .picker(signup_msg("dup", "ASHA_9", "+919000000002", true), "dup")
+        .await;
+    let IpcMsg::Reply { body, error, .. } = &reply else {
+        unreachable!()
+    };
+    assert!(error.is_none(), "{reply:?}");
+    assert_eq!(body["outcome"], "refused");
+    assert_eq!(body["code"], "USERNAME_TAKEN");
+    assert_eq!(body["field"], "username");
+
+    let text = log_text();
+    for plain in ["sample secret phrase", "asha_9", "9876543210", "Asha Rao"] {
+        assert!(!text.contains(plain), "{plain}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_player_signup_with_the_hub_down_is_hub_slow() {
+    let mut hub = Hub::seeded().await;
+    hub.up().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.start();
+    kiosk.wait_state(KioskHubState::Connected).await;
+    let mut app = kiosk.app().await;
+    hub.down().await;
+    kiosk.wait_state(KioskHubState::Reconnecting).await;
+    let reply = app
+        .picker(signup_msg("su", "asha_9", "+919876543210", true), "su")
+        .await;
+    assert_eq!(reply_code(&reply), Some(arena_proto::ErrorCode::HubSlow));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_end_of_an_exit_closes_explorer_and_resumes_enforcement() {
     let mut hub = Hub::seeded().await;

@@ -145,6 +145,30 @@ async fn player_logout(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<A
         .await)
 }
 
+/// A new player's sign-up (Story 6.10): the fields go to the service only, as IPC `player_signup`,
+/// and are dropped here. The answer is the Hub's outcome (`{outcome, ...}`); `None` when the
+/// service did not answer.
+#[tauri::command]
+async fn player_signup(
+    username: String,
+    password: String,
+    phone: String,
+    name: String,
+    consent: bool,
+    bridge: tauri::State<'_, Arc<Bridge>>,
+) -> Result<Option<Answer>, ()> {
+    let form = arena_kiosk_core::ipc::SignupFields {
+        username,
+        password: arena_kiosk_core::ipc::SecretPin::new(password),
+        phone,
+        name,
+        consent,
+    };
+    Ok(bridge
+        .request(move |rid| arena_kiosk_core::ipc::IpcMsg::PlayerSignup { rid, form })
+        .await)
+}
+
 /// Whether the admin-exit prompt is paused (`retry_after_s`) and whether an exit runs (`until`).
 #[tauri::command]
 async fn admin_exit_status(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
@@ -306,7 +330,8 @@ fn main() {
             player_login,
             player_plans,
             player_start,
-            player_logout
+            player_logout,
+            player_signup
         ])
         .on_window_event(|_window, event| {
             // The kiosk is the shell: nothing closes it (admin exit comes in Story 1.20).

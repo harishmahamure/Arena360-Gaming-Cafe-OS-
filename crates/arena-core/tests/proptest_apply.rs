@@ -291,6 +291,12 @@ enum Op {
         slot: u8,
         kind: u8,
     },
+    /// A player intent by a device actor that Story 6.10 does not allow (a create with the consent
+    /// box unticked, an update, or a password reset): always `PERMISSION_DENIED`, writing nothing.
+    DevicePlayerDenied {
+        slot: u8,
+        kind: u8,
+    },
     /// An extend of the live session on an existing PC from the wallet, a pack or credit: it
     /// either moves the end out by exactly the minutes and writes its own settled order, or
     /// writes nothing.
@@ -696,6 +702,7 @@ fn op() -> impl Strategy<Value = Op> {
             guest
         }),
         1 => (0..3u8, 0..3u8).prop_map(|(slot, kind)| Op::DeviceStartDenied { slot, kind }),
+        1 => (0..3u8, 0..3u8).prop_map(|(slot, kind)| Op::DevicePlayerDenied { slot, kind }),
         2 => (0..3u8, 0..3u8, 0..3u8).prop_map(|(slot, source, minutes)| Op::SessionExtend {
             slot,
             source,
@@ -3965,6 +3972,85 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 }),
                 None,
             );
+            intent.actor = Actor {
+                kind: ActorKind::Device,
+                id: device,
+            };
+            let before = hub.change_count();
+            let out = hub.submit_new(intent);
+            prop_assert_eq!(
+                code(&out).map(|c| c.0),
+                Some(ErrorCode::PermissionDenied),
+                "{:?}",
+                out
+            );
+            prop_assert_eq!(hub.change_count(), before);
+        }
+        Op::DevicePlayerDenied { slot, kind } => {
+            const KEK: [u8; 32] = [3; 32];
+            let Some(device) = hub
+                .reader
+                .rows(Table::DevicesMeta)
+                .unwrap()
+                .get(usize::from(*slot))
+                .map(|d| text(d, "device_id"))
+            else {
+                return Ok(());
+            };
+            let first = hub.reader.rows(Table::Players).unwrap().first().cloned();
+            let (payload, base) = match (kind, first) {
+                (0, _) | (_, None) => {
+                    let form = arena_proto::PlayerForm {
+                        username: format!("kiosk{slot}"),
+                        password: "secret1".into(),
+                        phone: "+919111111111".into(),
+                        name: "Asha".into(),
+                        email: String::new(),
+                        dob: String::new(),
+                        notes: String::new(),
+                        tags: Vec::new(),
+                        consent: false,
+                        policy_version: "1".into(),
+                    };
+                    let sealed = arena_core::players::seal(
+                        &KEK,
+                        &form,
+                        &ulid::Ulid::generate().to_string(),
+                        password_hash().to_owned(),
+                    )
+                    .unwrap();
+                    (IntentPayload::PlayerCreate(sealed), None)
+                }
+                (1, Some(p)) => {
+                    let (RowValue::Text(id), RowValue::Integer(rev)) = (&p["player_id"], &p["rev"])
+                    else {
+                        unreachable!()
+                    };
+                    let wrapped = hub.reader.player_key(id).unwrap().unwrap();
+                    let form = arena_proto::PlayerEditForm {
+                        player_id: id.clone(),
+                        base_rev: *rev,
+                        phone: "+919222222222".into(),
+                        name: "Asha".into(),
+                        email: String::new(),
+                        dob: String::new(),
+                        notes: String::new(),
+                        tags: Vec::new(),
+                        consent: true,
+                        policy_version: "1".into(),
+                    };
+                    let update = arena_core::players::reseal(&KEK, &form, &wrapped).unwrap();
+                    (IntentPayload::PlayerUpdate(update), Some(*rev))
+                }
+                (_, Some(p)) => (
+                    IntentPayload::PlayerPasswordReset(arena_proto::PlayerPasswordReset {
+                        player_id: text(&p, "player_id"),
+                        password_hash: password_hash().to_owned(),
+                    }),
+                    None,
+                ),
+            };
+            let mut intent = hub.intent(payload, base);
             intent.actor = Actor {
                 kind: ActorKind::Device,
                 id: device,

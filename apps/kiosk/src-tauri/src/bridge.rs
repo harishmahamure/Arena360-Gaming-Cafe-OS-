@@ -65,7 +65,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// The Tauri commands the webview calls: the `generate_handler!` list in `main.rs`, pinned
 /// against `ipc-names.json` (the list the webview reads) by a test.
 #[cfg(test)]
-const COMMANDS: [&str; 20] = [
+const COMMANDS: [&str; 21] = [
     "report_app_state",
     "hub_status",
     "take_restore_state",
@@ -86,6 +86,7 @@ const COMMANDS: [&str; 20] = [
     "player_plans",
     "player_start",
     "player_logout",
+    "player_signup",
 ];
 /// How recent the webview's last heartbeat must be for a `ping` to be answered.
 pub const HEARTBEAT_FRESH: Duration = Duration::from_secs(3);
@@ -864,6 +865,66 @@ mod tests {
         let logout = logout.unwrap();
         assert!(!logout.ok);
         assert_eq!(logout.code.as_deref(), Some("HUB_SLOW"));
+        drop(sw);
+        drop(sr);
+        let _ = tokio::time::timeout(Duration::from_secs(2), served).await;
+    }
+
+    #[tokio::test]
+    async fn a_player_signup_goes_to_the_service_and_the_hubs_outcome_comes_back() {
+        use arena_kiosk_core::ipc::{SecretPin, SignupFields};
+        let b = Arc::new(Bridge::default());
+        let (app, svc) = tokio::io::duplex(4096);
+        let (ar, aw) = tokio::io::split(app);
+        let (sr, mut sw) = tokio::io::split(svc);
+        let served = {
+            let b = Arc::clone(&b);
+            tokio::spawn(async move { b.serve(ar, aw, &|_| {}).await })
+        };
+        let mut sr = BufReader::new(sr);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let asking = {
+            let b = Arc::clone(&b);
+            tokio::spawn(async move {
+                b.request(|rid| IpcMsg::PlayerSignup {
+                    rid,
+                    form: SignupFields {
+                        username: "asha_9".into(),
+                        password: SecretPin::new("hunter2-secret"),
+                        phone: "+919876543210".into(),
+                        name: "Asha Rao".into(),
+                        consent: true,
+                    },
+                })
+                .await
+            })
+        };
+        let msg = read_msg(&mut sr).await.unwrap();
+        let shown = format!("{msg:?}");
+        for secret in ["asha_9", "hunter2", "9876543210", "Asha"] {
+            assert!(!shown.contains(secret), "{shown}");
+        }
+        let IpcMsg::PlayerSignup { rid, form } = msg else {
+            panic!("expected player_signup")
+        };
+        assert_eq!(
+            (form.username.as_str(), form.password.expose(), form.consent),
+            ("asha_9", "hunter2-secret", true)
+        );
+        write_msg(
+            &mut sw,
+            &IpcMsg::Reply {
+                rid,
+                body: serde_json::json!({"outcome": "refused", "code": "USERNAME_TAKEN", "field": "username"}),
+                error: None,
+            },
+        )
+        .await
+        .unwrap();
+        let answer = asking.await.unwrap().unwrap();
+        assert!(answer.ok);
+        assert_eq!(answer.body["outcome"], "refused");
+        assert_eq!(answer.body["code"], "USERNAME_TAKEN");
         drop(sw);
         drop(sr);
         let _ = tokio::time::timeout(Duration::from_secs(2), served).await;

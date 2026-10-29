@@ -14,14 +14,20 @@
     items,
     locale,
     busy,
+    ready = false,
     onserve,
+    onready,
     oncancel,
     onvoid,
   }: {
     items: BillItem[];
     locale: SnapshotLocale;
     busy: boolean;
+    /** The order is already marked ready for the player (Story 6.33). */
+    ready?: boolean;
     onserve: (lineId: string) => void;
+    /** Tells the player their order is ready; absent when the bill has no order to mark. */
+    onready?: () => void;
     oncancel: (lineId: string, made: boolean, reason: ReasonCode) => void;
     /** Voids the whole order (a reason, and the text of `other`); absent when it cannot be voided. */
     onvoid?: (reason: ReasonCode, note?: string) => void;
@@ -161,6 +167,19 @@
     <p class="type-hub-label muted" data-testid="order-pending">
       {t("hub.order.unserved_note")}
     </p>
+    {#if ready}
+      <p class="type-hub-label muted" data-testid="order-ready-state">{t("hub.order.ready")}</p>
+    {:else if onready}
+      <div class="actions" data-testid="order-ready">
+        <Button
+          label="hub.order.mark_ready"
+          variant="secondary"
+          disabled={busy}
+          disabledReason="hub.sheet.waiting"
+          onclick={onready}
+        />
+      </div>
+    {/if}
   {/if}
   {#if onvoid}
     {#if voiding}

@@ -182,6 +182,12 @@ pub struct StaffMessage {
     pub read: bool,
     /// Just arrived: the HUD shows it as a toast. A replay on a new connection is not fresh.
     pub fresh: bool,
+    /// Set for an order note (Story 6.33): `order.placed`, `order.ready_seat`,
+    /// `order.ready_counter` or `order.cancelled` (then `text` is the item). The app words it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// For `order.placed`, the items just ordered.
+    pub count: u64,
 }
 
 /// What the service answered to a request: the body, or the error code (and the body that came
@@ -493,6 +499,8 @@ impl Bridge {
                 at,
                 read,
                 fresh,
+                code,
+                count,
             } => {
                 let message = StaffMessage {
                     id,
@@ -500,6 +508,8 @@ impl Bridge {
                     at,
                     read,
                     fresh,
+                    code,
+                    count,
                 };
                 let mut kept = lock(&self.messages);
                 if kept.iter().any(|m| m.id == id) {
@@ -1323,6 +1333,7 @@ mod tests {
                     grace_in_ms: None,
                     grace_ms: 0,
                     ordered_items: 0,
+                    unserved_items: 0,
                     username: None,
                     guest_no: None,
                     remaining_ms: None,
@@ -1345,6 +1356,8 @@ mod tests {
             at: 1_800_000_000_000 + id as i64,
             read,
             fresh,
+            code: None,
+            count: 0,
         }
     }
 
@@ -1381,6 +1394,32 @@ mod tests {
             session: None,
         });
         assert!(b.staff_messages().is_empty(), "the session ended");
+    }
+
+    #[test]
+    fn an_order_note_keeps_its_code_and_count_for_the_app_to_word() {
+        let b = Bridge::default();
+        let (_, emitted) = b.on_message(IpcMsg::StaffMessage {
+            id: 7,
+            text: String::new(),
+            at: 1_800_000_000_000,
+            read: false,
+            fresh: true,
+            code: Some("order.placed".into()),
+            count: 3,
+        });
+        let Some(Emit::StaffMessage(m)) = emitted else {
+            panic!("an order note is raised like a staff message")
+        };
+        assert_eq!((m.code.as_deref(), m.count), (Some("order.placed"), 3));
+        let json = serde_json::to_value(&m).unwrap();
+        assert_eq!(json["code"], "order.placed");
+        assert_eq!(b.staff_messages()[0].code.as_deref(), Some("order.placed"));
+        let (_, plain) = b.on_message(staff(8, "Hi", false, true));
+        let Some(Emit::StaffMessage(plain)) = plain else {
+            panic!("a staff message")
+        };
+        assert!(serde_json::to_value(&plain).unwrap().get("code").is_none());
     }
 
     #[test]

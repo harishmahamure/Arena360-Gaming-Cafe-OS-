@@ -13,7 +13,7 @@ fn operating(ctx: &Ctx) -> crate::operating::KioskOperating {
     crate::operating::load(&ctx.queue.lock().unwrap_or_else(|p| p.into_inner()))
 }
 
-pub fn sync(ctx: &Ctx, s: SessionScreen, started: bool) {
+pub fn sync(ctx: &Ctx, mut s: SessionScreen, started: bool) {
     let operating = operating(ctx);
     if !started && ctx.pc.screen.borrow().locked {
         return;
@@ -26,6 +26,8 @@ pub fn sync(ctx: &Ctx, s: SessionScreen, started: bool) {
         set_locked(ctx, false, None);
     }
     crate::cleanup::mark_dirty(ctx);
+    let unserved_items: u64 = s.orders.iter().map(|o| o.unserved).sum();
+    let orders = std::mem::take(&mut s.orders);
     ctx.pc.screen.send_modify(|v| {
         let warning_min = v
             .session
@@ -41,6 +43,7 @@ pub fn sync(ctx: &Ctx, s: SessionScreen, started: bool) {
             lock_at: now + Duration::from_millis(s.lock_after_ms),
             grace_ms: s.grace_ms,
             ordered_items: s.ordered_items,
+            unserved_items,
             username: s.username,
             guest_no: s.guest_no,
             ends_at: s.remaining_ms.map(|ms| now + Duration::from_millis(ms)),
@@ -52,6 +55,7 @@ pub fn sync(ctx: &Ctx, s: SessionScreen, started: bool) {
             hold: s.time_up_mode == TimeUpMode::StaffHandles.as_str(),
         });
     });
+    ctx.pc.track_orders(&orders, ctx.clock.now_ms());
 }
 
 pub fn warn(ctx: &Ctx, minutes_left: u8) {
@@ -189,6 +193,7 @@ mod tests {
             lock_at: at(now, lock_in),
             grace_ms,
             ordered_items: 0,
+            unserved_items: 0,
             username: None,
             guest_no: None,
             ends_at: ends_in.map(|s| at(now, s)),

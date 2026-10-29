@@ -232,6 +232,15 @@ pub struct OrderLineServed {
     pub line_id: String,
 }
 
+/// The payload of `order.ready` (Story 6.33): an open order with an unserved line is marked ready
+/// for the player. The Hub stamps the order; the kiosk shows the seat or pick-up copy the branch's
+/// fulfilment setting asks for. It takes no `base_rev`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OrderReady {
+    pub order_id: String,
+}
+
 /// The payload of `order.line_cancel`: an unserved placed line is cancelled. `made` answers "Was
 /// it already made?": `false` releases the hold (or returns the stock), `true` records waste
 /// `cancelled_order` at cost. The intent's `reason` (`changed_mind`, `mistake`, `other`) is

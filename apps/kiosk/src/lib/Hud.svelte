@@ -3,6 +3,7 @@
   import type { MessageKey } from "@arena/ui/messages";
   import type { SnapshotLocale } from "@arena/ui/generated";
   import { onMount, tick, untrack } from "svelte";
+  import { noteText } from "./messages";
   import {
     applyTheme,
     currentAttract,
@@ -56,6 +57,8 @@
     /** When the grace after prepaid time begins, on the monotonic clock (`null`: no grace). */
     graceFrom: number | null;
     graceMs: number;
+    /** Ordered lines not served yet: the pill carries an "Ordered" tag while any is. */
+    unserved: number;
   };
 
   let session = $state<Running | null>(null);
@@ -127,8 +130,12 @@
   const timeLabel = $derived(
     t(prepaid ? "player.shell.chip_left" : "player.shell.chip_played", { time }),
   );
-  const pillLabel = $derived(
+  const ordered = $derived(shown && session !== null && session.unserved > 0);
+  const basePillLabel = $derived(
     balance === null ? timeLabel : t("player.hud.pill_label", { time: timeLabel, balance }),
+  );
+  const pillLabel = $derived(
+    ordered ? t("player.order.pill_label", { label: basePillLabel }) : basePillLabel,
   );
 
   const follow = (s: PcScreen, fresh = true) => {
@@ -144,6 +151,7 @@
           plan: v.plan_name,
           graceFrom: v.remaining_ms === null || v.grace_in_ms === null ? null : now + v.grace_in_ms,
           graceMs: v.grace_ms,
+          unserved: v.unserved_items,
         }
       : null;
     // A session that ends or locks closes the panel; the shell must make the window
@@ -354,7 +362,7 @@
       add(await onGameLaunchFailed(raiseLaunchFailed));
       add(
         await onStaffMessage((m) => {
-          if (m.fresh) raiseMessage(m.id, m.text);
+          if (m.fresh) raiseMessage(m.id, noteText(m, t));
         }),
       );
       add(await onHudExpand(() => void expand()));
@@ -512,6 +520,12 @@
         <span class="rule" aria-hidden="true"></span>
         <span class="num type-hud-numeric tabular-nums" data-testid="hud-balance">{balance}</span>
       {/if}
+      {#if ordered}
+        <span class="rule" aria-hidden="true"></span>
+        <span class="ordered type-kiosk-label" data-testid="hud-ordered">
+          {t("player.order.tag")}
+        </span>
+      {/if}
     </p>
   {/if}
   {#if shown && expanded}
@@ -638,6 +652,11 @@
     width: 1px;
     height: 24px;
     background-color: var(--border-strong);
+  }
+
+  .ordered {
+    color: var(--hud-pill-foreground);
+    white-space: nowrap;
   }
 
   .toasts:not(:empty) {

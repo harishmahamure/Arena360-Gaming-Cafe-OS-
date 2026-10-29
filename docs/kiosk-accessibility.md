@@ -194,3 +194,16 @@ Borderless-fullscreen games are not affected: the HUD draws over them like any w
 - A PC that owes the counter for an order shows "Pay at the counter" and "Unpaid ₹80.00" on the
   attract screen in place of the rate. Keys and taps open nothing until the counter settles it; the
   next attract view lifts the hold on its own, with no player action.
+
+## Order status on the HUD (Story 6.33)
+
+- An order raises info toasts on the HUD, never taking focus and going by themselves after 8 s:
+  "Ordered: 3 items" when it commits, "Order's ready — on its way to you." or "Order's ready — grab
+  it at the counter." when staff mark it ready (the branch's fulfilment setting decides which), and
+  "<item> was cancelled — see the counter." when an unserved line is cancelled. Each stays in the
+  messages bell with its time, worded the same way.
+- While any ordered line is unserved the pill carries an "Ordered" tag after the time and balance.
+  It is text, not colour alone, and it is part of the pill's accessible name ("…. Ordered, not
+  served yet"). It clears when the last line is served.
+- After the Hub was unreachable the kiosk shows each open order's latest status once; toasts missed
+  meanwhile are not replayed.

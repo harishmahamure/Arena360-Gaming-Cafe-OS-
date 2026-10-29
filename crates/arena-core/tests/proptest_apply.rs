@@ -386,6 +386,13 @@ enum Op {
         cancel: bool,
         made: bool,
     },
+    /// `order.ready` of an open order (Story 6.33), twice when `again`: it applies when the order
+    /// has an unserved line and no ready mark, and is otherwise refused on `order_id` with nothing
+    /// written.
+    OrderReady {
+        pick: u8,
+        again: bool,
+    },
     /// `order.void` of an open session order by the owner or a staff member of a built-in role,
     /// with a good, missing or wrong reason and note. Only the owner and managers may void; a
     /// voided order is detached from its session, keeps its lines and holds no stock.
@@ -798,6 +805,7 @@ fn op() -> impl Strategy<Value = Op> {
         2 => (any::<u8>(), any::<bool>(), any::<bool>()).prop_map(
             |(pick, cancel, made)| Op::OrderLine { pick, cancel, made }
         ),
+        2 => (any::<u8>(), any::<bool>()).prop_map(|(pick, again)| Op::OrderReady { pick, again }),
         2 => (any::<u8>(), any::<u8>(), any::<u8>(), 0..7u8, 0..5u8, any::<Index>()).prop_map(
             |(pick, line, qty, method, reason, who)| Op::Refund { pick, line, qty, method, reason, who }
         ),
@@ -3319,6 +3327,57 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     prop_assert_eq!(e.code, ErrorCode::OutOfStock, "{:?}", e);
                     prop_assert!(!*cancel);
                     prop_assert_eq!(stock_image(hub), stock_before);
+                }
+            }
+        }
+        Op::OrderReady { pick, again } => {
+            let orders: Vec<_> = hub
+                .reader
+                .rows(Table::Orders)
+                .unwrap()
+                .into_iter()
+                .filter(|o| text(o, "status") == "open")
+                .collect();
+            let Some(order) = orders.get(usize::from(*pick) % orders.len().max(1)) else {
+                return Ok(());
+            };
+            let id = text(order, "id");
+            let unserved = hub
+                .reader
+                .rows(Table::OrderLines)
+                .unwrap()
+                .iter()
+                .any(|l| text(l, "order_id") == id && int(l, "served") == 0);
+            let marked = !matches!(order["ready_at"], RowValue::Null);
+            let bill = matches!(text(order, "kind").as_str(), "session")
+                || (text(order, "kind") == "pos_sale"
+                    && matches!(order["session_id"], RowValue::Null));
+            for _ in 0..(1 + usize::from(*again)) {
+                let before = hub.reader.rows(Table::Orders).unwrap();
+                let out = hub.submit_new(hub.intent(
+                    IntentPayload::OrderReady(arena_proto::OrderReady {
+                        order_id: id.clone(),
+                    }),
+                    None,
+                ));
+                let now = hub
+                    .reader
+                    .rows(Table::Orders)
+                    .unwrap()
+                    .into_iter()
+                    .find(|o| text(o, "id") == id)
+                    .unwrap();
+                match out {
+                    Ok(_) => {
+                        prop_assert!(unserved && bill && !marked, "a refusable order applied");
+                        prop_assert!(!matches!(now["ready_at"], RowValue::Null));
+                        break;
+                    }
+                    Err(e) => {
+                        prop_assert_eq!(e.code, ErrorCode::ValidationFailed, "{:?}", e);
+                        prop_assert_eq!(e.field.as_deref(), Some("order_id"));
+                        prop_assert_eq!(hub.reader.rows(Table::Orders).unwrap(), before);
+                    }
                 }
             }
         }

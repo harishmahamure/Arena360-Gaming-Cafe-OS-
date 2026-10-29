@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -33,6 +33,8 @@ pub struct ScreenSession {
     pub lock_at: Instant,
     pub grace_ms: u64,
     pub ordered_items: u64,
+    /// How many ordered lines are not served yet (Story 6.33).
+    pub unserved_items: u64,
     pub username: Option<String>,
     pub guest_no: Option<i64>,
     /// When a prepaid session's time runs out (`None` for postpaid, which counts up).
@@ -47,15 +49,53 @@ pub struct ScreenSession {
     pub hold: bool,
 }
 
-/// One staff message of the session on screen (Story 6.16).
+/// The notes the kiosk raises for an order (Story 6.33); the app words each from its own strings.
+pub const NOTE_ORDER_PLACED: &str = "order.placed";
+pub const NOTE_ORDER_READY_SEAT: &str = "order.ready_seat";
+pub const NOTE_ORDER_READY_COUNTER: &str = "order.ready_counter";
+pub const NOTE_ORDER_CANCELLED: &str = "order.cancelled";
+
+/// One staff message of the session on screen (Story 6.16), or an order note (Story 6.33).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StaffNote {
     /// This service's own counter, so the app can tell a replay from a new message.
     pub id: u64,
+    /// The staff's text; for an order note, the item's name (cancelled) or empty.
     pub text: String,
     /// When it arrived, UTC ms.
     pub at: i64,
     pub read: bool,
+    /// Set for an order note: which one (`NOTE_ORDER_*`).
+    pub code: Option<&'static str>,
+    /// For `order.placed`, the items just ordered.
+    pub count: u64,
+}
+
+/// What the kiosk last knew of one open order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SeenOrder {
+    items: u64,
+    ready: bool,
+}
+
+/// The order note one tick raises for `order` given what was last seen of it, if any.
+fn order_note(
+    prev: Option<SeenOrder>,
+    order: &arena_proto::OrderStatus,
+) -> Option<(&'static str, u64)> {
+    let ready = |o: &arena_proto::OrderStatus| match o.ready.as_deref() {
+        Some("seat") => (NOTE_ORDER_READY_SEAT, 0),
+        _ => (NOTE_ORDER_READY_COUNTER, 0),
+    };
+    match prev {
+        None if order.ready.is_some() => Some(ready(order)),
+        None => (order.items > 0).then_some((NOTE_ORDER_PLACED, order.items)),
+        Some(p) if order.ready.is_some() && (!p.ready || order.items > p.items) => {
+            Some(ready(order))
+        }
+        Some(p) if order.items > p.items => Some((NOTE_ORDER_PLACED, order.items - p.items)),
+        Some(_) => None,
+    }
 }
 
 #[derive(Debug, Default)]
@@ -77,6 +117,8 @@ pub struct PcState {
     pub deadline: watch::Sender<Option<Instant>>,
     seen: Mutex<VecDeque<String>>,
     inbox: Mutex<Inbox>,
+    /// The open orders the last tick carried, by id (Story 6.33).
+    orders: Mutex<BTreeMap<String, SeenOrder>>,
     /// The player's programs are suspended under a Staff-handles time-up lock.
     frozen: AtomicBool,
     /// Each message as it arrives (the supervisor forwards it as a fresh `staff_message`).
@@ -97,6 +139,7 @@ impl PcState {
             deadline: watch::channel(None).0,
             seen: Mutex::default(),
             inbox: Mutex::default(),
+            orders: Mutex::default(),
             notes: broadcast::channel(16).0,
         }
     }
@@ -107,6 +150,16 @@ impl PcState {
 
     /// Keeps a message at the front of the list and tells the supervisor.
     fn keep(&self, text: String, at: i64) -> StaffNote {
+        self.keep_note(text, at, None, 0)
+    }
+
+    fn keep_note(
+        &self,
+        text: String,
+        at: i64,
+        code: Option<&'static str>,
+        count: u64,
+    ) -> StaffNote {
         let note = {
             let mut inbox = self.inbox();
             inbox.last_id += 1;
@@ -115,6 +168,8 @@ impl PcState {
                 text,
                 at,
                 read: false,
+                code,
+                count,
             };
             inbox.notes.insert(0, note.clone());
             inbox.notes.truncate(INBOX_MAX);
@@ -137,9 +192,49 @@ impl PcState {
         unread
     }
 
-    /// Forgets the session's messages (it ended, or a new one begins).
+    /// Forgets the session's messages and what it knew of its orders (it ended, or a new one
+    /// begins).
     pub fn clear_notes(&self) {
         self.inbox().notes.clear();
+        self.orders
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
+    }
+
+    /// Compares a tick's open orders with the last it saw and raises at most one note per order
+    /// (Story 6.33): "ordered" when items were added, "ready" when staff marked it ready. An
+    /// unchanged order raises nothing; the first tick after a restart raises one note per order
+    /// from its latest state. Nothing is replayed for ticks missed while the Hub was away.
+    pub fn track_orders(&self, orders: &[arena_proto::OrderStatus], at: i64) {
+        let notes: Vec<_> = {
+            let mut seen = self.orders.lock().unwrap_or_else(|p| p.into_inner());
+            let notes = orders
+                .iter()
+                .filter_map(|o| order_note(seen.get(&o.order_id).copied(), o))
+                .collect();
+            *seen = orders
+                .iter()
+                .map(|o| {
+                    (
+                        o.order_id.clone(),
+                        SeenOrder {
+                            items: o.items,
+                            ready: o.ready.is_some(),
+                        },
+                    )
+                })
+                .collect();
+            notes
+        };
+        for (code, count) in notes {
+            self.keep_note(String::new(), at, Some(code), count);
+        }
+    }
+
+    /// Raises "<item> was cancelled" for an unserved line the Hub cancelled.
+    pub fn order_cancelled(&self, item: String, at: i64) {
+        self.keep_note(item, at, Some(NOTE_ORDER_CANCELLED), 0);
     }
 
     fn first_time(&self, cmd_id: &str) -> bool {
@@ -364,6 +459,82 @@ mod tests {
         assert_eq!(notes.len(), INBOX_MAX);
         assert_eq!(notes[0].text, "m5");
         assert_eq!(notes[INBOX_MAX - 1].text, format!("m{}", INBOX_MAX + 4));
+    }
+
+    fn order(id: &str, items: u64, unserved: u64, ready: Option<&str>) -> arena_proto::OrderStatus {
+        arena_proto::OrderStatus {
+            order_id: id.into(),
+            items,
+            unserved,
+            ready: ready.map(Into::into),
+        }
+    }
+
+    fn codes(s: &PcState) -> Vec<(Option<&'static str>, u64)> {
+        s.staff_notes()
+            .into_iter()
+            .map(|n| (n.code, n.count))
+            .collect()
+    }
+
+    #[test]
+    fn a_new_order_a_ready_mark_and_more_items_each_raise_one_note() {
+        let s = state();
+        s.track_orders(&[order("A", 3, 1, None)], 1);
+        assert_eq!(codes(&s), [(Some(NOTE_ORDER_PLACED), 3)]);
+        // Unchanged state raises nothing, and a served line only drops the HUD tag.
+        s.track_orders(&[order("A", 3, 1, None)], 2);
+        s.track_orders(&[order("A", 3, 0, None)], 3);
+        assert_eq!(s.staff_notes().len(), 1);
+        s.track_orders(&[order("A", 3, 1, Some("seat"))], 4);
+        s.track_orders(&[order("A", 3, 1, Some("seat"))], 5);
+        // More items clear the mark at the Hub: a note for the new items only.
+        s.track_orders(&[order("A", 5, 2, None)], 6);
+        s.track_orders(&[order("A", 5, 2, Some("counter"))], 7);
+        assert_eq!(
+            codes(&s),
+            [
+                (Some(NOTE_ORDER_PLACED), 3),
+                (Some(NOTE_ORDER_READY_SEAT), 0),
+                (Some(NOTE_ORDER_PLACED), 2),
+                (Some(NOTE_ORDER_READY_COUNTER), 0),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_restart_or_reconnect_raises_one_note_per_order_from_its_latest_state() {
+        let s = state();
+        s.track_orders(&[order("A", 2, 1, Some("seat")), order("B", 4, 0, None)], 1);
+        assert_eq!(
+            codes(&s),
+            [
+                (Some(NOTE_ORDER_READY_SEAT), 0),
+                (Some(NOTE_ORDER_PLACED), 4)
+            ]
+        );
+        // A tick that grew an order while the Hub was away is one note, not one per change.
+        s.track_orders(&[order("A", 9, 3, Some("seat")), order("B", 4, 0, None)], 2);
+        assert_eq!(s.staff_notes().len(), 3);
+        // Cancelled lines and settled orders raise nothing from a tick.
+        s.track_orders(&[order("A", 8, 2, Some("seat"))], 3);
+        s.track_orders(&[], 4);
+        assert_eq!(s.staff_notes().len(), 3);
+        // Ending the session forgets the orders: the next player's order is new again.
+        s.clear_notes();
+        s.track_orders(&[order("A", 8, 2, None)], 5);
+        assert_eq!(codes(&s), [(Some(NOTE_ORDER_PLACED), 8)]);
+    }
+
+    #[test]
+    fn a_cancelled_line_is_a_note_with_the_item_name() {
+        let s = state();
+        s.order_cancelled("Burger".into(), 9);
+        let n = s.staff_notes().remove(0);
+        assert_eq!(
+            (n.code, n.text.as_str(), n.count),
+            (Some(NOTE_ORDER_CANCELLED), "Burger", 0)
+        );
     }
 
     #[test]

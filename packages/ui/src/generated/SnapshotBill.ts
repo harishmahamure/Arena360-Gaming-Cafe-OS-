@@ -31,6 +31,10 @@ export type SnapshotBill = {
    * session's placed products): what `order.void` names (Story 5.23).
    */
   items_order_id?: string;
+  /**
+   * Whether the order holding `items` is marked ready (Story 6.33); absent until it is.
+   */
+  ready?: boolean;
   subtotal_minor: number;
   paid_minor: number;
   remaining_minor: number;

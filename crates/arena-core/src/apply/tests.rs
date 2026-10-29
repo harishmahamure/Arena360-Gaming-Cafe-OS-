@@ -44,6 +44,7 @@ mod library;
 mod login;
 mod order_line;
 mod order_place;
+mod order_ready;
 mod order_void;
 mod people_reports;
 mod plans;

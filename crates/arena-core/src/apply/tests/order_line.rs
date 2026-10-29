@@ -11,7 +11,7 @@ use arena_proto::{
     OrderPlace, OrderPlaceReverted, PaymentRow, PosSale, PosSaleLine, ProductUpsert,
 };
 
-fn place_of(session: &str, lines: &[(&str, i64)]) -> OrderPlace {
+pub(super) fn place_of(session: &str, lines: &[(&str, i64)]) -> OrderPlace {
     OrderPlace {
         counter: None,
         session_id: session.into(),
@@ -26,7 +26,7 @@ fn place_of(session: &str, lines: &[(&str, i64)]) -> OrderPlace {
     }
 }
 
-async fn place(f: &Fixture, actor: Actor, p: OrderPlace) -> Result<Applied, AppError> {
+pub(super) async fn place(f: &Fixture, actor: Actor, p: OrderPlace) -> Result<Applied, AppError> {
     submit(f, actor, IntentPayload::OrderPlace(p)).await
 }
 
@@ -82,18 +82,22 @@ async fn unplace(
     f.writer.submit_intent(i).await
 }
 
-async fn set_mode(f: &Fixture, value: &str) {
+pub(super) async fn set_mode(f: &Fixture, value: &str) {
+    set_setting(f, KEY_INVENTORY_TAKE_STOCK_AT, value).await;
+}
+
+pub(super) async fn set_setting(f: &Fixture, key: &str, value: &str) {
     let store = reopen(f);
     let row = store
         .rows(Table::Settings)
         .unwrap()
         .into_iter()
-        .find(|r| r["key"] == RowValue::Text(KEY_INVENTORY_TAKE_STOCK_AT.into()))
+        .find(|r| r["key"] == RowValue::Text(key.into()))
         .expect("the setting is seeded");
     let mut i = intent(
         owner(),
         IntentPayload::SettingsSet(arena_proto::SettingsSet {
-            key: KEY_INVENTORY_TAKE_STOCK_AT.into(),
+            key: key.into(),
             value: value.into(),
         }),
     );
@@ -111,25 +115,25 @@ fn priced(name: &str, price: i64, kitchen: bool) -> ProductUpsert {
 }
 
 /// A tracked kitchen product with `qty` on hand at cost 2 000.
-async fn burger(f: &Fixture, qty: i64) -> String {
+pub(super) async fn burger(f: &Fixture, qty: i64) -> String {
     let id = make(f, priced("Burger", 9_000, true)).await;
     stock_in(f, &id, qty, 2_000).await;
     id
 }
 
-async fn cola(f: &Fixture, qty: i64) -> String {
+pub(super) async fn cola(f: &Fixture, qty: i64) -> String {
     let id = make(f, priced("Cola", 4_000, false)).await;
     stock_in(f, &id, qty, 1_000).await;
     id
 }
 
-async fn running(f: &Fixture) -> String {
+pub(super) async fn running(f: &Fixture) -> String {
     let d = pc(f, DeviceKind::Pc, "pc", Some(10_000)).await;
     start(f, &d, None).await.unwrap();
     text(sessions(f).last().unwrap(), "id")
 }
 
-fn order_of(f: &Fixture, session: &str) -> Option<Row> {
+pub(super) fn order_of(f: &Fixture, session: &str) -> Option<Row> {
     table(f, Table::Orders)
         .into_iter()
         .find(|o| matches!(&o["session_id"], RowValue::Text(t) if t == session))
@@ -145,7 +149,7 @@ fn lines_of(f: &Fixture, order: &str) -> Vec<Row> {
 }
 
 /// The line of `label` on the session's bill.
-fn line(f: &Fixture, session: &str, label: &str) -> Row {
+pub(super) fn line(f: &Fixture, session: &str, label: &str) -> Row {
     let order = text(&order_of(f, session).unwrap(), "id");
     lines_of(f, &order)
         .into_iter()
@@ -173,7 +177,7 @@ fn moves_of(f: &Fixture, id: &str, reason: &str) -> Vec<arena_store::MoveRow> {
         .collect()
 }
 
-fn code(r: Result<Applied, AppError>) -> ErrorCode {
+pub(super) fn code(r: Result<Applied, AppError>) -> ErrorCode {
     refusal(r).0
 }
 

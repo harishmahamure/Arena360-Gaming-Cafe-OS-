@@ -279,6 +279,8 @@ export type PcScreen = {
     grace_in_ms: number | null;
     grace_ms: number;
     ordered_items: number;
+    /** How many ordered lines are not served yet; the HUD pill shows "Ordered" while any is. */
+    unserved_items: number;
     username: string | null;
     guest_no: number | null;
     remaining_ms: number | null;
@@ -303,6 +305,7 @@ const screenOf = (v: unknown): PcScreen | null => {
         grace_in_ms?: unknown;
         grace_ms?: unknown;
         ordered_items?: unknown;
+        unserved_items?: unknown;
         username?: unknown;
         guest_no?: unknown;
         remaining_ms?: unknown;
@@ -321,6 +324,7 @@ const screenOf = (v: unknown): PcScreen | null => {
           grace_in_ms: typeof s.grace_in_ms === "number" ? s.grace_in_ms : null,
           grace_ms: typeof s.grace_ms === "number" ? s.grace_ms : 0,
           ordered_items: typeof s.ordered_items === "number" ? s.ordered_items : 0,
+          unserved_items: typeof s.unserved_items === "number" ? s.unserved_items : 0,
           username: typeof s.username === "string" ? s.username : null,
           guest_no: typeof s.guest_no === "number" ? s.guest_no : null,
           remaining_ms: typeof s.remaining_ms === "number" ? s.remaining_ms : null,
@@ -724,13 +728,28 @@ export type StaffMessage = {
   read: boolean;
   /** Just arrived (the HUD shows it as a toast); a replay on a new connection is not. */
   fresh: boolean;
+  /**
+   * Set for an order note (Story 6.33): `order.placed` (with `count`), `order.ready_seat`,
+   * `order.ready_counter` or `order.cancelled` (then `text` is the item). The app words it.
+   */
+  code: string | null;
+  /** For `order.placed`, the items just ordered. */
+  count: number;
 };
 
 const messageOf = (v: unknown): StaffMessage | null => {
   if (typeof v !== "object" || v === null) return null;
-  const { id, text, at, read, fresh } = v as Record<string, unknown>;
+  const { id, text, at, read, fresh, code, count } = v as Record<string, unknown>;
   if (typeof id !== "number" || typeof text !== "string" || typeof at !== "number") return null;
-  return { id, text, at, read: read === true, fresh: fresh === true };
+  return {
+    id,
+    text,
+    at,
+    read: read === true,
+    fresh: fresh === true,
+    code: typeof code === "string" ? code : null,
+    count: typeof count === "number" ? count : 0,
+  };
 };
 
 /** The session's staff messages the shell already holds, newest first (a cold start asks). */

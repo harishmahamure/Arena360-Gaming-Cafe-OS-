@@ -116,6 +116,8 @@ const REFUSALS: Record<string, MessageKey> = {
   "VALIDATION_FAILED:order.line_served": "hub.order.line_refused",
   "NOT_FOUND:order.line_served": "hub.order.line_refused",
   "OUT_OF_STOCK:order.line_served": "hub.order.serve_short",
+  "VALIDATION_FAILED:order.ready": "hub.order.ready_refused",
+  "NOT_FOUND:order.ready": "hub.order.ready_refused",
   "VALIDATION_FAILED:order.line_cancel": "hub.order.line_refused",
   "NOT_FOUND:order.line_cancel": "hub.order.line_refused",
   "VALIDATION_FAILED:order.void": "hub.order.void_refused",
@@ -256,6 +258,10 @@ export const settleJob = (
 export const servedJob = (line_id: string) =>
   job({ kind: "order.line_served", line_id }, { track: "none", done: "hub.sheet.done.served" });
 
+/** Marks an order ready for the player (Story 6.33); the kiosk shows the seat or pick-up copy. */
+export const readyJob = (order_id: string) =>
+  job({ kind: "order.ready", order_id }, { track: "none", done: "hub.sheet.done.ready" });
+
 /** The reasons a placed line is cancelled for, in the order the sheet offers them. */
 export const CANCEL_REASONS: ReasonCode[] = ["changed_mind", "mistake", "other"];
 
@@ -350,6 +356,7 @@ export const permissionFor = (kind: IntentPayload["kind"]): Permission =>
                         kind === "order.place" ||
                         kind === "order.place.reverted" ||
                         kind === "order.line_served" ||
+                        kind === "order.ready" ||
                         kind === "order.line_cancel"
                       ? "pos.sell"
                       : kind === "order.void"

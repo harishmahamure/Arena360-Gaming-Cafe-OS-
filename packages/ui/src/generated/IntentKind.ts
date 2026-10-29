@@ -50,6 +50,7 @@ export type IntentKind =
   | "order.place"
   | "order.place.reverted"
   | "order.line_served"
+  | "order.ready"
   | "order.line_cancel"
   | "order.void"
   | "refund.create"

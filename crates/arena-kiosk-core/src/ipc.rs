@@ -121,6 +121,10 @@ pub struct PcSession {
     /// How many items were placed on the session's bill (shown as "Ordered: n items").
     #[serde(default, skip_serializing_if = "is_zero")]
     pub ordered_items: u64,
+    /// How many ordered lines are not served yet (Story 6.33); the HUD pill shows "Ordered" while
+    /// any is.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub unserved_items: u64,
     /// Who the shell greets: the profiled player's username, or a guest's number.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
@@ -267,12 +271,20 @@ pub enum IpcMsg {
     /// service's own counter, `at` the UTC ms it arrived. `fresh` is a message that has just
     /// come in (the HUD shows it as a toast); a replayed one, sent again on a new connection, is
     /// not fresh. `read` is whether the player has opened the bell since.
+    ///
+    /// An order note (Story 6.33) carries a `code` instead of staff text: `order.placed` (with
+    /// `count`, the items just ordered), `order.ready_seat`, `order.ready_counter` or
+    /// `order.cancelled` (`text` is the item's name). The app words it from its own strings.
     StaffMessage {
         id: u64,
         text: String,
         at: i64,
         read: bool,
         fresh: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        count: u64,
     },
     #[serde(rename = "discovery.found")]
     DiscoveryFound {
@@ -609,6 +621,7 @@ mod tests {
                 grace_in_ms: Some(3),
                 grace_ms: 4,
                 ordered_items: 2,
+                unserved_items: 1,
                 username: None,
                 guest_no: None,
                 remaining_ms: None,
@@ -628,11 +641,29 @@ mod tests {
             at: 1_800_000_000_000,
             read: false,
             fresh: true,
+            code: None,
+            count: 0,
         };
         let v: Value = serde_json::from_str(&m.to_line()).unwrap();
         assert_eq!(v["type"], "staff_message");
         assert_eq!(v["text"], "Closing at 11");
+        assert!(v.get("code").is_none() && v.get("count").is_none());
         assert_eq!(IpcMsg::parse(&m.to_line()).unwrap(), m);
+        let order = IpcMsg::StaffMessage {
+            id: 4,
+            text: String::new(),
+            at: 1_800_000_000_000,
+            read: false,
+            fresh: true,
+            code: Some("order.placed".into()),
+            count: 3,
+        };
+        let v: Value = serde_json::from_str(&order.to_line()).unwrap();
+        assert_eq!(
+            (v["code"].as_str(), v["count"].as_u64()),
+            (Some("order.placed"), Some(3))
+        );
+        assert_eq!(IpcMsg::parse(&order.to_line()).unwrap(), order);
     }
 
     #[test]

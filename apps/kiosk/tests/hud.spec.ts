@@ -909,3 +909,60 @@ test("a game that would not start raises an info toast naming it, gone after 8 s
   await expect(page.getByTestId("toast")).toHaveCount(1);
   await expect(page.getByTestId("toast-text")).toContainText("Apex");
 });
+
+// ---- Story 6.33: the "Ordered" tag on the pill ----
+
+test("the pill carries an Ordered tag while any ordered line is unserved, and loses it when served", async ({
+  page,
+}) => {
+  await openHud(page);
+  await attract(page);
+  await emit(
+    page,
+    names.events.pcScreen,
+    shown({ username: "asha", remaining_ms: 3_600_000, balance_minor: 25_050 }),
+  );
+  await expect(page.getByTestId("hud-pill")).toBeVisible();
+  await expect(page.getByTestId("hud-ordered")).toHaveCount(0);
+  await emit(
+    page,
+    names.events.pcScreen,
+    shown({
+      username: "asha",
+      remaining_ms: 3_600_000,
+      balance_minor: 25_050,
+      ordered_items: 3,
+      unserved_items: 2,
+    }),
+  );
+  await expect(page.getByTestId("hud-ordered")).toHaveText(en["player.order.tag"]);
+  await expect(page.getByTestId("hud-pill")).toHaveAttribute(
+    "aria-label",
+    /Ordered, not served yet$/,
+  );
+  expect(await serious(page)).toEqual([]);
+  await emit(
+    page,
+    names.events.pcScreen,
+    shown({
+      username: "asha",
+      remaining_ms: 3_600_000,
+      balance_minor: 25_050,
+      ordered_items: 3,
+      unserved_items: 0,
+    }),
+  );
+  await expect(page.getByTestId("hud-ordered")).toHaveCount(0);
+});
+
+test("a guest's pill carries the Ordered tag too, and a lock hides it", async ({ page }) => {
+  await openHud(page);
+  await emit(page, names.events.pcScreen, shown({ guest_no: 3, unserved_items: 1 }));
+  await expect(page.getByTestId("hud-ordered")).toBeVisible();
+  await emit(
+    page,
+    names.events.pcScreen,
+    shown({ guest_no: 3, unserved_items: 1 }, { locked: true, reason: "paused" }),
+  );
+  await expect(page.getByTestId("hud-ordered")).toHaveCount(0);
+});

@@ -186,3 +186,46 @@ test("a fresh staff message is an info toast with its text that goes by itself, 
   await toast.first().getByRole("button", { name: en["common.dismiss"] }).click();
   await expect(toast).toHaveCount(1);
 });
+
+// Story 6.33: order notes arrive as coded staff messages and are worded from the catalogue.
+test("an order note is an info toast worded from the catalogue, in every kind", async ({
+  page,
+}) => {
+  await openWithShell(page);
+  await page.waitForFunction(
+    (event) =>
+      (window as unknown as { __shell: { listening: (e: string) => boolean } }).__shell.listening(
+        event,
+      ),
+    names.events.staffMessage,
+  );
+  const toast = page.getByTestId("toast");
+  const note = (id: number, code: string, count = 0, text = "") => ({
+    id,
+    text,
+    at: Date.UTC(2026, 9, 29, 8, 30),
+    read: false,
+    fresh: true,
+    code,
+    count,
+  });
+  await emit(page, names.events.staffMessage, note(1, "order.placed", 3));
+  await emit(page, names.events.staffMessage, note(2, "order.placed", 1));
+  await emit(page, names.events.staffMessage, note(3, "order.ready_seat"));
+  await emit(page, names.events.staffMessage, note(4, "order.ready_counter"));
+  await emit(page, names.events.staffMessage, note(5, "order.cancelled", 0, "Burger"));
+  await expect(toast).toHaveCount(5);
+  await expect(page.getByTestId("toast-text")).toHaveText([
+    "Ordered: 3 items",
+    "Ordered: 1 item",
+    en["player.order.ready_seat"],
+    en["player.order.ready_counter"],
+    "Burger was cancelled — see the counter.",
+  ]);
+  for (const t of await toast.all()) await expect(t).toHaveAttribute("data-kind", "info");
+  expect(
+    (await new AxeBuilder({ page }).analyze()).violations.filter(
+      (v) => v.impact === "serious" || v.impact === "critical",
+    ),
+  ).toEqual([]);
+});

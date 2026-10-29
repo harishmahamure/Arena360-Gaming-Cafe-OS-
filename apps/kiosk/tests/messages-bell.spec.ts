@@ -2,7 +2,16 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import names from "../src-tauri/ipc-names.json" with { type: "json" };
-import { add, markRead, MAX_MESSAGES, timeOf, unread, type Note } from "../src/lib/messages";
+import {
+  add,
+  markRead,
+  MAX_MESSAGES,
+  noteText,
+  orderCopy,
+  timeOf,
+  unread,
+  type Note,
+} from "../src/lib/messages";
 
 // Story 6.16: the messages bell in the shell's top bar. The Tauri shell is stubbed in the page:
 // the test emits its `staff-message`, `staff-messages-cleared` and `pc-screen` events as
@@ -298,4 +307,44 @@ test("the list rules: newest first, no duplicates, at most 50, unread counted, a
   expect(many.length).toBe(MAX_MESSAGES);
   expect(many[0].id).toBe(MAX_MESSAGES + 5);
   expect(timeOf(Date.UTC(2026, 9, 29, 8, 30))).toMatch(/\d/);
+});
+
+// Story 6.33: order notes are kept in the bell, worded from the catalogue.
+test("order notes are listed in the bell with the order copy", async ({ page }) => {
+  await openWithShell(page);
+  const coded = (
+    id: number,
+    code: string,
+    count = 0,
+    text = "",
+  ): Held & Record<string, unknown> => ({
+    ...message(id, text, AT + id * 1000),
+    code,
+    count,
+  });
+  await emitTo(page, names.events.staffMessage, coded(1, "order.placed", 3));
+  await emitTo(page, names.events.staffMessage, coded(2, "order.ready_counter"));
+  await emitTo(page, names.events.staffMessage, coded(3, "order.cancelled", 0, "Burger"));
+  await page.getByTestId("messages-bell").click();
+  await expect(page.getByTestId("message-text")).toHaveText([
+    "Burger was cancelled — see the counter.",
+    en["player.order.ready_counter"],
+    "Ordered: 3 items",
+  ]);
+});
+
+test("the order copy rules word each code and leave staff text alone", () => {
+  expect(orderCopy({ text: "Hi" })).toBeNull();
+  expect(orderCopy({ text: "", code: "order.placed", count: 1 })?.key).toBe(
+    "player.order.placed_one",
+  );
+  expect(orderCopy({ text: "", code: "order.placed", count: 4 })).toEqual({
+    key: "player.order.placed",
+    params: { count: 4 },
+  });
+  expect(orderCopy({ text: "Cola", code: "order.cancelled" })?.params).toEqual({ item: "Cola" });
+  expect(noteText({ text: "Closing at 11" }, (k) => k)).toBe("Closing at 11");
+  expect(noteText({ text: "", code: "order.ready_seat" }, (k) => k)).toBe(
+    "player.order.ready_seat",
+  );
 });

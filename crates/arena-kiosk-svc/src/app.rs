@@ -353,6 +353,8 @@ fn staff_message(n: crate::pc::StaffNote, fresh: bool) -> IpcMsg {
         at: n.at,
         read: n.read,
         fresh,
+        code: n.code.map(str::to_owned),
+        count: n.count,
     }
 }
 
@@ -372,6 +374,7 @@ fn screen_message(s: crate::pc::Screen) -> IpcMsg {
             }),
             grace_ms: v.grace_ms,
             ordered_items: v.ordered_items,
+            unserved_items: v.unserved_items,
             username: v.username,
             guest_no: v.guest_no,
             balance_minor: v.balance_minor,

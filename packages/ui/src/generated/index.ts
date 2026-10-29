@@ -253,6 +253,8 @@ export type { OrderLineServed } from "./OrderLineServed";
 export type { OrderPlace } from "./OrderPlace";
 export type { OrderPlaceReverted } from "./OrderPlaceReverted";
 export type { OrderPlacedEvent } from "./OrderPlacedEvent";
+export type { OrderReady } from "./OrderReady";
+export type { OrderStatus } from "./OrderStatus";
 export type { OrderVoid } from "./OrderVoid";
 export type { OrderVoidEvent } from "./OrderVoidEvent";
 export type { OwnedPlanView } from "./OwnedPlanView";

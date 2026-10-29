@@ -2228,9 +2228,49 @@ async fn run_intent(
         }
         _ => None,
     };
+    // The kiosk is told which item was cancelled (Story 6.33); the name goes with the line.
+    let cancelled_item = match &intent.payload {
+        arena_proto::IntentPayload::OrderLineCancel(c) => {
+            let (reader, id) = (Arc::clone(&auth.reader), c.line_id.clone());
+            tokio::task::spawn_blocking(move || reader.line_device_label(&id))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .flatten()
+        }
+        _ => None,
+    };
+    // An order marked ready reaches its session's screen at once, not at the next tick.
+    let readying = match &intent.payload {
+        arena_proto::IntentPayload::OrderReady(r) => {
+            let (reader, id) = (Arc::clone(&auth.reader), r.order_id.clone());
+            tokio::task::spawn_blocking(move || reader.order_session(&id))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .flatten()
+        }
+        _ => None,
+    };
     let cmd_id = intent.idempotency_key.clone();
     match writer.submit_intent(intent).await {
         Ok(applied) => {
+            if let Some((device_id, item)) = cancelled_item {
+                let sent = auth.presence.push_order_line_cancelled(&device_id, &item);
+                tracing::info!(device_id = %device_id, cmd_id = %cmd_id, sessions = sent, "order line cancellation pushed");
+            }
+            if let Some(session_id) = readying {
+                let reader = Arc::clone(&auth.reader);
+                let id = session_id.clone();
+                let paused = tokio::task::spawn_blocking(move || reader.session_paused(&id))
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+                    .unwrap_or(true);
+                if !paused {
+                    push_pause_state(auth, &session_id, false, &cmd_id).await;
+                }
+            }
             if let Some(session_id) = cancelling {
                 let reader = Arc::clone(&auth.reader);
                 let id = session_id.clone();
@@ -4603,6 +4643,17 @@ pub(crate) mod tests {
         assert_eq!(reply["code"], "REASON_REQUIRED");
         let (status, reply) = post(token.clone(), cancel, Some(ReasonCode::ChangedMind)).await;
         assert_eq!(status, StatusCode::OK, "{reply}");
+        // Story 6.33: the PC hears which item was cancelled, then gets the new screen.
+        let Some(tokio_tungstenite::tungstenite::Message::Text(t)) = rx.recv().await else {
+            panic!("the cancellation pushed to the kiosk")
+        };
+        let arena_proto::FrameBody::Event(arena_proto::EventFrame {
+            event: arena_proto::HubEvent::OrderLineCancelled { item },
+        }) = arena_proto::parse_frame(t.as_str()).unwrap().body
+        else {
+            panic!("an order.line_cancelled event")
+        };
+        assert_eq!(item, "Burger");
         let Some(tokio_tungstenite::tungstenite::Message::Text(t)) = rx.recv().await else {
             panic!("the screen pushed to the kiosk")
         };
@@ -4620,6 +4671,35 @@ pub(crate) mod tests {
         let (status, _) = post(token.clone(), place(2), None).await;
         assert_eq!(status, StatusCode::OK);
         let line_id = first_item(&hub, &session_id).line_id;
+        // Story 6.33: marking the order ready reaches the screen at once, with the branch's
+        // fulfilment; a second mark is refused on `order_id`.
+        while rx.try_recv().is_ok() {}
+        let ready = IntentPayload::OrderReady(arena_proto::OrderReady {
+            order_id: items_order(&hub, &session_id),
+        });
+        let (status, reply) = post(token.clone(), ready.clone(), None).await;
+        assert_eq!(status, StatusCode::OK, "{reply}");
+        let Some(tokio_tungstenite::tungstenite::Message::Text(t)) = rx.recv().await else {
+            panic!("the screen pushed to the kiosk")
+        };
+        let arena_proto::FrameBody::Event(arena_proto::EventFrame {
+            event: arena_proto::HubEvent::SessionStarted { session, .. },
+        }) = arena_proto::parse_frame(t.as_str()).unwrap().body
+        else {
+            panic!("a session.started event")
+        };
+        assert_eq!(session.orders.len(), 1);
+        assert_eq!(
+            (session.orders[0].items, session.orders[0].unserved),
+            (2, 1)
+        );
+        assert_eq!(session.orders[0].ready.as_deref(), Some("counter"));
+        let (status, reply) = post(token.clone(), ready, None).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{reply}");
+        assert_eq!(
+            (&reply["code"], &reply["field"]),
+            (&json!("VALIDATION_FAILED"), &json!("order_id"))
+        );
         let (status, reply) = post(
             token.clone(),
             IntentPayload::OrderLineServed(OrderLineServed {

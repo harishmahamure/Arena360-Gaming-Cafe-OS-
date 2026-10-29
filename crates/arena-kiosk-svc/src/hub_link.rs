@@ -295,15 +295,23 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
                     }
                     Some(HubEvent::SessionStarted { cmd_id, session }) => {
                         let fresh = ctx.pc.screen.borrow().session.is_none();
+                        if fresh {
+                            // Before the sync: its orders may raise the new session's first notes.
+                            ctx.pc.clear_notes();
+                        }
                         crate::session::sync(ctx, session, true);
                         if fresh {
                             crate::volume::reset_for_session(ctx);
-                            ctx.pc.clear_notes();
                         }
                         ack(client, &cmd_id).await;
                     }
                     Some(HubEvent::SessionTick(session)) => {
                         crate::session::sync(ctx, session, false);
+                    }
+                    Some(HubEvent::OrderLineCancelled { item }) => {
+                        if ctx.pc.screen.borrow().session.is_some() {
+                            ctx.pc.order_cancelled(item, ctx.clock.now_ms());
+                        }
                     }
                     Some(HubEvent::SessionWarning { minutes_left, .. }) => {
                         crate::session::warn(ctx, minutes_left);

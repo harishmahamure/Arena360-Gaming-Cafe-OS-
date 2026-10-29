@@ -125,6 +125,8 @@ pub struct OpenOrder {
     /// whatever the tax mode.
     pub total_minor: i64,
     pub group_bill_id: Option<String>,
+    /// When staff marked the order ready (Story 6.33).
+    pub ready_at: Option<i64>,
 }
 
 pub fn insert_session(conn: &Connection, s: &NewSession<'_>) -> Result<(), AppError> {
@@ -570,7 +572,7 @@ pub fn list_open_orders(conn: &Connection) -> Result<Vec<OpenOrder>, AppError> {
             "SELECT o.id, o.session_id, COALESCE(o.device_id, ''), o.subtotal_minor, o.rev, o.player_id,
                     w.balance_minor, s.rev,
                     c.player_id, c.limit_minor, c.outstanding_minor, c.reminder_days, c.credit_paused,
-                    c.last_override_day, c.rev, o.group_bill_id, o.total_minor
+                    c.last_override_day, c.rev, o.group_bill_id, o.total_minor, o.ready_at
              FROM orders o LEFT JOIN wallets w ON w.player_id = o.player_id
                   LEFT JOIN credit_balances c ON c.player_id = o.player_id
                   LEFT JOIN sessions s ON s.id = o.session_id
@@ -593,6 +595,7 @@ pub fn list_open_orders(conn: &Connection) -> Result<Vec<OpenOrder>, AppError> {
             },
             group_bill_id: r.get(15)?,
             total_minor: r.get(16)?,
+            ready_at: r.get(17)?,
         })
     })
     .map_err(db_error)?
@@ -647,6 +650,8 @@ pub struct OrderRow {
     pub group_bill_id: Option<String>,
     /// The PC an order is tied to (a counter order from a kiosk, Story 6.32).
     pub device_id: Option<String>,
+    /// When staff marked the order ready (Story 6.33); cleared when more lines are placed.
+    pub ready_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -692,7 +697,7 @@ pub fn find_order(conn: &Connection, id: &str) -> Result<Option<OrderRow>, AppEr
     .map_err(db_error)
 }
 
-pub(crate) const ORDER_COLUMNS: &str = "id, status, total_minor, rev, session_id, settled_at, settled_by, player_id, kind, group_bill_id, device_id";
+pub(crate) const ORDER_COLUMNS: &str = "id, status, total_minor, rev, session_id, settled_at, settled_by, player_id, kind, group_bill_id, device_id, ready_at";
 
 pub(crate) fn order_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<OrderRow> {
     Ok(OrderRow {
@@ -707,6 +712,7 @@ pub(crate) fn order_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<OrderRow> {
         kind: r.get(8)?,
         group_bill_id: r.get(9)?,
         device_id: r.get(10)?,
+        ready_at: r.get(11)?,
     })
 }
 
@@ -821,6 +827,16 @@ pub fn next_product_position(conn: &Connection, order_id: &str) -> Result<i64, A
         |r| r.get(0),
     )
     .map_err(db_error)
+}
+
+/// Marks an open order ready at `at` (`None` clears the mark).
+pub fn set_order_ready(conn: &Connection, order_id: &str, at: Option<i64>) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE orders SET ready_at = ?2 WHERE id = ?1",
+        params![order_id, at],
+    )
+    .map_err(db_error)?;
+    Ok(())
 }
 
 /// Raises (or, negative, lowers) an open bill's subtotal and total by `delta_minor`.
@@ -944,6 +960,49 @@ pub fn list_ordered_counts(
         .map_err(db_error)?
         .collect::<Result<_, _>>()
         .map_err(db_error)
+}
+
+/// An open order with product lines, as the kiosk's session tick reports it (Story 6.33).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderState {
+    pub order_id: String,
+    /// The session whose bill it is; `None` for an unpaid counter order.
+    pub session_id: Option<String>,
+    pub device_id: String,
+    pub player_id: Option<String>,
+    /// The sum of its product line quantities.
+    pub items: i64,
+    /// How many of its product lines are not served.
+    pub unserved: i64,
+    pub ready_at: Option<i64>,
+}
+
+/// Every open order that holds a product line, oldest first.
+pub fn list_order_states(conn: &Connection) -> Result<Vec<OrderState>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT o.id, o.session_id, COALESCE(o.device_id, ''), o.ready_at,
+                    SUM(COALESCE(l.qty, 1)), SUM(CASE WHEN l.served = 0 THEN 1 ELSE 0 END),
+                    o.player_id
+             FROM orders o JOIN order_lines l ON l.order_id = o.id
+             WHERE o.status = 'open' AND l.product_id IS NOT NULL
+             GROUP BY o.id ORDER BY o.created_at, o.id",
+        )
+        .map_err(db_error)?;
+    stmt.query_map([], |r| {
+        Ok(OrderState {
+            order_id: r.get(0)?,
+            session_id: r.get(1)?,
+            device_id: r.get(2)?,
+            ready_at: r.get(3)?,
+            items: r.get(4)?,
+            unserved: r.get(5)?,
+            player_id: r.get(6)?,
+        })
+    })
+    .map_err(db_error)?
+    .collect::<Result<_, _>>()
+    .map_err(db_error)
 }
 
 pub fn list_payment_ids(conn: &Connection, order_id: &str) -> Result<Vec<String>, AppError> {

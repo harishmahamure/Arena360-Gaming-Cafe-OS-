@@ -195,10 +195,10 @@ pub use sessions::{
     unpaid_counter_minor,
 };
 pub use sessions::{
-    LineRow, OrderVoid, PRODUCT_LINE_BASE, PlacedLine, add_order_amount, count_product_lines,
-    count_unserved_lines, find_line, find_placed_order, list_ordered_counts, list_placement_lines,
-    list_segment_line_ids, mark_line_served, next_product_position, sum_segment_amounts,
-    void_order,
+    LineRow, OrderState, OrderVoid, PRODUCT_LINE_BASE, PlacedLine, add_order_amount,
+    count_product_lines, count_unserved_lines, find_line, find_placed_order, list_order_states,
+    list_ordered_counts, list_placement_lines, list_segment_line_ids, mark_line_served,
+    next_product_position, set_order_ready, sum_segment_amounts, void_order,
 };
 pub use sessions::{
     SessionListing, add_segment_pause, assign_order_player, assign_session_player, fold_pause,
@@ -1019,6 +1019,29 @@ impl Store {
             return Ok(std::collections::BTreeMap::new());
         }
         list_ordered_counts(&self.conn)
+    }
+
+    /// Every open order holding a product line, with its items, unserved lines and ready mark
+    /// (Story 6.33).
+    pub fn order_states(&self) -> Result<Vec<OrderState>, AppError> {
+        if !self.table_exists("orders")? {
+            return Ok(Vec::new());
+        }
+        list_order_states(&self.conn)
+    }
+
+    /// The PC and name of an unserved or served product line, for a cancel push (Story 6.33);
+    /// `None` when the line or its order is gone.
+    pub fn line_device_label(&self, line_id: &str) -> Result<Option<(String, String)>, AppError> {
+        if !self.table_exists("orders")? {
+            return Ok(None);
+        }
+        let Some(line) = find_line(&self.conn, line_id)? else {
+            return Ok(None);
+        };
+        Ok(find_order(&self.conn, &line.order_id)?
+            .and_then(|o| o.device_id)
+            .map(|d| (d, line.label)))
     }
 
     pub fn live_segments(&self) -> Result<Vec<SegmentRow>, AppError> {

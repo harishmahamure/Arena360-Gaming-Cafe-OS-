@@ -356,6 +356,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::OrderLineServed(t) => super::order_line::validate_served(intent, s, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::OrderReady(_) => match target {
+            Target::OrderReady(t) => super::order_ready::validate_ready(intent, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::OrderLineCancel(c) => match target {
             Target::OrderLineCancel(t) => super::order_line::validate_cancel(intent, c, t),
             _ => Err(internal_target()),

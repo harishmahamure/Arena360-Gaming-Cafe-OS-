@@ -7,7 +7,7 @@
     onStaffMessage,
     onStaffMessagesCleared,
   } from "./bridge";
-  import { add, markRead, timeOf, unread, type Note } from "./messages";
+  import { add, markRead, noteText, timeOf, unread, type Note } from "./messages";
 
   // The messages bell (Story 6.16): the session's staff messages, newest first with their time.
   // An unread message adds an `info` dot and a count, and the count is part of the accessible
@@ -149,7 +149,7 @@
               <time class="type-kiosk-label tabular-nums" datetime={new Date(note.at).toISOString()}
                 >{timeOf(note.at)}</time
               >
-              <p class="type-kiosk-body" data-testid="message-text">{note.text}</p>
+              <p class="type-kiosk-body" data-testid="message-text">{noteText(note, t)}</p>
             </li>
           {/each}
         </ol>

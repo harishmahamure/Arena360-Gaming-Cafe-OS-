@@ -19,6 +19,7 @@ export type HubEvent =
   | { kind: "pc_command"; cmd_id: string; action: PcAction; text?: string; reason?: LockReason }
   | { kind: "session.started"; cmd_id: string; session: SessionScreen }
   | ({ kind: "session.tick" } & SessionScreen)
+  | { kind: "order.line_cancelled"; item: string }
   | { kind: "session.warning"; session_id: string; minutes_left: number }
   | { kind: "catalog.changed"; products: Array<CatalogEntry> }
   | { kind: "test_session"; lock_after_ms: number }

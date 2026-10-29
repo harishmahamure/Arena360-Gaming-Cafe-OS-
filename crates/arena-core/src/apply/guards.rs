@@ -342,6 +342,7 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::OrderPlaceReverted(_)
             | Target::OrderLineServed(_)
             | Target::OrderLineCancel(_)
+            | Target::OrderReady(_)
             | Target::OrderVoid(_)
             | Target::Refund(_)
             | Target::CreditSetLimit(_)
@@ -432,6 +433,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         | Target::OrderPlace(_)
         | Target::OrderLineServed(_)
         | Target::OrderLineCancel(_)
+        | Target::OrderReady(_)
         | Target::OrderVoid(_)
         | Target::Refund(_) => Ok(()),
         Target::OrderPlaceReverted(t) => super::order_place::base_rev_place_reverted(intent, t),

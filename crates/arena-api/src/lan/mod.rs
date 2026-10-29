@@ -154,6 +154,14 @@ impl Presence {
         self.0.as_ref().map_or(0, |r| r.push_timer_event(event))
     }
 
+    /// Tells a PC an unserved line of its order was cancelled (`order.line_cancelled`); returns
+    /// how many kiosk sessions got it.
+    pub fn push_order_line_cancelled(&self, device_id: &str, item: &str) -> usize {
+        self.0
+            .as_ref()
+            .map_or(0, |r| r.push_order_line_cancelled(device_id, item))
+    }
+
     pub fn push_session_started(
         &self,
         device_id: &str,

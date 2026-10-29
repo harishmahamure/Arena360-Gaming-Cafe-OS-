@@ -503,6 +503,10 @@ pub(super) fn mutate(
             Target::OrderLineServed(t) => super::order_line::mutate_served(tx, intent, t, now_ms),
             _ => Err(mismatch()),
         },
+        IntentPayload::OrderReady(_) => match target {
+            Target::OrderReady(t) => super::order_ready::mutate_ready(tx, t, now_ms),
+            _ => Err(mismatch()),
+        },
         IntentPayload::OrderLineCancel(c) => match target {
             Target::OrderLineCancel(t) => {
                 super::order_line::mutate_cancel(tx, intent, c, t, now_ms)

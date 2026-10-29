@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use arena_proto::{
-    AppError, DEFAULT_OPENING_HOURS, KEY_OPENING_HOURS, OpeningDay, SessionScreen,
-    parse_opening_hours,
+    AppError, DEFAULT_FULFILMENT, DEFAULT_OPENING_HOURS, KEY_FULFILMENT, KEY_OPENING_HOURS,
+    OpeningDay, OrderStatus, SessionScreen, parse_opening_hours,
 };
 use arena_store::Store;
 use chrono::{Datelike, Duration, NaiveDate, NaiveTime, TimeZone};
@@ -89,42 +89,50 @@ pub fn session_screens(
     store: &Store,
     now_ms: i64,
 ) -> Result<Vec<(String, SessionScreen)>, AppError> {
-    let (sessions, devices, meta, settings, branch, ordered, hud) = store.read_consistent(|s| {
-        let sessions = s.live_sessions()?;
-        // What the overlay HUD shows beside the clock: the profiled player's wallet balance and
-        // the name of the pack or pass the session runs on.
-        let mut hud: HashMap<String, (i64, Option<String>, Option<i64>)> = HashMap::new();
-        for session in &sessions {
-            let Some(player) = &session.player_id else {
-                continue;
-            };
-            let plan = match &session.pack_id {
-                Some(pack) => s
-                    .player_packs(player)?
-                    .into_iter()
-                    .find(|p| &p.id == pack)
-                    .map(|p| p.name),
-                None => None,
-            };
-            let balance = s.wallet_balance(player)?;
-            let left = if session.mode == "wallet" {
-                Some((balance - s.reserved_minor(player)?).max(0))
-            } else {
-                None
-            };
-            hud.insert(session.id.clone(), (balance, plan, left));
-        }
-        Ok((
-            sessions,
-            s.devices()?,
-            s.devices_meta()?,
-            s.settings()?,
-            s.branch_locale()?,
-            s.ordered_counts()?,
-            hud,
-        ))
-    })?;
+    let (sessions, devices, meta, settings, branch, ordered, hud, states) =
+        store.read_consistent(|s| {
+            let sessions = s.live_sessions()?;
+            // What the overlay HUD shows beside the clock: the profiled player's wallet balance and
+            // the name of the pack or pass the session runs on.
+            let mut hud: HashMap<String, (i64, Option<String>, Option<i64>)> = HashMap::new();
+            for session in &sessions {
+                let Some(player) = &session.player_id else {
+                    continue;
+                };
+                let plan = match &session.pack_id {
+                    Some(pack) => s
+                        .player_packs(player)?
+                        .into_iter()
+                        .find(|p| &p.id == pack)
+                        .map(|p| p.name),
+                    None => None,
+                };
+                let balance = s.wallet_balance(player)?;
+                let left = if session.mode == "wallet" {
+                    Some((balance - s.reserved_minor(player)?).max(0))
+                } else {
+                    None
+                };
+                hud.insert(session.id.clone(), (balance, plan, left));
+            }
+            Ok((
+                sessions,
+                s.devices()?,
+                s.devices_meta()?,
+                s.settings()?,
+                s.branch_locale()?,
+                s.ordered_counts()?,
+                hud,
+                s.order_states()?,
+            ))
+        })?;
     let lock_after = closing_in(branch, &settings, now_ms).unwrap_or(DAY_MS);
+    // Where a ready order is picked up: the branch's fulfilment setting, `seat` or `counter`.
+    let fulfilment = settings
+        .iter()
+        .find(|r| r.key == KEY_FULFILMENT)
+        .map_or(DEFAULT_FULFILMENT, |r| r.value.as_str())
+        .to_owned();
     Ok(sessions
         .into_iter()
         .map(|s| {
@@ -178,6 +186,20 @@ pub fn session_screens(
                 ordered_items: ordered
                     .get(&s.id)
                     .map_or(0, |n| u64::try_from(*n).unwrap_or(0)),
+                // The session's own bill and the player's unpaid counter orders on this PC.
+                orders: states
+                    .iter()
+                    .filter(|o| match &o.session_id {
+                        Some(id) => *id == s.id,
+                        None => o.device_id == s.device_id && o.player_id == s.player_id,
+                    })
+                    .map(|o| OrderStatus {
+                        order_id: o.order_id.clone(),
+                        items: u64::try_from(o.items).unwrap_or(0),
+                        unserved: u64::try_from(o.unserved).unwrap_or(0),
+                        ready: o.ready_at.map(|_| fulfilment.clone()),
+                    })
+                    .collect(),
                 session_id: s.id,
                 device_name: name,
                 elapsed_ms: u64::try_from(

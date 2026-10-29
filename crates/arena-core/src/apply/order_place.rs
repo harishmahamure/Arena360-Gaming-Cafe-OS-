@@ -20,7 +20,7 @@ use arena_store::{
     add_order_amount, delete_row, effect_recorded, find_order, find_order_for_session,
     find_session, find_setting, find_stock, insert_hold, insert_order, insert_pos_order,
     insert_product_line, list_lots, list_order_line_ids, list_placement_holds,
-    list_placement_lines, list_placement_moves, next_product_position, read_row,
+    list_placement_lines, list_placement_moves, next_product_position, read_row, set_order_ready,
 };
 
 use super::mutate::Written;
@@ -225,6 +225,8 @@ pub(super) fn mutate_place(
         }
         (None, Some(o)) => {
             add_order_amount(tx, &o.id, amount)?;
+            // More food is coming: an earlier "ready" no longer covers the order.
+            set_order_ready(tx, &o.id, None)?;
             written.push(Written {
                 key: RowKey::Orders { id: o.id.clone() },
                 op: ChangeOp::Update,

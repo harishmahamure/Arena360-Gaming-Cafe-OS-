@@ -56,6 +56,7 @@ import type { OrderLineCancel } from "./OrderLineCancel";
 import type { OrderLineServed } from "./OrderLineServed";
 import type { OrderPlace } from "./OrderPlace";
 import type { OrderPlaceReverted } from "./OrderPlaceReverted";
+import type { OrderReady } from "./OrderReady";
 import type { OrderVoid } from "./OrderVoid";
 import type { PlanSell } from "./PlanSell";
 import type { PlanSellReverted } from "./PlanSellReverted";
@@ -158,6 +159,7 @@ export type IntentPayload =
   | ({ kind: "order.place" } & OrderPlace)
   | ({ kind: "order.place.reverted" } & OrderPlaceReverted)
   | ({ kind: "order.line_served" } & OrderLineServed)
+  | ({ kind: "order.ready" } & OrderReady)
   | ({ kind: "order.line_cancel" } & OrderLineCancel)
   | ({ kind: "order.void" } & OrderVoid)
   | ({ kind: "refund.create" } & RefundCreate)

@@ -278,9 +278,9 @@ pub use players::{
 pub use pos::{
     CounterOrder, InvoiceIssue, KioskSale, MAX_SALE_LINES, MAX_SALE_QTY, MOVE_COUNT_ADJUST,
     MOVE_RETURN, MOVE_SALE, MOVE_SALE_REVERTED, NOTE_SALE_OVERRIDE, OrderLineCancel,
-    OrderLineEvent, OrderLineServed, OrderPlace, OrderPlaceReverted, OrderPlacedEvent, OrderVoid,
-    OrderVoidEvent, PlaceOutcome, PosSale, PosSaleLine, PosSaleLineView, PosSalePaymentView,
-    PosSaleReverted, PosSaleView, PosSalesView, VOID_NOTE_MAX_CHARS,
+    OrderLineEvent, OrderLineServed, OrderPlace, OrderPlaceReverted, OrderPlacedEvent, OrderReady,
+    OrderVoid, OrderVoidEvent, PlaceOutcome, PosSale, PosSaleLine, PosSaleLineView,
+    PosSalePaymentView, PosSaleReverted, PosSaleView, PosSalesView, VOID_NOTE_MAX_CHARS,
 };
 pub use pricing::{
     RULE_ADJUST_KINDS, RULE_ALL_DAYS, RULE_KINDS, RULE_MAX_DATE_SPAN_DAYS, RULE_MAX_PERCENT_BP,
@@ -343,14 +343,14 @@ pub use session::{
     CREDIT_DAYS_MAX, CREDIT_LIMIT_MAX_MINOR, CREDIT_OVERDUE_DAYS, ClearedSpend, ControllerCheck,
     ControllerResult, CreditAging, CreditAutoPause, CreditCollect, CreditCollectReverted,
     CreditCollection, CreditSetLimit, CreditView, DEFAULT_REMINDER_DAYS, EXTEND_OPTIONS_MIN,
-    EndOutcome, ExtendSource, GroupPayer, PAUSE_NOTE_MAX, PauseReason, PaymentMethod, PaymentRow,
-    SESSION_WARNING_MARKS_MIN, SessionAssignPlayer, SessionEnd, SessionEndReverted, SessionExpire,
-    SessionExtend, SessionForceEnd, SessionForceEndReverted, SessionGroup, SessionListRow,
-    SessionListState, SessionListView, SessionMode, SessionPause, SessionRateFlip, SessionResume,
-    SessionScreen, SessionSettle, SessionSettleReverted, SessionStart, SessionStartedEvent,
-    SessionTransfer, SettleOutcome, SnapshotBill, SnapshotGroupBill, SnapshotSession,
-    UNDO_WINDOW_MS, UiSessionConvertRequest, WALLET_TOPUP_MAX_MINOR, WalletChangedEvent,
-    WalletTopup, WalletTopupReverted, WalletTxnView, WalletView,
+    EndOutcome, ExtendSource, GroupPayer, OrderStatus, PAUSE_NOTE_MAX, PauseReason, PaymentMethod,
+    PaymentRow, SESSION_WARNING_MARKS_MIN, SessionAssignPlayer, SessionEnd, SessionEndReverted,
+    SessionExpire, SessionExtend, SessionForceEnd, SessionForceEndReverted, SessionGroup,
+    SessionListRow, SessionListState, SessionListView, SessionMode, SessionPause, SessionRateFlip,
+    SessionResume, SessionScreen, SessionSettle, SessionSettleReverted, SessionStart,
+    SessionStartedEvent, SessionTransfer, SettleOutcome, SnapshotBill, SnapshotGroupBill,
+    SnapshotSession, UNDO_WINDOW_MS, UiSessionConvertRequest, WALLET_TOPUP_MAX_MINOR,
+    WalletChangedEvent, WalletTopup, WalletTopupReverted, WalletTxnView, WalletView,
 };
 pub use setup_devices::{
     BranchSetup, SETUP_ITEMS_MAX, SetupCommandRequest, SetupCommandView, SetupDevice,

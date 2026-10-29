@@ -170,6 +170,9 @@ pub enum IntentKind {
     /// A placed kitchen line marked served: its held stock is taken.
     #[serde(rename = "order.line_served")]
     OrderLineServed,
+    /// An order with an unserved line marked ready for the player (Story 6.33).
+    #[serde(rename = "order.ready")]
+    OrderReady,
     /// An unserved placed line cancelled, with a reason.
     #[serde(rename = "order.line_cancel")]
     OrderLineCancel,
@@ -348,7 +351,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 110] = [
+    pub const ALL: [IntentKind; 111] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -395,6 +398,7 @@ impl IntentKind {
         Self::OrderPlace,
         Self::OrderPlaceReverted,
         Self::OrderLineServed,
+        Self::OrderReady,
         Self::OrderLineCancel,
         Self::OrderVoid,
         Self::RefundCreate,
@@ -510,6 +514,7 @@ impl IntentKind {
             Self::OrderPlace => "order.place",
             Self::OrderPlaceReverted => "order.place.reverted",
             Self::OrderLineServed => "order.line_served",
+            Self::OrderReady => "order.ready",
             Self::OrderLineCancel => "order.line_cancel",
             Self::OrderVoid => "order.void",
             Self::RefundCreate => "refund.create",
@@ -654,6 +659,7 @@ impl IntentKind {
             | Self::OrderPlace
             | Self::OrderPlaceReverted
             | Self::OrderLineServed
+            | Self::OrderReady
             | Self::InvoiceIssue
             | Self::ReceiptReprint
             | Self::ReceiptPrinted
@@ -793,6 +799,7 @@ impl IntentKind {
             | Self::OrderPlace
             | Self::OrderPlaceReverted
             | Self::OrderLineServed
+            | Self::OrderReady
             | Self::ReceiptReprint
             | Self::OrderLineCancel => Requirement::Perm(Permission::PosSell),
             Self::OrderVoid => Requirement::Perm(Permission::PosVoid),
@@ -889,6 +896,7 @@ impl IntentKind {
             | Self::OrderPlace
             | Self::OrderPlaceReverted
             | Self::OrderLineServed
+            | Self::OrderReady
             | Self::StaffSetCredentials
             | Self::StaffDeactivate
             | Self::StockIn
@@ -1462,6 +1470,8 @@ pub enum IntentPayload {
     OrderPlaceReverted(crate::OrderPlaceReverted),
     #[serde(rename = "order.line_served")]
     OrderLineServed(crate::OrderLineServed),
+    #[serde(rename = "order.ready")]
+    OrderReady(crate::OrderReady),
     #[serde(rename = "order.line_cancel")]
     OrderLineCancel(crate::OrderLineCancel),
     #[serde(rename = "order.void")]
@@ -1641,6 +1651,7 @@ impl IntentPayload {
             Self::OrderPlace(_) => IntentKind::OrderPlace,
             Self::OrderPlaceReverted(_) => IntentKind::OrderPlaceReverted,
             Self::OrderLineServed(_) => IntentKind::OrderLineServed,
+            Self::OrderReady(_) => IntentKind::OrderReady,
             Self::OrderLineCancel(_) => IntentKind::OrderLineCancel,
             Self::OrderVoid(_) => IntentKind::OrderVoid,
             Self::RefundCreate(_) => IntentKind::RefundCreate,
@@ -2081,6 +2092,7 @@ mod tests {
                 | "order.place"
                 | "order.place.reverted"
                 | "order.line_served"
+                | "order.ready"
                 | "receipt.reprint"
                 | "order.line_cancel" => Requirement::Perm(Permission::PosSell),
                 "order.void" => Requirement::Perm(Permission::PosVoid),

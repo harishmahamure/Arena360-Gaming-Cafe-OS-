@@ -71,6 +71,7 @@
     pauseJob,
     permissionFor,
     powerJob,
+    readyJob,
     resumeJob,
     messageJob,
     messageValid,
@@ -435,6 +436,12 @@
   /** Marks a placed line served: its held stock is taken. */
   function serveLine(lineId: string) {
     if (!busy) void go(servedJob(lineId));
+  }
+
+  /** Tells the player their order is ready (Story 6.33): the kiosk shows the seat or pick-up copy. */
+  function markReady() {
+    const orderId = bill?.items_order_id ?? bill?.order_id;
+    if (orderId && !busy) void go(readyJob(orderId));
   }
 
   function cancelLine(lineId: string, made: boolean, reason: ReasonCode) {
@@ -848,7 +855,9 @@
               items={bill.items}
               {locale}
               {busy}
+              ready={bill.ready === true}
               onserve={serveLine}
+              onready={bill.items_order_id || bill.order_id ? markReady : undefined}
               oncancel={cancelLine}
               onvoid={bill.items_order_id ? voidOrder : undefined}
             />

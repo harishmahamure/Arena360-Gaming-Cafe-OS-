@@ -342,6 +342,18 @@ impl Registry {
             .count()
     }
 
+    /// Tells one PC that an unserved line of its order was cancelled (Story 6.33). Not tracked,
+    /// not acknowledged and not resent: a PC that is offline simply never hears of it.
+    pub(crate) fn push_order_line_cancelled(&self, device_id: &str, item: &str) -> usize {
+        let msg = event_frame(
+            self.next_rid(),
+            HubEvent::OrderLineCancelled {
+                item: item.to_owned(),
+            },
+        );
+        self.push_paired(&msg, Some(device_id))
+    }
+
     pub(crate) fn push_session_started(
         &self,
         device_id: &str,

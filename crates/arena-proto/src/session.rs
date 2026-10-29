@@ -700,6 +700,10 @@ pub struct SnapshotBill {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub items_order_id: Option<String>,
+    /// Whether the order holding `items` is marked ready (Story 6.33); absent until it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ready: Option<bool>,
     #[ts(type = "number")]
     pub subtotal_minor: i64,
     #[ts(type = "number")]
@@ -789,6 +793,25 @@ pub struct SessionStartedEvent {
     pub device_id: String,
 }
 
+/// One open order of a PC as the session tick carries it (Story 6.33): the kiosk compares each tick
+/// with the last it saw and raises the order's notes itself, so the Hub never replays one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OrderStatus {
+    pub order_id: String,
+    /// The items on the order (the sum of its product line quantities).
+    #[ts(type = "number")]
+    pub items: u64,
+    /// How many of its lines are not served yet.
+    #[ts(type = "number")]
+    pub unserved: u64,
+    /// Where staff said the order is ready: the branch's fulfilment (`seat` or `counter`) at the
+    /// time it is shown; `None` until marked ready.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ready: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct SessionScreen {
@@ -807,6 +830,9 @@ pub struct SessionScreen {
     #[serde(default)]
     #[ts(type = "number")]
     pub ordered_items: u64,
+    /// The PC's open orders with their status (Story 6.33), oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub orders: Vec<OrderStatus>,
     /// The profiled player's username; the shell's account chip greets them by it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

@@ -784,6 +784,47 @@ test("the order section marks a held line served and offers nothing on a served 
     });
 });
 
+test("Mark ready tells the player the order is ready, once, and only while a line is unserved", async ({
+  page,
+}) => {
+  const hub = await open(page, "seller-token", {
+    bills: [{ ...orderedBill(), items_order_id: "O-run" }],
+  });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  const ready = page.getByTestId("order-ready").getByRole("button", {
+    name: en["hub.order.mark_ready"],
+  });
+  await expect(ready).toBeVisible();
+  await expect(page.getByTestId("order-ready-state")).toHaveCount(0);
+  await ready.click();
+  await expect
+    .poll(() => hub.sent.map((s) => s.payload))
+    .toContainEqual({ kind: "order.ready", order_id: "O-run" });
+});
+
+test("an order already marked ready shows that instead of the button; a served bill shows neither", async ({
+  page,
+}) => {
+  await open(page, "seller-token", {
+    bills: [{ ...orderedBill(), items_order_id: "O-run", ready: true }],
+  });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("order-ready-state")).toHaveText(en["hub.order.ready"]);
+  await expect(page.getByTestId("order-ready")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
+  const served = orderedBill();
+  served.items = served.items?.map((i) => ({ ...i, served: true }));
+  await open(page, "seller-token", { bills: [{ ...served, items_order_id: "O-run" }] });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("order-section")).toBeVisible();
+  await expect(page.getByTestId("order-ready")).toHaveCount(0);
+  await expect(page.getByTestId("order-ready-state")).toHaveCount(0);
+});
+
 test("cancelling an unserved line asks why, then whether it was already made", async ({ page }) => {
   const hub = await open(page, "seller-token", { bills: [orderedBill()] });
   await face(page, "PC 2").focus();

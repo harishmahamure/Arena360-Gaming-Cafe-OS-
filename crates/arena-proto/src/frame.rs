@@ -408,6 +408,10 @@ pub enum HubEvent {
     },
     #[serde(rename = "session.tick")]
     SessionTick(SessionScreen),
+    /// An unserved line of the PC's order was cancelled at the Hub (Story 6.33); `item` is its name.
+    /// Pushed once to the PC, not persisted, not resent after a reconnect.
+    #[serde(rename = "order.line_cancelled")]
+    OrderLineCancelled { item: String },
     /// 10, 5 or 1 minute remain on the device's session (not persisted, not resent).
     #[serde(rename = "session.warning")]
     SessionWarning {
@@ -736,6 +740,7 @@ mod tests {
             time_up_mode: "clean_up".into(),
             grace_ms: 0,
             ordered_items: 0,
+            orders: Vec::new(),
             username: None,
             guest_no: None,
             remaining_ms: None,

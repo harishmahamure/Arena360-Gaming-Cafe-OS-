@@ -167,6 +167,7 @@ fn bills(
             lines,
             items,
             items_order_id: None,
+            ready: None,
             subtotal_minor,
             paid_minor: 0,
             remaining_minor: subtotal_minor,
@@ -229,6 +230,11 @@ fn bills(
             lines,
             placed.as_deref().map(items_of).unwrap_or_default(),
         );
+        live_bill.ready = placed
+            .as_deref()
+            .and_then(|id| orders.iter().find(|o| o.id == id))
+            .and_then(|o| o.ready_at)
+            .map(|_| true);
         live_bill.items_order_id = placed.filter(|_| !live_bill.items.is_empty());
         live_bill
     });
@@ -262,6 +268,7 @@ fn bills(
             lines,
             items,
         );
+        open_bill.ready = o.ready_at.map(|_| true);
         if o.session_id.is_none() {
             // An unpaid counter order settles for its priced total, tax included (Story 6.32).
             open_bill.subtotal_minor = o.total_minor;
@@ -819,6 +826,16 @@ impl SnapshotReader {
             .lock()
             .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
         store.line_session(line_id)
+    }
+
+    /// The PC and name of a product line (`None` when the line or its order is gone); a cancel
+    /// reads it first so the PC can be told the item's name (Story 6.33).
+    pub fn line_device_label(&self, line_id: &str) -> Result<Option<(String, String)>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.line_device_label(line_id)
     }
 
     /// The kind of the intent `intent_id` (`None` when it wrote nothing).

@@ -219,6 +219,15 @@ pub(super) fn mutate(
             ),
             _ => Err(mismatch()),
         },
+        IntentPayload::KioskGameLaunched(p) => match target {
+            Target::Branch(b) => super::kiosk_log::mutate(
+                tx,
+                intent,
+                super::kiosk_log::Event::GameLaunched(p),
+                b.as_ref(),
+            ),
+            _ => Err(mismatch()),
+        },
         IntentPayload::KioskScanReported(p) => match target {
             Target::KioskScan(t) => super::kiosk_scan::mutate(tx, intent, p, t),
             _ => Err(mismatch()),

@@ -32,6 +32,7 @@
 //!   with a read flag, [`crate::pc::PcState`]) and sent as IPC `staff_message`: fresh as they arrive,
 //!   replayed (not fresh) on every new connection. `messages_read` marks them read. The session end
 //!   and a new session clear them.
+//! - `games` lists the Games tab and `game_launch{id}` starts a game ([`crate::games`], Story 6.23).
 //! - `call_staff` (Story 6.15) is forwarded the same way as `device.call_staff`; `volume` reads the
 //!   slider level, and `volume{percent}` sets the system volume ([`crate::volume`]).
 
@@ -682,6 +683,18 @@ async fn serve(
                             error: Some(e),
                         },
                     };
+                    let _ = out.send(reply).await;
+                });
+            }
+            Ok(IpcMsg::Request { rid, kind, .. }) if kind == "games" => {
+                let reply = reply_of(rid, crate::games::list(&ctx));
+                let _ = out_tx.send(reply).await;
+            }
+            Ok(IpcMsg::Request { rid, kind, body }) if kind == "game_launch" => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(rid, crate::games::launch(&ctx, body).await);
                     let _ = out.send(reply).await;
                 });
             }

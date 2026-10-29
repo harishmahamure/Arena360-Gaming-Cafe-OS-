@@ -22,6 +22,9 @@ pub mod config;
 #[cfg(feature = "dev-fixtures")]
 pub mod dev;
 pub mod discovery;
+pub mod games;
+#[cfg(windows)]
+pub mod games_windows;
 pub mod host;
 pub mod hub_link;
 pub mod intents;

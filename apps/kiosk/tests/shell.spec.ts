@@ -34,6 +34,8 @@ async function openWithShell(page: Page, screen: unknown = null) {
               return null;
             case commands.staffMessages:
               return [];
+            case commands.games:
+              return { ok: true, body: { games: [], running: false } };
             case commands.hubStatus:
             case commands.takeRestoreState:
             case commands.reportAppState:
@@ -159,7 +161,7 @@ test("the pill nav starts on Home, arrows move focus, Enter selects and the sess
   await page.keyboard.press("Enter");
   await expect(games).toHaveAttribute("aria-current", "page");
   await expect(home).not.toHaveAttribute("aria-current", "page");
-  await expect(page.getByTestId("tab-empty-games")).toHaveText(en["player.shell.empty"]);
+  await expect(page.getByTestId("games-empty")).toHaveText(en["player.shell.empty"]);
   await page.keyboard.press("ArrowRight");
   await expect(apps).toBeFocused();
   await page.keyboard.press("ArrowRight");

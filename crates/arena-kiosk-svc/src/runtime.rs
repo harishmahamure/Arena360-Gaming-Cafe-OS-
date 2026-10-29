@@ -104,6 +104,8 @@ pub struct Ctx {
     pub freezer: Mutex<Option<crate::procs::Freezer>>,
     /// The session-end cleanup: dirty flag, cancel epoch, worker wake-up.
     pub cleanup: crate::cleanup::CleanupState,
+    /// The games the Games tab started and the host that starts them (Story 6.23).
+    pub games: crate::games::GameState,
 }
 
 impl Ctx {
@@ -238,6 +240,7 @@ impl Runtime {
             closer: Mutex::new(None),
             freezer: Mutex::new(None),
             cleanup,
+            games: crate::games::GameState::default(),
         });
         let (stop, stop_rx) = watch::channel(false);
         let tasks = vec![
@@ -289,6 +292,17 @@ impl Runtime {
             Arc::clone(&self.ctx),
             host,
             pipeline,
+            self.stop.subscribe(),
+        )));
+    }
+
+    /// Lets the Games tab start games through `host` (Story 6.23) and keeps track of the ones
+    /// that are running (Windows: the real PC; tests: a fake). Without this call a `game_launch`
+    /// is refused as unsupported.
+    pub fn games(&mut self, host: Arc<dyn crate::games::GameHost>) {
+        self.ctx.games.set_host(host);
+        self.tasks.push(tokio::spawn(crate::games::run(
+            Arc::clone(&self.ctx),
             self.stop.subscribe(),
         )));
     }

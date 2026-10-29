@@ -738,7 +738,10 @@ impl Ctx<'_> {
         // which the kiosk treats as transient (it keeps the event queued).
         if matches!(
             submit.intent.payload.kind(),
-            IntentKind::KioskLog | IntentKind::KioskProcessBlocked | IntentKind::KioskCleanupFailed
+            IntentKind::KioskLog
+                | IntentKind::KioskProcessBlocked
+                | IntentKind::KioskCleanupFailed
+                | IntentKind::KioskGameLaunched
         ) && !self
             .hub
             .kiosk_log_rate

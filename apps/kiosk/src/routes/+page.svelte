@@ -7,6 +7,8 @@
     currentHubStatus,
     currentPcScreen,
     currentTestSession,
+    launchGame,
+    loadGames,
     onAttract,
     onHubStatus,
     onPcScreen,
@@ -17,6 +19,7 @@
   } from "../lib/bridge";
   import Attract from "../lib/Attract.svelte";
   import Shell from "../lib/Shell.svelte";
+  import { GAMES_POLL_MS, type GameCard } from "../lib/games";
   import { type Tab } from "../lib/shell";
 
   /** The idle screen: the last attract view and logo (from the service cache at first). */
@@ -46,6 +49,37 @@
   } | null>(null);
   /** The shell's active item: it lasts for the session and is forgotten when the session ends. */
   let tab: Tab = $state("home");
+  /** The Games tab's tiles and whether any game is running (Story 6.23); asked of the service. */
+  let games: GameCard[] | null = $state(null);
+  let gameRunning = $state(false);
+
+  async function refreshGames() {
+    const view = await loadGames();
+    if (view === null) return;
+    games = view.games;
+    gameRunning = view.running;
+  }
+
+  async function launch(game: GameCard) {
+    await launchGame(game);
+    await refreshGames();
+  }
+
+  // While a session is on screen the games and the running signal are asked for now, when the
+  // Games tab opens, and every few seconds; with no session there is nothing to show.
+  const inSession = $derived(session !== null);
+  $effect(() => {
+    if (!inSession) {
+      games = null;
+      gameRunning = false;
+      return;
+    }
+    void tab;
+    void refreshGames();
+    const timer = setInterval(() => void refreshGames(), GAMES_POLL_MS);
+    return () => clearInterval(timer);
+  });
+
   const graceLeft = $derived(
     session === null || session.graceFrom === null
       ? null
@@ -153,6 +187,9 @@
       balance={session.balance}
       locale={attract.view?.locale ?? null}
       connected={hub === "connected"}
+      {games}
+      {gameRunning}
+      onlaunch={launch}
       bind:tab
     >
       {#snippet status()}

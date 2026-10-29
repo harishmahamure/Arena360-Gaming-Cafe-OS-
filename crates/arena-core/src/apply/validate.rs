@@ -108,6 +108,14 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             ),
             _ => Err(internal_target()),
         },
+        IntentPayload::KioskGameLaunched(p) => match target {
+            Target::Branch(b) => super::kiosk_log::validate(
+                intent,
+                super::kiosk_log::Event::GameLaunched(p),
+                b.as_ref(),
+            ),
+            _ => Err(internal_target()),
+        },
         IntentPayload::KioskScanReported(p) => match target {
             Target::KioskScan(t) => super::kiosk_scan::validate(intent, p, t),
             _ => Err(internal_target()),

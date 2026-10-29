@@ -4538,6 +4538,80 @@ mod process_lists {
         assert_eq!(store.rows(Table::DeviceEvents).unwrap().len(), 2);
         assert_eq!(store.rows(Table::Alerts).unwrap().len(), 1);
     }
+
+    fn game_launched(device_id: &str, game_id: &str, name: &str) -> Intent {
+        let mut i = device_intent(
+            ActorKind::Device,
+            IntentPayload::KioskGameLaunched(arena_proto::KioskGameLaunched {
+                game_id: game_id.into(),
+                name: name.into(),
+            }),
+        );
+        i.actor.id = device_id.into();
+        i
+    }
+
+    #[tokio::test]
+    async fn game_launched_writes_one_info_event_with_the_game_and_no_session() {
+        let mut f = primary();
+        let (id, _) = with_device(&mut f).await;
+        let first = game_launched(&id, "01JGAME", "Valorant");
+        let applied = f.writer.submit_intent(first.clone()).await.unwrap();
+        let tables: Vec<&str> = applied.changes.iter().map(|c| c.tbl.as_str()).collect();
+        assert_eq!(tables, ["device_events"]);
+        // Replayed after a reconnect: the stored outcome, nothing new.
+        assert_eq!(f.writer.submit_intent(first).await.unwrap(), applied);
+        let store = reopen(&f);
+        let rows = store.rows(Table::DeviceEvents).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["code"], RowValue::Text("game_launched".into()));
+        assert_eq!(rows[0]["level"], RowValue::Text("info".into()));
+        assert_eq!(rows[0]["device_id"], RowValue::Text(id.clone()));
+        let RowValue::Text(detail) = &rows[0]["detail"] else {
+            panic!("text detail")
+        };
+        let detail: serde_json::Value = serde_json::from_str(detail).unwrap();
+        assert_eq!(
+            detail,
+            serde_json::json!({
+                "game_id": "01JGAME",
+                "name": "Valorant",
+                "session_id": null,
+                "player_id": null,
+            })
+        );
+        let change = store.changes().unwrap().pop().unwrap();
+        assert_eq!(
+            (change.intent_kind.as_str(), change.actor_kind.as_str()),
+            ("game.launched", "device")
+        );
+
+        // Not a device, not a live device, a bad game id, a base_rev: refused, nothing written.
+        for actor in [ActorKind::Owner, ActorKind::System, ActorKind::Staff] {
+            let mut i = game_launched(&id, "01JGAME", "Valorant");
+            i.actor.kind = actor;
+            assert_eq!(
+                expect_err(&f, i).await.code,
+                ErrorCode::PermissionDenied,
+                "{actor:?}"
+            );
+        }
+        let err = expect_err(
+            &f,
+            game_launched("01JNOPEAAAAAAAAAAAAAAAAAAA", "01JGAME", "Valorant"),
+        )
+        .await;
+        assert_eq!(err.code, ErrorCode::PermissionDenied);
+        let err = expect_err(&f, game_launched(&id, "not a game", "Valorant")).await;
+        assert_eq!(err.field.as_deref(), Some("game_id"));
+        let mut edit = game_launched(&id, "01JGAME", "Valorant");
+        edit.base_rev = Some(1);
+        assert_eq!(
+            expect_err(&f, edit).await.field.as_deref(),
+            Some("base_rev")
+        );
+        assert_eq!(reopen(&f).rows(Table::DeviceEvents).unwrap().len(), 1);
+    }
 }
 
 // ---- Story 1.21: high contrast per device ----

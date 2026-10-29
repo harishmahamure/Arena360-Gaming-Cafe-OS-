@@ -71,6 +71,7 @@ fn ctx_in(dir: &std::path::Path, lists: ProcessLists) -> Arc<Ctx> {
         closer: Mutex::new(None),
         freezer: Mutex::new(None),
         cleanup,
+        games: crate::games::GameState::default(),
     })
 }
 

@@ -7,6 +7,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod bridge;
+mod games;
 mod hud;
 mod shell;
 mod theme;
@@ -16,9 +17,10 @@ use std::sync::Arc;
 use arena_proto::KioskHubStatus;
 use bridge::{
     ADMIN_EXIT_ENDED_EVENT, ADMIN_EXIT_EVENT, ATTRACT_EVENT, Answer, Attract, Bridge,
-    DISCOVERY_DONE_EVENT, DISCOVERY_FOUND_EVENT, Emit, HUB_STATUS_EVENT, PC_SCREEN_EVENT, PcScreen,
-    RESTORE_STATE_EVENT, STAFF_MESSAGE_EVENT, STAFF_MESSAGES_CLEARED_EVENT, StaffMessage,
-    TEST_SESSION_ENDED_EVENT, TEST_SESSION_EVENT, THEME_EVENT, TOAST_EVENT,
+    DISCOVERY_DONE_EVENT, DISCOVERY_FOUND_EVENT, Emit, GAME_LAUNCH_FAILED_EVENT, HUB_STATUS_EVENT,
+    LaunchOutcome, PC_SCREEN_EVENT, PcScreen, RESTORE_STATE_EVENT, STAFF_MESSAGE_EVENT,
+    STAFF_MESSAGES_CLEARED_EVENT, StaffMessage, TEST_SESSION_ENDED_EVENT, TEST_SESSION_EVENT,
+    THEME_EVENT, TOAST_EVENT,
 };
 use tauri::{Emitter, Manager, Runtime, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
@@ -262,6 +264,40 @@ async fn player_extend(
     Ok(service_request(&bridge, "player_extend", body).await)
 }
 
+/// The Games tab (Story 6.23): IPC `games`, answered with `{games: [{id, name, running}],
+/// running}`. `None` when the service did not answer.
+#[tauri::command]
+async fn games(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
+    Ok(service_request(&bridge, "games", serde_json::Value::Null).await)
+}
+
+/// Starts a game from its tile (Story 6.23): IPC `game_launch{id}`, answered with
+/// `{outcome: started | already_running | failed}`. A game that is already running has its window
+/// brought to the front here (this runs in the player's session); a start that failed, or that
+/// the service did not answer, raises the HUD's "Couldn't start <name>" toast. `name` only words
+/// that toast: the service takes the game from `id`.
+#[tauri::command]
+async fn game_launch<R: Runtime>(
+    id: String,
+    name: String,
+    app: tauri::AppHandle<R>,
+    bridge: tauri::State<'_, Arc<Bridge>>,
+) -> Result<Option<Answer>, ()> {
+    let answer = service_request(&bridge, "game_launch", serde_json::json!({ "id": id })).await;
+    match bridge::launch_outcome(answer.as_ref()) {
+        LaunchOutcome::Started => {}
+        LaunchOutcome::AlreadyRunning(pid) => {
+            if !games::bring_forward(pid) {
+                tracing::warn!(pid, "no window to bring forward for the running game");
+            }
+        }
+        LaunchOutcome::Failed => {
+            let _ = app.emit(GAME_LAUNCH_FAILED_EVENT, name);
+        }
+    }
+    Ok(answer)
+}
+
 /// The password typed on the player's own lock screen (Story 6.17): sent to the service only, as
 /// IPC `player_unlock`, and dropped here. The answer is the Hub's outcome (`{outcome, ...}`).
 #[tauri::command]
@@ -468,7 +504,9 @@ fn main() {
             player_lock,
             player_unlock,
             player_extend_options,
-            player_extend
+            player_extend,
+            games,
+            game_launch
         ])
         .on_window_event(|_window, event| {
             // The kiosk is the shell: nothing closes it (admin exit comes in Story 1.20).

@@ -200,6 +200,7 @@ export type { InviteStatus } from "./InviteStatus";
 export type { InvoiceIssue } from "./InvoiceIssue";
 export type { IssuePairingCode } from "./IssuePairingCode";
 export type { KioskCleanupFailed } from "./KioskCleanupFailed";
+export type { KioskGameLaunched } from "./KioskGameLaunched";
 export type { KioskHubState } from "./KioskHubState";
 export type { KioskHubStatus } from "./KioskHubStatus";
 export type { KioskInstall } from "./KioskInstall";

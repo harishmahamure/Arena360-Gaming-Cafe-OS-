@@ -75,6 +75,48 @@ impl KioskLog {
     }
 }
 
+/// Longest game id of a `game.launched`, in characters (a library entry id).
+pub const MAX_GAME_ID_LEN: usize = 64;
+
+/// The payload of `game.launched` (Story 6.23): a player started a library game at this PC. The
+/// Hub names the player and session itself from the device's live session; the kiosk never does.
+/// `name` is the library name at the time, so the log reads the same after a rename.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KioskGameLaunched {
+    pub game_id: String,
+    pub name: String,
+}
+
+impl KioskGameLaunched {
+    /// `game_id` is 1-64 of `A-Z a-z 0-9 _ -`; `name` is 1-80 characters with no control
+    /// character. A failure is `VALIDATION_FAILED` naming the field.
+    pub fn validate(&self) -> Result<(), crate::AppError> {
+        use crate::{AppError, ErrorCode};
+        let id_ok = (1..=MAX_GAME_ID_LEN).contains(&self.game_id.len())
+            && self
+                .game_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+        if !id_ok {
+            return Err(AppError::with_field(
+                ErrorCode::ValidationFailed,
+                "game_id",
+                "game_id must be 1-64 characters of a-z, A-Z, 0-9, '_' or '-'",
+            ));
+        }
+        let len = self.name.chars().count();
+        if len == 0 || len > crate::LIBRARY_NAME_MAX || self.name.chars().any(char::is_control) {
+            return Err(AppError::with_field(
+                ErrorCode::ValidationFailed,
+                "name",
+                "name must be 1-80 characters with no control characters",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// The state of the Kiosk service's link to the Hub.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -100,6 +142,33 @@ pub struct KioskHubStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_game_launch_names_a_game_and_a_name() {
+        let ok = KioskGameLaunched {
+            game_id: "01JABC-def_9".into(),
+            name: "Valorant".into(),
+        };
+        assert!(ok.validate().is_ok());
+        for (id, name, field) in [
+            ("", "X", "game_id"),
+            ("a b", "X", "game_id"),
+            ("a/b", "X", "game_id"),
+            ("a", "", "name"),
+            ("a", "bad\nname", "name"),
+        ] {
+            let bad = KioskGameLaunched {
+                game_id: id.into(),
+                name: name.into(),
+            };
+            assert_eq!(bad.validate().unwrap_err().field.as_deref(), Some(field));
+        }
+        let long = KioskGameLaunched {
+            game_id: "a".repeat(MAX_GAME_ID_LEN + 1),
+            name: "X".into(),
+        };
+        assert!(long.validate().is_err());
+    }
 
     #[test]
     fn wire_forms() {

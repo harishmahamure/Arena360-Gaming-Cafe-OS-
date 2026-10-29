@@ -18,6 +18,7 @@
     onPcScreen,
     onStaffMessage,
     onTheme,
+    onGameLaunchFailed,
     onToast,
     playerEnd,
     TOAST_KINDS,
@@ -236,6 +237,19 @@
     chime(kind);
   }
 
+  /** A game that would not start (Story 6.23): an info toast naming it. */
+  function raiseLaunchFailed(name: string) {
+    toasts = raise(
+      toasts,
+      "player.games.launch_failed",
+      "info",
+      performance.now(),
+      nextId++,
+      t("player.games.launch_failed", { name }),
+    );
+    chime("info");
+  }
+
   /** A staff message: an info toast with its words (Story 6.16). A replay is not raised again. */
   function raiseMessage(id: number, text: string) {
     toasts = raise(toasts, staffToastKey(id), "info", performance.now(), nextId++, text);
@@ -337,6 +351,7 @@
         }),
       );
       add(await onToast(raiseToast));
+      add(await onGameLaunchFailed(raiseLaunchFailed));
       add(
         await onStaffMessage((m) => {
           if (m.fresh) raiseMessage(m.id, m.text);

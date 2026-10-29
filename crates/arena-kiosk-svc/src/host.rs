@@ -81,6 +81,11 @@ pub async fn run_until_with(
     // The installed-software scan (Story 6.4) looks at a Windows PC only.
     #[cfg(windows)]
     runtime.scan(std::sync::Arc::new(crate::scan::windows::WinHost::new()));
+    // The Games tab (Story 6.23) starts games in the player's session.
+    #[cfg(windows)]
+    runtime.games(std::sync::Arc::new(crate::games_windows::WinGames::new(
+        config_path.clone(),
+    )));
     // The session-end cleanup (Story 6.11) too: programs, clipboard, temp files and volume.
     #[cfg(windows)]
     runtime.cleanup(std::sync::Arc::new(

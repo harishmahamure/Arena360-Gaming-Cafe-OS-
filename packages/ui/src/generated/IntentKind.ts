@@ -17,6 +17,7 @@ export type IntentKind =
   | "kiosk.log"
   | "kiosk.process_blocked"
   | "kiosk.cleanup_failed"
+  | "game.launched"
   | "kiosk.scan_reported"
   | "device.admin_exit"
   | "device.admin_relock"

@@ -70,6 +70,9 @@ pub const STAFF_MESSAGES_CLEARED_EVENT: &str = "staff-messages-cleared";
 pub const ATTRACT_EVENT: &str = "attract";
 pub const DISCOVERY_FOUND_EVENT: &str = "discovery-found";
 pub const DISCOVERY_DONE_EVENT: &str = "discovery-done";
+/// The Tauri event of a game that would not start (Story 6.23): the game's name; the HUD raises
+/// "Couldn't start <name> — ask at the counter." as an info toast.
+pub const GAME_LAUNCH_FAILED_EVENT: &str = "game-launch-failed";
 /// The Tauri event the HUD window listens to: Ctrl+Shift+E expands the pill into its panel.
 pub const HUD_EXPAND_EVENT: &str = "hud-expand";
 /// How long the shell waits for the service's answer to a PIN.
@@ -77,7 +80,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// The Tauri commands the webview calls: the `generate_handler!` list in `main.rs`, pinned
 /// against `ipc-names.json` (the list the webview reads) by a test.
 #[cfg(test)]
-const COMMANDS: [&str; 34] = [
+const COMMANDS: [&str; 36] = [
     "report_app_state",
     "hub_status",
     "take_restore_state",
@@ -112,6 +115,8 @@ const COMMANDS: [&str; 34] = [
     "player_unlock",
     "player_extend_options",
     "player_extend",
+    "games",
+    "game_launch",
 ];
 /// How recent the webview's last heartbeat must be for a `ping` to be answered.
 pub const HEARTBEAT_FRESH: Duration = Duration::from_secs(3);
@@ -191,6 +196,33 @@ pub fn call_staff_toast(answer: Option<&Answer>) -> &'static str {
     match answer {
         Some(a) if a.ok => CALL_STAFF_SENT_TOAST,
         _ => RECONNECTING_TOAST,
+    }
+}
+
+/// What the service made of a `game_launch` (Story 6.23).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaunchOutcome {
+    Started,
+    /// The game is running already: its process id, whose window is brought forward.
+    AlreadyRunning(u32),
+    /// It would not start, was refused, or the service did not answer.
+    Failed,
+}
+
+/// Reads the service's answer to a `game_launch`.
+pub fn launch_outcome(answer: Option<&Answer>) -> LaunchOutcome {
+    let Some(a) = answer.filter(|a| a.ok) else {
+        return LaunchOutcome::Failed;
+    };
+    match a.body.get("outcome").and_then(Value::as_str) {
+        Some("started") => LaunchOutcome::Started,
+        Some("already_running") => a
+            .body
+            .get("pid")
+            .and_then(Value::as_u64)
+            .and_then(|p| u32::try_from(p).ok())
+            .map_or(LaunchOutcome::Started, LaunchOutcome::AlreadyRunning),
+        _ => LaunchOutcome::Failed,
     }
 }
 
@@ -736,6 +768,10 @@ mod tests {
         assert_eq!(names["events"]["discoveryFound"], DISCOVERY_FOUND_EVENT);
         assert_eq!(names["events"]["discoveryDone"], DISCOVERY_DONE_EVENT);
         assert_eq!(names["events"]["hudExpand"], HUD_EXPAND_EVENT);
+        assert_eq!(
+            names["events"]["gameLaunchFailed"],
+            GAME_LAUNCH_FAILED_EVENT
+        );
         let mut listed: Vec<&str> = names["commands"]
             .as_object()
             .unwrap()
@@ -746,6 +782,32 @@ mod tests {
         let mut ours = COMMANDS.to_vec();
         ours.sort_unstable();
         assert_eq!(listed, ours);
+    }
+
+    #[test]
+    fn a_launch_answer_is_started_already_running_or_failed() {
+        let answer = |ok: bool, body: Value| Answer {
+            ok,
+            code: None,
+            body,
+        };
+        let started = answer(true, serde_json::json!({"outcome": "started"}));
+        assert_eq!(launch_outcome(Some(&started)), LaunchOutcome::Started);
+        let running = answer(
+            true,
+            serde_json::json!({"outcome": "already_running", "pid": 4242}),
+        );
+        assert_eq!(
+            launch_outcome(Some(&running)),
+            LaunchOutcome::AlreadyRunning(4242)
+        );
+        let failed = answer(true, serde_json::json!({"outcome": "failed"}));
+        assert_eq!(launch_outcome(Some(&failed)), LaunchOutcome::Failed);
+        let refused = answer(false, Value::Null);
+        assert_eq!(launch_outcome(Some(&refused)), LaunchOutcome::Failed);
+        assert_eq!(launch_outcome(None), LaunchOutcome::Failed);
+        let odd = answer(true, serde_json::json!({"outcome": "later"}));
+        assert_eq!(launch_outcome(Some(&odd)), LaunchOutcome::Failed);
     }
 
     #[test]

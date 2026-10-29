@@ -4,6 +4,8 @@
   import type { MessageKey } from "@arena/ui/messages";
   import AccountMenu from "./AccountMenu.svelte";
   import { callStaff } from "./bridge";
+  import Games from "./Games.svelte";
+  import type { GameCard } from "./games";
   import { INFO_TOAST_MS } from "./hud";
   import MessagesBell from "./MessagesBell.svelte";
   import VolumeControl from "./VolumeControl.svelte";
@@ -26,6 +28,9 @@
     balance = null,
     locale = null,
     connected = false,
+    games = null,
+    gameRunning = false,
+    onlaunch = () => {},
   }: {
     session: ShellSession;
     /** The branch logo (a `data:` URI), or `null` for the Arena 360 mark. */
@@ -42,6 +47,12 @@
     locale?: SnapshotLocale | null;
     /** The Hub link is up (the account menu's Hub-dependent rows need it). */
     connected?: boolean;
+    /** The Games tab's tiles (Story 6.23); `null` until the service has answered. */
+    games?: GameCard[] | null;
+    /** A game is running: the shell's signal, wired into every `game-media` inside. */
+    gameRunning?: boolean;
+    /** A game tile was activated. */
+    onlaunch?: (game: GameCard) => void;
   } = $props();
 
   const LABELS: Record<Tab, MessageKey> = {
@@ -215,7 +226,13 @@
   <main class="content" aria-label={t(LABELS[tab])}>
     <h1 class="type-kiosk-headline" data-testid="session-device">{session.device}</h1>
     {@render status?.()}
-    <p class="empty type-kiosk-body" data-testid={"tab-empty-" + tab}>{t("player.shell.empty")}</p>
+    {#if tab === "games"}
+      <Games {games} {gameRunning} {onlaunch} />
+    {:else}
+      <p class="empty type-kiosk-body" data-testid={"tab-empty-" + tab}>
+        {t("player.shell.empty")}
+      </p>
+    {/if}
   </main>
 </div>
 

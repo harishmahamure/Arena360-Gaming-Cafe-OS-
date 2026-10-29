@@ -194,6 +194,25 @@ pub fn device_has_live_session(conn: &Connection, device_id: &str) -> Result<boo
     .map_err(db_error)
 }
 
+/// The live session on `device_id` (same states as [`device_has_live_session`]): its id and its
+/// player (`None` for a guest), if any. If several (which the engine does not allow), the
+/// earliest started.
+pub fn live_session_on_device(
+    conn: &Connection,
+    device_id: &str,
+) -> Result<Option<(String, Option<String>)>, AppError> {
+    conn.query_row(
+        "SELECT id, player_id FROM sessions
+         WHERE device_id = ?1 AND (state IN ('active', 'paused', 'grace')
+                                   OR (state = 'expired' AND ended_at IS NULL))
+         ORDER BY started_at, id LIMIT 1",
+        [device_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .optional()
+    .map_err(db_error)
+}
+
 /// The device a player has a live session on (`active`, `paused`, `grace`, or `expired` and not
 /// yet ended), if any. If several (which the engine does not allow), the earliest started.
 pub fn live_session_device_of_player(

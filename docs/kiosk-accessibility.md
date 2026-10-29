@@ -46,3 +46,15 @@ Borderless-fullscreen games are not affected: the HUD draws over them like any w
   "Staff handles" mode shows "Time's up — see the counter." and **suspends** the player's programs
   (the game is frozen, not closed) until staff act: an Extend from the Hub thaws them and lifts the
   lock; End ends them as part of the session-end cleanup.
+
+## The Games tab (Story 6.23)
+
+- Every game is a real button (`game-tile`, 140 × 196, name on the tile scrim, or centred on
+  `surface` with no cover). Tab moves through the tiles in name order; Enter or Space starts the
+  game, and the focus ring is the 3px outline used across the shell.
+- A running game's tile is named "<game>, running" for a screen reader and wears a "Running" chip.
+  Activating it again brings the game's window forward instead of starting a second copy.
+- A game that will not start raises an info toast on the HUD ("Couldn't start <game> — ask at the
+  counter."); it uses the same polite live region as every other toast.
+- While any game is running the shell stops all background video (the cover shows instead), so the
+  game gets the PC's decode and GPU time.

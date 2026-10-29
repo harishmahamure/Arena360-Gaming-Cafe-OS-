@@ -5,7 +5,7 @@ use ts_rs::TS;
 
 use crate::actor::{Actor, ElevatedBy};
 use crate::admin::{DeviceAdminExit, DeviceAdminRelock, DeviceAdminUnlock};
-use crate::kiosk::KioskLog;
+use crate::kiosk::{KioskGameLaunched, KioskLog};
 use crate::operating::AdsConsentSet;
 use crate::pc_command::{DeviceMessage, DevicePower, DeviceScreen};
 use crate::permission::{Permission, Requirement};
@@ -82,6 +82,10 @@ pub enum IntentKind {
     /// event and raises a `check_pc` alert on the tile. Queued offline like `kiosk.log`.
     #[serde(rename = "kiosk.cleanup_failed")]
     KioskCleanupFailed,
+    /// A player started a library game at this PC (device actor); the Hub records `game.launched`
+    /// with the player, device, game and time. Queued offline and replayed like `kiosk.log`.
+    #[serde(rename = "game.launched")]
+    KioskGameLaunched,
     /// The kiosk scanned its PC for installed games and launchers (device actor); the Hub keeps
     /// the latest report per device. Queued offline and replayed like `kiosk.log`.
     #[serde(rename = "kiosk.scan_reported")]
@@ -335,7 +339,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 107] = [
+    pub const ALL: [IntentKind; 108] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -349,6 +353,7 @@ impl IntentKind {
         Self::KioskLog,
         Self::KioskProcessBlocked,
         Self::KioskCleanupFailed,
+        Self::KioskGameLaunched,
         Self::KioskScanReported,
         Self::DeviceAdminExit,
         Self::DeviceAdminRelock,
@@ -461,6 +466,7 @@ impl IntentKind {
             Self::KioskLog => "kiosk.log",
             Self::KioskProcessBlocked => "kiosk.process_blocked",
             Self::KioskCleanupFailed => "kiosk.cleanup_failed",
+            Self::KioskGameLaunched => "game.launched",
             Self::KioskScanReported => "kiosk.scan_reported",
             Self::DeviceAdminExit => "device.admin_exit",
             Self::DeviceAdminRelock => "device.admin_relock",
@@ -606,6 +612,7 @@ impl IntentKind {
             Self::KioskLog
             | Self::KioskProcessBlocked
             | Self::KioskCleanupFailed
+            | Self::KioskGameLaunched
             | Self::KioskScanReported => IntentCategory::Kiosk,
             Self::ProductUpsert
             | Self::ProductDelete
@@ -722,6 +729,7 @@ impl IntentKind {
             Self::KioskLog
             | Self::KioskProcessBlocked
             | Self::KioskCleanupFailed
+            | Self::KioskGameLaunched
             | Self::KioskScanReported
             | Self::DeviceTestSessionCompleted => Requirement::Device,
             // The kiosk itself acts; the approving manager must hold `device.remote`
@@ -829,6 +837,7 @@ impl IntentKind {
             | Self::KioskLog
             | Self::KioskProcessBlocked
             | Self::KioskCleanupFailed
+            | Self::KioskGameLaunched
             | Self::KioskScanReported
             | Self::DeviceAdminExit
             | Self::DeviceAdminRelock
@@ -1368,6 +1377,8 @@ pub enum IntentPayload {
     KioskProcessBlocked(KioskProcessBlocked),
     #[serde(rename = "kiosk.cleanup_failed")]
     KioskCleanupFailed(KioskCleanupFailed),
+    #[serde(rename = "game.launched")]
+    KioskGameLaunched(KioskGameLaunched),
     #[serde(rename = "kiosk.scan_reported")]
     KioskScanReported(KioskScanReported),
     #[serde(rename = "device.admin_exit")]
@@ -1574,6 +1585,7 @@ impl IntentPayload {
             Self::KioskLog(_) => IntentKind::KioskLog,
             Self::KioskProcessBlocked(_) => IntentKind::KioskProcessBlocked,
             Self::KioskCleanupFailed(_) => IntentKind::KioskCleanupFailed,
+            Self::KioskGameLaunched(_) => IntentKind::KioskGameLaunched,
             Self::KioskScanReported(_) => IntentKind::KioskScanReported,
             Self::DeviceAdminExit(_) => IntentKind::DeviceAdminExit,
             Self::DeviceAdminRelock(_) => IntentKind::DeviceAdminRelock,
@@ -2062,6 +2074,7 @@ mod tests {
                 "kiosk.log"
                 | "kiosk.process_blocked"
                 | "kiosk.cleanup_failed"
+                | "game.launched"
                 | "kiosk.scan_reported"
                 | "device.test_session.completed" => Requirement::Device,
                 other => panic!("{other} has no pinned requirement"),

@@ -14,7 +14,8 @@
     "attract": "attract",
     "discoveryFound": "discovery-found",
     "discoveryDone": "discovery-done",
-    "hudExpand": "hud-expand"
+    "hudExpand": "hud-expand",
+    "gameLaunchFailed": "game-launch-failed"
   },
   "commands": {
     "reportAppState": "report_app_state",
@@ -50,6 +51,8 @@
     "playerLock": "player_lock",
     "playerUnlock": "player_unlock",
     "playerExtendOptions": "player_extend_options",
-    "playerExtend": "player_extend"
+    "playerExtend": "player_extend",
+    "games": "games",
+    "gameLaunch": "game_launch"
   }
 }

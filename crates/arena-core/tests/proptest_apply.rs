@@ -129,6 +129,14 @@ enum Op {
         stale: bool,
         who: Index,
     },
+    /// `game.launched` (Story 6.23) by a registered device: a well-formed one writes exactly one
+    /// `device_events` row `game_launched` (unless the device was revoked meanwhile: then it is
+    /// refused `PERMISSION_DENIED`); a bad game id, a `base_rev`, or a non-device actor is refused
+    /// and writes nothing.
+    GameLaunch {
+        slot: u8,
+        kind: u8,
+    },
     /// `kiosk.scan_reported` (Story 6.4) by a registered kiosk: a good report at a random time
     /// before now, or one with too many entries, a control character, an empty path or a future
     /// time. It is stored only when it is valid and newer than the device's stored scan; a refusal
@@ -640,6 +648,7 @@ fn op() -> impl Strategy<Value = Op> {
                 stale,
                 who,
             }),
+        1 => (0..3u8, 0..4u8).prop_map(|(slot, kind)| Op::GameLaunch { slot, kind }),
         2 => (0..3u8, 0..8u8, 0..4u8, 1..=60_000i64)
             .prop_map(|(slot, kind, entries, back_ms)| Op::Scan {
                 slot,
@@ -2301,6 +2310,47 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             } else {
                 prop_assert!(out.is_ok(), "{:?}", out);
                 prop_assert!(hub.change_count() > before);
+            }
+        }
+        Op::GameLaunch { slot, kind } => {
+            if !hub.bootstrapped {
+                return Ok(());
+            }
+            let devices = hub.reader.rows(Table::Devices).unwrap();
+            let Some(row) = devices.get(usize::from(*slot)) else {
+                return Ok(());
+            };
+            let device = text(row, "device_id");
+            let launched = arena_proto::KioskGameLaunched {
+                game_id: if *kind == 1 {
+                    "not a game".into()
+                } else {
+                    "01JGAMEAAAAAAAAAAAAAAAAAAA".into()
+                },
+                name: "Game".into(),
+            };
+            let mut intent = hub.intent(IntentPayload::KioskGameLaunched(launched), None);
+            intent.actor = Actor {
+                kind: if *kind == 2 {
+                    ActorKind::System
+                } else {
+                    ActorKind::Device
+                },
+                id: device,
+            };
+            if *kind == 3 {
+                intent.base_rev = Some(1);
+            }
+            let events = |hub: &Hub| hub.reader.rows(Table::DeviceEvents).unwrap().len();
+            let (before, rows) = (hub.change_count(), events(hub));
+            let out = hub.submit_new(intent);
+            if *kind == 0 && out.is_ok() {
+                prop_assert_eq!(hub.change_count(), before + 1);
+                prop_assert_eq!(events(hub), rows + 1);
+            } else {
+                prop_assert!(out.is_err(), "{:?}", out);
+                prop_assert_eq!(hub.change_count(), before);
+                prop_assert_eq!(events(hub), rows);
             }
         }
         Op::Scan {

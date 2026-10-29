@@ -8,13 +8,19 @@
 //! `kiosk.cleanup_failed` (Story 6.11) writes an `error` row `cleanup_failed` with the detail
 //! `<step>: <detail>` and, in the same transaction, a `check_pc` alert for the device unless one
 //! is already open.
+//!
+//! `game.launched` (Story 6.23) writes an `info` row `game_launched` whose detail is the JSON
+//! `{game_id, name, session_id, player_id}`: the session and player are the ones live on the
+//! device when the Hub applies it (a guest has `player_id: null`, no session at all gives both
+//! `null`).
 
 use arena_proto::{
-    AlertKind, AppError, ErrorCode, Intent, KioskCleanupFailed, KioskLog, KioskProcessBlocked,
+    AlertKind, AppError, ErrorCode, Intent, KioskCleanupFailed, KioskGameLaunched, KioskLog,
+    KioskProcessBlocked,
 };
 use arena_store::{
     ChangeOp, NewAlert, NewDeviceEvent, RowKey, StoreTx, current_branch_id, find_open_alert,
-    insert_alert, insert_device_event,
+    insert_alert, insert_device_event, live_session_on_device,
 };
 
 use super::Target;
@@ -34,12 +40,15 @@ pub(super) fn load(tx: &StoreTx<'_>) -> Result<Target, AppError> {
 pub const PROCESS_BLOCKED_CODE: &str = "process_blocked";
 /// The `device_events.code` of a `kiosk.cleanup_failed` row.
 pub const CLEANUP_FAILED_CODE: &str = "cleanup_failed";
+/// The `device_events.code` of a `game.launched` row.
+pub const GAME_LAUNCHED_CODE: &str = "game_launched";
 
 /// A kiosk event's fields, from either payload.
 pub(super) enum Event<'a> {
     Log(&'a KioskLog),
     ProcessBlocked(&'a KioskProcessBlocked),
     CleanupFailed(&'a KioskCleanupFailed),
+    GameLaunched(&'a KioskGameLaunched),
 }
 
 pub(super) fn validate(
@@ -57,6 +66,7 @@ pub(super) fn validate(
         Event::Log(log) => log.validate()?,
         Event::ProcessBlocked(p) => p.validate()?,
         Event::CleanupFailed(p) => p.validate()?,
+        Event::GameLaunched(p) => p.validate()?,
     }
     if branch.is_none() {
         return Err(AppError::new(
@@ -89,6 +99,17 @@ pub(super) fn mutate(
         Event::CleanupFailed(c) => {
             detail = c.event_detail();
             ("error", CLEANUP_FAILED_CODE, detail.as_str())
+        }
+        Event::GameLaunched(g) => {
+            let (session_id, player_id) = live_session_on_device(tx, &intent.actor.id)?.unzip();
+            detail = serde_json::json!({
+                "game_id": g.game_id,
+                "name": g.name,
+                "session_id": session_id,
+                "player_id": player_id.flatten(),
+            })
+            .to_string();
+            ("info", GAME_LAUNCHED_CODE, detail.as_str())
         }
     };
     let event_id = ulid::Ulid::generate().to_string();

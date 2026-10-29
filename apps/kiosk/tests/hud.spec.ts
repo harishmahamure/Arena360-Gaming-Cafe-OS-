@@ -885,3 +885,27 @@ test("the grace clock never goes below zero and milestones are 30 and 10 seconds
   expect(graceClock(-3)).toBe("0:00");
   expect([120, 31, 30, 11, 10, 0].map(graceMilestone)).toEqual([null, null, 30, 30, 10, 10]);
 });
+
+test("a game that would not start raises an info toast naming it, gone after 8 seconds", async ({
+  page,
+}) => {
+  await openHud(page);
+  await attract(page);
+  await page.waitForFunction(
+    (e) =>
+      (window as unknown as { __shell: { listening: (e: string) => boolean } }).__shell.listening(
+        e,
+      ),
+    names.events.gameLaunchFailed,
+  );
+  await emit(page, names.events.gameLaunchFailed, "Valorant");
+  await expect(page.getByTestId("toast")).toHaveAttribute("data-kind", "info");
+  await expect(page.getByTestId("toast-text")).toHaveText(
+    en["player.games.launch_failed"].replace("{name}", "Valorant"),
+  );
+  expect(await serious(page)).toEqual([]);
+  // A second failure replaces the first rather than stacking.
+  await emit(page, names.events.gameLaunchFailed, "Apex");
+  await expect(page.getByTestId("toast")).toHaveCount(1);
+  await expect(page.getByTestId("toast-text")).toContainText("Apex");
+});

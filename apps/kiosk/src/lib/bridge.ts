@@ -26,6 +26,7 @@ import {
   type LogoutOutcome,
   type UnlockOutcome,
 } from "./account";
+import { gamesOf, launchOf, type GameCard, type GamesView, type LaunchResult } from "./games";
 import { LOGIN_TIMEOUT_MS, outcomeOf, type LoginOutcome } from "./login";
 import { PICKER_TIMEOUT_MS, plansOf, startOf, type PlansOutcome, type StartOutcome } from "./plans";
 import { SIGNUP_TIMEOUT_MS, signupOutcomeOf, type SignupOutcome } from "./signup";
@@ -45,6 +46,7 @@ export const TEST_SESSION_ENDED_EVENT = names.events.testSessionEnded;
 export const DISCOVERY_FOUND_EVENT = names.events.discoveryFound;
 export const DISCOVERY_DONE_EVENT = names.events.discoveryDone;
 export const HUD_EXPAND_EVENT = names.events.hudExpand;
+export const GAME_LAUNCH_FAILED_EVENT = names.events.gameLaunchFailed;
 const CMD = names.commands;
 /** How often the webview tells the shell it is alive (the shell answers pings only then). */
 export const HEARTBEAT_MS = 1000;
@@ -557,6 +559,35 @@ export async function playerAccount(): Promise<AccountOutcome> {
 export async function playerEnd(): Promise<LogoutOutcome> {
   if (!inTauri()) return { kind: "unreachable" };
   return endOf(await ask(CMD.playerEnd));
+}
+
+/**
+ * The Games tab (Story 6.23): the library games this PC has and whether one is running. `null`
+ * outside Tauri, or when the service does not answer.
+ */
+export async function loadGames(): Promise<GamesView | null> {
+  if (!inTauri()) return null;
+  const answer = await ask(CMD.games);
+  return isAnswer(answer) && answer.ok ? gamesOf(answer.body) : null;
+}
+
+/**
+ * Starts a game from its tile (Story 6.23). The service checks it against the library and the
+ * allow-list; the shell brings a running game's window forward and raises the HUD toast when the
+ * start fails, so the caller only reads the result.
+ */
+export async function launchGame(card: Pick<GameCard, "id" | "name">): Promise<LaunchResult> {
+  if (!inTauri()) return "failed";
+  const answer = await ask(CMD.gameLaunch, { id: card.id, name: card.name });
+  return isAnswer(answer) && answer.ok ? launchOf(answer.body) : "failed";
+}
+
+/** Calls `cb` with the game's name when a game would not start (the HUD words the toast). */
+export async function onGameLaunchFailed(cb: (name: string) => void): Promise<() => void> {
+  if (!inTauri()) return () => {};
+  return listen<unknown>(GAME_LAUNCH_FAILED_EVENT, (e) => {
+    if (typeof e.payload === "string") cb(e.payload);
+  });
 }
 
 /** Locks the screen for the player (Story 6.17); `true`: the service covered it. */

@@ -70,6 +70,7 @@ fn ctx_in(dir: &std::path::Path, retry: Duration) -> Arc<Ctx> {
         closer: Mutex::new(None),
         freezer: Mutex::new(None),
         cleanup,
+        games: crate::games::GameState::default(),
     })
 }
 

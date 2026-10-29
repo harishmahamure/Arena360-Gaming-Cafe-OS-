@@ -184,8 +184,9 @@ pub use sessions::{
     hold_session_expired, insert_effect, insert_extension_order, insert_order, insert_order_line,
     insert_payment, insert_pos_order, insert_product_line, insert_segment, insert_session,
     list_live_sessions, list_open_order_lines, list_open_orders, list_order_line_ids,
-    list_payment_ids, list_pos_sales, list_segments, live_session_device_of_player, mark_forced,
-    next_guest_no, reopen_order, reopen_segments, reopen_session, settle_order, sum_reserved_minor,
+    list_payment_ids, list_pos_sales, list_segments, live_session_device_of_player,
+    live_session_on_device, mark_forced, next_guest_no, reopen_order, reopen_segments,
+    reopen_session, settle_order, sum_reserved_minor,
 };
 pub use sessions::{
     LineRow, OrderVoid, PRODUCT_LINE_BASE, PlacedLine, add_order_amount, count_product_lines,

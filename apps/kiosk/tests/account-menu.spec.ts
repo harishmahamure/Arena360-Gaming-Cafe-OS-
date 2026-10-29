@@ -174,6 +174,7 @@ test("the account chip and the time chip each open the menu with name, balance a
     "Messages",
     "Account",
     /^Extend/,
+    "PC settings",
     "Lock",
     "Log out",
   ]);
@@ -213,7 +214,12 @@ test("a guest's menu has no Balance and no Lock, and a postpaid chip says time p
   await page.getByTestId("account-chip").click();
   await expect(page.getByTestId("account-menu-name")).toHaveText("Guest 3");
   await expect(page.getByTestId("account-menu-balance")).toHaveCount(0);
-  await expect(menu(page).getByRole("button")).toHaveText(["Messages", "I'm done", "Log out"]);
+  await expect(menu(page).getByRole("button")).toHaveText([
+    "Messages",
+    "PC settings",
+    "I'm done",
+    "Log out",
+  ]);
   await expect(page.getByTestId("account-menu-time")).toHaveText(/^Time played /);
 });
 
@@ -453,6 +459,7 @@ test("a postpaid menu lists I'm done above Log out; prepaid has none", async ({ 
     "Balance",
     "Messages",
     "Account",
+    "PC settings",
     "Lock",
     "I'm done",
     "Log out",
@@ -575,11 +582,15 @@ test("prepaid sessions get an Extend row above Lock with the Ctrl+Shift+E key ca
   const order = await menu(page)
     .locator("[data-testid^=account-row-]:not([data-testid$=keys])")
     .evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
-  expect(order.indexOf("account-row-extend")).toBe(order.indexOf("account-row-lock") - 1);
-  // Arrow keys reach it between Account and Lock.
+  // Extend, then PC settings (Story 6.35), then Lock.
+  expect(order.indexOf("account-row-extend")).toBe(order.indexOf("account-row-pc-settings") - 1);
+  expect(order.indexOf("account-row-pc-settings")).toBe(order.indexOf("account-row-lock") - 1);
+  // Arrow keys reach it between Account and PC settings.
   await row(page, "account").focus();
   await page.keyboard.press("ArrowDown");
   await expect(extend).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(row(page, "pc-settings")).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await expect(row(page, "lock")).toBeFocused();
   expect(await serious(page)).toEqual([]);

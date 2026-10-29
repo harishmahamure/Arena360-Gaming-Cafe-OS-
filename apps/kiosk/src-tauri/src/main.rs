@@ -254,6 +254,30 @@ async fn player_password_change(
         .await)
 }
 
+/// The PC settings panel's content (Story 6.35): IPC `pc_settings`, answered with the service's
+/// `PcSettingsPanel` as the body.
+#[tauri::command]
+async fn pc_settings(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
+    Ok(service_request(&bridge, "pc_settings", serde_json::Value::Null).await)
+}
+
+/// A PC settings change (Story 6.35): IPC `pc_settings_set` with the chosen fields; the service
+/// applies it at once and the Hub saves a profiled player's choice. The answer is
+/// `PcSettingsChanged`.
+#[tauri::command]
+async fn pc_settings_set(
+    patch: serde_json::Value,
+    bridge: tauri::State<'_, Arc<Bridge>>,
+) -> Result<Option<Answer>, ()> {
+    Ok(service_request(&bridge, "pc_settings_set", patch).await)
+}
+
+/// "Keep this" on a new display mode (Story 6.35): IPC `pc_settings_keep`.
+#[tauri::command]
+async fn pc_settings_keep(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
+    Ok(service_request(&bridge, "pc_settings_keep", serde_json::Value::Null).await)
+}
+
 /// Log out from the account menu (Story 6.17): IPC `player_end`, answered with the Hub's
 /// `player.end_result`. The Hub then locks the PC: the cleanup runs and the screen follows.
 #[tauri::command]
@@ -637,6 +661,9 @@ fn main() {
             player_account,
             player_account_page,
             player_password_change,
+            pc_settings,
+            pc_settings_set,
+            pc_settings_keep,
             player_end,
             player_lock,
             player_unlock,

@@ -64,6 +64,7 @@ import type { PlanUpsert } from "./PlanUpsert";
 import type { PlayerCreate } from "./PlayerCreate";
 import type { PlayerPasswordChange } from "./PlayerPasswordChange";
 import type { PlayerPasswordReset } from "./PlayerPasswordReset";
+import type { PlayerPcSettingsSet } from "./PlayerPcSettingsSet";
 import type { PlayerUpdate } from "./PlayerUpdate";
 import type { PosSale } from "./PosSale";
 import type { PosSaleReverted } from "./PosSaleReverted";
@@ -193,6 +194,7 @@ export type IntentPayload =
   | ({ kind: "player.update" } & PlayerUpdate)
   | ({ kind: "player.password_reset" } & PlayerPasswordReset)
   | ({ kind: "player.password_change" } & PlayerPasswordChange)
+  | ({ kind: "player.pc_settings_set" } & PlayerPcSettingsSet)
   | ({ kind: "session.start" } & SessionStart)
   | ({ kind: "session.end" } & SessionEnd)
   | ({ kind: "session.settle" } & SessionSettle)

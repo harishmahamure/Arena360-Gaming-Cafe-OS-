@@ -38,6 +38,9 @@ pub mod operating;
 pub mod pairing;
 pub mod paths;
 pub mod pc;
+pub mod pc_settings;
+#[cfg(windows)]
+pub mod pc_settings_windows;
 pub mod player_login;
 pub mod player_session;
 pub mod player_signup;

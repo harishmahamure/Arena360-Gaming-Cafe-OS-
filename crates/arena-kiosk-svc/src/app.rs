@@ -44,6 +44,9 @@
 //!   Story 6.31).
 //! - `call_staff` (Story 6.15) is forwarded the same way as `device.call_staff`; `volume` reads the
 //!   slider level, and `volume{percent}` sets the system volume ([`crate::volume`]).
+//! - `pc_settings`, `pc_settings_set{..}` and `pc_settings_keep` (Story 6.35) drive the PC settings
+//!   panel ([`crate::pc_settings`]): the panel's content, a change applied at once (and saved by
+//!   the Hub for a profiled player), and "Keep this" for a new display mode.
 
 use std::sync::Arc;
 
@@ -793,6 +796,30 @@ async fn serve(
                 let out = out_tx.clone();
                 tokio::spawn(async move {
                     let reply = reply_of(rid, crate::player_session::call_staff(&ctx).await);
+                    let _ = out.send(reply).await;
+                });
+            }
+            Ok(IpcMsg::Request { rid, kind, .. }) if kind == "pc_settings" => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(rid, crate::pc_settings::view(&ctx).await);
+                    let _ = out.send(reply).await;
+                });
+            }
+            Ok(IpcMsg::Request { rid, kind, body }) if kind == "pc_settings_set" => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(rid, crate::pc_settings::change(&ctx, body).await);
+                    let _ = out.send(reply).await;
+                });
+            }
+            Ok(IpcMsg::Request { rid, kind, .. }) if kind == "pc_settings_keep" => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(rid, crate::pc_settings::keep(&ctx).await);
                     let _ = out.send(reply).await;
                 });
             }

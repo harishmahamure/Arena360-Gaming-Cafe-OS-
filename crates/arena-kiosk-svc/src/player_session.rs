@@ -22,6 +22,10 @@
 //! `shop_place{lines}` (Story 6.31) forwards the cart as `shop.place`; the Hub finds the session,
 //! builds the order and answers typed.
 //!
+//! PC settings (Story 6.35) add `pc_settings` and `pc_settings_set`, forwarded as
+//! `player.pc_settings` and `player.pc_settings_set`: the Hub reads and saves a profiled player's
+//! choices; [`crate::pc_settings`] decides when to ask and applies them on the PC.
+//!
 //! The service decides nothing and keeps no player context: the Hub remembers who logged in on this
 //! PC and builds the session itself, so the app never names a player. Nothing is queued: with no
 //! live connection (or no answer in time) the app gets `HUB_SLOW` and shows "Counter is
@@ -33,8 +37,8 @@ use std::sync::Arc;
 use arena_kiosk_core::ipc::SecretPin;
 use arena_kiosk_core::{ClientError, HubClient};
 use arena_proto::{
-    AppError, ErrorCode, FrameBody, LockReason, PlayerChoice, PlayerExtend, PlayerUnlockResult,
-    ShopImageRequest, ShopPlace,
+    AppError, ErrorCode, FrameBody, LockReason, PcSettings, PlayerChoice, PlayerExtend,
+    PlayerUnlockResult, ShopImageRequest, ShopPlace,
 };
 use serde_json::Value;
 
@@ -164,6 +168,35 @@ pub async fn change_password(
             other => Err(unexpected("player.password_change", other)),
         },
         Err(e) => Err(failed("player.password_change", e)),
+    }
+}
+
+/// Asks the Hub for the PC settings saved for the player on this PC's session (Story 6.35); empty
+/// for a guest and for a player who saved nothing. Nothing is queued.
+pub async fn pc_settings(ctx: &Ctx) -> Result<PcSettings, AppError> {
+    let client = client(ctx)?;
+    match client.request("player.pc_settings", Value::Null).await {
+        Ok(frame) => match frame.body {
+            FrameBody::PlayerPcSettingsResult(r) => Ok(r.settings),
+            other => Err(unexpected("player.pc_settings", other)),
+        },
+        Err(e) => Err(failed("player.pc_settings", e)),
+    }
+}
+
+/// Asks the Hub to save a PC settings change for the player on this PC's session (Story 6.35):
+/// `true` when it stored it, `false` for a guest. Nothing is queued or retried: with no live link
+/// the app gets `HUB_SLOW`; the change stays applied on the PC for the session.
+pub async fn pc_settings_set(ctx: &Ctx, patch: &PcSettings) -> Result<bool, AppError> {
+    let client = client(ctx)?;
+    let body = serde_json::to_value(patch)
+        .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string()))?;
+    match client.request("player.pc_settings_set", body).await {
+        Ok(frame) => match frame.body {
+            FrameBody::PlayerPcSettingsSetResult(r) => Ok(r.saved),
+            other => Err(unexpected("player.pc_settings_set", other)),
+        },
+        Err(e) => Err(failed("player.pc_settings_set", e)),
     }
 }
 

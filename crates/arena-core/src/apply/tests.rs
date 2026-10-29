@@ -46,6 +46,7 @@ mod order_line;
 mod order_place;
 mod order_ready;
 mod order_void;
+mod pc_settings;
 mod people_reports;
 mod plans;
 mod player_account_page;
@@ -4237,16 +4238,17 @@ mod process_lists {
         let applied = f.writer.seed_defaults().await.unwrap().unwrap();
         let mut ids: Vec<&str> = applied.changes.iter().map(|c| c.row_id.as_str()).collect();
         ids.sort_unstable();
-        assert_eq!(ids.len(), 9);
+        assert_eq!(ids.len(), 10);
         assert!(ids[0].ends_with("/kiosk.booster_close"), "{ids:?}");
         assert!(ids[1].ends_with("/kiosk.booster_power_plan"), "{ids:?}");
         assert!(ids[2].ends_with("/kiosk.booster_priority"), "{ids:?}");
-        assert!(ids[3].ends_with("/kiosk.library"), "{ids:?}");
-        assert!(ids[4].ends_with("/kiosk.logo"), "{ids:?}");
-        assert!(ids[5].ends_with("/kiosk.process_allow"), "{ids:?}");
-        assert!(ids[6].ends_with("/kiosk.process_block"), "{ids:?}");
-        assert!(ids[7].ends_with("/kiosk.process_mode"), "{ids:?}");
-        assert!(ids[8].ends_with("/kiosk.volume_default"), "{ids:?}");
+        assert!(ids[3].ends_with("/kiosk.display_modes"), "{ids:?}");
+        assert!(ids[4].ends_with("/kiosk.library"), "{ids:?}");
+        assert!(ids[5].ends_with("/kiosk.logo"), "{ids:?}");
+        assert!(ids[6].ends_with("/kiosk.process_allow"), "{ids:?}");
+        assert!(ids[7].ends_with("/kiosk.process_block"), "{ids:?}");
+        assert!(ids[8].ends_with("/kiosk.process_mode"), "{ids:?}");
+        assert!(ids[9].ends_with("/kiosk.volume_default"), "{ids:?}");
         assert_eq!(
             setting(&reopen(&f), "kiosk.process_block")["value"],
             RowValue::Text(DEFAULT_PROCESS_BLOCK.into())

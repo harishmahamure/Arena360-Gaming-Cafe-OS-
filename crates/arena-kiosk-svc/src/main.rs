@@ -47,6 +47,7 @@ fn main() -> ExitCode {
         } => lockdown(data_dir(d), action, player_user),
         Command::CleanupHelper(task) => cleanup_helper(task),
         Command::WindowWatch(pid) => window_watch(pid),
+        Command::PcSettingsHelper(task) => pc_settings_helper(task),
         #[cfg(feature = "dev-fixtures")]
         Command::DevProvision {
             hub,
@@ -256,6 +257,25 @@ fn cleanup_helper(task: HelperTask) -> ExitCode {
 #[cfg(not(windows))]
 fn cleanup_helper(_task: HelperTask) -> ExitCode {
     eprintln!("arena-kiosk-svc: cleanup-helper is Windows only");
+    ExitCode::from(EXIT_NOT_WINDOWS)
+}
+
+/// The PC settings panel's player-session part (Story 6.35): the service starts this in the
+/// player's session, where the mouse, display, sound output and keyboard layout are.
+#[cfg(windows)]
+fn pc_settings_helper(task: arena_kiosk_svc::cli::PcTask) -> ExitCode {
+    match arena_kiosk_svc::pc_settings_windows::run_helper(task) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("pc-settings: {e}");
+            ExitCode::from(EXIT_FAILURE)
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn pc_settings_helper(_task: arena_kiosk_svc::cli::PcTask) -> ExitCode {
+    eprintln!("arena-kiosk-svc: pc-settings is Windows only");
     ExitCode::from(EXIT_NOT_WINDOWS)
 }
 

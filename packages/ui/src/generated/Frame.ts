@@ -9,6 +9,7 @@ import type { IntentResult } from "./IntentResult";
 import type { IntentSubmit } from "./IntentSubmit";
 import type { MostPlayed } from "./MostPlayed";
 import type { PcAck } from "./PcAck";
+import type { PcSettings } from "./PcSettings";
 import type { PlayerAccountPage } from "./PlayerAccountPage";
 import type { PlayerAccountResult } from "./PlayerAccountResult";
 import type { PlayerAuthResult } from "./PlayerAuthResult";
@@ -19,6 +20,8 @@ import type { PlayerExtend } from "./PlayerExtend";
 import type { PlayerExtendOptions } from "./PlayerExtendOptions";
 import type { PlayerExtendResult } from "./PlayerExtendResult";
 import type { PlayerPasswordChangeResult } from "./PlayerPasswordChangeResult";
+import type { PlayerPcSettingsResult } from "./PlayerPcSettingsResult";
+import type { PlayerPcSettingsSetResult } from "./PlayerPcSettingsSetResult";
 import type { PlayerPlansResult } from "./PlayerPlansResult";
 import type { PlayerSignup } from "./PlayerSignup";
 import type { PlayerSignupResult } from "./PlayerSignupResult";
@@ -78,6 +81,10 @@ export type Frame = {
   | ({ kind: "player.account_page_result" } & PlayerAccountPage)
   | ({ kind: "player.password_change" } & PlayerChangePassword)
   | ({ kind: "player.password_change_result" } & PlayerPasswordChangeResult)
+  | { kind: "player.pc_settings" }
+  | ({ kind: "player.pc_settings_result" } & PlayerPcSettingsResult)
+  | ({ kind: "player.pc_settings_set" } & PcSettings)
+  | ({ kind: "player.pc_settings_set_result" } & PlayerPcSettingsSetResult)
   | { kind: "player.end_session" }
   | ({ kind: "player.end_result" } & PlayerEndResult)
   | ({ kind: "player.unlock" } & PlayerUnlock)

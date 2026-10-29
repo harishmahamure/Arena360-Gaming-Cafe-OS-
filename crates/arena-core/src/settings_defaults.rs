@@ -25,6 +25,7 @@ use arena_proto::{
     BOOSTER_PRIORITIES, DEFAULT_BOOSTER_CLOSE, DEFAULT_BOOSTER_POWER_PLAN,
     DEFAULT_BOOSTER_PRIORITY, KEY_BOOSTER_CLOSE, KEY_BOOSTER_POWER_PLAN, KEY_BOOSTER_PRIORITY,
 };
+use arena_proto::{DEFAULT_DISPLAY_MODES, KEY_DISPLAY_MODES};
 use arena_proto::{
     DEFAULT_INVENTORY_TAKE_STOCK_AT, DEFAULT_STOCK_EXPIRY_WARN_DAYS, KEY_INVENTORY_TAKE_STOCK_AT,
     KEY_STOCK_EXPIRY_WARN_DAYS, STOCK_EXPIRY_WARN_RANGE, TAKE_STOCK_AT_MODES,
@@ -165,6 +166,8 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     (KEY_BOOSTER_CLOSE, DEFAULT_BOOSTER_CLOSE),
     (KEY_BOOSTER_PRIORITY, DEFAULT_BOOSTER_PRIORITY),
     (KEY_BOOSTER_POWER_PLAN, DEFAULT_BOOSTER_POWER_PLAN),
+    // Story 6.35: the display modes a player may pick (empty: each PC's own mode only).
+    (KEY_DISPLAY_MODES, DEFAULT_DISPLAY_MODES),
 ];
 
 pub const SYSTEM_MANAGED_KEYS: [&str; 7] = [
@@ -177,7 +180,8 @@ pub const SYSTEM_MANAGED_KEYS: [&str; 7] = [
     KEY_TEST_SESSION,
 ];
 
-pub const KEYED_FIELD_KEYS: [&str; 35] = [
+pub const KEYED_FIELD_KEYS: [&str; 36] = [
+    KEY_DISPLAY_MODES,
     KEY_BOOSTER_CLOSE,
     KEY_BOOSTER_PRIORITY,
     KEY_BOOSTER_POWER_PLAN,
@@ -265,6 +269,8 @@ pub enum SettingRule {
     BranchName,
     /// `kiosk.booster_close`: executable names to close at launch (`arena_proto::parse_booster_programs`).
     BoosterPrograms,
+    /// `kiosk.display_modes`: `WxH@Hz` modes (`arena_proto::parse_display_modes`).
+    DisplayModes,
     /// `billing.warn_marks`: one to three distinct minutes (`arena_proto::parse_warn_marks`).
     WarnMarks,
     /// Up to `max_lines` receipt text lines (`arena_proto::valid_receipt_lines`).
@@ -422,6 +428,7 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
     (KEY_BOOSTER_CLOSE, SettingRule::BoosterPrograms),
     (KEY_BOOSTER_PRIORITY, SettingRule::OneOf(BOOSTER_PRIORITIES)),
     (KEY_BOOSTER_POWER_PLAN, SettingRule::Bool),
+    (KEY_DISPLAY_MODES, SettingRule::DisplayModes),
     (KEY_BRANCH_CODE, SettingRule::BranchCode),
     (KEY_BRANCH_NAME, SettingRule::BranchName),
     (KEY_BRANCH_CODE_LOCKED_AT, SettingRule::Text),
@@ -484,6 +491,7 @@ impl SettingRule {
             Self::ReceiptLines { max_lines } => valid_receipt_lines(value, max_lines),
             Self::WarnMarks => arena_proto::parse_warn_marks(value).is_ok(),
             Self::BoosterPrograms => arena_proto::parse_booster_programs(value).is_ok(),
+            Self::DisplayModes => arena_proto::parse_display_modes(value).is_ok(),
             Self::BranchCode => arena_proto::valid_branch_code(value),
             Self::BranchName => {
                 let n = value.chars().count();
@@ -812,6 +820,17 @@ mod tests {
             assert!(DEFAULT_SETTINGS.contains(&(k, v)), "{k}");
             assert!(KEYED_FIELD_KEYS.contains(&k), "{k}");
         }
+    }
+
+    #[test]
+    fn display_modes_rule() {
+        let rule = setting_rule(KEY_DISPLAY_MODES).unwrap();
+        assert!(rule.accepts(""));
+        assert!(rule.accepts("1920x1080@144, 1920x1080@60"));
+        assert!(!rule.accepts("1920x1080"));
+        assert!(!rule.accepts("1920x1080@60,1920x1080@60"));
+        assert!(DEFAULT_SETTINGS.contains(&(KEY_DISPLAY_MODES, "")));
+        assert!(KEYED_FIELD_KEYS.contains(&KEY_DISPLAY_MODES));
     }
 
     #[test]

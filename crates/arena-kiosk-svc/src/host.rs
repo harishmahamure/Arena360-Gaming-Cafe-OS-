@@ -86,6 +86,12 @@ pub async fn run_until_with(
     runtime.games(std::sync::Arc::new(crate::games_windows::WinGames::new(
         config_path.clone(),
     )));
+    // The PC settings panel (Story 6.35) changes the player's mouse, display, sound output and
+    // keyboard layout in their session.
+    #[cfg(windows)]
+    runtime.pc_settings(std::sync::Arc::new(
+        crate::pc_settings_windows::WinPcSettingsHost::new(config_path.clone()),
+    ));
     // The session-end cleanup (Story 6.11) too: programs, clipboard, temp files and volume.
     #[cfg(windows)]
     runtime.cleanup(std::sync::Arc::new(

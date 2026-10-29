@@ -1,9 +1,10 @@
 use arena_proto::{
-    BILLING_GRACE_RANGE, Booster, BoosterPriority, FULFILMENT_MODES, KEY_BILLING_GRACE_MIN,
-    KEY_BILLING_LOW_BALANCE, KEY_BILLING_TIME_UP_MODE, KEY_BILLING_WARN_MARKS, KEY_BOOSTER_CLOSE,
-    KEY_BOOSTER_POWER_PLAN, KEY_BOOSTER_PRIORITY, KEY_FULFILMENT, KEY_KIOSK_VOLUME_DEFAULT,
-    KIOSK_BILLING_KEYS, KIOSK_BOOSTER_KEYS, KIOSK_OPERATING_KEYS, KIOSK_VOLUME_MAX,
-    SESSION_WARNING_MARKS_MIN, SettingEntry, TimeUpMode, low_balance_from, parse_booster_programs,
+    BILLING_GRACE_RANGE, Booster, BoosterPriority, DisplayMode, FULFILMENT_MODES,
+    KEY_BILLING_GRACE_MIN, KEY_BILLING_LOW_BALANCE, KEY_BILLING_TIME_UP_MODE,
+    KEY_BILLING_WARN_MARKS, KEY_BOOSTER_CLOSE, KEY_BOOSTER_POWER_PLAN, KEY_BOOSTER_PRIORITY,
+    KEY_DISPLAY_MODES, KEY_FULFILMENT, KEY_KIOSK_VOLUME_DEFAULT, KIOSK_BILLING_KEYS,
+    KIOSK_BOOSTER_KEYS, KIOSK_OPERATING_KEYS, KIOSK_VOLUME_MAX, SESSION_WARNING_MARKS_MIN,
+    SettingEntry, TimeUpMode, low_balance_from, parse_booster_programs, parse_display_modes,
     parse_low_balance, parse_warn_marks,
 };
 
@@ -30,6 +31,9 @@ pub struct KioskOperating {
     /// What a game launch frees up (Story 6.25): the branch's, or nothing, normal priority
     /// above normal and no power plan switch before the Hub ever sent it.
     pub booster: Booster,
+    /// The display modes a player may pick (Story 6.35); empty (also before the Hub ever sent
+    /// it) means each PC's own mode only.
+    pub display_modes: Vec<DisplayMode>,
 }
 
 impl KioskOperating {
@@ -49,7 +53,7 @@ impl KioskOperating {
     }
 }
 
-pub const KEYS: [&str; 9] = [
+pub const KEYS: [&str; 10] = [
     KIOSK_OPERATING_KEYS[0],
     KIOSK_OPERATING_KEYS[1],
     KIOSK_BILLING_KEYS[0],
@@ -59,6 +63,7 @@ pub const KEYS: [&str; 9] = [
     KIOSK_BOOSTER_KEYS[0],
     KIOSK_BOOSTER_KEYS[1],
     KIOSK_BOOSTER_KEYS[2],
+    KEY_DISPLAY_MODES,
 ];
 
 fn valid(key: &str, value: &str) -> bool {
@@ -72,6 +77,7 @@ fn valid(key: &str, value: &str) -> bool {
         KEY_BOOSTER_CLOSE => parse_booster_programs(value).is_ok(),
         KEY_BOOSTER_PRIORITY => BoosterPriority::parse(value).is_some(),
         KEY_BOOSTER_POWER_PLAN => matches!(value, "true" | "false"),
+        KEY_DISPLAY_MODES => parse_display_modes(value).is_ok(),
         _ => false,
     }
 }
@@ -123,6 +129,9 @@ pub fn load(queue: &QueueDb) -> KioskOperating {
                 .unwrap_or_default(),
             high_performance: read(KEY_BOOSTER_POWER_PLAN).is_some_and(|v| v == "true"),
         },
+        display_modes: read(KEY_DISPLAY_MODES)
+            .and_then(|v| parse_display_modes(&v).ok())
+            .unwrap_or_default(),
     }
 }
 
@@ -236,6 +245,25 @@ mod tests {
         assert!(!valid(KEY_BILLING_WARN_MARKS, "10,10"));
         assert!(valid(KEY_BILLING_LOW_BALANCE, "0"));
         assert!(!valid(KEY_BILLING_LOW_BALANCE, "-1"));
+    }
+
+    #[test]
+    fn the_display_modes_default_to_none_and_ignore_bad_lists() {
+        let dir = tempfile::tempdir().unwrap();
+        let q = QueueDb::open(&dir.path().join("queue.db")).unwrap();
+        assert!(load(&q).display_modes.is_empty());
+        q.kv_set(KEY_DISPLAY_MODES, "1920x1080@144, 1920x1080@60", 2)
+            .unwrap();
+        let modes: Vec<String> = load(&q)
+            .display_modes
+            .iter()
+            .map(|m| m.to_string())
+            .collect();
+        assert_eq!(modes, ["1920x1080@144", "1920x1080@60"]);
+        q.kv_set(KEY_DISPLAY_MODES, "1920x1080", 3).unwrap();
+        assert!(load(&q).display_modes.is_empty());
+        assert!(valid(KEY_DISPLAY_MODES, "") && valid(KEY_DISPLAY_MODES, "1920x1080@60"));
+        assert!(!valid(KEY_DISPLAY_MODES, "big"));
     }
 
     #[test]

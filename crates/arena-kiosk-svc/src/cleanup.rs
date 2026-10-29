@@ -27,6 +27,11 @@
 //!   gone, and only then removes its saved logins; then `credentials` clears the player's
 //!   Credential Manager. A failure uses the path above and names the step.
 //!
+//! - **PC settings (Story 6.35).** The last step puts the mouse speed, display mode, sound output
+//!   and keyboard layout back to the values the service recorded before the player's first
+//!   change ([`pc_settings::restore`](crate::pc_settings::restore)); a PC the player changed
+//!   nothing on has nothing to put back.
+//!
 //! The OS parts sit behind [`CleanupHost`] (Windows: [`cleanup_windows`](crate::cleanup_windows);
 //! tests: [`fake::FakeHost`]). The `programs` step first records the play of any game still
 //! open (Story 6.27, [`games::record_running`](crate::games::record_running)), then uses the process enforcer's kill path through
@@ -55,6 +60,7 @@ pub const STEP_CLIPBOARD: &str = "clipboard";
 pub const STEP_TEMP_FILES: &str = "temp_files";
 pub const STEP_VOLUME: &str = "volume";
 pub const STEP_POWER_PLAN: &str = "power_plan";
+pub const STEP_PC_SETTINGS: &str = "pc_settings";
 
 /// The volume used when the branch default was never synced.
 pub const DEFAULT_VOLUME: u8 = 50;
@@ -114,6 +120,9 @@ pub struct TempFiles;
 pub struct PowerPlan;
 /// Sets the system volume to the branch default.
 pub struct Volume;
+/// Puts the mouse speed, display mode, sound output and keyboard layout back to the PC's own
+/// (Story 6.35).
+pub struct PcSettings;
 
 impl CleanupStep for Programs {
     fn name(&self) -> &'static str {
@@ -181,6 +190,16 @@ impl CleanupStep for PowerPlan {
     }
 }
 
+impl CleanupStep for PcSettings {
+    fn name(&self) -> &'static str {
+        STEP_PC_SETTINGS
+    }
+
+    fn run(&self, env: &StepEnv<'_>) -> Result<(), String> {
+        crate::pc_settings::restore(env.ctx)
+    }
+}
+
 /// Ends the player's programs that match `scope` through the process enforcer's kill path
 /// (the app, the service and protected images are never touched).
 pub(crate) fn close(ctx: &Ctx, scope: CloseScope<'_>) -> Result<CloseReport, String> {
@@ -212,6 +231,7 @@ impl Pipeline {
         steps.push(Arc::new(TempFiles));
         steps.push(Arc::new(Volume));
         steps.push(Arc::new(PowerPlan));
+        steps.push(Arc::new(PcSettings));
         Self { steps }
     }
 

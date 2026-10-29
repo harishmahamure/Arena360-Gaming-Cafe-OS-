@@ -5,11 +5,13 @@
   import { balanceText, packLine, timeLeftText } from "./account-text";
   import { hudExpand, playerAccount, playerEnd, playerLock } from "./bridge";
   import { EXTEND_KEYS } from "./hud";
+  import PcSettingsView from "./PcSettings.svelte";
   import { chipText } from "./shell";
 
   // The account menu (Story 6.17): a `surface` panel under the top bar with the player's name,
   // wallet and time left, and the rows Balance, Messages, Extend (Story 6.21, prepaid only, shown
-  // with its Ctrl+Shift+E key caps), Lock, I'm done (Story 6.18, postpaid only) and Log out. Esc
+  // with its Ctrl+Shift+E key caps), PC settings (Story 6.35, players and guests, opens the
+  // settings panel in place), Lock, I'm done (Story 6.18, postpaid only) and Log out. Esc
   // closes it and
   // focus goes back to the chip that opened it. Nothing here decides anything: Balance asks the
   // Hub, Log out asks the Hub to end the player's own session, and Lock is a screen the service
@@ -48,7 +50,7 @@
     onaccount: () => void;
   } = $props();
 
-  type View = "menu" | "balance" | "confirm" | "done";
+  type View = "menu" | "balance" | "confirm" | "done" | "pcsettings";
   let view: View = $state("menu");
   let root: HTMLDivElement | undefined = $state();
   let rows: HTMLButtonElement[] = $state([]);
@@ -129,6 +131,12 @@
   function messages() {
     onclose(false);
     onmessages();
+  }
+
+  function pc_settings() {
+    line = null;
+    view = "pcsettings";
+    void focusFirst();
   }
 
   function account_page() {
@@ -274,10 +282,19 @@
           </button>
         </li>
       {/if}
+      <li>
+        <button
+          bind:this={rows[4]}
+          type="button"
+          class="row type-kiosk-label"
+          data-testid="account-row-pc-settings"
+          onclick={pc_settings}>{t("player.account.row.pc_settings")}</button
+        >
+      </li>
       {#if profiled}
         <li>
           <button
-            bind:this={rows[4]}
+            bind:this={rows[5]}
             type="button"
             class="row type-kiosk-label"
             data-testid="account-row-lock"
@@ -289,7 +306,7 @@
       {#if !prepaid}
         <li>
           <button
-            bind:this={rows[5]}
+            bind:this={rows[6]}
             type="button"
             class="row type-kiosk-label"
             data-testid="account-row-done"
@@ -300,7 +317,7 @@
       {/if}
       <li>
         <button
-          bind:this={rows[6]}
+          bind:this={rows[7]}
           type="button"
           class="row type-kiosk-label"
           data-testid="account-row-logout"
@@ -353,6 +370,8 @@
         <Button variant="secondary" label="player.account.back" onclick={stay} />
       </div>
     </section>
+  {:else if view === "pcsettings"}
+    <PcSettingsView {profiled} onback={stay} />
   {:else if view === "done"}
     <section class="panel" aria-label={t("player.account.row.done")}>
       <p class="type-kiosk-body" role="alert" data-testid="account-done-confirm">

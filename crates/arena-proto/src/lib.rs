@@ -37,6 +37,7 @@ mod matching;
 mod operating;
 pub mod pairing;
 mod pc_command;
+mod pc_settings;
 mod permission;
 mod plans;
 mod player_login;
@@ -246,6 +247,13 @@ pub use pairing::{
 pub use pc_command::{
     DeviceMessage, DevicePower, DeviceScreen, LockReason, MessageScope, PC_MESSAGE_MAX, PcAck,
     PcAckEvent, PcAction, valid_message_text,
+};
+pub use pc_settings::{
+    DEFAULT_DISPLAY_MODES, DISPLAY_MODES_MAX, DISPLAY_REVERT_SECS, DisplayMode,
+    DisplayModesProblem, KEY_DISPLAY_MODES, MOUSE_SPEED_DEFAULT, MOUSE_SPEED_MAX, MOUSE_SPEED_MIN,
+    PC_SETTING_TEXT_MAX, PcLayout, PcSettings, PcSettingsChanged, PcSettingsPanel,
+    PlayerPcSettingsResult, PlayerPcSettingsSet, PlayerPcSettingsSetResult, parse_display_mode,
+    parse_display_modes, valid_keyboard_layout, valid_mouse_speed,
 };
 pub use permission::{Permission, Requirement};
 pub use plans::{

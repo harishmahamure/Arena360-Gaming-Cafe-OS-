@@ -4,6 +4,7 @@ export const KEY_OPENING_HOURS = "branch.opening_hours";
 export const KEY_OPENING_HOURS_SET = "branch.opening_hours_set";
 export const KEY_FULFILMENT = "branch.fulfilment";
 export const KEY_KIOSK_VOLUME = "kiosk.volume_default";
+export const KEY_DISPLAY_MODES = "kiosk.display_modes";
 export const KEY_BACKUP_DIR = "system.backup_dir";
 export const KEY_ADS_CONSENT = "branch.ads_consent";
 export const KEY_ADS_RATING = "branch.ads_rating";

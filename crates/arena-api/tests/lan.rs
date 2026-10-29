@@ -3937,6 +3937,110 @@ async fn a_player_changes_their_password_and_five_wrong_currents_pause_the_form(
     ));
 }
 
+async fn pc_settings_frame(client: &HubClient) -> arena_proto::PcSettings {
+    match client
+        .request("player.pc_settings", serde_json::Value::Null)
+        .await
+        .unwrap()
+        .body
+    {
+        FrameBody::PlayerPcSettingsResult(r) => r.settings,
+        other => panic!("{other:?}"),
+    }
+}
+
+async fn pc_settings_set_frame(
+    client: &HubClient,
+    body: serde_json::Value,
+) -> Result<bool, ClientError> {
+    match client.request("player.pc_settings_set", body).await?.body {
+        FrameBody::PlayerPcSettingsSetResult(r) => Ok(r.saved),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_players_pc_settings_are_saved_to_their_profile_and_read_back() {
+    let hub = start("0.1.0", true).await;
+    let (client, _) = playing(&hub).await;
+    // Nothing saved yet.
+    assert!(pc_settings_frame(&client).await.is_empty());
+    assert!(
+        pc_settings_set_frame(&client, serde_json::json!({ "mouse_speed": 14 }))
+            .await
+            .unwrap()
+    );
+    assert!(
+        pc_settings_set_frame(
+            &client,
+            serde_json::json!({ "display_mode": "1920x1080@144", "keyboard_layout": "00000409" })
+        )
+        .await
+        .unwrap()
+    );
+    let saved = pc_settings_frame(&client).await;
+    assert_eq!(saved.mouse_speed, Some(14));
+    assert_eq!(saved.display_mode.as_deref(), Some("1920x1080@144"));
+    assert_eq!(saved.keyboard_layout.as_deref(), Some("00000409"));
+    assert_eq!(saved.audio_output, None);
+    // Written by the device actor through apply().
+    let reader = Store::open_reader(&hub.path).unwrap();
+    let logged = reader
+        .changes()
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|c| c.tbl == "player_pc_settings")
+        .unwrap();
+    assert_eq!(
+        (logged.actor_kind.as_str(), logged.actor_id.as_str()),
+        ("device", hub.paired_id.as_str())
+    );
+    // A bad value is refused and nothing more is stored.
+    for bad in [
+        serde_json::json!({ "mouse_speed": 0 }),
+        serde_json::json!({ "mouse_speed": 21 }),
+        serde_json::json!({ "display_mode": "big" }),
+        serde_json::json!({ "keyboard_layout": "us" }),
+        serde_json::json!({}),
+    ] {
+        let ClientError::Hub(e) = pc_settings_set_frame(&client, bad).await.unwrap_err() else {
+            panic!("a hub refusal")
+        };
+        assert_eq!(e.code, ErrorCode::ValidationFailed);
+    }
+    assert_eq!(pc_settings_frame(&client).await.mouse_speed, Some(14));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_guests_pc_settings_are_never_saved() {
+    let hub = start("0.1.0", true).await;
+    rated_pc(&hub, 6_000).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    // No session at all, then a guest's: both answer saved:false and store nothing.
+    for guest in [false, true] {
+        if guest {
+            start_postpaid(&hub, None).await;
+        }
+        assert!(
+            !pc_settings_set_frame(&client, serde_json::json!({ "mouse_speed": 9 }))
+                .await
+                .unwrap()
+        );
+        assert!(pc_settings_frame(&client).await.is_empty());
+    }
+    let reader = Store::open_reader(&hub.path).unwrap();
+    assert!(
+        reader
+            .changes()
+            .unwrap()
+            .iter()
+            .all(|c| c.tbl != "player_pc_settings")
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_account_of_a_guest_or_an_empty_pc_is_not_found() {
     let hub = start("0.1.0", true).await;

@@ -134,6 +134,7 @@ fn bare(entries: &[KioskLibraryEntry]) -> (tempfile::TempDir, Arc<Ctx>, Arc<Manu
         freezer: Mutex::new(None),
         cleanup,
         games: GameState::default(),
+        pc_settings: crate::pc_settings::PcSettingsState::default(),
     });
     ctx.pc.screen.send_replace(Screen {
         locked: false,

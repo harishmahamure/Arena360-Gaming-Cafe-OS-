@@ -10,6 +10,8 @@ pub const USAGE: &str = "usage:
   arena-kiosk-svc lockdown apply|restore|reset-shell [--player-user <name>] [--data-dir <path>]   (Windows, elevated)
   arena-kiosk-svc cleanup-helper --clipboard | --volume <0-100>   (Windows; started by the service in the player's session)
   arena-kiosk-svc window-watch <pid>   (Windows; started by the service in the player's session)
+  arena-kiosk-svc pc-settings read | mouse <1-20> | display <WxH@Hz> | audio <hex> | layout <hex>
+                  (Windows; started by the service in the player's session)
   arena-kiosk-svc dev provision --hub <host:7400> --fingerprint <hex> --token <token>
                   [--player-user <name>] [--data-dir <path>]   (dev-fixtures builds)
   arena-kiosk-svc --help | --version";
@@ -21,6 +23,8 @@ pub const USAGE: &str = "usage:
   arena-kiosk-svc lockdown apply|restore|reset-shell [--player-user <name>] [--data-dir <path>]   (Windows, elevated)
   arena-kiosk-svc cleanup-helper --clipboard | --volume <0-100>   (Windows; started by the service in the player's session)
   arena-kiosk-svc window-watch <pid>   (Windows; started by the service in the player's session)
+  arena-kiosk-svc pc-settings read | mouse <1-20> | display <WxH@Hz> | audio <hex> | layout <hex>
+                  (Windows; started by the service in the player's session)
   arena-kiosk-svc --help | --version";
 
 /// A parsed command line.
@@ -50,6 +54,9 @@ pub enum Command {
     /// `window-watch <pid>`: waits in the player's session until process `pid` shows a window
     /// (Story 6.25); exits 0 when it did, 2 when the process ended or time ran out.
     WindowWatch(u32),
+    /// `pc-settings`: reads or changes the player's mouse, display, sound output or keyboard layout
+    /// (Story 6.35). The service starts it in the player's session.
+    PcSettingsHelper(PcTask),
     /// `dev provision`.
     #[cfg(feature = "dev-fixtures")]
     DevProvision {
@@ -74,6 +81,38 @@ pub enum HelperTask {
     SteamLogin,
     /// Remove the player's Credential Manager entries (Story 6.12).
     Credentials,
+}
+
+/// What `pc-settings` does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PcTask {
+    /// Print the PC's settings and choices as JSON on stdout.
+    Read,
+    /// Set the pointer speed (1 to 20).
+    Mouse(u8),
+    /// Switch the display to this `WxH@Hz`.
+    Display(String),
+    /// Make the sound output with this name (given as hex of its UTF-8) the default.
+    Audio(String),
+    /// Activate the keyboard layout with this 8-digit id.
+    Layout(String),
+}
+
+/// Reads a name given as hex of its UTF-8 bytes (so a quote or a space never needs escaping).
+pub fn decode_hex_name(hex: &str) -> Option<String> {
+    if hex.is_empty() || !hex.len().is_multiple_of(2) || !hex.is_ascii() {
+        return None;
+    }
+    let bytes: Option<Vec<u8>> = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+        .collect();
+    String::from_utf8(bytes?).ok()
+}
+
+/// Spells a name as hex of its UTF-8 bytes, the form `pc-settings audio` takes.
+pub fn encode_hex_name(name: &str) -> String {
+    name.bytes().map(|b| format!("{b:02x}")).collect()
 }
 
 /// What `lockdown` does.
@@ -150,6 +189,33 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                 .ok_or_else(|| "window-watch takes a process id".into()),
             _ => Err("window-watch takes a process id".into()),
         },
+        "pc-settings" => {
+            let word = args.get(1).and_then(|a| a.to_str());
+            let value = args.get(2).and_then(|a| a.to_str());
+            let task = match (word, value, args.len()) {
+                (Some("read"), None, 2) => Some(PcTask::Read),
+                (Some("mouse"), Some(v), 3) => v
+                    .bytes()
+                    .all(|b| b.is_ascii_digit())
+                    .then(|| v.parse::<u8>().ok())
+                    .flatten()
+                    .filter(|s| arena_proto::valid_mouse_speed(*s))
+                    .map(PcTask::Mouse),
+                (Some("display"), Some(v), 3) => {
+                    arena_proto::parse_display_mode(v).map(|m| PcTask::Display(m.to_string()))
+                }
+                (Some("audio"), Some(v), 3) => decode_hex_name(v)
+                    .filter(|n| n.chars().count() <= arena_proto::PC_SETTING_TEXT_MAX)
+                    .map(PcTask::Audio),
+                (Some("layout"), Some(v), 3) => {
+                    arena_proto::valid_keyboard_layout(v).then(|| PcTask::Layout(v.to_owned()))
+                }
+                _ => None,
+            };
+            task.map(Command::PcSettingsHelper).ok_or_else(|| {
+                "pc-settings takes read, mouse <1-20>, display <WxH@Hz>, audio <hex> or layout <8 hex digits>".into()
+            })
+        }
         #[cfg(feature = "dev-fixtures")]
         "dev" => {
             if args.get(1).and_then(|a| a.to_str()) != Some("provision") {
@@ -354,6 +420,50 @@ mod tests {
             assert!(p(bad).is_err(), "{bad:?}");
         }
     }
+    #[test]
+    fn pc_settings_takes_one_task_with_a_valid_value() {
+        assert_eq!(
+            p(&["pc-settings", "read"]).unwrap(),
+            Command::PcSettingsHelper(PcTask::Read)
+        );
+        assert_eq!(
+            p(&["pc-settings", "mouse", "14"]).unwrap(),
+            Command::PcSettingsHelper(PcTask::Mouse(14))
+        );
+        assert_eq!(
+            p(&["pc-settings", "display", "1920x1080@144"]).unwrap(),
+            Command::PcSettingsHelper(PcTask::Display("1920x1080@144".into()))
+        );
+        let name = "Speakers (Realtek \"HD\" Audio)";
+        assert_eq!(
+            p(&["pc-settings", "audio", &encode_hex_name(name)]).unwrap(),
+            Command::PcSettingsHelper(PcTask::Audio(name.into()))
+        );
+        assert_eq!(
+            p(&["pc-settings", "layout", "04090409"]).unwrap(),
+            Command::PcSettingsHelper(PcTask::Layout("04090409".into()))
+        );
+        for bad in [
+            &["pc-settings"][..],
+            &["pc-settings", "read", "x"],
+            &["pc-settings", "mouse"],
+            &["pc-settings", "mouse", "0"],
+            &["pc-settings", "mouse", "21"],
+            &["pc-settings", "mouse", "-3"],
+            &["pc-settings", "mouse", "+3"],
+            &["pc-settings", "display", "1920x1080"],
+            &["pc-settings", "display", "1920x1080@60", "x"],
+            &["pc-settings", "audio", "zz"],
+            &["pc-settings", "audio", "abc"],
+            &["pc-settings", "audio", ""],
+            &["pc-settings", "layout", "409"],
+            &["pc-settings", "layout", "0000040g"],
+            &["pc-settings", "volume", "5"],
+        ] {
+            assert!(p(bad).is_err(), "{bad:?}");
+        }
+    }
+
     #[cfg(not(feature = "dev-fixtures"))]
     #[test]
     fn a_release_build_has_no_dev_provision_command() {

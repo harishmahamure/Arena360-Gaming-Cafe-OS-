@@ -127,6 +127,11 @@ pub(super) fn validate(s: &SettingsSet, row: Option<&SettingRef>) -> Result<(), 
                 .map(|_| ())
                 .map_err(|p| invalid(field, p.message()));
         }
+        SettingRule::DisplayModes => {
+            return arena_proto::parse_display_modes(&s.value)
+                .map(|_| ())
+                .map_err(|p| invalid(field, p.message()));
+        }
         SettingRule::PrinterSelected => {
             return PrinterSelected::parse(&s.value)
                 .map(|_| ())

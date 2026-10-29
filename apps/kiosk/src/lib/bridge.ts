@@ -12,12 +12,21 @@ import type {
   DiscoveredHub,
   KioskHubState,
   KioskHubStatus,
+  PcSettings,
   PlayerChoice,
   PlayerExtend,
 } from "@arena/ui/generated";
 // The event and command names, shared with the Rust shell (its tests read the same file).
 import names from "../../src-tauri/ipc-names.json" with { type: "json" };
 import { extendOf, extendOptionsOf, type ExtendOptionsOutcome, type ExtendOutcome } from "./extend";
+import {
+  changeOf,
+  keepOf,
+  panelOf,
+  type ChangeOutcome,
+  type KeepOutcome,
+  type PanelOutcome,
+} from "./pc-settings";
 import {
   accountOf,
   accountPageOf,
@@ -592,6 +601,30 @@ export async function playerPasswordChange(
 ): Promise<PasswordChangeOutcome> {
   if (!inTauri()) return { kind: "unreachable" };
   return passwordChangeOf(await ask(CMD.playerPasswordChange, { current, new: next }));
+}
+
+/**
+ * The PC settings panel's content (Story 6.35): this PC's mouse speed, display mode, sound
+ * output and keyboard layout, and what the player may choose here. The service reads the PC.
+ */
+export async function playerPcSettings(): Promise<PanelOutcome> {
+  if (!inTauri()) return { kind: "unavailable" };
+  return panelOf(await ask(CMD.pcSettings));
+}
+
+/**
+ * Changes one or more PC settings (Story 6.35). The service applies them at once and the Hub saves
+ * a profiled player's choice; a new display mode is applied but waits for "Keep this".
+ */
+export async function pcSettingsSet(patch: PcSettings): Promise<ChangeOutcome> {
+  if (!inTauri()) return { kind: "failed" };
+  return changeOf(await ask(CMD.pcSettingsSet, { patch }));
+}
+
+/** "Keep this" on a new display mode (Story 6.35): the Hub saves it to the player's profile. */
+export async function pcSettingsKeep(): Promise<KeepOutcome> {
+  if (!inTauri()) return { kind: "failed" };
+  return keepOf(await ask(CMD.pcSettingsKeep));
 }
 
 /**

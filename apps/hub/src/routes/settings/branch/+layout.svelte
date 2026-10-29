@@ -15,6 +15,7 @@
     { href: "/settings/branch/billing", label: "hub.settings.branch.nav.billing" },
     { href: "/settings/branch/tax", label: "hub.settings.branch.nav.tax" },
     { href: "/settings/branch/logo", label: "hub.settings.branch.nav.logo" },
+    { href: "/settings/branch/display", label: "hub.settings.branch.nav.display" },
     ...(showAds
       ? [{ href: "/settings/branch/ads", label: "hub.settings.branch.nav.ads" as MessageKey }]
       : []),

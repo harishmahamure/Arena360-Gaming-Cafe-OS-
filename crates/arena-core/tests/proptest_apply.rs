@@ -327,6 +327,14 @@ enum Op {
         slot: u8,
         other: bool,
     },
+    /// A device actor saving PC settings for a player (Story 6.35): it applies only for the
+    /// profiled player on the device's own live session, and is otherwise `PERMISSION_DENIED`
+    /// with nothing written; a bad mouse speed is refused whatever the player.
+    PcSettingsSave {
+        slot: u8,
+        other: bool,
+        speed: u8,
+    },
     /// An extend of the live session on an existing PC from the wallet, a pack or credit: it
     /// either moves the end out by exactly the minutes and writes its own settled order, or
     /// writes nothing.
@@ -772,6 +780,11 @@ fn op() -> impl Strategy<Value = Op> {
         1 => (0..3u8, 0..3u8).prop_map(|(slot, kind)| Op::DeviceStartDenied { slot, kind }),
         1 => (0..3u8, 0..3u8).prop_map(|(slot, kind)| Op::DevicePlayerDenied { slot, kind }),
         2 => (0..3u8, any::<bool>()).prop_map(|(slot, other)| Op::PasswordChange { slot, other }),
+        2 => (0..3u8, any::<bool>(), 0..24u8).prop_map(|(slot, other, speed)| Op::PcSettingsSave {
+            slot,
+            other,
+            speed
+        }),
         2 => (0..3u8, 0..3u8, 0..3u8).prop_map(|(slot, source, minutes)| Op::SessionExtend {
             slot,
             source,
@@ -2509,16 +2522,49 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let device = match devices.get(slot) {
                 Some(row) => text(row, "device_id"),
                 None => {
-                    let reg = arena_proto::DeviceRegister::new(
+                    let mut reg = arena_proto::DeviceRegister::new(
                         arena_proto::ClientClass::Paired,
                         "PC",
                         password_hash(),
                     );
-                    hub.submit_new(hub.intent(IntentPayload::DeviceRegister(reg), None))
+                    reg.device_kind = arena_proto::DeviceKind::Pc;
+                    let device = hub
+                        .submit_new(hub.intent(IntentPayload::DeviceRegister(reg), None))
                         .unwrap()
                         .changes[0]
                         .row_id
-                        .clone()
+                        .clone();
+                    // A scanned PC sits in a group with a rate like any other, so the session
+                    // ops that pick it by slot can start on it.
+                    let group = hub
+                        .submit_new(hub.intent(
+                            IntentPayload::GroupUpsert(arena_proto::GroupUpsert {
+                                id: None,
+                                name: format!("Scanned{}", devices.len()),
+                                group_kind: "pc".into(),
+                                colour: "teal".into(),
+                                sort_order: 1,
+                            }),
+                            None,
+                        ))
+                        .unwrap()
+                        .changes[0]
+                        .row_id
+                        .clone();
+                    for payload in [
+                        IntentPayload::RateUpsert(arena_proto::RateUpsert {
+                            group_id: group.clone(),
+                            price_per_hour_minor: 12_000,
+                        }),
+                        IntentPayload::DeviceAssign(arena_proto::DeviceAssign {
+                            device_id: device.clone(),
+                            group_id: Some(group),
+                        }),
+                    ] {
+                        let out = hub.submit_new(hub.intent(payload, None));
+                        prop_assert!(out.is_ok(), "{:?}", out);
+                    }
+                    device
                 }
             };
             let now = hub.clock_now();
@@ -4502,6 +4548,82 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 prop_assert_eq!(
                     code(&out).map(|c| c.0),
                     Some(ErrorCode::PermissionDenied),
+                    "{:?}",
+                    out
+                );
+                prop_assert_eq!(hub.change_count(), before);
+            }
+        }
+        Op::PcSettingsSave { slot, other, speed } => {
+            let Some(device) = hub
+                .reader
+                .rows(Table::DevicesMeta)
+                .unwrap()
+                .get(usize::from(*slot))
+                .map(|d| text(d, "device_id"))
+            else {
+                return Ok(());
+            };
+            let own = hub
+                .reader
+                .rows(Table::Sessions)
+                .unwrap()
+                .iter()
+                .filter(|s| text(s, "device_id") == device)
+                .filter(|s| {
+                    matches!(text(s, "state").as_str(), "active" | "paused" | "grace")
+                        || (text(s, "state") == "expired"
+                            && matches!(s["ended_at"], RowValue::Null))
+                })
+                .find_map(|s| match &s["player_id"] {
+                    RowValue::Text(id) => Some(id.clone()),
+                    _ => None,
+                });
+            let players = hub.reader.rows(Table::Players).unwrap();
+            let target = match (&own, *other) {
+                (Some(id), false) => id.clone(),
+                _ => {
+                    let Some(p) = players
+                        .iter()
+                        .map(|p| text(p, "player_id"))
+                        .find(|id| Some(id) != own.as_ref())
+                    else {
+                        return Ok(());
+                    };
+                    p
+                }
+            };
+            let mut intent = hub.intent(
+                IntentPayload::PlayerPcSettingsSet(arena_proto::PlayerPcSettingsSet {
+                    player_id: target.clone(),
+                    settings: arena_proto::PcSettings {
+                        mouse_speed: Some(*speed),
+                        ..Default::default()
+                    },
+                }),
+                None,
+            );
+            intent.actor = Actor {
+                kind: ActorKind::Device,
+                id: device,
+            };
+            let before = hub.change_count();
+            let out = hub.submit_new(intent);
+            if own.as_ref() != Some(&target) {
+                prop_assert_eq!(
+                    code(&out).map(|c| c.0),
+                    Some(ErrorCode::PermissionDenied),
+                    "{:?}",
+                    out
+                );
+                prop_assert_eq!(hub.change_count(), before);
+            } else if arena_proto::valid_mouse_speed(*speed) {
+                prop_assert!(out.is_ok(), "{:?}", out);
+                prop_assert_eq!(hub.change_count(), before + 1);
+            } else {
+                prop_assert_eq!(
+                    code(&out).map(|c| c.0),
+                    Some(ErrorCode::ValidationFailed),
                     "{:?}",
                     out
                 );

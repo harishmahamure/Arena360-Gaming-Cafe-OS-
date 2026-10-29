@@ -177,6 +177,7 @@ mod tests {
         assert!(paired("kiosk.volume_default"));
         assert!(paired("kiosk.booster_close") && paired("kiosk.booster_priority"));
         assert!(paired("kiosk.booster_power_plan"));
+        assert!(paired(crate::KEY_DISPLAY_MODES));
         assert!(paired("branch.fulfilment"));
         assert!(paired("branch.tz"));
         assert!(!paired("branch.day_start_min") && !paired("branch.tz2"));

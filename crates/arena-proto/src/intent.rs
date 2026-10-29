@@ -254,6 +254,10 @@ pub enum IntentKind {
     /// (Story 6.34).
     #[serde(rename = "player.password_change")]
     PlayerPasswordChange,
+    /// A player's PC settings saved to their profile, after the Hub built them from the kiosk's
+    /// `player.pc_settings_set` frame (Story 6.35).
+    #[serde(rename = "player.pc_settings_set")]
+    PlayerPcSettingsSet,
     #[serde(rename = "session.start")]
     SessionStart,
     #[serde(rename = "session.end")]
@@ -355,7 +359,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 112] = [
+    pub const ALL: [IntentKind; 113] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -435,6 +439,7 @@ impl IntentKind {
         Self::PlayerUpdate,
         Self::PlayerPasswordReset,
         Self::PlayerPasswordChange,
+        Self::PlayerPcSettingsSet,
         Self::SessionStart,
         Self::SessionEnd,
         Self::SessionSettle,
@@ -552,6 +557,7 @@ impl IntentKind {
             Self::PlayerUpdate => "player.update",
             Self::PlayerPasswordReset => "player.password_reset",
             Self::PlayerPasswordChange => "player.password_change",
+            Self::PlayerPcSettingsSet => "player.pc_settings_set",
             Self::SessionStart => "session.start",
             Self::SessionEnd => "session.end",
             Self::SessionSettle => "session.settle",
@@ -679,7 +685,8 @@ impl IntentKind {
             | Self::ImportPlayers
             | Self::PlayerUpdate
             | Self::PlayerPasswordReset
-            | Self::PlayerPasswordChange => IntentCategory::Player,
+            | Self::PlayerPasswordChange
+            | Self::PlayerPcSettingsSet => IntentCategory::Player,
             Self::SessionStart
             | Self::SessionEnd
             | Self::SessionSettle
@@ -788,7 +795,8 @@ impl IntentKind {
             | Self::ImportPlayers
             | Self::PlayerUpdate
             | Self::PlayerPasswordReset
-            | Self::PlayerPasswordChange => Requirement::Perm(Permission::PlayerManage),
+            | Self::PlayerPasswordChange
+            | Self::PlayerPcSettingsSet => Requirement::Perm(Permission::PlayerManage),
             Self::SessionStart
             | Self::SessionAssignPlayer
             | Self::SessionGroup
@@ -933,6 +941,7 @@ impl IntentKind {
             | Self::PlayerUpdate
             | Self::PlayerPasswordReset
             | Self::PlayerPasswordChange
+            | Self::PlayerPcSettingsSet
             | Self::SessionStart
             | Self::SessionEnd
             | Self::SessionSettle
@@ -1545,6 +1554,8 @@ pub enum IntentPayload {
     PlayerPasswordReset(crate::PlayerPasswordReset),
     #[serde(rename = "player.password_change")]
     PlayerPasswordChange(crate::PlayerPasswordChange),
+    #[serde(rename = "player.pc_settings_set")]
+    PlayerPcSettingsSet(crate::PlayerPcSettingsSet),
     #[serde(rename = "session.start")]
     SessionStart(crate::SessionStart),
     #[serde(rename = "session.end")]
@@ -1695,6 +1706,7 @@ impl IntentPayload {
             Self::PlayerUpdate(_) => IntentKind::PlayerUpdate,
             Self::PlayerPasswordReset(_) => IntentKind::PlayerPasswordReset,
             Self::PlayerPasswordChange(_) => IntentKind::PlayerPasswordChange,
+            Self::PlayerPcSettingsSet(_) => IntentKind::PlayerPcSettingsSet,
             Self::SessionStart(_) => IntentKind::SessionStart,
             Self::SessionEnd(_) => IntentKind::SessionEnd,
             Self::SessionSettle(_) => IntentKind::SessionSettle,
@@ -2088,7 +2100,8 @@ mod tests {
                 | "import.players"
                 | "player.update"
                 | "player.password_reset"
-                | "player.password_change" => Requirement::Perm(Permission::PlayerManage),
+                | "player.password_change"
+                | "player.pc_settings_set" => Requirement::Perm(Permission::PlayerManage),
                 "session.start" | "session.assign_player" | "session.group" | "alert.ack" => {
                     Requirement::Perm(Permission::SessionStart)
                 }

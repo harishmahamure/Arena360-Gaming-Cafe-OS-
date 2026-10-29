@@ -9,6 +9,8 @@
 //!   the wallet and every pack, and the order history.
 //! - `player.password_change` (Story 6.34) checks the current password under the same throttle
 //!   as `player.unlock`, then stores the new one through a `player.password_change` intent.
+//! - `player.pc_settings` and `player.pc_settings_set` (Story 6.35) read and save the PC settings
+//!   of the profiled player on this PC's session; a guest has none and nothing of theirs is saved.
 //! - `player.end_session` builds the `session.end` (device actor, the session's own `rev`) and
 //!   pushes the lock: `PAY_AT_COUNTER` for a bill, `LOGGED_OUT` (back to attract) when the time
 //!   was paid for already.
@@ -20,8 +22,9 @@ use std::sync::Arc;
 
 use arena_proto::{
     Actor, ActorKind, AppError, ErrorCode, IntentKind, IntentPayload, LockReason, PcAction,
-    PlayerAccountPage, PlayerAccountResult, PlayerChangePassword, PlayerEndResult,
-    PlayerPasswordChange, PlayerPasswordChangeResult, PlayerUnlock, PlayerUnlockResult, SessionEnd,
+    PcSettings, PlayerAccountPage, PlayerAccountResult, PlayerChangePassword, PlayerEndResult,
+    PlayerPasswordChange, PlayerPasswordChangeResult, PlayerPcSettingsResult, PlayerPcSettingsSet,
+    PlayerPcSettingsSetResult, PlayerUnlock, PlayerUnlockResult, SessionEnd,
 };
 use tokio::time::Instant;
 
@@ -90,6 +93,65 @@ pub(super) async fn account_page(
     tokio::task::spawn_blocking(move || dir.account_page(&kek.kek()?, &player_id, now))
         .await
         .map_err(|e| app(ErrorCode::Internal, format!("account read failed: {e}")))?
+}
+
+/// `player.pc_settings`: the settings saved for the profiled player on this PC's session. A guest,
+/// a PC with no session and a player who saved nothing all get an empty answer.
+pub(super) async fn pc_settings(
+    hub: &LanHub,
+    device: &str,
+) -> Result<PlayerPcSettingsResult, AppError> {
+    primary(hub)?;
+    let Some(player_id) = device_session(hub, device).await?.and_then(|s| s.player_id) else {
+        return Ok(PlayerPcSettingsResult::default());
+    };
+    let dir = Arc::clone(&hub.devices);
+    let settings = tokio::task::spawn_blocking(move || dir.pc_settings(&player_id))
+        .await
+        .map_err(|e| app(ErrorCode::Internal, format!("settings read failed: {e}")))??;
+    Ok(PlayerPcSettingsResult { settings })
+}
+
+/// `player.pc_settings_set`: saves a profiled player's change through a `player.pc_settings_set`
+/// intent (the device rule allows it only for the player on this PC's session). A guest's change is
+/// theirs for this session only: nothing is stored and the answer is `saved:false`. A bad value is
+/// `VALIDATION_FAILED` and nothing is stored either way.
+pub(super) async fn pc_settings_set(
+    hub: &LanHub,
+    device: &str,
+    patch: PcSettings,
+) -> Result<PlayerPcSettingsSetResult, AppError> {
+    primary(hub)?;
+    patch.validate()?;
+    if patch.is_empty() {
+        return Err(AppError::with_field(
+            ErrorCode::ValidationFailed,
+            "settings",
+            "choose at least one PC setting",
+        ));
+    }
+    let writer = hub
+        .writer
+        .clone()
+        .ok_or_else(|| app(ErrorCode::NotPrimary, "this hub is not the primary writer"))?;
+    let Some(player_id) = device_session(hub, device).await?.and_then(|s| s.player_id) else {
+        return Ok(PlayerPcSettingsSetResult { saved: false });
+    };
+    let save = intent(
+        hub.clock.now_ms(),
+        Actor {
+            kind: ActorKind::Device,
+            id: device.to_owned(),
+        },
+        IntentKind::PlayerPcSettingsSet,
+        IntentPayload::PlayerPcSettingsSet(PlayerPcSettingsSet {
+            player_id,
+            settings: patch,
+        }),
+    );
+    writer.submit_intent(save).await?;
+    tracing::info!(device_id = %device, "player PC settings saved");
+    Ok(PlayerPcSettingsSetResult { saved: true })
 }
 
 /// `player.password_change`: the current password is checked like the lock screen's (five wrong

@@ -9,11 +9,15 @@
 
 use std::path::PathBuf;
 
-use windows::Win32::Foundation::WAIT_OBJECT_0;
+use windows::Win32::Foundation::SetHandleInformation;
+use windows::Win32::Foundation::{HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, WAIT_OBJECT_0};
+use windows::Win32::Security::SECURITY_ATTRIBUTES;
+use windows::Win32::Storage::FileSystem::ReadFile;
 use windows::Win32::System::Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock};
+use windows::Win32::System::Pipes::CreatePipe;
 use windows::Win32::System::Threading::{
     CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW, GetExitCodeProcess,
-    PROCESS_INFORMATION, STARTUPINFOW, TerminateProcess, WaitForSingleObject,
+    PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW, TerminateProcess, WaitForSingleObject,
 };
 use windows::core::{PCWSTR, PWSTR};
 
@@ -127,14 +131,51 @@ impl CleanupHost for WinCleanupHost {
 /// Starts `cmd` as the token's user on `winsta0\default` with no window and waits for its exit
 /// code; a helper that hangs is ended.
 fn run_as(token: &Owned, cmd: &str, cwd: Option<String>) -> Result<(), String> {
+    run_as_capture(token, cmd, cwd, false).map(|_| ())
+}
+
+/// How much a helper's standard output may hold (the pipe's size): its whole output is read after
+/// it exits, so the pipe must hold all of it.
+const CAPTURE_BYTES: u32 = 256 * 1024;
+
+/// [`run_as`], also returning what the helper wrote to its standard output when `capture` is set
+/// (at most [`CAPTURE_BYTES`] of it; empty otherwise).
+pub(crate) fn run_as_capture(
+    token: &Owned,
+    cmd: &str,
+    cwd: Option<String>,
+    capture: bool,
+) -> Result<Vec<u8>, String> {
     // SAFETY: plain Win32 calls; every handle and block is released.
     unsafe {
+        // The write end is inheritable, the read end stays ours.
+        let (mut read, mut write) = (HANDLE::default(), HANDLE::default());
+        if capture {
+            let sa = SECURITY_ATTRIBUTES {
+                nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+                bInheritHandle: true.into(),
+                ..Default::default()
+            };
+            CreatePipe(&mut read, &mut write, Some(&sa), CAPTURE_BYTES)
+                .map_err(|e| format!("could not make a pipe for the helper: {e}"))?;
+        }
+        let (read, write) = (Owned(read), Owned(write));
+        if capture {
+            SetHandleInformation(read.0, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0))
+                .map_err(|e| format!("could not keep the pipe private: {e}"))?;
+        }
         let mut env: *mut core::ffi::c_void = std::ptr::null_mut();
         let env_ok = CreateEnvironmentBlock(&mut env, Some(token.0), false).is_ok();
         let mut desktop = wide(r"winsta0\default");
         let si = STARTUPINFOW {
             cb: std::mem::size_of::<STARTUPINFOW>() as u32,
             lpDesktop: PWSTR(desktop.as_mut_ptr()),
+            dwFlags: if capture {
+                STARTF_USESTDHANDLES
+            } else {
+                Default::default()
+            },
+            hStdOutput: write.0,
             ..Default::default()
         };
         let mut pi = PROCESS_INFORMATION::default();
@@ -146,7 +187,7 @@ fn run_as(token: &Owned, cmd: &str, cwd: Option<String>) -> Result<(), String> {
             Some(PWSTR(cmd.as_mut_ptr())),
             None,
             None,
-            false,
+            capture,
             CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
             env_ok.then_some(env as *const core::ffi::c_void),
             cwd.as_ref().map_or(PCWSTR::null(), |c| PCWSTR(c.as_ptr())),
@@ -159,6 +200,9 @@ fn run_as(token: &Owned, cmd: &str, cwd: Option<String>) -> Result<(), String> {
         created.map_err(|e| format!("could not start the helper: {e}"))?;
         let _thread = Owned(pi.hThread);
         let process = Owned(pi.hProcess);
+        // Only the helper may hold the write end now: closing ours makes the read end end when
+        // the helper exits.
+        drop(write);
         if WaitForSingleObject(process.0, HELPER_TIMEOUT_MS) != WAIT_OBJECT_0 {
             let _ = TerminateProcess(process.0, 1);
             return Err("the helper did not finish in time".into());
@@ -166,11 +210,25 @@ fn run_as(token: &Owned, cmd: &str, cwd: Option<String>) -> Result<(), String> {
         let mut code = 0u32;
         GetExitCodeProcess(process.0, &mut code)
             .map_err(|e| format!("could not read the helper's result: {e}"))?;
-        if code == 0 {
-            Ok(())
-        } else {
-            Err(format!("the helper failed (code {code})"))
+        if code != 0 {
+            return Err(format!("the helper failed (code {code})"));
         }
+        let mut out = Vec::new();
+        if capture {
+            let mut buf = vec![0u8; 8192];
+            loop {
+                let mut got = 0u32;
+                // The helper has exited: this ends with the pipe's last bytes, then an error.
+                if ReadFile(read.0, Some(&mut buf), Some(&mut got), None).is_err() || got == 0 {
+                    break;
+                }
+                out.extend_from_slice(&buf[..got as usize]);
+                if out.len() > CAPTURE_BYTES as usize {
+                    return Err("the helper wrote too much".into());
+                }
+            }
+        }
+        Ok(out)
     }
 }
 

@@ -225,3 +225,19 @@ Borderless-fullscreen games are not affected: the HUD draws over them like any w
   goes back to that field. "Password changed." is a `status`. Both fields are cleared the moment
   they are sent. After five wrong current passwords the fields and the button are disabled and the
   button carries "Too many tries. Try again in 0:60." counting down.
+
+## PC settings (Story 6.35)
+
+- "PC settings" is a row of the account menu, above Lock, for signed-in players and for guests. It
+  opens the panel in place of the rows; Back returns to them and Esc closes the menu as always.
+  Focus lands on the mouse speed slider once the panel has loaded.
+- The panel has four labelled controls: a Mouse speed slider (1 to 20, its value read out as "10
+  of 20" through `aria-valuetext`, moved with the arrow keys, Home and End), and Display, Sound
+  output and Keyboard layout as native lists that open with Enter or Space and move with the
+  arrow keys. A change is applied when the slider is released or a list item is chosen.
+- A new display mode raises an `alert` with a countdown ("Keep this display mode? It goes back in
+  15 s.") and a Keep this button. The countdown is text, not colour or motion alone. The display
+  list is disabled while it counts down. If it ends, the display goes back and a line says "The
+  display went back to what it was."
+- A failed change or an unreachable counter is an `alert` line under the controls with a warning
+  mark, not colour alone. A guest is told their choices last for this session only.

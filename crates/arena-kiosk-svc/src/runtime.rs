@@ -106,6 +106,9 @@ pub struct Ctx {
     pub cleanup: crate::cleanup::CleanupState,
     /// The games the Games tab started and the host that starts them (Story 6.23).
     pub games: crate::games::GameState,
+    /// The PC settings the player changed this session and the host that applies them (Story
+    /// 6.35).
+    pub pc_settings: crate::pc_settings::PcSettingsState,
 }
 
 impl Ctx {
@@ -241,6 +244,7 @@ impl Runtime {
             freezer: Mutex::new(None),
             cleanup,
             games: crate::games::GameState::default(),
+            pc_settings: crate::pc_settings::PcSettingsState::default(),
         });
         let (stop, stop_rx) = watch::channel(false);
         let tasks = vec![
@@ -305,6 +309,13 @@ impl Runtime {
             Arc::clone(&self.ctx),
             self.stop.subscribe(),
         )));
+    }
+
+    /// Lets the PC settings panel change the mouse, display, sound output and keyboard layout
+    /// through `host` (Story 6.35; Windows: the real PC; tests: a fake). Without this call the
+    /// panel's requests are refused as unsupported and the cleanup has nothing to put back.
+    pub fn pc_settings(&mut self, host: Arc<dyn crate::pc_settings::PcSettingsHost>) {
+        self.ctx.pc_settings.set_host(host);
     }
 
     /// The shared state (tests and the hosts read it).

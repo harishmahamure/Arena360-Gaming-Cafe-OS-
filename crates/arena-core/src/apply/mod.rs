@@ -60,6 +60,7 @@ mod order_place;
 mod order_ready;
 mod order_void;
 mod pc_command;
+mod pc_settings;
 mod plan_sales;
 pub(crate) mod plans;
 mod players;
@@ -180,6 +181,8 @@ pub(crate) enum Target {
     Branch(Option<String>),
     /// `kiosk.scan_reported`: the branch and the device's stored scan.
     KioskScan(Box<kiosk_scan::ScanTarget>),
+    /// `player.pc_settings_set`: the player and their stored PC settings.
+    PcSettings(Box<pc_settings::PcSettingsTarget>),
     /// `device.admin_exit`: the branch and whether the exit id is taken.
     AdminExit(Box<admin_exit::ExitTarget>),
     /// `device.admin_relock`: the exit row, if it exists.
@@ -275,6 +278,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         | P::KioskLauncherOpened(_)
         | P::KioskGamePlayRecorded(_) => kiosk_log::load(tx)?,
         P::KioskScanReported(_) => kiosk_scan::load(tx, intent)?,
+        P::PlayerPcSettingsSet(p) => pc_settings::load(tx, p)?,
         P::DeviceAdminExit(p) => admin_exit::load_exit(tx, p)?,
         P::DeviceAdminRelock(p) => admin_exit::load_relock(tx, p)?,
         P::DeviceAdminUnlock(p) => admin_exit::load_unlock(tx, p)?,

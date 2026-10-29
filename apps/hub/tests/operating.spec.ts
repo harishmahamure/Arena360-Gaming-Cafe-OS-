@@ -56,6 +56,7 @@ function newHub(): Hub {
       ["branch.opening_hours_set", { value: "false", rev: 1 }],
       ["branch.fulfilment", { value: "counter", rev: 1 }],
       ["kiosk.volume_default", { value: "50", rev: 1 }],
+      ["kiosk.display_modes", { value: "", rev: 1 }],
       ["system.backup_dir", { value: "", rev: 1 }],
       ["system.media_cap_gb", { value: "10", rev: 1 }],
       ["branch.ads_consent", { value: NO_CONSENT, rev: 1 }],
@@ -278,6 +279,7 @@ test("Hours lists the seven days closed, saves a week with a past-midnight day, 
     en["hub.settings.branch.nav.billing"],
     en["hub.settings.branch.nav.tax"],
     en["hub.settings.branch.nav.logo"],
+    en["hub.settings.branch.nav.display"],
     en["hub.settings.branch.nav.ads"],
   ]);
   await expect(
@@ -394,6 +396,51 @@ test("Service saves fulfilment and the kiosk volume slider, which the keyboard m
   await expect(page.locator("#service-volume-error")).toContainText(
     en["hub.settings.service.invalid.volume"],
   );
+});
+
+test("Kiosk display saves the allowed display modes, and an empty list means each PC's own mode", async ({
+  page,
+}) => {
+  const hub = newHub();
+  await open(page, hub, "/settings/branch/display");
+  const box = page.getByLabel(en["hub.settings.kiosk_display.modes"]);
+  await expect(box).toHaveValue("");
+  await expect(save(page)).toHaveAttribute("aria-disabled", "true");
+  await expect(page.getByText(en["hub.settings.kiosk_display.intro"])).toBeVisible();
+  await expectTarget(box);
+  await box.fill("1920x1080@144, 1920x1080@60");
+  await expectNoSeriousAxe(page);
+  await save(page).click();
+  await expect(page.getByTestId("display-status")).toContainText(en["hub.settings.saved"]);
+  expect(hub.intents).toEqual([
+    {
+      kind: "settings.set",
+      key: "kiosk.display_modes",
+      value: "1920x1080@144, 1920x1080@60",
+      base_rev: 1,
+    },
+  ]);
+  // A list the Hub refuses is named in place and nothing changes.
+  await box.fill("1920x1080");
+  hub.refuse = {
+    status: 422,
+    body: { code: "VALIDATION_FAILED", message: "bad", field: "kiosk.display_modes" },
+  };
+  await save(page).click();
+  await expect(page.locator("#display-modes-error")).toContainText(
+    en["hub.settings.kiosk_display.invalid"],
+  );
+  await expect(box).toHaveValue("1920x1080");
+  // Emptying it saves the empty default.
+  await box.fill("");
+  await save(page).click();
+  await expect(page.getByTestId("display-status")).toContainText(en["hub.settings.saved"]);
+  expect(hub.intents.at(-1)).toEqual({
+    kind: "settings.set",
+    key: "kiosk.display_modes",
+    value: "",
+    base_rev: 2,
+  });
 });
 
 test("System saves a backup location and shows the Hub's writable check inline", async ({

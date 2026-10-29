@@ -132,6 +132,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             ),
             _ => Err(internal_target()),
         },
+        IntentPayload::PlayerPcSettingsSet(p) => match target {
+            Target::PcSettings(t) => super::pc_settings::validate(intent, p, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::KioskScanReported(p) => match target {
             Target::KioskScan(t) => super::kiosk_scan::validate(intent, p, t),
             _ => Err(internal_target()),

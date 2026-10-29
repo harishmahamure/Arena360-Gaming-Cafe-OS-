@@ -302,6 +302,7 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
                         crate::session::sync(ctx, session, true);
                         if fresh {
                             crate::volume::reset_for_session(ctx);
+                            crate::pc_settings::session_started(ctx);
                         }
                         ack(client, &cmd_id).await;
                     }

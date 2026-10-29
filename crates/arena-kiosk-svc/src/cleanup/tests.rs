@@ -71,6 +71,7 @@ fn ctx_in(dir: &std::path::Path, retry: Duration) -> Arc<Ctx> {
         freezer: Mutex::new(None),
         cleanup,
         games: crate::games::GameState::default(),
+        pc_settings: crate::pc_settings::PcSettingsState::default(),
     })
 }
 
@@ -274,7 +275,8 @@ fn the_standard_pipeline_names_its_steps_in_order() {
             "clipboard",
             "temp_files",
             "volume",
-            "power_plan"
+            "power_plan",
+            "pc_settings"
         ]
     );
 }
@@ -1413,5 +1415,57 @@ async fn a_game_still_open_at_session_end_has_its_play_recorded_once_by_the_prog
             .count(),
         1
     );
+    t.stop();
+}
+
+// ---- Story 6.35: PC settings ----
+
+#[tokio::test]
+async fn the_pc_settings_step_puts_the_pc_back_before_the_lock_shows() {
+    let t = start().await;
+    let pc = Arc::new(crate::pc_settings::fake::FakeHost::default());
+    t.ctx.pc_settings.set_host(pc.clone());
+    t.start_session();
+    // The player changes the mouse and the keyboard layout (the Hub link is down here, so the
+    // save is HUB_SLOW; the change stays applied).
+    for body in [
+        serde_json::json!({ "mouse_speed": 18 }),
+        serde_json::json!({ "keyboard_layout": "04070407" }),
+    ] {
+        let _ = crate::pc_settings::change(&t.ctx, body).await;
+    }
+    assert_eq!(pc.pc().mouse_speed, 18);
+    t.lock(LockReason::PayAtCounter);
+    t.shows(LockReason::PayAtCounter).await;
+    assert!(t.failures().is_empty(), "{:?}", t.failures());
+    assert_eq!(t.done(), 1);
+    assert_eq!(pc.pc().mouse_speed, 10);
+    assert_eq!(pc.pc().keyboard_layout.as_deref(), Some("04090409"));
+    t.stop();
+}
+
+#[tokio::test]
+async fn a_pc_setting_that_will_not_go_back_holds_the_lock_and_reports_the_step() {
+    let t = start().await;
+    let pc = Arc::new(crate::pc_settings::fake::FakeHost::default());
+    t.ctx.pc_settings.set_host(pc.clone());
+    t.start_session();
+    let _ = crate::pc_settings::change(&t.ctx, serde_json::json!({ "mouse_speed": 18 })).await;
+    pc.fail("mouse", true);
+    t.lock(LockReason::PayAtCounter);
+    t.held().await;
+    assert_eq!(t.reason(), Some(LockReason::PreparingPc));
+    assert_eq!(
+        t.failures(),
+        [(
+            "pc_settings".to_owned(),
+            "1 PC setting would not go back".to_owned()
+        )]
+    );
+    // Staff retry once the PC works again: the step finishes and the lock shows.
+    pc.fail("mouse", false);
+    t.command("c1", PcAction::CleanupRetry);
+    t.shows(LockReason::PayAtCounter).await;
+    assert_eq!(pc.pc().mouse_speed, 10);
     t.stop();
 }

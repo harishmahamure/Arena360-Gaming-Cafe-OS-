@@ -16,6 +16,7 @@ use crate::error::{AppError, ErrorCode};
 use crate::intent::Intent;
 use crate::kiosk::MostPlayed;
 use crate::pc_command::{LockReason, PcAck, PcAction};
+use crate::pc_settings::{PcSettings, PlayerPcSettingsResult, PlayerPcSettingsSetResult};
 use crate::player_login::{PlayerAuthResult, PlayerAuthenticate};
 use crate::player_session::{
     PlayerAccountPage, PlayerAccountResult, PlayerChangePassword, PlayerEndResult, PlayerExtend,
@@ -134,6 +135,20 @@ pub enum FrameBody {
     /// The Hub's typed answer to `player.password_change`.
     #[serde(rename = "player.password_change_result")]
     PlayerPasswordChangeResult(PlayerPasswordChangeResult),
+    /// A session starts or the player opens PC settings: the settings saved for them (paired
+    /// sessions only; Story 6.35).
+    #[serde(rename = "player.pc_settings")]
+    PlayerPcSettingsRequest,
+    /// The settings saved for the player on this PC's session.
+    #[serde(rename = "player.pc_settings_result")]
+    PlayerPcSettingsResult(PlayerPcSettingsResult),
+    /// The player changed some PC settings: the Hub saves a profiled player's choices (paired
+    /// sessions only; Story 6.35).
+    #[serde(rename = "player.pc_settings_set")]
+    PlayerPcSettingsSet(PcSettings),
+    /// Whether the Hub saved the change (`false` for a guest).
+    #[serde(rename = "player.pc_settings_set_result")]
+    PlayerPcSettingsSetResult(PlayerPcSettingsSetResult),
     /// The player chose Log out: end their own session (paired sessions only).
     #[serde(rename = "player.end_session")]
     PlayerEndSession,
@@ -190,7 +205,7 @@ pub enum FrameBody {
 }
 
 /// Every known `kind`.
-pub const FRAME_KINDS: [&str; 47] = [
+pub const FRAME_KINDS: [&str; 51] = [
     "hello",
     "hello.ok",
     "intent.submit",
@@ -221,6 +236,10 @@ pub const FRAME_KINDS: [&str; 47] = [
     "player.account_page_result",
     "player.password_change",
     "player.password_change_result",
+    "player.pc_settings",
+    "player.pc_settings_result",
+    "player.pc_settings_set",
+    "player.pc_settings_set_result",
     "player.end_session",
     "player.end_result",
     "player.unlock",
@@ -274,6 +293,10 @@ impl FrameBody {
             Self::PlayerAccountPageResult(_) => "player.account_page_result",
             Self::PlayerPasswordChange(_) => "player.password_change",
             Self::PlayerPasswordChangeResult(_) => "player.password_change_result",
+            Self::PlayerPcSettingsRequest => "player.pc_settings",
+            Self::PlayerPcSettingsResult(_) => "player.pc_settings_result",
+            Self::PlayerPcSettingsSet(_) => "player.pc_settings_set",
+            Self::PlayerPcSettingsSetResult(_) => "player.pc_settings_set_result",
             Self::PlayerEndSession => "player.end_session",
             Self::PlayerEndResult(_) => "player.end_result",
             Self::PlayerUnlock(_) => "player.unlock",

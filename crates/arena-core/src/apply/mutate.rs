@@ -246,6 +246,10 @@ pub(super) fn mutate(
             ),
             _ => Err(mismatch()),
         },
+        IntentPayload::PlayerPcSettingsSet(p) => match target {
+            Target::PcSettings(t) => super::pc_settings::mutate(tx, p, t),
+            _ => Err(mismatch()),
+        },
         IntentPayload::KioskScanReported(p) => match target {
             Target::KioskScan(t) => super::kiosk_scan::mutate(tx, intent, p, t),
             _ => Err(mismatch()),

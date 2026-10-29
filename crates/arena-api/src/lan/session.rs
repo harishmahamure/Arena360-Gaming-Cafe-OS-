@@ -644,6 +644,20 @@ impl Ctx<'_> {
                 }
                 Err(e) => self.reply(Frame::error(rid, e)).await,
             },
+            "player.pc_settings" => match self.paired_device("player.pc_settings") {
+                Ok(device) => {
+                    self.spawn_player_pc_settings(rid, device, permits, tasks)
+                        .await
+                }
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
+            "player.pc_settings_set" => match self.check_player_pc_settings_set(value) {
+                Ok((device, patch)) => {
+                    self.spawn_player_pc_settings_set(rid, device, patch, permits, tasks)
+                        .await
+                }
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
             "player.password_change" => match self.check_player_password_change(value) {
                 Ok((device, request)) => {
                     self.spawn_player_password_change(rid, device, request, permits, tasks)
@@ -949,6 +963,19 @@ impl Ctx<'_> {
         });
     }
 
+    fn check_player_pc_settings_set(
+        &self,
+        value: Value,
+    ) -> Result<(String, arena_proto::PcSettings), AppError> {
+        let device = self.paired_device("player.pc_settings_set")?;
+        let frame = parse_frame_value(value).map_err(|e| e.error)?;
+        let FrameBody::PlayerPcSettingsSet(patch) = frame.body else {
+            return Err(app(ErrorCode::BadFrame, "malformed player.pc_settings_set"));
+        };
+        patch.validate()?;
+        Ok((device, patch))
+    }
+
     fn check_player_password_change(
         &self,
         value: Value,
@@ -1180,6 +1207,51 @@ impl Ctx<'_> {
             let _permit = permit;
             let reply = match super::player_account::account_page(&hub, &device).await {
                 Ok(result) => Frame::new(rid, FrameBody::PlayerAccountPageResult(result)),
+                Err(e) => Frame::error(rid, e),
+            };
+            let _ = out.send(text(&reply)).await;
+        });
+    }
+
+    async fn spawn_player_pc_settings(
+        &self,
+        rid: String,
+        device: String,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let (hub, out) = (Arc::clone(self.hub), self.out.clone());
+        tasks.spawn(async move {
+            let _permit = permit;
+            let reply = match super::player_account::pc_settings(&hub, &device).await {
+                Ok(result) => Frame::new(rid, FrameBody::PlayerPcSettingsResult(result)),
+                Err(e) => Frame::error(rid, e),
+            };
+            let _ = out.send(text(&reply)).await;
+        });
+    }
+
+    async fn spawn_player_pc_settings_set(
+        &self,
+        rid: String,
+        device: String,
+        patch: arena_proto::PcSettings,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let (hub, out) = (Arc::clone(self.hub), self.out.clone());
+        tasks.spawn(async move {
+            let _permit = permit;
+            let reply = match super::player_account::pc_settings_set(&hub, &device, patch).await {
+                Ok(result) => Frame::new(rid, FrameBody::PlayerPcSettingsSetResult(result)),
                 Err(e) => Frame::error(rid, e),
             };
             let _ = out.send(text(&reply)).await;

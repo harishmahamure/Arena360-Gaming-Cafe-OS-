@@ -75,11 +75,12 @@ pub enum Table {
     LibraryInstalls,
     LibraryDismissals,
     GamePlays,
+    PlayerPcSettings,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 48] = [
+    pub const ALL: [Table; 49] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -128,6 +129,7 @@ impl Table {
         Table::LibraryInstalls,
         Table::LibraryDismissals,
         Table::GamePlays,
+        Table::PlayerPcSettings,
     ];
 
     /// The SQL table name.
@@ -181,6 +183,7 @@ impl Table {
             Self::LibraryInstalls => "library_installs",
             Self::LibraryDismissals => "library_dismissals",
             Self::GamePlays => "game_plays",
+            Self::PlayerPcSettings => "player_pc_settings",
         }
     }
 
@@ -208,7 +211,7 @@ impl Table {
             Self::StockMoves => &["move_id"],
             Self::Rates => &["rate_id"],
             Self::Players => &["player_id"],
-            Self::Wallets | Self::CreditBalances => &["player_id"],
+            Self::Wallets | Self::CreditBalances | Self::PlayerPcSettings => &["player_id"],
             Self::PlayerPacks
             | Self::Alerts
             | Self::GroupBills
@@ -280,6 +283,7 @@ impl Table {
             | Self::LibraryInstalls
             | Self::LibraryDismissals
             | Self::GamePlays
+            | Self::PlayerPcSettings
             | Self::Plans => true,
             Self::Settings
             | Self::RolePerms
@@ -389,6 +393,9 @@ pub enum RowKey {
         player_id: String,
     },
     CreditBalances {
+        player_id: String,
+    },
+    PlayerPcSettings {
         player_id: String,
     },
     WalletTxns {
@@ -512,6 +519,7 @@ impl RowKey {
             Self::Wallets { .. } => Table::Wallets,
             Self::WalletTxns { .. } => Table::WalletTxns,
             Self::CreditBalances { .. } => Table::CreditBalances,
+            Self::PlayerPcSettings { .. } => Table::PlayerPcSettings,
         }
     }
 
@@ -561,7 +569,9 @@ impl RowKey {
                 target_id,
             } => format!("{coupon_id}/{target_kind}/{target_id}"),
             Self::Players { player_id } => player_id.clone(),
-            Self::Wallets { player_id } | Self::CreditBalances { player_id } => player_id.clone(),
+            Self::Wallets { player_id }
+            | Self::CreditBalances { player_id }
+            | Self::PlayerPcSettings { player_id } => player_id.clone(),
             Self::Consents { consent_id } => consent_id.clone(),
             Self::Sessions { id }
             | Self::SessionSegments { id }
@@ -707,6 +717,9 @@ impl RowKey {
             Table::CreditBalances => Self::CreditBalances {
                 player_id: text("player_id")?,
             },
+            Table::PlayerPcSettings => Self::PlayerPcSettings {
+                player_id: text("player_id")?,
+            },
         })
     }
 
@@ -755,7 +768,9 @@ impl RowKey {
                 target_id,
             } => vec![coupon_id, target_kind, target_id],
             Self::Players { player_id } => vec![player_id],
-            Self::Wallets { player_id } | Self::CreditBalances { player_id } => vec![player_id],
+            Self::Wallets { player_id }
+            | Self::CreditBalances { player_id }
+            | Self::PlayerPcSettings { player_id } => vec![player_id],
             Self::Consents { consent_id } => vec![consent_id],
             Self::Sessions { id }
             | Self::SessionSegments { id }

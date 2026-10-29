@@ -26,6 +26,7 @@ mod library_installs;
 mod migrations;
 mod notify;
 mod outbox;
+mod pc_settings;
 mod plans;
 mod player_packs;
 mod players;
@@ -144,6 +145,7 @@ pub use outbox::{
     ReceiptSource, STATE_DONE, STATE_FAILED, STATE_QUEUED, find_outbox, finish_outbox,
     insert_outbox, latest_print_state, list_queued_outbox, load_receipt_source,
 };
+pub use pc_settings::{find_pc_settings, insert_pc_settings, update_pc_settings};
 pub use plans::{
     PlanRow, find_plan, insert_plan, insert_plan_group, list_plan_groups, list_plans, update_plan,
 };
@@ -1605,6 +1607,17 @@ impl Store {
             return Ok(Vec::new());
         }
         top_played(&self.conn, since, limit)
+    }
+
+    /// The PC settings `player_id` saved (`None` before they saved any or before migration 67).
+    pub fn pc_settings(
+        &self,
+        player_id: &str,
+    ) -> Result<Option<arena_proto::PcSettings>, AppError> {
+        if !self.table_exists("player_pc_settings")? {
+            return Ok(None);
+        }
+        find_pc_settings(&self.conn, player_id)
     }
 
     /// When `player_id` last finished each game (empty before migration 65): see [`last_played`].

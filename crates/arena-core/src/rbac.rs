@@ -149,6 +149,26 @@ fn device_changes_own_password(
         .is_some_and(|(_, player)| player.as_deref() == Some(change.player_id.as_str())))
 }
 
+/// Whether a paired device may save PC settings for the player on its own PC (Story 6.35): the
+/// player changed a mouse, display, sound or keyboard setting at the kiosk's PC settings panel.
+/// The Hub builds this `player.pc_settings_set` from the device's session; a kiosk cannot send it
+/// (it is outside the paired scope). Another player's settings stay denied.
+fn device_saves_own_pc_settings(
+    tx: &StoreTx<'_>,
+    p: Permission,
+    intent: &Intent,
+) -> Result<bool, AppError> {
+    use arena_proto::IntentPayload;
+    let IntentPayload::PlayerPcSettingsSet(save) = &intent.payload else {
+        return Ok(false);
+    };
+    if p != Permission::PlayerManage {
+        return Ok(false);
+    }
+    Ok(arena_store::live_session_on_device(tx, &intent.actor.id)?
+        .is_some_and(|(_, player)| player.as_deref() == Some(save.player_id.as_str())))
+}
+
 /// Whether a paired device may end the session on its own PC (Story 6.17): the player chose Log
 /// out at the kiosk. The Hub builds that `session.end` from the device's session; a kiosk cannot
 /// send it (it is outside the paired scope). Another PC's session stays denied.
@@ -265,6 +285,7 @@ pub fn check(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
                     || device_extends_own_session(tx, p, intent)?
                     || device_places_own_order(tx, p, intent)?
                     || device_changes_own_password(tx, p, intent)?
+                    || device_saves_own_pc_settings(tx, p, intent)?
             }
         },
     };

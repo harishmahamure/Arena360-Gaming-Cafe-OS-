@@ -264,6 +264,15 @@ impl DeviceDirectory {
         crate::player_account::player_account(&store, player_id, device_id, now_ms)
     }
 
+    /// The PC settings `player_id` saved (Story 6.35); all absent when they saved none.
+    pub fn pc_settings(&self, player_id: &str) -> Result<arena_proto::PcSettings, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?;
+        Ok(store.pc_settings(player_id)?.unwrap_or_default())
+    }
+
     /// What the Account page shows for `player_id` (Story 6.34).
     pub fn account_page(
         &self,

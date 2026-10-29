@@ -505,6 +505,16 @@ async fn a_scan_that_completes_while_the_hub_is_down_is_queued_and_applied_once_
     );
     assert!(hub.scan().is_none());
     assert_eq!(kiosk.last_scan(), Some(start));
+    // Story 6.26: the launchers the scan found are kept for the Games tab's launcher cards.
+    let recorded = kiosk
+        .rt()
+        .ctx()
+        .queue
+        .lock()
+        .unwrap()
+        .kv_get(arena_kiosk_svc::launchers::SCAN_KEY)
+        .unwrap();
+    assert_eq!(recorded.map(|(v, _)| v).as_deref(), Some("[]"));
     // It is queued once, not once per tick.
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert_eq!(kiosk.queued_scans(), 1);

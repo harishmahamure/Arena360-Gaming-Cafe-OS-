@@ -89,6 +89,11 @@ pub trait GameHost: Send + Sync {
     fn power_plan(&self) -> Result<String, String>;
     /// Makes the power plan `id` the active one (Story 6.25).
     fn set_power_plan(&self, id: &str) -> Result<(), String>;
+    /// The id of a running process whose image file name is one of `images` (Story 6.26: a
+    /// launcher that is already open). The default finds none.
+    fn find_process(&self, _images: &[&str]) -> Option<u32> {
+        None
+    }
 }
 
 /// The games this service started that have not exited yet.
@@ -98,6 +103,11 @@ pub struct GameState {
     running: Mutex<HashMap<String, u32>>,
     /// Games whose start is in progress, so two quick requests cannot start one twice.
     starting: Mutex<HashSet<String>>,
+    /// The launchers (Story 6.26) this service opened that have not exited yet, by launcher id.
+    /// Apart from `running`: an open launcher is not a game running.
+    launchers: Mutex<HashMap<String, u32>>,
+    /// Launchers whose open is in progress.
+    opening: Mutex<HashSet<String>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -110,7 +120,7 @@ impl GameState {
         *lock(&self.host) = Some(host);
     }
 
-    fn host(&self) -> Option<Arc<dyn GameHost>> {
+    pub(crate) fn host(&self) -> Option<Arc<dyn GameHost>> {
         lock(&self.host).clone()
     }
 
@@ -136,6 +146,29 @@ impl GameState {
 
     fn started(&self, id: &str, pid: u32) {
         lock(&self.running).insert(id.to_owned(), pid);
+    }
+
+    /// The process of launcher `id` when this service opened it and it is still running.
+    pub(crate) fn launcher_pid(&self, id: &str, host: &dyn GameHost) -> Option<u32> {
+        let pid = lock(&self.launchers).get(id).copied()?;
+        if host.alive(pid) {
+            Some(pid)
+        } else {
+            lock(&self.launchers).remove(id);
+            None
+        }
+    }
+
+    pub(crate) fn begin_launcher(&self, id: &str) -> bool {
+        lock(&self.opening).insert(id.to_owned())
+    }
+
+    pub(crate) fn end_launcher(&self, id: &str) {
+        lock(&self.opening).remove(id);
+    }
+
+    pub(crate) fn launcher_started(&self, id: &str, pid: u32) {
+        lock(&self.launchers).insert(id.to_owned(), pid);
     }
 
     /// Forgets the games that have exited; answers how many are still running.
@@ -598,6 +631,7 @@ pub mod fake {
         plan: String,
         plan_sets: Vec<String>,
         plan_fail: Option<String>,
+        outside: Vec<(String, u32)>,
     }
 
     impl Default for FakeGames {
@@ -614,6 +648,7 @@ pub mod fake {
                     plan: BALANCED_PLAN.into(),
                     plan_sets: Vec::new(),
                     plan_fail: None,
+                    outside: Vec::new(),
                 }),
             }
         }
@@ -665,6 +700,16 @@ pub mod fake {
         /// Makes the PC run on power plan `id`.
         pub fn set_plan(&self, id: &str) {
             self.inner.lock().unwrap().plan = id.to_owned();
+        }
+
+        /// Makes a process with image `image` (any of the names asked for) appear as running with
+        /// id `pid`, as if started outside this service.
+        pub fn show_process(&self, image: &str, pid: u32) {
+            self.inner
+                .lock()
+                .unwrap()
+                .outside
+                .push((image.to_owned(), pid));
         }
 
         /// Every plan switched to, in order.
@@ -721,8 +766,17 @@ pub mod fake {
             inner.plan_sets.push(id.to_owned());
             Ok(())
         }
+
+        fn find_process(&self, images: &[&str]) -> Option<u32> {
+            let inner = self.inner.lock().unwrap();
+            inner
+                .outside
+                .iter()
+                .find(|(image, _)| images.iter().any(|i| i.eq_ignore_ascii_case(image)))
+                .map(|(_, pid)| *pid)
+        }
     }
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

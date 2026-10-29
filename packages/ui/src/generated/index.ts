@@ -206,6 +206,7 @@ export type { KioskGameLaunched } from "./KioskGameLaunched";
 export type { KioskHubState } from "./KioskHubState";
 export type { KioskHubStatus } from "./KioskHubStatus";
 export type { KioskInstall } from "./KioskInstall";
+export type { KioskLauncherOpened } from "./KioskLauncherOpened";
 export type { KioskLibraryEntry } from "./KioskLibraryEntry";
 export type { KioskLog } from "./KioskLog";
 export type { KioskLogLevel } from "./KioskLogLevel";

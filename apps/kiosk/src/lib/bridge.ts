@@ -26,7 +26,15 @@ import {
   type LogoutOutcome,
   type UnlockOutcome,
 } from "./account";
-import { gamesOf, launchOf, type GameCard, type GamesView, type LaunchResult } from "./games";
+import {
+  gamesOf,
+  launchOf,
+  launchersOf,
+  type GameCard,
+  type GamesView,
+  type LaunchResult,
+  type LauncherCardData,
+} from "./games";
 import { LOGIN_TIMEOUT_MS, outcomeOf, type LoginOutcome } from "./login";
 import { PICKER_TIMEOUT_MS, plansOf, startOf, type PlansOutcome, type StartOutcome } from "./plans";
 import { SIGNUP_TIMEOUT_MS, signupOutcomeOf, type SignupOutcome } from "./signup";
@@ -579,6 +587,29 @@ export async function loadGames(): Promise<GamesView | null> {
 export async function launchGame(card: Pick<GameCard, "id" | "name">): Promise<LaunchResult> {
   if (!inTauri()) return "failed";
   const answer = await ask(CMD.gameLaunch, { id: card.id, name: card.name });
+  return isAnswer(answer) && answer.ok ? launchOf(answer.body) : "failed";
+}
+
+/**
+ * The launcher cards (Story 6.26): the launchers installed on this PC and whether each is open.
+ * `null` outside Tauri, or when the service does not answer.
+ */
+export async function loadLaunchers(): Promise<LauncherCardData[] | null> {
+  if (!inTauri()) return null;
+  const answer = await ask(CMD.launchers);
+  return isAnswer(answer) && answer.ok ? launchersOf(answer.body) : null;
+}
+
+/**
+ * Opens a launcher from its card (Story 6.26), signed out on its login screen. The service names
+ * the launcher from `id` alone; the shell brings an open launcher's window forward and raises the
+ * HUD toast when it will not open, so the caller only reads the result.
+ */
+export async function openLauncher(
+  card: Pick<LauncherCardData, "id" | "name">,
+): Promise<LaunchResult> {
+  if (!inTauri()) return "failed";
+  const answer = await ask(CMD.launcherOpen, { id: card.id, name: card.name });
   return isAnswer(answer) && answer.ok ? launchOf(answer.body) : "failed";
 }
 

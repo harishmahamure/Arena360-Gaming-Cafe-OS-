@@ -19,6 +19,9 @@ use std::sync::Mutex;
 
 use arena_proto::BoosterPriority;
 use windows::Win32::Foundation::{HWND, LPARAM, WAIT_OBJECT_0, WAIT_TIMEOUT};
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+};
 use windows::Win32::System::Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock};
 use windows::Win32::System::Registry::{
     HKEY_CLASSES_ROOT, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ, RegGetValueW,
@@ -269,6 +272,39 @@ impl GameHost for WinGames {
             return Err("not a power plan id".into());
         }
         powercfg(&["/setactive", id]).map(|_| ())
+    }
+
+    fn find_process(&self, images: &[&str]) -> Option<u32> {
+        find_image(images)
+    }
+}
+
+/// The id of a running process whose image file name is one of `images` (any case).
+fn find_image(images: &[&str]) -> Option<u32> {
+    // SAFETY: a snapshot walked with a correctly sized entry, then closed.
+    unsafe {
+        let snap = Owned(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?);
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        if Process32FirstW(snap.0, &mut entry).is_err() {
+            return None;
+        }
+        loop {
+            let len = entry
+                .szExeFile
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(entry.szExeFile.len());
+            let image = String::from_utf16_lossy(&entry.szExeFile[..len]);
+            if images.iter().any(|i| i.eq_ignore_ascii_case(&image)) {
+                return Some(entry.th32ProcessID);
+            }
+            if Process32NextW(snap.0, &mut entry).is_err() {
+                return None;
+            }
+        }
     }
 }
 

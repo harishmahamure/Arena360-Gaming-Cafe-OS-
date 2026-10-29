@@ -137,6 +137,13 @@ enum Op {
         slot: u8,
         kind: u8,
     },
+    /// `launcher.opened` (Story 6.26) by a registered device: steam, epic or riot writes exactly
+    /// one `device_events` row `launcher_opened`; any other launcher, a `base_rev` or a
+    /// non-device actor is refused and writes nothing.
+    LauncherOpen {
+        slot: u8,
+        kind: u8,
+    },
     /// `kiosk.scan_reported` (Story 6.4) by a registered kiosk: a good report at a random time
     /// before now, or one with too many entries, a control character, an empty path or a future
     /// time. It is stored only when it is valid and newer than the device's stored scan; a refusal
@@ -649,6 +656,7 @@ fn op() -> impl Strategy<Value = Op> {
                 who,
             }),
         1 => (0..3u8, 0..4u8).prop_map(|(slot, kind)| Op::GameLaunch { slot, kind }),
+        1 => (0..3u8, 0..6u8).prop_map(|(slot, kind)| Op::LauncherOpen { slot, kind }),
         2 => (0..3u8, 0..8u8, 0..4u8, 1..=60_000i64)
             .prop_map(|(slot, kind, entries, back_ms)| Op::Scan {
                 slot,
@@ -2346,6 +2354,48 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let (before, rows) = (hub.change_count(), events(hub));
             let out = hub.submit_new(intent);
             if *kind == 0 && out.is_ok() {
+                prop_assert_eq!(hub.change_count(), before + 1);
+                prop_assert_eq!(events(hub), rows + 1);
+            } else {
+                prop_assert!(out.is_err(), "{:?}", out);
+                prop_assert_eq!(hub.change_count(), before);
+                prop_assert_eq!(events(hub), rows);
+            }
+        }
+        Op::LauncherOpen { slot, kind } => {
+            if !hub.bootstrapped {
+                return Ok(());
+            }
+            let devices = hub.reader.rows(Table::Devices).unwrap();
+            let Some(row) = devices.get(usize::from(*slot)) else {
+                return Ok(());
+            };
+            let device = text(row, "device_id");
+            let launcher = match *kind {
+                0 => "steam",
+                1 => "epic",
+                2 => "riot",
+                _ => "battlenet",
+            };
+            let opened = arena_proto::KioskLauncherOpened {
+                launcher: launcher.into(),
+            };
+            let mut intent = hub.intent(IntentPayload::KioskLauncherOpened(opened), None);
+            intent.actor = Actor {
+                kind: if *kind == 4 {
+                    ActorKind::System
+                } else {
+                    ActorKind::Device
+                },
+                id: device,
+            };
+            if *kind == 5 {
+                intent.base_rev = Some(1);
+            }
+            let events = |hub: &Hub| hub.reader.rows(Table::DeviceEvents).unwrap().len();
+            let (before, rows) = (hub.change_count(), events(hub));
+            let out = hub.submit_new(intent);
+            if *kind <= 2 && out.is_ok() {
                 prop_assert_eq!(hub.change_count(), before + 1);
                 prop_assert_eq!(events(hub), rows + 1);
             } else {

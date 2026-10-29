@@ -298,6 +298,40 @@ async fn game_launch<R: Runtime>(
     Ok(answer)
 }
 
+/// The launcher cards (Story 6.26): IPC `launchers`, answered with `{launchers: [{id, name,
+/// running}]}` (only the launchers installed on this PC). `None` when the service did not
+/// answer.
+#[tauri::command]
+async fn launchers(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
+    Ok(service_request(&bridge, "launchers", serde_json::Value::Null).await)
+}
+
+/// Opens Steam, Epic or Riot from its card (Story 6.26): IPC `launcher_open{id}`, answered like
+/// `game_launch`. A launcher that is already open has its window brought to the front here (this
+/// runs in the player's session); one that did not open raises the HUD's "Couldn't start <name>"
+/// toast. `name` only words that toast: the service takes the launcher from `id`.
+#[tauri::command]
+async fn launcher_open<R: Runtime>(
+    id: String,
+    name: String,
+    app: tauri::AppHandle<R>,
+    bridge: tauri::State<'_, Arc<Bridge>>,
+) -> Result<Option<Answer>, ()> {
+    let answer = service_request(&bridge, "launcher_open", serde_json::json!({ "id": id })).await;
+    match bridge::launch_outcome(answer.as_ref()) {
+        LaunchOutcome::Started => {}
+        LaunchOutcome::AlreadyRunning(pid) => {
+            if !games::bring_forward(pid) {
+                tracing::warn!(pid, "no window to bring forward for the open launcher");
+            }
+        }
+        LaunchOutcome::Failed => {
+            let _ = app.emit(GAME_LAUNCH_FAILED_EVENT, name);
+        }
+    }
+    Ok(answer)
+}
+
 /// The password typed on the player's own lock screen (Story 6.17): sent to the service only, as
 /// IPC `player_unlock`, and dropped here. The answer is the Hub's outcome (`{outcome, ...}`).
 #[tauri::command]
@@ -506,7 +540,9 @@ fn main() {
             player_extend_options,
             player_extend,
             games,
-            game_launch
+            game_launch,
+            launchers,
+            launcher_open
         ])
         .on_window_event(|_window, event| {
             // The kiosk is the shell: nothing closes it (admin exit comes in Story 1.20).

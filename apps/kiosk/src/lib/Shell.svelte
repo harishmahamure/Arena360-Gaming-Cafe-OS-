@@ -5,7 +5,7 @@
   import AccountMenu from "./AccountMenu.svelte";
   import { callStaff } from "./bridge";
   import Games from "./Games.svelte";
-  import type { GameCard } from "./games";
+  import type { GameCard, LauncherCardData } from "./games";
   import { INFO_TOAST_MS } from "./hud";
   import MessagesBell from "./MessagesBell.svelte";
   import VolumeControl from "./VolumeControl.svelte";
@@ -30,7 +30,9 @@
     connected = false,
     games = null,
     gameRunning = false,
+    launchers = [],
     onlaunch = () => {},
+    onopenlauncher = () => {},
   }: {
     session: ShellSession;
     /** The branch logo (a `data:` URI), or `null` for the Arena 360 mark. */
@@ -51,8 +53,12 @@
     games?: GameCard[] | null;
     /** A game is running: the shell's signal, wired into every `game-media` inside. */
     gameRunning?: boolean;
+    /** The launchers installed on this PC (Story 6.26), for the Games tab's card row. */
+    launchers?: LauncherCardData[];
     /** A game tile was activated. */
     onlaunch?: (game: GameCard) => void;
+    /** A launcher card was activated. */
+    onopenlauncher?: (launcher: LauncherCardData) => void;
   } = $props();
 
   const LABELS: Record<Tab, MessageKey> = {
@@ -227,7 +233,7 @@
     <h1 class="type-kiosk-headline" data-testid="session-device">{session.device}</h1>
     {@render status?.()}
     {#if tab === "games"}
-      <Games {games} {gameRunning} {onlaunch} />
+      <Games {games} {gameRunning} {launchers} {onlaunch} {onopenlauncher} />
     {:else}
       <p class="empty type-kiosk-body" data-testid={"tab-empty-" + tab}>
         {t("player.shell.empty")}

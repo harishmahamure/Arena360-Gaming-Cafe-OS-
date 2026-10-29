@@ -4618,6 +4618,72 @@ mod process_lists {
         assert_eq!(reopen(&f).rows(Table::DeviceEvents).unwrap().len(), 1);
     }
 
+    fn launcher_opened(device_id: &str, launcher: &str) -> Intent {
+        let mut i = device_intent(
+            ActorKind::Device,
+            IntentPayload::KioskLauncherOpened(arena_proto::KioskLauncherOpened {
+                launcher: launcher.into(),
+            }),
+        );
+        i.actor.id = device_id.into();
+        i
+    }
+
+    #[tokio::test]
+    async fn launcher_opened_writes_one_info_event_with_the_launcher_and_the_live_session() {
+        let mut f = primary();
+        let (id, _) = with_device(&mut f).await;
+        let first = launcher_opened(&id, "steam");
+        let applied = f.writer.submit_intent(first.clone()).await.unwrap();
+        let tables: Vec<&str> = applied.changes.iter().map(|c| c.tbl.as_str()).collect();
+        assert_eq!(tables, ["device_events"]);
+        // Replayed after a reconnect: the stored outcome, nothing new.
+        assert_eq!(f.writer.submit_intent(first).await.unwrap(), applied);
+        let store = reopen(&f);
+        let rows = store.rows(Table::DeviceEvents).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["code"], RowValue::Text("launcher_opened".into()));
+        assert_eq!(rows[0]["level"], RowValue::Text("info".into()));
+        assert_eq!(rows[0]["device_id"], RowValue::Text(id.clone()));
+        let RowValue::Text(detail) = &rows[0]["detail"] else {
+            panic!("text detail")
+        };
+        let detail: serde_json::Value = serde_json::from_str(detail).unwrap();
+        assert_eq!(
+            detail,
+            serde_json::json!({"launcher": "steam", "session_id": null, "player_id": null})
+        );
+        let change = store.changes().unwrap().pop().unwrap();
+        assert_eq!(
+            (change.intent_kind.as_str(), change.actor_kind.as_str()),
+            ("launcher.opened", "device")
+        );
+
+        // Not a device, not a live device, another launcher, a base_rev: refused, nothing written.
+        for actor in [ActorKind::Owner, ActorKind::System, ActorKind::Staff] {
+            let mut i = launcher_opened(&id, "epic");
+            i.actor.kind = actor;
+            assert_eq!(
+                expect_err(&f, i).await.code,
+                ErrorCode::PermissionDenied,
+                "{actor:?}"
+            );
+        }
+        let err = expect_err(&f, launcher_opened("01JNOPEAAAAAAAAAAAAAAAAAAA", "epic")).await;
+        assert_eq!(err.code, ErrorCode::PermissionDenied);
+        for bad in ["battlenet", "", "Steam"] {
+            let err = expect_err(&f, launcher_opened(&id, bad)).await;
+            assert_eq!(err.field.as_deref(), Some("launcher"), "{bad:?}");
+        }
+        let mut edit = launcher_opened(&id, "riot");
+        edit.base_rev = Some(1);
+        assert_eq!(
+            expect_err(&f, edit).await.field.as_deref(),
+            Some("base_rev")
+        );
+        assert_eq!(reopen(&f).rows(Table::DeviceEvents).unwrap().len(), 1);
+    }
+
     #[tokio::test]
     async fn a_game_launch_carries_its_launch_time_within_the_three_minute_window() {
         let mut f = primary();

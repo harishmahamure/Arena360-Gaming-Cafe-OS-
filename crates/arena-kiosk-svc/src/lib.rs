@@ -30,6 +30,7 @@ pub mod hub_link;
 pub mod intents;
 pub mod ipc;
 pub mod launcher;
+pub mod launchers;
 pub mod library;
 pub mod lockdown;
 pub mod logs;

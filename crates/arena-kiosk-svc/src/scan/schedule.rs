@@ -201,6 +201,12 @@ fn queue_report(
     queue
         .kv_set(LAST_SCAN_KEY, &now.to_string(), 0)
         .map_err(|e| format!("the scan time cannot be recorded: {e}"))?;
+    // Story 6.26: the launcher cards open the launchers this scan found.
+    let launchers = serde_json::to_string(&report.launchers)
+        .map_err(|e| format!("the scan launchers cannot be recorded: {e}"))?;
+    queue
+        .kv_set(crate::launchers::SCAN_KEY, &launchers, 0)
+        .map_err(|e| format!("the scan launchers cannot be recorded: {e}"))?;
     drop(queue);
     ctx.queued.notify_one();
     Ok(report.entries.len())

@@ -1,19 +1,26 @@
 <script lang="ts">
   import { t } from "@arena/ui";
   import GameTile from "./GameTile.svelte";
-  import { railLabels, visibleGames, type GameCard } from "./games";
+  import LauncherCard from "./LauncherCard.svelte";
+  import { railLabels, visibleGames, type GameCard, type LauncherCardData } from "./games";
 
   let {
     games,
     gameRunning = false,
+    launchers = [],
     onlaunch,
+    onopenlauncher = () => {},
   }: {
     /** The games this PC lists, sorted by name; `null` until the service has answered. */
     games: GameCard[] | null;
     /** Any game is running (the shell's signal, wired into every tile's media). */
     gameRunning?: boolean;
+    /** The launchers installed on this PC, for the "Play on your own account" row (Story 6.26). */
+    launchers?: LauncherCardData[];
     /** A tile was activated. */
     onlaunch: (game: GameCard) => void;
+    /** A launcher card was activated. */
+    onopenlauncher?: (launcher: LauncherCardData) => void;
   } = $props();
 
   // The filter rail and the search field (Story 6.24). One rail item is active at a time and
@@ -76,6 +83,24 @@
 </script>
 
 <section class="games" aria-label={t("player.games.grid_label")} data-testid="games">
+  {#if launchers.length > 0}
+    <!-- The row of `launcher-card`s: installed launchers only, whatever the games below hold. -->
+    <section class="launchers" aria-labelledby="launchers-title" data-testid="launchers">
+      <h2 id="launchers-title" class="type-kiosk-title">{t("player.games.launchers_title")}</h2>
+      <ul class="launcher-row">
+        {#each launchers as launcher (launcher.id)}
+          <li>
+            <LauncherCard
+              id={launcher.id}
+              name={launcher.name}
+              running={launcher.running}
+              onactivate={() => onopenlauncher(launcher)}
+            />
+          </li>
+        {/each}
+      </ul>
+    </section>
+  {/if}
   {#if games === null}
     <!-- Not answered yet: nothing to say, so no flash of the empty line. -->
   {:else if games.length === 0}
@@ -169,6 +194,23 @@
 <style>
   .games {
     width: 100%;
+  }
+
+  .launchers {
+    padding: 0 var(--space-3) var(--space-5);
+  }
+
+  .launchers h2 {
+    margin: 0 0 var(--space-3);
+  }
+
+  .launcher-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+    margin: 0;
+    padding: 0;
+    list-style: none;
   }
 
   .layout {

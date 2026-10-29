@@ -269,7 +269,8 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::KioskLog(_)
         | P::KioskProcessBlocked(_)
         | P::KioskCleanupFailed(_)
-        | P::KioskGameLaunched(_) => kiosk_log::load(tx)?,
+        | P::KioskGameLaunched(_)
+        | P::KioskLauncherOpened(_) => kiosk_log::load(tx)?,
         P::KioskScanReported(_) => kiosk_scan::load(tx, intent)?,
         P::DeviceAdminExit(p) => admin_exit::load_exit(tx, p)?,
         P::DeviceAdminRelock(p) => admin_exit::load_relock(tx, p)?,

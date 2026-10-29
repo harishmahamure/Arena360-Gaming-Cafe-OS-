@@ -13,10 +13,13 @@
 //! `{game_id, name, session_id, player_id, launch_ms}`: the session and player are the ones live on the
 //! device when the Hub applies it (a guest has `player_id: null`, no session at all gives both
 //! `null`).
+//!
+//! `launcher.opened` (Story 6.26) writes an `info` row `launcher_opened` whose detail is the JSON
+//! `{launcher, session_id, player_id}`, named the same way.
 
 use arena_proto::{
-    AlertKind, AppError, ErrorCode, Intent, KioskCleanupFailed, KioskGameLaunched, KioskLog,
-    KioskProcessBlocked,
+    AlertKind, AppError, ErrorCode, Intent, KioskCleanupFailed, KioskGameLaunched,
+    KioskLauncherOpened, KioskLog, KioskProcessBlocked,
 };
 use arena_store::{
     ChangeOp, NewAlert, NewDeviceEvent, RowKey, StoreTx, current_branch_id, find_open_alert,
@@ -43,12 +46,16 @@ pub const CLEANUP_FAILED_CODE: &str = "cleanup_failed";
 /// The `device_events.code` of a `game.launched` row.
 pub const GAME_LAUNCHED_CODE: &str = "game_launched";
 
+/// The `device_events.code` of a `launcher.opened` row.
+pub const LAUNCHER_OPENED_CODE: &str = "launcher_opened";
+
 /// A kiosk event's fields, from either payload.
 pub(super) enum Event<'a> {
     Log(&'a KioskLog),
     ProcessBlocked(&'a KioskProcessBlocked),
     CleanupFailed(&'a KioskCleanupFailed),
     GameLaunched(&'a KioskGameLaunched),
+    LauncherOpened(&'a KioskLauncherOpened),
 }
 
 pub(super) fn validate(
@@ -67,6 +74,7 @@ pub(super) fn validate(
         Event::ProcessBlocked(p) => p.validate()?,
         Event::CleanupFailed(p) => p.validate()?,
         Event::GameLaunched(p) => p.validate()?,
+        Event::LauncherOpened(p) => p.validate()?,
     }
     if branch.is_none() {
         return Err(AppError::new(
@@ -111,6 +119,16 @@ pub(super) fn mutate(
             })
             .to_string();
             ("info", GAME_LAUNCHED_CODE, detail.as_str())
+        }
+        Event::LauncherOpened(l) => {
+            let (session_id, player_id) = live_session_on_device(tx, &intent.actor.id)?.unzip();
+            detail = serde_json::json!({
+                "launcher": l.launcher,
+                "session_id": session_id,
+                "player_id": player_id.flatten(),
+            })
+            .to_string();
+            ("info", LAUNCHER_OPENED_CODE, detail.as_str())
         }
     };
     let event_id = ulid::Ulid::generate().to_string();

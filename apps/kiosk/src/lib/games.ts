@@ -87,3 +87,31 @@ export function visibleGames(games: GameCard[], label: string | null, query: str
       (label === null || inLabel(g, label)) && (needle === "" || fold(g.name).includes(needle)),
   );
 }
+
+// The launcher cards (Story 6.26): the row "Play on your own account" above the games.
+
+/** The launchers the Games tab can open, in the order the cards appear. */
+export const LAUNCHER_IDS = ["steam", "epic", "riot"] as const;
+export type LauncherId = (typeof LAUNCHER_IDS)[number];
+
+/** One launcher card: an installed launcher, and whether it is open now. */
+export type LauncherCardData = { id: LauncherId; name: string; running: boolean };
+
+const isLauncher = (v: unknown): v is LauncherCardData => {
+  if (typeof v !== "object" || v === null) return false;
+  const c = v as Record<string, unknown>;
+  return (
+    typeof c.id === "string" &&
+    (LAUNCHER_IDS as readonly string[]).includes(c.id) &&
+    typeof c.name === "string" &&
+    typeof c.running === "boolean"
+  );
+};
+
+/** The cards in a `launchers` answer body, in Steam, Epic, Riot order; `null` when it is not one. */
+export function launchersOf(body: unknown): LauncherCardData[] | null {
+  if (typeof body !== "object" || body === null) return null;
+  const list = (body as Record<string, unknown>).launchers;
+  if (!Array.isArray(list) || !list.every(isLauncher)) return null;
+  return [...list].sort((a, b) => LAUNCHER_IDS.indexOf(a.id) - LAUNCHER_IDS.indexOf(b.id));
+}

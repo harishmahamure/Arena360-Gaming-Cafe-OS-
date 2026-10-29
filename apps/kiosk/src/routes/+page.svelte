@@ -9,6 +9,8 @@
     currentTestSession,
     launchGame,
     loadGames,
+    loadLaunchers,
+    openLauncher,
     onAttract,
     onHubStatus,
     onPcScreen,
@@ -19,7 +21,7 @@
   } from "../lib/bridge";
   import Attract from "../lib/Attract.svelte";
   import Shell from "../lib/Shell.svelte";
-  import { GAMES_POLL_MS, type GameCard } from "../lib/games";
+  import { GAMES_POLL_MS, type GameCard, type LauncherCardData } from "../lib/games";
   import { type Tab } from "../lib/shell";
 
   /** The idle screen: the last attract view and logo (from the service cache at first). */
@@ -52,12 +54,20 @@
   /** The Games tab's tiles and whether any game is running (Story 6.23); asked of the service. */
   let games: GameCard[] | null = $state(null);
   let gameRunning = $state(false);
+  /** The launcher cards (Story 6.26): the launchers installed on this PC. */
+  let launchers: LauncherCardData[] = $state([]);
 
   async function refreshGames() {
-    const view = await loadGames();
+    const [view, cards] = await Promise.all([loadGames(), loadLaunchers()]);
+    if (cards !== null) launchers = cards;
     if (view === null) return;
     games = view.games;
     gameRunning = view.running;
+  }
+
+  async function openOwnAccount(card: LauncherCardData) {
+    await openLauncher(card);
+    await refreshGames();
   }
 
   async function launch(game: GameCard) {
@@ -72,6 +82,7 @@
     if (!inSession) {
       games = null;
       gameRunning = false;
+      launchers = [];
       return;
     }
     void tab;
@@ -189,7 +200,9 @@
       connected={hub === "connected"}
       {games}
       {gameRunning}
+      {launchers}
       onlaunch={launch}
+      onopenlauncher={openOwnAccount}
       bind:tab
     >
       {#snippet status()}

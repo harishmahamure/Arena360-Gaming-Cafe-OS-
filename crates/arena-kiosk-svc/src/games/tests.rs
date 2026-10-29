@@ -19,7 +19,7 @@ use crate::queue::QueueDb;
 use crate::runtime::{Ctx, Timings};
 use crate::secret::SecretStore;
 
-const ME: &str = "DEVICE-ME";
+pub(crate) const ME: &str = "DEVICE-ME";
 
 struct NoSecret;
 impl SecretStore for NoSecret {
@@ -31,7 +31,7 @@ impl SecretStore for NoSecret {
     }
 }
 
-fn entry(id: &str, name: &str, exe: &str) -> KioskLibraryEntry {
+pub(crate) fn entry(id: &str, name: &str, exe: &str) -> KioskLibraryEntry {
     KioskLibraryEntry {
         id: id.into(),
         kind: "game".into(),
@@ -70,14 +70,14 @@ fn session() -> ScreenSession {
     }
 }
 
-struct T {
+pub(crate) struct T {
     _dir: tempfile::TempDir,
-    ctx: Arc<Ctx>,
-    host: Arc<FakeGames>,
+    pub(crate) ctx: Arc<Ctx>,
+    pub(crate) host: Arc<FakeGames>,
 }
 
 /// A service with a session on screen, a host and every library path allowed.
-fn t(entries: &[KioskLibraryEntry]) -> T {
+pub(crate) fn t(entries: &[KioskLibraryEntry]) -> T {
     let (dir, ctx) = bare(entries);
     let host = Arc::new(FakeGames::default());
     ctx.games.set_host(host.clone());
@@ -137,7 +137,7 @@ fn bare(entries: &[KioskLibraryEntry]) -> (tempfile::TempDir, Arc<Ctx>) {
 }
 
 /// The kinds of the intents waiting for the Hub, oldest first.
-fn queued(t: &T) -> Vec<(IntentKind, Option<IntentPayload>)> {
+pub(crate) fn queued(t: &T) -> Vec<(IntentKind, Option<IntentPayload>)> {
     let queue = t.ctx.queue.lock().unwrap();
     queue
         .entries()

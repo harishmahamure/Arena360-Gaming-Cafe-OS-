@@ -742,6 +742,7 @@ impl Ctx<'_> {
                 | IntentKind::KioskProcessBlocked
                 | IntentKind::KioskCleanupFailed
                 | IntentKind::KioskGameLaunched
+                | IntentKind::KioskLauncherOpened
         ) && !self
             .hub
             .kiosk_log_rate

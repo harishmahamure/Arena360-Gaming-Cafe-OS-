@@ -5,7 +5,7 @@ use ts_rs::TS;
 
 use crate::actor::{Actor, ElevatedBy};
 use crate::admin::{DeviceAdminExit, DeviceAdminRelock, DeviceAdminUnlock};
-use crate::kiosk::{KioskGameLaunched, KioskLog};
+use crate::kiosk::{KioskGameLaunched, KioskLauncherOpened, KioskLog};
 use crate::operating::AdsConsentSet;
 use crate::pc_command::{DeviceMessage, DevicePower, DeviceScreen};
 use crate::permission::{Permission, Requirement};
@@ -86,6 +86,11 @@ pub enum IntentKind {
     /// with the player, device, game and time. Queued offline and replayed like `kiosk.log`.
     #[serde(rename = "game.launched")]
     KioskGameLaunched,
+    /// A player opened Steam, Epic or Riot from the Games tab (device actor); the Hub records
+    /// `launcher.opened` with the player, device, launcher and time. Queued offline like
+    /// `game.launched`.
+    #[serde(rename = "launcher.opened")]
+    KioskLauncherOpened,
     /// The kiosk scanned its PC for installed games and launchers (device actor); the Hub keeps
     /// the latest report per device. Queued offline and replayed like `kiosk.log`.
     #[serde(rename = "kiosk.scan_reported")]
@@ -339,7 +344,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 108] = [
+    pub const ALL: [IntentKind; 109] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -354,6 +359,7 @@ impl IntentKind {
         Self::KioskProcessBlocked,
         Self::KioskCleanupFailed,
         Self::KioskGameLaunched,
+        Self::KioskLauncherOpened,
         Self::KioskScanReported,
         Self::DeviceAdminExit,
         Self::DeviceAdminRelock,
@@ -467,6 +473,7 @@ impl IntentKind {
             Self::KioskProcessBlocked => "kiosk.process_blocked",
             Self::KioskCleanupFailed => "kiosk.cleanup_failed",
             Self::KioskGameLaunched => "game.launched",
+            Self::KioskLauncherOpened => "launcher.opened",
             Self::KioskScanReported => "kiosk.scan_reported",
             Self::DeviceAdminExit => "device.admin_exit",
             Self::DeviceAdminRelock => "device.admin_relock",
@@ -613,6 +620,7 @@ impl IntentKind {
             | Self::KioskProcessBlocked
             | Self::KioskCleanupFailed
             | Self::KioskGameLaunched
+            | Self::KioskLauncherOpened
             | Self::KioskScanReported => IntentCategory::Kiosk,
             Self::ProductUpsert
             | Self::ProductDelete
@@ -730,6 +738,7 @@ impl IntentKind {
             | Self::KioskProcessBlocked
             | Self::KioskCleanupFailed
             | Self::KioskGameLaunched
+            | Self::KioskLauncherOpened
             | Self::KioskScanReported
             | Self::DeviceTestSessionCompleted => Requirement::Device,
             // The kiosk itself acts; the approving manager must hold `device.remote`
@@ -838,6 +847,7 @@ impl IntentKind {
             | Self::KioskProcessBlocked
             | Self::KioskCleanupFailed
             | Self::KioskGameLaunched
+            | Self::KioskLauncherOpened
             | Self::KioskScanReported
             | Self::DeviceAdminExit
             | Self::DeviceAdminRelock
@@ -1379,6 +1389,8 @@ pub enum IntentPayload {
     KioskCleanupFailed(KioskCleanupFailed),
     #[serde(rename = "game.launched")]
     KioskGameLaunched(KioskGameLaunched),
+    #[serde(rename = "launcher.opened")]
+    KioskLauncherOpened(KioskLauncherOpened),
     #[serde(rename = "kiosk.scan_reported")]
     KioskScanReported(KioskScanReported),
     #[serde(rename = "device.admin_exit")]
@@ -1586,6 +1598,7 @@ impl IntentPayload {
             Self::KioskProcessBlocked(_) => IntentKind::KioskProcessBlocked,
             Self::KioskCleanupFailed(_) => IntentKind::KioskCleanupFailed,
             Self::KioskGameLaunched(_) => IntentKind::KioskGameLaunched,
+            Self::KioskLauncherOpened(_) => IntentKind::KioskLauncherOpened,
             Self::KioskScanReported(_) => IntentKind::KioskScanReported,
             Self::DeviceAdminExit(_) => IntentKind::DeviceAdminExit,
             Self::DeviceAdminRelock(_) => IntentKind::DeviceAdminRelock,
@@ -2075,6 +2088,7 @@ mod tests {
                 | "kiosk.process_blocked"
                 | "kiosk.cleanup_failed"
                 | "game.launched"
+                | "launcher.opened"
                 | "kiosk.scan_reported"
                 | "device.test_session.completed" => Requirement::Device,
                 other => panic!("{other} has no pinned requirement"),

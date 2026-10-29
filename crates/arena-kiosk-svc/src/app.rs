@@ -32,6 +32,8 @@
 //!   with a read flag, [`crate::pc::PcState`]) and sent as IPC `staff_message`: fresh as they arrive,
 //!   replayed (not fresh) on every new connection. `messages_read` marks them read. The session end
 //!   and a new session clear them.
+//! - `launchers` lists the launcher cards and `launcher_open{id}` opens one ([`crate::launchers`],
+//!   Story 6.26).
 //! - `games` lists the Games tab and `game_launch{id}` starts a game ([`crate::games`], Story 6.23).
 //! - `call_staff` (Story 6.15) is forwarded the same way as `device.call_staff`; `volume` reads the
 //!   slider level, and `volume{percent}` sets the system volume ([`crate::volume`]).
@@ -689,6 +691,21 @@ async fn serve(
             Ok(IpcMsg::Request { rid, kind, .. }) if kind == "games" => {
                 let reply = reply_of(rid, crate::games::list(&ctx));
                 let _ = out_tx.send(reply).await;
+            }
+            Ok(IpcMsg::Request { rid, kind, .. }) if kind == "launchers" => {
+                let reply = reply_of(
+                    rid,
+                    crate::launchers::list(&ctx, crate::library::path_exists),
+                );
+                let _ = out_tx.send(reply).await;
+            }
+            Ok(IpcMsg::Request { rid, kind, body }) if kind == "launcher_open" => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(rid, crate::launchers::open(&ctx, body).await);
+                    let _ = out.send(reply).await;
+                });
             }
             Ok(IpcMsg::Request { rid, kind, body }) if kind == "game_launch" => {
                 let ctx = Arc::clone(&ctx);

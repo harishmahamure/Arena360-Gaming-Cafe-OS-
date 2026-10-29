@@ -78,6 +78,35 @@ impl KioskLog {
 /// Longest game id of a `game.launched`, in characters (a library entry id).
 pub const MAX_GAME_ID_LEN: usize = 64;
 
+/// The launchers the Games tab opens (Story 6.26): the `launcher` of a `launcher.opened`.
+pub const OPENABLE_LAUNCHERS: [&str; 3] = ["steam", "epic", "riot"];
+
+/// The payload of `launcher.opened` (Story 6.26): a player opened Steam, Epic or Riot from the
+/// Games tab. As with `game.launched`, the Hub names the player and session itself from the
+/// device's live session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KioskLauncherOpened {
+    /// `steam`, `epic` or `riot`.
+    pub launcher: String,
+}
+
+impl KioskLauncherOpened {
+    /// `launcher` must be one of [`OPENABLE_LAUNCHERS`]; a failure is `VALIDATION_FAILED` naming
+    /// the field.
+    pub fn validate(&self) -> Result<(), crate::AppError> {
+        use crate::{AppError, ErrorCode};
+        if OPENABLE_LAUNCHERS.contains(&self.launcher.as_str()) {
+            return Ok(());
+        }
+        Err(AppError::with_field(
+            ErrorCode::ValidationFailed,
+            "launcher",
+            "launcher must be steam, epic or riot",
+        ))
+    }
+}
+
 /// The payload of `game.launched` (Story 6.23): a player started a library game at this PC. The
 /// Hub names the player and session itself from the device's live session; the kiosk never does.
 /// `name` is the library name at the time, so the log reads the same after a rename.
@@ -188,6 +217,27 @@ mod tests {
             launch_ms: None,
         };
         assert!(long.validate().is_err());
+    }
+
+    #[test]
+    fn a_launcher_open_names_steam_epic_or_riot() {
+        for ok in OPENABLE_LAUNCHERS {
+            assert!(
+                KioskLauncherOpened {
+                    launcher: ok.into()
+                }
+                .validate()
+                .is_ok()
+            );
+        }
+        for bad in ["", "Steam", "battlenet", "none", "steam ", "../steam"] {
+            let err = KioskLauncherOpened {
+                launcher: bad.into(),
+            }
+            .validate()
+            .unwrap_err();
+            assert_eq!(err.field.as_deref(), Some("launcher"), "{bad:?}");
+        }
     }
 
     #[test]

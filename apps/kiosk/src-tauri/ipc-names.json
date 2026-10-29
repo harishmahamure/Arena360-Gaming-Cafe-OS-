@@ -53,6 +53,8 @@
     "playerExtendOptions": "player_extend_options",
     "playerExtend": "player_extend",
     "games": "games",
-    "gameLaunch": "game_launch"
+    "gameLaunch": "game_launch",
+    "launchers": "launchers",
+    "launcherOpen": "launcher_open"
   }
 }

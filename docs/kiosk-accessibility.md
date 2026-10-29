@@ -71,3 +71,15 @@ Borderless-fullscreen games are not affected: the HUD draws over them like any w
   rail, and the arrow keys step through the grid. Every stop wears the 4px focus ring (3px on tiles).
 - When nothing matches the grid is replaced by "No games match." and an underlined "Clear filters"
   button that resets to All with an empty search and puts focus in the search field.
+
+## Launcher cards on the Games tab (Story 6.26)
+
+- A row titled "Play on your own account" sits above the filter rail and the grid, as its own
+  labelled section (heading plus a list). It shows a `launcher-card` for each of Steam, Epic Games
+  and Riot Client that is installed on the PC, and is absent when none is.
+- A card is one button on a `surface` card (radius lg, 280px wide, at least 88px tall). Its
+  accessible name is its text: the launcher's name, "Use your own account", and "Open" while the
+  launcher is open. The initial on the left is decorative (`aria-hidden`); state is words, not
+  colour. Tab visits each card; Enter and Space open it; focus wears the 3px ring.
+- Opening a launcher that is already open brings its window to the front. A launcher that will not
+  open raises the same HUD toast as a game ("Couldn't start <name> — ask at the counter.").

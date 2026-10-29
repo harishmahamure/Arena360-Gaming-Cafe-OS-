@@ -87,7 +87,7 @@ export async function pairDisplay(code: string, name: string): Promise<PairOutco
     const res = await fetch(PAIR_URL, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ code, name: name.trim().slice(0, 40) || DEFAULT_NAME }),
+      body: JSON.stringify({ code, name: [...name.trim()].slice(0, 40).join("") || DEFAULT_NAME }),
       cache: "no-store",
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });

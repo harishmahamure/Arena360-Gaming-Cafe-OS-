@@ -2,7 +2,7 @@
 title: 'Story 7.6: Pair a kitchen tablet by code as a scoped display'
 type: 'feature'
 created: '2026-10-29'
-status: 'in-review'
+status: 'done'
 baseline_commit: 'd2feb851f44ebbfd2b87cee6e7b675979673356a'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -102,6 +102,9 @@ deferred: []
 
 ## Review Triage Log
 
+- patch (fixed): `kds.seen` rewrote the display row (bumping `rev`) on every reconnect, so a Manager's high-contrast or revoke based on the snapshot `rev` could go STALE and a reconnect loop churned the change log. `kds.seen` is now refused inside 60 s of the last write; test added.
+- patch (fixed): a paired tablet waited on `/kitchen/status` before connecting; it now connects first. The display name is cut by code point, not UTF-16 unit.
+- defer: built-in page without high contrast, missing Rust snapshot/overlay tests, lost-token on HubSlow, symlink/caching of static serving, stale pair-panel code — see deferred-work.md.
 ## Design Notes
 
 - **`kds.pair_code`** is not a stored intent: issuing a code writes nothing (the code lives in memory like the kiosk's). It is the manager route `POST /ui/kds-pairing-code`, which runs the same `kitchen` flag check as the gate and returns `TIER_LOCKED` on Free; `kds.pair` is the intent the gate covers. Recorded in the decision log.

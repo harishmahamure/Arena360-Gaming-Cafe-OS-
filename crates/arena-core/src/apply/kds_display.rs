@@ -15,8 +15,8 @@
 //! The token hash is never returned to a client and never logged.
 
 use arena_proto::{
-    AppError, ErrorCode, Intent, IntentPayload, KDS_LIMIT_MESSAGE, KDS_MAX_DISPLAYS, SettingsSet,
-    is_display_name, parse_hc_key,
+    AppError, ErrorCode, Intent, IntentPayload, KDS_LIMIT_MESSAGE, KDS_MAX_DISPLAYS,
+    KDS_SEEN_INTERVAL_MS, SettingsSet, is_display_name, parse_hc_key,
 };
 use arena_store::{
     ChangeOp, DisplayRow, NewDisplay, RowKey, StoreTx, count_live_displays, find_display,
@@ -142,6 +142,16 @@ pub(super) fn validate(intent: &Intent, t: &KdsTarget) -> Result<(), AppError> {
             let d = live_display(t, "display_id")?;
             if d.revoked_at.is_some() {
                 return Err(invalid("display_id", "the display is revoked"));
+            }
+            // At most one write a minute: every write bumps the row's `rev`, which a Manager's
+            // high-contrast or revoke intent is based on, so a reconnect loop must not churn it.
+            if d.last_seen
+                .is_some_and(|at| intent.issued_at - at < KDS_SEEN_INTERVAL_MS)
+            {
+                return Err(invalid(
+                    "display_id",
+                    "the display was seen under a minute ago",
+                ));
             }
             Ok(())
         }

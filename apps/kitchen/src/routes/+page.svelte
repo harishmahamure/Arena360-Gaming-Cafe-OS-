@@ -83,8 +83,8 @@
 
   onMount(async () => {
     const token = readToken();
-    const status = await fetchStatus();
     if (token) return start(token);
+    const status = await fetchStatus();
     if (status.kind === "ok" && !status.status.available) mode = "locked";
     else showPairing();
   });

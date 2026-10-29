@@ -591,3 +591,7 @@
 - The Hub installer does not bundle the built Kitchen app; `/kitchen` falls back to the built-in pairing page until `ARENA_KITCHEN_DIR` holds the build.
 - Settings → Kitchen is covered only by stubbed Playwright specs; the Kitchen app has no Playwright spec (Story 7.7 adds the board and its tests).
 - Bad bearer tokens on `/kitchen*` count against the same per-IP throttle as the TLS hello.
+- (Review) The built-in `/kitchen` fallback page does not apply the per-display high-contrast setting (only the built Kitchen app does); a missing `/kitchen/<asset>` answers 404 not 403.
+- (Review) No Rust test reads the real `/ui/snapshot` `kitchen_displays` list or its `connected` overlay; the periodic 60 s `kds.seen` path and the Hub pair panel's expiry / "Get a new code" / revoke-refusal branches have no assertion.
+- (Review) A pairing whose `kds.pair` commits but whose response is lost (`HubSlow`, 8 s tablet timeout) leaves a display row with no token; the manager must revoke it. Static serving does not canonicalise away symlinks inside the kitchen directory and `_app/immutable/*` is sent `no-store`.
+- (Review) The pair panel keeps showing a code that was used or burned by 5 wrong tries until it times out; `kitchen_address` uses the first LAN address without bracketing IPv6.

@@ -225,6 +225,15 @@ async fn seen_sets_last_seen_for_the_system_actor_only() {
     seen(system()).await.unwrap();
     assert_eq!(int(&displays(&f)[0], "last_seen"), f.clock.now_ms());
 
+    // Throttled: a second report inside a minute is refused and writes nothing (so `rev` holds).
+    let (rev, at) = (int(&displays(&f)[0], "rev"), f.clock.now_ms());
+    f.clock.advance(59_000);
+    assert_eq!(refusal(seen(system()).await).0, ErrorCode::ValidationFailed);
+    assert_eq!(int(&displays(&f)[0], "rev"), rev);
+    f.clock.advance(1_000);
+    seen(system()).await.unwrap();
+    assert_eq!(int(&displays(&f)[0], "last_seen"), at + 60_000);
+
     revoke(&f, manager, &id).await.unwrap();
     assert_eq!(refusal(seen(system()).await).0, ErrorCode::ValidationFailed);
 }

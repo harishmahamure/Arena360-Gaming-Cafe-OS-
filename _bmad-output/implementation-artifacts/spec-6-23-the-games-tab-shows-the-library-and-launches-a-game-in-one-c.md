@@ -2,7 +2,7 @@
 title: 'Story 6.23: The Games tab shows the library and launches a game in one click'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '222c9ba'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'
@@ -78,3 +78,5 @@ deferred:
 - `pnpm check:strings check:hex check:no-blur check:layers check:pins check:protocol format:check` pass; `check:generated` lists the new generated types until they are committed.
 
 Not run: a real Hub-to-kiosk round trip, the Tauri shell, `CreateProcessAsUserW` and the registry link handler against a real game or launcher on Windows, `SetForegroundWindow` on a real game window.
+
+- Review (6-23): added an in-flight start claim in `games::launch` so a double click cannot start a game twice.

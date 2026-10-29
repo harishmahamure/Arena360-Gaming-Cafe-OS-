@@ -18,7 +18,7 @@
 //! Nothing here is written without a session on screen, and nothing is started while the PC is
 //! locked.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -65,6 +65,8 @@ pub trait GameHost: Send + Sync {
 pub struct GameState {
     host: Mutex<Option<Arc<dyn GameHost>>>,
     running: Mutex<HashMap<String, u32>>,
+    /// Games whose start is in progress, so two quick requests cannot start one twice.
+    starting: Mutex<HashSet<String>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -90,6 +92,15 @@ impl GameState {
             lock(&self.running).remove(id);
             None
         }
+    }
+
+    /// Claims the right to start game `id`; `false` when another start of it is in progress.
+    fn begin(&self, id: &str) -> bool {
+        lock(&self.starting).insert(id.to_owned())
+    }
+
+    fn end(&self, id: &str) {
+        lock(&self.starting).remove(id);
     }
 
     fn started(&self, id: &str, pid: u32) {
@@ -284,14 +295,34 @@ async fn launch_in(
     if let Some(pid) = ctx.games.running_pid(&entry.id, host.as_ref()) {
         return Ok(json!({ "outcome": "already_running", "pid": pid }));
     }
-    let Some(spec) = spec_of(&entry, device, crate::library::path_exists) else {
+    if !ctx.games.begin(&entry.id) {
+        // Another request is starting this game right now (a double click): not an error.
+        return Ok(json!({ "outcome": "started" }));
+    }
+    let result = start_entry(ctx, device, &entry, &host).await;
+    ctx.games.end(&entry.id);
+    result
+}
+
+/// Checks and starts `entry` (the caller holds its start claim).
+async fn start_entry(
+    ctx: &Arc<Ctx>,
+    device: &str,
+    entry: &KioskLibraryEntry,
+    host: &Arc<dyn GameHost>,
+) -> Result<Value, AppError> {
+    // Seen again under the claim: a start that finished meanwhile is running now.
+    if let Some(pid) = ctx.games.running_pid(&entry.id, host.as_ref()) {
+        return Ok(json!({ "outcome": "already_running", "pid": pid }));
+    }
+    let Some(spec) = spec_of(entry, device, crate::library::path_exists) else {
         return Ok(failed(ctx, &entry.name, "nothing to start on this PC"));
     };
     let lists = Arc::clone(&ctx.lists.borrow());
-    if !allowed(&lists, &entry, &spec) {
+    if !allowed(&lists, entry, &spec) {
         return Ok(failed(ctx, &entry.name, "not allowed on this PC"));
     }
-    let start_host = Arc::clone(&host);
+    let start_host = Arc::clone(host);
     let started = tokio::task::spawn_blocking(move || start_host.start(&spec))
         .await
         .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string()))?;

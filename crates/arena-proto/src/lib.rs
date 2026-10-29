@@ -359,10 +359,10 @@ pub use report::{
 };
 pub use report_export::{EXPORT_REPORTS, ExportFormat, ReportExportRequest, ReportExported};
 pub use rollup::{
-    ROLLUP_PLAYERS_CAP, ROLLUP_SCHEMA, RollupAged, RollupAmount, RollupByMethod, RollupByType,
-    RollupCredit, RollupCreditPlayer, RollupExpiring, RollupPlayHours, RollupPublish,
+    ROLLUP_MIN_SCHEMA, ROLLUP_PLAYERS_CAP, ROLLUP_SCHEMA, RollupAged, RollupAmount, RollupByMethod,
+    RollupByType, RollupCredit, RollupCreditPlayer, RollupExpiring, RollupPlayHours, RollupPublish,
     RollupRevenue, RollupSessions, RollupShift, RollupStock, RollupStockLevel, RollupV1,
-    RollupWaste, is_rollup_date, rollup_object_key,
+    RollupWaste, emitted_rollup_schema, is_rollup_date, rollup_object_key, rollup_schema_accepted,
 };
 pub use scan::{
     DeviceScanView, KEY_BRANCH_TZ, KioskScanReported, LibraryScansView, MAX_SCAN_ENTRIES,

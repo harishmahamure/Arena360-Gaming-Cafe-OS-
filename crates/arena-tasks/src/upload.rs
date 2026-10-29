@@ -11,7 +11,7 @@
 //! A Free Hub (or one whose tier is not known yet), a follower and an unpaired Hub make no
 //! request at all. The task reads through the [`SnapshotReader`], never inside `apply()`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -20,8 +20,8 @@ use arena_core::{
 };
 use arena_proto::{
     AppError, ErrorCode, PRESIGN_KIND_ROLLUP, PRESIGN_TTL_S, PresignBatch, PresignRequest,
-    ROLLUP_SCHEMA, ResendUnavailable, SUMMARY_OBJECT_KEY, SeqRange, Tier, VerifyKey,
-    licence::verify_claims, rollup_object_key,
+    ROLLUP_SCHEMA, ResendUnavailable, RollupV1, SUMMARY_OBJECT_KEY, SeqRange, Tier, VerifyKey,
+    emitted_rollup_schema, licence::verify_claims, rollup_object_key,
 };
 use arena_store::{BATCH_MAX_ROWS, ChangedRow, ROLLUP_LEDGER_TABLES, RangeRead, encode_batch};
 use tokio::sync::{broadcast, watch};
@@ -41,6 +41,9 @@ const SUMMARY_LINK_MARGIN_S: u64 = 60;
 const ROLLUPS_PER_CYCLE: usize = 10;
 /// The wait before the next cycle of a catch-up that is not finished.
 const ROLLUP_CATCH_UP_WAIT: Duration = Duration::from_secs(60);
+/// The most old-schema days one Hub regenerates in a minute (Story 8.7).
+const REGENERATIONS_PER_MINUTE: usize = 10;
+const REGENERATION_WINDOW_MS: i64 = 60_000;
 /// The most ledger changes remembered between two rollup plans; more means a rescan.
 const MAX_HEARD_CHANGES: usize = 5_000;
 /// How long to wait when the cloud limits the calls but names no time.
@@ -187,6 +190,9 @@ fn build(snapshots: &SnapshotReader, limit: usize, schema: u32) -> Result<Option
     }))
 }
 
+/// Builds the rollup of a day in a schema; the snapshot reader's writers unless a test swaps it.
+type RollupBuilder = fn(&SnapshotReader, &str, i64, u32) -> Result<Option<RollupV1>, AppError>;
+
 pub struct UploadTask {
     cloud: CloudClient,
     keystore: Arc<dyn Keystore>,
@@ -216,6 +222,13 @@ pub struct UploadTask {
     rescan: bool,
     /// Days with a ledger change whose rollup was not (re)published yet.
     dirty: BTreeSet<String>,
+    /// The newest rollup schema this Hub writes (N); the Hub keeps writers for N and N−1.
+    newest_schema: u32,
+    build_rollup: RollupBuilder,
+    /// When (Hub clock, ms) old-schema days were last regenerated, within the last minute.
+    regenerated: VecDeque<i64>,
+    /// Old-schema days that could not be built this run; they do not hold up the days behind.
+    unbuildable: BTreeSet<String>,
 }
 
 impl UploadTask {
@@ -249,6 +262,10 @@ impl UploadTask {
             // A restart forgets the changes heard before it: look at the recent days once.
             rescan: true,
             dirty: BTreeSet::new(),
+            newest_schema: ROLLUP_SCHEMA,
+            build_rollup: SnapshotReader::daily_rollup,
+            regenerated: VecDeque::new(),
+            unbuildable: BTreeSet::new(),
         }
     }
 
@@ -428,8 +445,9 @@ impl UploadTask {
         }
         let mut wait = interval;
         if self.rollups {
+            let target = self.rollup_schema(&writer, tier).await;
             match self
-                .publish_rollups(&writer, &token, &epoch, interval)
+                .publish_rollups(&writer, &token, &epoch, interval, target)
                 .await
             {
                 Ok(sooner) => wait = sooner.map_or(interval, |s| s.min(interval)),
@@ -694,6 +712,7 @@ impl UploadTask {
         token: &str,
         epoch: &str,
         interval: Duration,
+        target: u32,
     ) -> Result<Option<Duration>, Next> {
         let now = writer.now_ms();
         let heard = std::mem::take(&mut self.heard);
@@ -733,7 +752,7 @@ impl UploadTask {
                 break;
             }
             sent += usize::from(
-                self.publish_rollup(writer, token, epoch, interval, day)
+                self.publish_rollup(writer, token, epoch, interval, day, target)
                     .await?,
             );
         }
@@ -741,10 +760,17 @@ impl UploadTask {
             return Ok(Some(ROLLUP_CATCH_UP_WAIT));
         }
         // The next day to fall due by the clock: wake for it rather than a whole interval later.
-        Ok(plan.next_at.map(|at| {
+        let by_clock = plan.next_at.map(|at| {
             Duration::from_millis(u64::try_from(at.saturating_sub(now)).unwrap_or(0))
                 .max(Duration::from_secs(1))
-        }))
+        });
+        let regeneration = self
+            .regenerate_old_days(writer, token, epoch, interval, target)
+            .await?;
+        Ok(match (by_clock, regeneration) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        })
     }
 
     /// One daily rollup: build, presign `kind: rollup`, PUT, then `rollup.publish`. `Ok(false)`
@@ -757,12 +783,14 @@ impl UploadTask {
         epoch: &str,
         interval: Duration,
         day: &str,
+        schema: u32,
     ) -> Result<bool, Next> {
         let built_at = writer.now_ms();
         let snapshots = Arc::clone(&self.snapshots);
         let build_day = day.to_owned();
+        let build = self.build_rollup;
         let doc = match tokio::task::spawn_blocking(move || {
-            snapshots.daily_rollup(&build_day, built_at)
+            build(&snapshots, &build_day, built_at, schema)
         })
         .await
         {
@@ -806,12 +834,7 @@ impl UploadTask {
         }
         self.fails = 0;
         match writer
-            .publish_rollup(
-                day.to_owned(),
-                ROLLUP_SCHEMA,
-                built_at,
-                rollup_object_key(day),
-            )
+            .publish_rollup(day.to_owned(), schema, built_at, rollup_object_key(day))
             .await
         {
             Ok(_) => {
@@ -832,6 +855,95 @@ impl UploadTask {
                 Ok(true)
             }
         }
+    }
+
+    /// Rebuilds published days whose schema is below `target`, oldest first, at most
+    /// [`REGENERATIONS_PER_MINUTE`] a minute (Story 8.7). The `rollup_log` is the resume point:
+    /// a restart starts again from the oldest day still below, and a rebuilt day is not rebuilt
+    /// again. It runs after the cycle's batches, summary and due days, never inside `apply()`.
+    /// `Ok` carries when the next lot can go, if days are left over.
+    async fn regenerate_old_days(
+        &mut self,
+        writer: &WriterHandle,
+        token: &str,
+        epoch: &str,
+        interval: Duration,
+        target: u32,
+    ) -> Result<Option<Duration>, Next> {
+        let now = writer.now_ms();
+        while self
+            .regenerated
+            .front()
+            .is_some_and(|at| now.saturating_sub(*at) >= REGENERATION_WINDOW_MS)
+        {
+            self.regenerated.pop_front();
+        }
+        let allowed = REGENERATIONS_PER_MINUTE.saturating_sub(self.regenerated.len());
+        let snapshots = Arc::clone(&self.snapshots);
+        // Days that cannot be built are passed over, so they never starve the ones behind.
+        let look = allowed + self.unbuildable.len() + 1;
+        let old = match tokio::task::spawn_blocking(move || {
+            snapshots.rollup_days_below(target, look)
+        })
+        .await
+        {
+            Ok(Ok(days)) => days,
+            Ok(Err(e)) => {
+                tracing::warn!(code = e.code.as_str(), error = %e, "rollup: could not list old days");
+                return Ok(None);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "rollup: list task failed");
+                return Ok(None);
+            }
+        };
+        let old: Vec<String> = old
+            .into_iter()
+            .filter(|d| !self.unbuildable.contains(d))
+            .collect();
+        let mut tried = 0;
+        for day in old.iter().take(allowed) {
+            tried += 1;
+            if self
+                .publish_rollup(writer, token, epoch, interval, day, target)
+                .await?
+            {
+                self.regenerated.push_back(writer.now_ms());
+            } else {
+                self.unbuildable.insert(day.clone());
+            }
+        }
+        if old.len() <= tried {
+            return Ok(None);
+        }
+        // More waits for the minute to free a place.
+        let wake = self
+            .regenerated
+            .front()
+            .map_or(Duration::from_secs(1), |at| {
+                let free = at.saturating_add(REGENERATION_WINDOW_MS);
+                Duration::from_millis(
+                    u64::try_from(free.saturating_sub(writer.now_ms())).unwrap_or(0),
+                )
+                .max(Duration::from_secs(1))
+            });
+        Ok(Some(wake))
+    }
+
+    /// The schema to emit: the licence's pinned `rollup_schema` (the tier's default when it
+    /// cannot be read), held within the writers this release keeps (Story 8.7).
+    async fn rollup_schema(&self, writer: &WriterHandle, tier: Tier) -> u32 {
+        let from_licence = match writer.licence_state().await {
+            Ok(state) => state
+                .jwt
+                .and_then(|jwt| verify_claims(&jwt, &self.keys).ok())
+                .map(|c| c.rollup_schema),
+            Err(_) => None,
+        };
+        emitted_rollup_schema(
+            from_licence.unwrap_or(tier.defaults().rollup_schema),
+            self.newest_schema,
+        )
     }
 
     /// How the cloud's refusal changes the schedule.
@@ -2362,5 +2474,179 @@ mod tests {
         assert_eq!(rollup_asks(&seen)[0], "2027-01-01", "oldest first");
         f.task.cycle().await;
         assert_eq!(rollup_asks(&seen).len(), 14);
+    }
+
+    /// A Hub release whose newest writer is v2: the v1 document stamped as v2 (the real v2 shape
+    /// arrives with Epic 13).
+    fn v2_writer(
+        r: &SnapshotReader,
+        day: &str,
+        now: i64,
+        schema: u32,
+    ) -> Result<Option<arena_proto::RollupV1>, AppError> {
+        r.daily_rollup(day, now, 1).map(|d| {
+            d.map(|mut d| {
+                d.schema = schema;
+                d
+            })
+        })
+    }
+
+    async fn pin_rollup_schema(f: &Fx, tier: Tier, pin: u32) {
+        let mut claims = LicenceClaims::for_tier("T", "B", tier, T0 / 1000);
+        claims.rollup_schema = pin;
+        f.writer
+            .record_heartbeat(Some(dev_sign(&claims).unwrap()), None, None)
+            .await
+            .unwrap();
+    }
+
+    fn logged_schemas(f: &Fx) -> Vec<u32> {
+        Store::open_reader(&f.path)
+            .unwrap()
+            .read_with(|c| {
+                let mut stmt = c
+                    .prepare("SELECT schema FROM rollup_log WHERE date <> 'latest' ORDER BY date")
+                    .unwrap();
+                Ok(stmt
+                    .query_map([], |r| r.get(0))
+                    .unwrap()
+                    .collect::<Result<Vec<u32>, _>>()
+                    .unwrap())
+            })
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn old_days_are_regenerated_oldest_first_ten_a_minute_and_only_once() {
+        let (mut f, seen, _) = rollup_fx(Tier::Basic, true).await;
+        paid_since(&f, 14).await;
+        f.task.cycle().await;
+        f.task.cycle().await;
+        assert_eq!(rollup_asks(&seen).len(), 14);
+        assert_eq!(logged_schemas(&f), vec![1; 14]);
+
+        // The Hub is updated to a v2 writer and the licence raises the pin to 2.
+        f.task.newest_schema = 2;
+        f.task.build_rollup = v2_writer;
+        pin_rollup_schema(&f, Tier::Basic, 2).await;
+        let before = rollup_asks(&seen).len();
+        let next = f.task.cycle().await;
+        let asks = rollup_asks(&seen);
+        assert_eq!(asks.len() - before, REGENERATIONS_PER_MINUTE);
+        assert_eq!(asks[before], "2027-01-01", "oldest first");
+        assert_eq!(asks[asks.len() - 1], "2027-01-10");
+        let schemas = logged_schemas(&f);
+        assert_eq!(&schemas[..10], &[2; 10]);
+        assert_eq!(&schemas[10..], &[1; 4]);
+        let sent = rollup_puts(&seen);
+        assert_eq!(sent.last().unwrap().1.schema, 2);
+        assert!(
+            next.wait <= Duration::from_secs(60) && next.wait >= Duration::from_secs(1),
+            "wakes when the minute frees a place: {:?}",
+            next.wait
+        );
+
+        // The rest of the minute: nothing more goes out.
+        f.clock.advance(30_000);
+        keep_lease(&f).await;
+        f.task.cycle().await;
+        assert_eq!(rollup_asks(&seen).len(), before + 10);
+
+        // A minute after the first lot, the remaining four go and nothing is rebuilt twice.
+        f.clock.advance(31_000);
+        keep_lease(&f).await;
+        let next = f.task.cycle().await;
+        let asks = rollup_asks(&seen);
+        assert_eq!(asks.len(), before + 14);
+        assert_eq!(
+            &asks[before + 10..],
+            ["2027-01-11", "2027-01-12", "2027-01-13", "2027-01-14"]
+        );
+        assert_eq!(logged_schemas(&f), vec![2; 14]);
+        assert_eq!(next.wait, Duration::from_secs(300));
+        f.task.cycle().await;
+        assert_eq!(rollup_asks(&seen).len(), before + 14);
+    }
+
+    #[tokio::test]
+    async fn a_restart_resumes_from_the_oldest_day_still_below() {
+        let (mut f, seen, _) = rollup_fx(Tier::Basic, true).await;
+        paid_since(&f, 12).await;
+        f.task.cycle().await;
+        f.task.cycle().await;
+        f.task.newest_schema = 2;
+        f.task.build_rollup = v2_writer;
+        pin_rollup_schema(&f, Tier::Basic, 2).await;
+        f.task.cycle().await;
+        assert_eq!(logged_schemas(&f)[..10], [2; 10]);
+
+        // The Hub restarts: a fresh task knows only the log.
+        let mut again = UploadTask::new(
+            f.task.cloud.clone(),
+            Arc::clone(&f.task.keystore),
+            Some(f.writer.clone()),
+            Arc::clone(&f.task.snapshots),
+            PairGate::new(true),
+            f.status.clone(),
+            DEV_LICENCE_VERIFY_KEYS.to_vec(),
+        );
+        again.newest_schema = 2;
+        again.build_rollup = v2_writer;
+        let before = rollup_asks(&seen).len();
+        f.clock.advance(61_000);
+        keep_lease(&f).await;
+        again.cycle().await;
+        let asks = rollup_asks(&seen);
+        assert_eq!(&asks[before..], ["2027-01-13", "2027-01-14"]);
+        assert_eq!(logged_schemas(&f), vec![2; 12]);
+    }
+
+    #[tokio::test]
+    async fn the_hub_emits_the_pinned_schema_not_its_newest() {
+        let (mut f, seen, _) = rollup_fx(Tier::Basic, true).await;
+        paid_since(&f, 2).await;
+        // The Hub can write v2, but the licence still pins v1: new days are v1 and nothing is old.
+        f.task.newest_schema = 2;
+        f.task.build_rollup = v2_writer;
+        pin_rollup_schema(&f, Tier::Basic, 1).await;
+        f.task.cycle().await;
+        assert_eq!(rollup_asks(&seen).len(), 2);
+        assert!(rollup_puts(&seen).iter().all(|(_, d)| d.schema == 1));
+        f.task.cycle().await;
+        assert_eq!(rollup_asks(&seen).len(), 2, "nothing is rebuilt");
+        assert_eq!(logged_schemas(&f), [1, 1]);
+
+        // A pin past what the Hub can write is held to its newest writer.
+        pin_rollup_schema(&f, Tier::Basic, 9).await;
+        assert_eq!(f.task.rollup_schema(&f.writer, Tier::Basic).await, 2);
+        // A licence that cannot be verified falls back to the tier's default pin.
+        f.task.keys = Vec::new();
+        assert_eq!(f.task.rollup_schema(&f.writer, Tier::Basic).await, 1);
+    }
+
+    #[tokio::test]
+    async fn a_day_that_cannot_be_rebuilt_does_not_hold_up_the_days_behind_it() {
+        let (mut f, seen, _) = rollup_fx(Tier::Basic, true).await;
+        paid_since(&f, 3).await;
+        f.task.cycle().await;
+        f.task.newest_schema = 2;
+        f.task.build_rollup = |r, day, now, schema| {
+            if day == "2027-01-12" {
+                Ok(None)
+            } else {
+                v2_writer(r, day, now, schema)
+            }
+        };
+        pin_rollup_schema(&f, Tier::Basic, 2).await;
+        f.task.cycle().await;
+        assert_eq!(logged_schemas(&f), [1, 2, 2]);
+        let before = rollup_asks(&seen).len();
+        f.task.cycle().await;
+        assert_eq!(
+            rollup_asks(&seen).len(),
+            before,
+            "the stuck day is not retried every cycle"
+        );
     }
 }

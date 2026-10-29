@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 
 use arena_proto::{
     AppError, DEFAULT_STOCK_EXPIRY_WARN_DAYS, ErrorCode, KEY_STOCK_EXPIRY_WARN_DAYS,
-    ROLLUP_PLAYERS_CAP, ROLLUP_SCHEMA, RollupAged, RollupAmount, RollupByMethod, RollupByType,
-    RollupCredit, RollupCreditPlayer, RollupExpiring, RollupPlayHours, RollupRevenue,
+    ROLLUP_MIN_SCHEMA, ROLLUP_PLAYERS_CAP, ROLLUP_SCHEMA, RollupAged, RollupAmount, RollupByMethod,
+    RollupByType, RollupCredit, RollupCreditPlayer, RollupExpiring, RollupPlayHours, RollupRevenue,
     RollupSessions, RollupShift, RollupStock, RollupStockLevel, RollupV1, RollupWaste,
     SALES_DISCOUNTS, SALES_PLANS, SALES_PLAY_TIME, SALES_PRODUCTS, SALES_TAX_ADDED,
     STOCK_EXPIRY_WARN_RANGE,
@@ -252,7 +252,16 @@ pub fn build_rollup(
     store: &Store,
     business_day: &str,
     now_ms: i64,
+    schema: u32,
 ) -> Result<Option<RollupV1>, AppError> {
+    // The writers this release keeps: v1 only so far (Story 8.7).
+    if !(ROLLUP_MIN_SCHEMA..=ROLLUP_SCHEMA).contains(&schema) {
+        return Err(AppError::with_field(
+            ErrorCode::ValidationFailed,
+            "schema",
+            "No writer for that rollup schema.",
+        ));
+    }
     let date = parse_day(business_day)?;
     let (Some(branch), Some(locale)) = (store.branch_summary()?, store.branch_locale()?) else {
         return Ok(None);

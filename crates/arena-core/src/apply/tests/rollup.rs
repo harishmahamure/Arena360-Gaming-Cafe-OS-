@@ -18,7 +18,7 @@ fn amount(list: &[arena_proto::ReportAmount], key: &str) -> i64 {
 fn rollup_of(f: &Fixture, day: &str) -> RollupV1 {
     SnapshotReader::open(&f.path)
         .unwrap()
-        .daily_rollup(day, f.clock.now_ms())
+        .daily_rollup(day, f.clock.now_ms(), ROLLUP_SCHEMA)
         .unwrap()
         .unwrap()
 }
@@ -101,13 +101,20 @@ async fn a_day_with_no_sales_is_zeros_and_a_bad_date_or_no_branch_is_handled() {
     assert_eq!(r.credit.outstanding, 0);
 
     let reader = SnapshotReader::open(&f.path).unwrap();
-    let bad = reader.daily_rollup("2026-13-40", 0).unwrap_err();
+    let bad = reader
+        .daily_rollup("2026-13-40", 0, ROLLUP_SCHEMA)
+        .unwrap_err();
     assert_eq!(bad.code, arena_proto::ErrorCode::ValidationFailed);
+    // The Hub only writes the schemas it keeps writers for (Story 8.7).
+    for schema in [0, ROLLUP_SCHEMA + 1] {
+        let e = reader.daily_rollup("2026-03-10", 0, schema).unwrap_err();
+        assert_eq!(e.field.as_deref(), Some("schema"), "schema {schema}");
+    }
 
     let unbooted = primary();
     let none = SnapshotReader::open(&unbooted.path)
         .unwrap()
-        .daily_rollup("2026-03-10", 0)
+        .daily_rollup("2026-03-10", 0, ROLLUP_SCHEMA)
         .unwrap();
     assert!(none.is_none());
 }
@@ -172,9 +179,12 @@ async fn a_busy_day_rolls_up_within_its_budget() {
     )
     .await;
     let reader = SnapshotReader::open(&f.path).unwrap();
-    reader.daily_rollup(&day, now).unwrap(); // warm the connection
+    reader.daily_rollup(&day, now, ROLLUP_SCHEMA).unwrap(); // warm the connection
     let started = std::time::Instant::now();
-    let r = reader.daily_rollup(&day, now).unwrap().unwrap();
+    let r = reader
+        .daily_rollup(&day, now, ROLLUP_SCHEMA)
+        .unwrap()
+        .unwrap();
     let took = started.elapsed();
     assert_eq!(r.sessions.count, 1000);
     assert_eq!(r.sessions.minutes, 1000 * 60);

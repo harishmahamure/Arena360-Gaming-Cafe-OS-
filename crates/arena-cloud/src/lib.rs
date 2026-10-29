@@ -31,6 +31,7 @@ pub mod ops;
 pub mod pairing_code;
 pub mod passwords;
 pub mod presign;
+pub mod rollups;
 pub mod store;
 pub mod templates;
 pub mod totp;

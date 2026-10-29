@@ -9,8 +9,26 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-/// The schema of `rollups/<date>.json`.
+/// The schema of `rollups/<date>.json` this release writes natively: N (Story 8.7).
 pub const ROLLUP_SCHEMA: u32 = 1;
+/// The oldest schema this release still has a writer for: N−1, or N when N is the first.
+pub const ROLLUP_MIN_SCHEMA: u32 = if ROLLUP_SCHEMA > 1 {
+    ROLLUP_SCHEMA - 1
+} else {
+    1
+};
+
+/// The schema a Hub whose newest writer is `newest` (N) emits when its licence pins `pin`: the
+/// pin, held within the writers it keeps (N−1 and N). A tier's file shape therefore changes only
+/// when the cloud raises the pin, and never past what the Hub can write.
+pub fn emitted_rollup_schema(pin: u32, newest: u32) -> u32 {
+    pin.clamp(newest.saturating_sub(1).max(1), newest)
+}
+
+/// Whether a cloud whose newest rollup schema is `current` reads a file of `schema`: N or N−1.
+pub fn rollup_schema_accepted(schema: u32, current: u32) -> bool {
+    schema >= 1 && (schema == current || schema.saturating_add(1) == current)
+}
 /// The object key of the rollup of `date` (`yyyy-mm-dd`) under the branch's prefix of the data
 /// bucket; what `rollup_log.key` records for that day.
 pub fn rollup_object_key(date: &str) -> String {
@@ -276,6 +294,30 @@ mod tests {
         assert!(!is_rollup_date("2027-02-29"));
         assert!(!is_rollup_date("2026-1-001"));
         assert_eq!(rollup_object_key("2026-10-29"), "rollups/2026-10-29.json");
+    }
+
+    #[test]
+    fn the_emitted_schema_follows_the_pin_within_the_kept_writers() {
+        // Newest writer 3: it keeps 2 and 3.
+        assert_eq!(emitted_rollup_schema(0, 3), 2);
+        assert_eq!(emitted_rollup_schema(2, 3), 2);
+        assert_eq!(emitted_rollup_schema(3, 3), 3);
+        assert_eq!(emitted_rollup_schema(9, 3), 3);
+        // The first release has only v1.
+        assert_eq!(emitted_rollup_schema(0, 1), 1);
+        assert_eq!(emitted_rollup_schema(1, 1), 1);
+        assert_eq!(emitted_rollup_schema(5, 1), 1);
+        const { assert!(ROLLUP_MIN_SCHEMA <= ROLLUP_SCHEMA) };
+    }
+
+    #[test]
+    fn the_cloud_accepts_the_current_and_the_previous_schema_only() {
+        assert!(rollup_schema_accepted(3, 3));
+        assert!(rollup_schema_accepted(2, 3));
+        assert!(!rollup_schema_accepted(1, 3));
+        assert!(!rollup_schema_accepted(4, 3));
+        assert!(!rollup_schema_accepted(0, 1));
+        assert!(rollup_schema_accepted(1, 1));
     }
 
     #[test]

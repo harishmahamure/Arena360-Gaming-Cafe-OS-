@@ -50,6 +50,8 @@ pub struct AuthState {
     pub put_metrics: crate::presign::PutMetrics,
     /// Upload gaps found by heartbeats per tenant and branch (Story 8.3).
     pub gap_metrics: crate::gaps::GapMetrics,
+    /// Rollup days the cloud cannot read, and the missing-day count per branch (Story 8.7).
+    pub rollup_metrics: crate::rollups::RollupMetrics,
 }
 
 impl AuthState {
@@ -72,6 +74,7 @@ impl AuthState {
             presigner: std::sync::OnceLock::new(),
             put_metrics: crate::presign::PutMetrics::default(),
             gap_metrics: crate::gaps::GapMetrics::default(),
+            rollup_metrics: crate::rollups::RollupMetrics::default(),
         }
     }
 

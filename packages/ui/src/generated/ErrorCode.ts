@@ -95,4 +95,5 @@ export type ErrorCode =
   | "VARIANCE_OVER_THRESHOLD"
   | "BUNDLE_SHORT"
   | "PAYLOAD_TOO_LARGE"
-  | "FENCED";
+  | "FENCED"
+  | "ROLLUP_SCHEMA_OLD";

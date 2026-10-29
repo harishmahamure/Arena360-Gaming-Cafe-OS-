@@ -177,6 +177,9 @@ pub enum ErrorCode {
     PayloadTooLarge,
     /// The caller's epoch is below the branch fence: a newer Hub took over (Story 8.1).
     Fenced,
+    /// A rollup file's `schema` is neither the cloud's current one nor the one before it; the day
+    /// counts as missing until the Hub regenerates it (Story 8.7).
+    RollupSchemaOld,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -286,6 +289,7 @@ impl ErrorCode {
             Self::BundleShort => "BUNDLE_SHORT",
             Self::PayloadTooLarge => "PAYLOAD_TOO_LARGE",
             Self::Fenced => "FENCED",
+            Self::RollupSchemaOld => "ROLLUP_SCHEMA_OLD",
         }
     }
 }
@@ -456,6 +460,7 @@ mod tests {
             (ErrorCode::BundleShort, "BUNDLE_SHORT"),
             (ErrorCode::PayloadTooLarge, "PAYLOAD_TOO_LARGE"),
             (ErrorCode::Fenced, "FENCED"),
+            (ErrorCode::RollupSchemaOld, "ROLLUP_SCHEMA_OLD"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

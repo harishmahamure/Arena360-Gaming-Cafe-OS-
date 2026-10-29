@@ -244,6 +244,29 @@ pub fn catalogue(conn: &Connection) -> Result<SummaryCatalogue, AppError> {
 }
 
 impl Store {
+    /// The days (`yyyy-mm-dd`) whose published rollup has a `schema` below `schema`, oldest
+    /// first, at most `limit` (Story 8.7). The log itself is the resume point: a rebuilt day's row
+    /// carries the new schema and drops out.
+    pub fn rollup_days_below(&self, schema: u32, limit: usize) -> Result<Vec<String>, AppError> {
+        if !self.table_exists("rollup_log")? {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT date FROM rollup_log
+                 WHERE schema < ?1
+                   AND date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+                 ORDER BY date LIMIT ?2",
+            )
+            .map_err(db_error)?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        stmt.query_map(params![schema, limit], |r| r.get(0))
+            .map_err(db_error)?
+            .collect::<Result<_, _>>()
+            .map_err(db_error)
+    }
+
     /// The `rollup_log` row of `date`, if the Hub has published it.
     pub fn rollup_log(&self, date: &str) -> Result<Option<RollupLogRow>, AppError> {
         if !self.table_exists("rollup_log")? {

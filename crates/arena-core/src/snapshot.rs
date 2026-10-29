@@ -1760,18 +1760,29 @@ impl SnapshotReader {
         crate::summary::build_summary(&store, now_ms)
     }
 
-    /// The daily rollup of `business_day` as of `now_ms` (Story 8.5); `None` before the branch
-    /// exists. Blocking (SQLite), on the reader's own connection; writes nothing.
+    /// The daily rollup of `business_day` as of `now_ms` in `schema` (Stories 8.5, 8.7); `None`
+    /// before the branch exists. Blocking (SQLite), on the reader's own connection; writes nothing.
     pub fn daily_rollup(
         &self,
         business_day: &str,
         now_ms: i64,
+        schema: u32,
     ) -> Result<Option<arena_proto::RollupV1>, AppError> {
         let store = self
             .reader
             .lock()
             .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
-        crate::rollup::build_rollup(&store, business_day, now_ms)
+        crate::rollup::build_rollup(&store, business_day, now_ms, schema)
+    }
+
+    /// The published rollup days still below `schema`, oldest first, at most `limit` (Story 8.7).
+    /// Blocking (SQLite); writes nothing.
+    pub fn rollup_days_below(&self, schema: u32, limit: usize) -> Result<Vec<String>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.rollup_days_below(schema, limit)
     }
 
     /// The business days due for a daily rollup now (Story 8.6) and when the next falls due, or

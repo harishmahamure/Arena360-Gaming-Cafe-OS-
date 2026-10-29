@@ -10,6 +10,7 @@
     launchGame,
     loadGames,
     loadLaunchers,
+    loadMostPlayed,
     openLauncher,
     onAttract,
     onHubStatus,
@@ -21,7 +22,14 @@
   } from "../lib/bridge";
   import Attract from "../lib/Attract.svelte";
   import Shell from "../lib/Shell.svelte";
-  import { GAMES_POLL_MS, type GameCard, type LauncherCardData } from "../lib/games";
+  import {
+    GAMES_POLL_MS,
+    MOST_PLAYED_POLL_MS,
+    rankedGames,
+    type GameCard,
+    type LauncherCardData,
+    type MostPlayedView,
+  } from "../lib/games";
   import { type Tab } from "../lib/shell";
 
   /** The idle screen: the last attract view and logo (from the service cache at first). */
@@ -56,6 +64,9 @@
   let gameRunning = $state(false);
   /** The launcher cards (Story 6.26): the launchers installed on this PC. */
   let launchers: LauncherCardData[] = $state([]);
+  /** The Hub's most-played list (Story 6.27); `null` until asked, or when the Hub is unreachable. */
+  let mostPlayed: MostPlayedView | null = $state(null);
+  const ranked = $derived(rankedGames(mostPlayed, games));
 
   async function refreshGames() {
     const [view, cards] = await Promise.all([loadGames(), loadLaunchers()]);
@@ -89,6 +100,29 @@
     void refreshGames();
     const timer = setInterval(() => void refreshGames(), GAMES_POLL_MS);
     return () => clearInterval(timer);
+  });
+
+  // The carousel's list is asked of the Hub when the Games tab opens and every few minutes while
+  // it stays open (the Hub recomputes it at most every 15 minutes); no answer hides the carousel.
+  $effect(() => {
+    if (!inSession) {
+      mostPlayed = null;
+      return;
+    }
+    if (tab !== "games") return;
+    // An answer that arrives after this run is over (the session ended, the tab changed) is dropped,
+    // so a slow reply never shows an old carousel to the next player.
+    let live = true;
+    const refresh = async () => {
+      const view = await loadMostPlayed();
+      if (live) mostPlayed = view;
+    };
+    void refresh();
+    const timer = setInterval(() => void refresh(), MOST_PLAYED_POLL_MS);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
   });
 
   const graceLeft = $derived(
@@ -201,6 +235,8 @@
       {games}
       {gameRunning}
       {launchers}
+      mostPlayed={ranked}
+      branch={attract.view?.branch_name ?? ""}
       onlaunch={launch}
       onopenlauncher={openOwnAccount}
       bind:tab

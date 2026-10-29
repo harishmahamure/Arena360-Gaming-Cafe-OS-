@@ -7,6 +7,7 @@ import type { Hello } from "./Hello";
 import type { HelloOk } from "./HelloOk";
 import type { IntentResult } from "./IntentResult";
 import type { IntentSubmit } from "./IntentSubmit";
+import type { MostPlayed } from "./MostPlayed";
 import type { PcAck } from "./PcAck";
 import type { PlayerAccountResult } from "./PlayerAccountResult";
 import type { PlayerAuthResult } from "./PlayerAuthResult";
@@ -63,5 +64,7 @@ export type FrameBody =
   | { kind: "player.extend_options" }
   | ({ kind: "player.extend_options_result" } & PlayerExtendOptions)
   | ({ kind: "player.extend" } & PlayerExtend)
+  | { kind: "games.most_played" }
+  | ({ kind: "games.most_played_result" } & MostPlayed)
   | ({ kind: "player.extend_result" } & PlayerExtendResult)
   | { kind: "ack" };

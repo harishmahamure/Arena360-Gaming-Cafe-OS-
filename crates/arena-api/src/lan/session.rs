@@ -655,6 +655,13 @@ impl Ctx<'_> {
                 }
                 Err(e) => self.reply(Frame::error(rid, e)).await,
             },
+            "games.most_played" => match self.paired_device("games.most_played") {
+                Ok(device) => {
+                    self.spawn_games_most_played(rid, device, permits, tasks)
+                        .await
+                }
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
             "player.extend" => match self.check_player_extend(value) {
                 Ok((device, request)) => {
                     self.spawn_player_extend(rid, device, request, permits, tasks)
@@ -733,7 +740,8 @@ impl Ctx<'_> {
         };
         debug_assert_eq!(frame.rid, rid);
         // A chatty kiosk cannot flood the change log: 60 events a minute per device, kiosk.log,
-        // kiosk.process_blocked and kiosk.cleanup_failed together (a `kiosk.scan_reported` is one
+        // kiosk.process_blocked, kiosk.cleanup_failed, game.launched, launcher.opened and
+        // game.play_recorded together (a `kiosk.scan_reported` is one
         // small event a day, so the limit does not apply to it). Over the limit is HUB_SLOW,
         // which the kiosk treats as transient (it keeps the event queued).
         if matches!(
@@ -743,6 +751,7 @@ impl Ctx<'_> {
                 | IntentKind::KioskCleanupFailed
                 | IntentKind::KioskGameLaunched
                 | IntentKind::KioskLauncherOpened
+                | IntentKind::KioskGamePlayRecorded
         ) && !self
             .hub
             .kiosk_log_rate
@@ -953,6 +962,28 @@ impl Ctx<'_> {
             let _permit = permit;
             let reply = match super::player_extend::options(&hub, &device).await {
                 Ok(result) => Frame::new(rid, FrameBody::PlayerExtendOptionsResult(result)),
+                Err(e) => Frame::error(rid, e),
+            };
+            let _ = out.send(text(&reply)).await;
+        });
+    }
+
+    async fn spawn_games_most_played(
+        &self,
+        rid: String,
+        device: String,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let (hub, out) = (Arc::clone(self.hub), self.out.clone());
+        tasks.spawn(async move {
+            let _permit = permit;
+            let reply = match super::games::most_played(&hub, &device).await {
+                Ok(result) => Frame::new(rid, FrameBody::GamesMostPlayedResult(result)),
                 Err(e) => Frame::error(rid, e),
             };
             let _ = out.send(text(&reply)).await;

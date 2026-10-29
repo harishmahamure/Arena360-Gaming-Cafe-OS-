@@ -30,6 +30,16 @@
 //!   time is still the click. A game started from a launcher link is measured by the launcher's
 //!   window, as it is tracked by the launcher's process.
 //!
+//! - **Play hours (Story 6.27).** Each game this service starts is tracked with the time it
+//!   started. When its process is seen to have exited (the run loop checks every [`POLL`], and a
+//!   launch or a list check does too), or the session ends (the cleanup's `programs` step calls
+//!   [`record_running`] before any program is ended), one `game.play_recorded{game_id,
+//!   started_at, ended_at, minutes}` is queued for the Hub and the game is no longer tracked, so
+//!   a play is recorded once. It is queued like any kiosk event, so a Hub that is unreachable gets
+//!   it once on reconnect. The Hub names the player and session. A game started from a launcher
+//!   link is tracked by the launcher's handler process, so its recorded minutes may be short
+//!   (the same limit as launch time).
+//!
 //! Nothing here is written without a session on screen, and nothing is started while the PC is
 //! locked.
 
@@ -39,8 +49,9 @@ use std::time::Duration;
 
 use arena_kiosk_core::procpolicy::{Decision, ProcInfo, decide, normalize_path};
 use arena_proto::{
-    AppError, Booster, BoosterPriority, ErrorCode, KioskGameLaunched, KioskLibraryEntry,
-    KioskLogLevel, LAUNCH_WINDOW_TIMEOUT_MS, is_launch_uri, launcher_install_globs,
+    AppError, Booster, BoosterPriority, ErrorCode, KioskGameLaunched, KioskGamePlayRecorded,
+    KioskLibraryEntry, KioskLogLevel, LAUNCH_WINDOW_TIMEOUT_MS, MAX_PLAY_MINUTES, is_launch_uri,
+    launcher_install_globs,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -96,11 +107,19 @@ pub trait GameHost: Send + Sync {
     }
 }
 
+/// A game this service started that is being timed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Tracked {
+    pid: u32,
+    /// When it started, on the wall clock (Unix milliseconds).
+    started_at: i64,
+}
+
 /// The games this service started that have not exited yet.
 #[derive(Default)]
 pub struct GameState {
     host: Mutex<Option<Arc<dyn GameHost>>>,
-    running: Mutex<HashMap<String, u32>>,
+    running: Mutex<HashMap<String, Tracked>>,
     /// Games whose start is in progress, so two quick requests cannot start one twice.
     starting: Mutex<HashSet<String>>,
     /// The launchers (Story 6.26) this service opened that have not exited yet, by launcher id.
@@ -124,15 +143,11 @@ impl GameState {
         lock(&self.host).clone()
     }
 
-    /// The process of game `id` when it is running.
+    /// The process of game `id` when it is running. A game that has exited stays tracked until
+    /// [`reap`] records its play.
     fn running_pid(&self, id: &str, host: &dyn GameHost) -> Option<u32> {
-        let pid = lock(&self.running).get(id).copied()?;
-        if host.alive(pid) {
-            Some(pid)
-        } else {
-            lock(&self.running).remove(id);
-            None
-        }
+        let pid = lock(&self.running).get(id)?.pid;
+        host.alive(pid).then_some(pid)
     }
 
     /// Claims the right to start game `id`; `false` when another start of it is in progress.
@@ -144,8 +159,11 @@ impl GameState {
         lock(&self.starting).remove(id);
     }
 
-    fn started(&self, id: &str, pid: u32) {
-        lock(&self.running).insert(id.to_owned(), pid);
+    /// Starts timing game `id`; answers the play it replaces, if one was left unrecorded.
+    pub(crate) fn started(&self, id: &str, pid: u32, started_at: i64) -> Option<(String, i64)> {
+        lock(&self.running)
+            .insert(id.to_owned(), Tracked { pid, started_at })
+            .map(|old| (id.to_owned(), old.started_at))
     }
 
     /// The process of launcher `id` when this service opened it and it is still running.
@@ -171,17 +189,36 @@ impl GameState {
         lock(&self.launchers).insert(id.to_owned(), pid);
     }
 
-    /// Forgets the games that have exited; answers how many are still running.
-    pub fn sweep(&self, host: &dyn GameHost) -> usize {
+    /// Stops timing the games that have exited; answers them as `(game id, started_at)` and how
+    /// many are still running.
+    fn take_exited(&self, host: &dyn GameHost) -> (Vec<(String, i64)>, usize) {
         let mut running = lock(&self.running);
-        running.retain(|_, pid| host.alive(*pid));
-        running.len()
+        let mut gone: Vec<(String, i64)> = running
+            .iter()
+            .filter(|(_, t)| !host.alive(t.pid))
+            .map(|(id, t)| (id.clone(), t.started_at))
+            .collect();
+        for (id, _) in &gone {
+            running.remove(id);
+        }
+        gone.sort();
+        (gone, running.len())
+    }
+
+    /// Stops timing every game, running or not; answers them as `(game id, started_at)`.
+    fn take_all(&self) -> Vec<(String, i64)> {
+        let mut all: Vec<(String, i64)> = lock(&self.running)
+            .drain()
+            .map(|(id, t)| (id, t.started_at))
+            .collect();
+        all.sort();
+        all
     }
 
     /// Whether any game this service started is still running.
     pub fn any_running(&self) -> bool {
         match self.host() {
-            Some(host) => self.sweep(host.as_ref()) > 0,
+            Some(host) => lock(&self.running).values().any(|t| host.alive(t.pid)),
             None => false,
         }
     }
@@ -298,7 +335,7 @@ pub fn list(ctx: &Ctx) -> Result<Value, AppError> {
 
 /// [`list`] for the library `entries` this PC has.
 fn list_of(ctx: &Ctx, entries: Vec<KioskLibraryEntry>) -> Value {
-    let running = ctx.games.any_running();
+    let running = reap(ctx) > 0;
     let host = ctx.games.host();
     let is_running = |id: &str| {
         host.as_deref()
@@ -360,6 +397,8 @@ async fn launch_in(
     let Some(entry) = entries.into_iter().find(|e| e.id == id && e.kind == "game") else {
         return Ok(failed(ctx, &id, "not in this PC's library"));
     };
+    // A game that exited since the last check is recorded before it can be started again.
+    reap(ctx);
     if let Some(pid) = ctx.games.running_pid(&entry.id, host.as_ref()) {
         return Ok(json!({ "outcome": "already_running", "pid": pid }));
     }
@@ -403,7 +442,9 @@ async fn start_entry(
         Ok(pid) => pid,
         Err(why) => return Ok(failed(ctx, &entry.name, &why)),
     };
-    ctx.games.started(&entry.id, pid);
+    if let Some(old) = ctx.games.started(&entry.id, pid, ctx.clock.now_ms()) {
+        record_plays(ctx, vec![old]);
+    }
     if booster.priority != BoosterPriority::Normal
         && let Err(why) = host.set_priority(pid, booster.priority)
     {
@@ -587,6 +628,69 @@ async fn record_launch(ctx: Arc<Ctx>, host: Arc<dyn GameHost>, launch: Launch) {
     }
 }
 
+/// Stops timing the games that have exited, queueing each one's play; answers how many games
+/// are still running.
+pub fn reap(ctx: &Ctx) -> usize {
+    let Some(host) = ctx.games.host() else {
+        return 0;
+    };
+    let (gone, running) = ctx.games.take_exited(host.as_ref());
+    record_plays(ctx, gone);
+    running
+}
+
+/// The session is ending: first records the games already seen to have exited (at the time they
+/// were noticed), then queues the play of every game still being timed with the end now, and stops
+/// timing them (so a later process exit records nothing). Called before any program is ended.
+pub fn record_running(ctx: &Ctx) {
+    reap(ctx);
+    record_plays(ctx, ctx.games.take_all());
+}
+
+/// The `game.play_recorded` of a play from `started_at` to `ended_at` on the wall clock: whole
+/// minutes to the nearest, never negative and never over the Hub's limit (the start is pulled
+/// forward instead).
+fn play_of(game_id: &str, started_at: i64, ended_at: i64) -> KioskGamePlayRecorded {
+    let max_ms = MAX_PLAY_MINUTES * 60_000;
+    let span = (ended_at - started_at).clamp(0, max_ms);
+    KioskGamePlayRecorded {
+        game_id: game_id.to_owned(),
+        started_at: ended_at - span,
+        ended_at,
+        minutes: (span + 30_000) / 60_000,
+    }
+}
+
+/// Queues one `game.play_recorded` for each of `plays` (`(game id, started_at)`), ended now.
+fn record_plays(ctx: &Ctx, plays: Vec<(String, i64)>) {
+    if plays.is_empty() {
+        return;
+    }
+    // As for any kiosk event: the Hub binds the intent to the paired device it arrives on.
+    let device = ctx
+        .config()
+        .map_or_else(|| "unprovisioned".into(), |c| c.device_id);
+    let ended_at = ctx.clock.now_ms();
+    for (game_id, started_at) in plays {
+        let play = play_of(&game_id, started_at, ended_at);
+        if let Err(e) = play.validate() {
+            tracing::error!(%game_id, error = %e, "not recording a play the hub would refuse");
+            continue;
+        }
+        tracing::info!(%game_id, minutes = play.minutes, "a game stopped; recording its play");
+        let intent = crate::intents::game_play_recorded(&device, ended_at, play);
+        let queued = ctx
+            .queue
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(&intent);
+        match queued {
+            Ok(()) => ctx.queued.notify_one(),
+            Err(e) => tracing::error!(error = %e, "the game play could not be queued"),
+        }
+    }
+}
+
 /// Keeps the running games current until `stop` is set.
 pub async fn run(ctx: Arc<Ctx>, mut stop: watch::Receiver<bool>) {
     let mut tick = tokio::time::interval(POLL);
@@ -594,9 +698,7 @@ pub async fn run(ctx: Arc<Ctx>, mut stop: watch::Receiver<bool>) {
     loop {
         tokio::select! {
             _ = tick.tick() => {
-                if let Some(host) = ctx.games.host() {
-                    ctx.games.sweep(host.as_ref());
-                }
+                reap(&ctx);
             }
             _ = stop.changed() => return,
         }

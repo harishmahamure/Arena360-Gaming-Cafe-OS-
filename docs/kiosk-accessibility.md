@@ -83,3 +83,17 @@ Borderless-fullscreen games are not affected: the HUD draws over them like any w
   colour. Tab visits each card; Enter and Space open it; focus wears the 3px ring.
 - Opening a launcher that is already open brings its window to the front. A launcher that will not
   open raises the same HUD toast as a game ("Couldn't start <name> — ask at the counter.").
+
+## "Most played here" carousel on the Games tab (Story 6.27)
+
+- A `most-played-carousel` sits above the filter rail and the grid, as its own labelled section:
+  the heading "Most played here", the caption "Top 10 by play hours · last 7 days · <branch>" and
+  a list of ranked game tiles in one row. It is absent when the last 7 days hold no plays, when
+  none of the top games is installed on the PC, and when the Hub cannot be asked.
+- A tile is the ordinary `game-tile` button. Its rank ("#1", "#2", ...) is a badge at the top-left
+  (`bg` fill, `text` ink), written before the name in the page, so the tile's accessible name is its
+  text: "#1 Name" (plus "Running" while the game runs, whose badge moves to the top-right). The
+  ranks number the tiles shown: a top game that is not installed is skipped and the next one moves
+  up. Tab visits each tile; Enter and Space launch the game; focus wears the 3px ring.
+- Left and Right move focus from tile to tile and scroll the focused tile into view; the row also
+  scrolls with the pointer. The keys stop at the first and the last tile.

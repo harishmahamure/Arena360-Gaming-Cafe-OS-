@@ -5,7 +5,7 @@
   import AccountMenu from "./AccountMenu.svelte";
   import { callStaff } from "./bridge";
   import Games from "./Games.svelte";
-  import type { GameCard, LauncherCardData } from "./games";
+  import type { GameCard, LauncherCardData, RankedGame } from "./games";
   import { INFO_TOAST_MS } from "./hud";
   import MessagesBell from "./MessagesBell.svelte";
   import VolumeControl from "./VolumeControl.svelte";
@@ -31,6 +31,8 @@
     games = null,
     gameRunning = false,
     launchers = [],
+    mostPlayed = [],
+    branch = "",
     onlaunch = () => {},
     onopenlauncher = () => {},
   }: {
@@ -55,6 +57,10 @@
     gameRunning?: boolean;
     /** The launchers installed on this PC (Story 6.26), for the Games tab's card row. */
     launchers?: LauncherCardData[];
+    /** The "Most played here" tiles for the Games tab (Story 6.27); none hides the carousel. */
+    mostPlayed?: RankedGame[];
+    /** The branch's name, for the carousel's caption. */
+    branch?: string;
     /** A game tile was activated. */
     onlaunch?: (game: GameCard) => void;
     /** A launcher card was activated. */
@@ -233,7 +239,7 @@
     <h1 class="type-kiosk-headline" data-testid="session-device">{session.device}</h1>
     {@render status?.()}
     {#if tab === "games"}
-      <Games {games} {gameRunning} {launchers} {onlaunch} {onopenlauncher} />
+      <Games {games} {gameRunning} {launchers} {mostPlayed} {branch} {onlaunch} {onopenlauncher} />
     {:else}
       <p class="empty type-kiosk-body" data-testid={"tab-empty-" + tab}>
         {t("player.shell.empty")}
@@ -424,6 +430,9 @@
 
   .content {
     display: grid;
+    /* One column that never grows past the content area, so a row that scrolls sideways (the
+       most-played carousel) scrolls instead of widening the page. */
+    grid-template-columns: minmax(0, 1fr);
     align-content: start;
     justify-items: center;
     gap: var(--space-5);

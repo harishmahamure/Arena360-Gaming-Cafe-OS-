@@ -188,8 +188,10 @@ pub use intent::{
     StaffSetCredentials, StaffUpsert, ZoneDelete, ZoneUpsert, reasons_json,
 };
 pub use kiosk::{
-    KioskGameLaunched, KioskHubState, KioskHubStatus, KioskLauncherOpened, KioskLog, KioskLogLevel,
-    MAX_GAME_ID_LEN, MAX_KIOSK_LOG_CODE_LEN, MAX_KIOSK_LOG_DETAIL_CHARS, OPENABLE_LAUNCHERS,
+    KioskGameLaunched, KioskGamePlayRecorded, KioskHubState, KioskHubStatus, KioskLauncherOpened,
+    KioskLog, KioskLogLevel, LastPlayed, MAX_GAME_ID_LEN, MAX_KIOSK_LOG_CODE_LEN,
+    MAX_KIOSK_LOG_DETAIL_CHARS, MAX_PLAY_MINUTES, MOST_PLAYED_DAYS, MOST_PLAYED_LIMIT, MostPlayed,
+    MostPlayedGame, OPENABLE_LAUNCHERS,
 };
 pub use kiosk_pairing::{
     DeviceKind, KioskPairInfo, KioskPaired, KioskPairingCode, MAX_PC_NAME_CHARS, PAIR_CODE_DIGITS,

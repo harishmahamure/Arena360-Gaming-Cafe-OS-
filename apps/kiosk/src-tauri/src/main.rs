@@ -306,6 +306,15 @@ async fn launchers(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answe
     Ok(service_request(&bridge, "launchers", serde_json::Value::Null).await)
 }
 
+/// The Games tab's "Most played here" carousel (Story 6.27): IPC `most_played`, answered with the
+/// Hub's `games.most_played_result` (`{top: [{game_id, minutes}], last_played: [{game_id, at}]}`).
+/// `None` when the service did not answer; an error answer (the Hub is unreachable) hides the
+/// carousel.
+#[tauri::command]
+async fn most_played(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
+    Ok(service_request(&bridge, "most_played", serde_json::Value::Null).await)
+}
+
 /// Opens Steam, Epic or Riot from its card (Story 6.26): IPC `launcher_open{id}`, answered like
 /// `game_launch`. A launcher that is already open has its window brought to the front here (this
 /// runs in the player's session); one that did not open raises the HUD's "Couldn't start <name>"
@@ -542,7 +551,8 @@ fn main() {
             games,
             game_launch,
             launchers,
-            launcher_open
+            launcher_open,
+            most_played
         ])
         .on_window_event(|_window, event| {
             // The kiosk is the shell: nothing closes it (admin exit comes in Story 1.20).

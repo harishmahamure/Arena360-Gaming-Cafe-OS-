@@ -12,7 +12,7 @@ use tokio::sync::{Notify, broadcast, watch};
 
 use super::fake::FakeGames;
 use super::*;
-use crate::clock::SystemClock;
+use crate::clock::ManualClock;
 use crate::paths::DataDir;
 use crate::pc::{Screen, ScreenSession};
 use crate::queue::QueueDb;
@@ -20,6 +20,8 @@ use crate::runtime::{Ctx, Timings};
 use crate::secret::SecretStore;
 
 pub(crate) const ME: &str = "DEVICE-ME";
+/// The wall clock the tests start at.
+const NOW_MS: i64 = 1_800_000_000_000;
 
 struct NoSecret;
 impl SecretStore for NoSecret {
@@ -74,22 +76,26 @@ pub(crate) struct T {
     _dir: tempfile::TempDir,
     pub(crate) ctx: Arc<Ctx>,
     pub(crate) host: Arc<FakeGames>,
+    /// The wall clock the service reads (it moves only when a test advances it).
+    pub(crate) clock: Arc<ManualClock>,
 }
 
 /// A service with a session on screen, a host and every library path allowed.
 pub(crate) fn t(entries: &[KioskLibraryEntry]) -> T {
-    let (dir, ctx) = bare(entries);
+    let (dir, ctx, clock) = bare(entries);
     let host = Arc::new(FakeGames::default());
     ctx.games.set_host(host.clone());
     T {
         _dir: dir,
         ctx,
         host,
+        clock,
     }
 }
 
 /// [`t`] without a game host.
-fn bare(entries: &[KioskLibraryEntry]) -> (tempfile::TempDir, Arc<Ctx>) {
+fn bare(entries: &[KioskLibraryEntry]) -> (tempfile::TempDir, Arc<Ctx>, Arc<ManualClock>) {
+    let clock = Arc::new(ManualClock::new(NOW_MS));
     let dir = tempfile::tempdir().unwrap();
     let data = DataDir(dir.path().to_path_buf());
     let queue = QueueDb::open(&data.queue()).unwrap();
@@ -106,7 +112,7 @@ fn bare(entries: &[KioskLibraryEntry]) -> (tempfile::TempDir, Arc<Ctx>) {
     let ctx = Arc::new(Ctx {
         data,
         secrets: Box::new(NoSecret),
-        clock: Arc::new(SystemClock),
+        clock: clock.clone(),
         timings: Timings::default(),
         queue: Mutex::new(queue),
         queued: Notify::new(),
@@ -133,7 +139,7 @@ fn bare(entries: &[KioskLibraryEntry]) -> (tempfile::TempDir, Arc<Ctx>) {
         reason: None,
         session: Some(session()),
     });
-    (dir, ctx)
+    (dir, ctx, clock)
 }
 
 /// The kinds of the intents waiting for the Hub, oldest first.
@@ -416,7 +422,7 @@ async fn a_request_without_an_id_or_a_host_is_refused() {
         assert_eq!(err.code, ErrorCode::BadFrame);
     }
     // A service without a game host (a non-Windows console run) cannot start games.
-    let (_dir, ctx) = bare(&[]);
+    let (_dir, ctx, _) = bare(&[]);
     let err = launch(&ctx, json!({"id": "G1"})).await.unwrap_err();
     assert_eq!(err.code, ErrorCode::Unsupported);
 }
@@ -676,4 +682,189 @@ async fn a_game_that_shows_no_window_is_recorded_with_no_launch_time_and_no_erro
         log_codes(&t).is_empty(),
         "no error for a game with no window"
     );
+}
+
+// ---- Story 6.27: play hours ----
+
+fn plays(t: &T) -> Vec<arena_proto::KioskGamePlayRecorded> {
+    queued(t)
+        .into_iter()
+        .filter_map(|(_, payload)| match payload {
+            Some(IntentPayload::KioskGamePlayRecorded(p)) => Some(p),
+            _ => None,
+        })
+        .collect()
+}
+
+const MIN: i64 = 60_000;
+
+#[tokio::test]
+async fn a_game_that_exits_after_25_minutes_queues_one_play_and_is_no_longer_tracked() {
+    let entries = vec![entry("G1", "Valorant", r"C:\Games\v.exe")];
+    let t = t(&entries);
+    go(&t, &entries, "G1").await;
+    let pid = t.host.alive_pids()[0];
+    t.clock.advance(25 * MIN);
+    // Still running: nothing yet.
+    assert_eq!(reap(&t.ctx), 1);
+    assert!(plays(&t).is_empty());
+
+    t.host.exit(pid);
+    assert_eq!(reap(&t.ctx), 0);
+    let play = plays(&t);
+    assert_eq!(play.len(), 1);
+    assert_eq!(
+        play[0],
+        arena_proto::KioskGamePlayRecorded {
+            game_id: "G1".into(),
+            started_at: NOW_MS,
+            ended_at: NOW_MS + 25 * MIN,
+            minutes: 25,
+        }
+    );
+    play[0].validate().unwrap();
+    // A device intent stamped when it ended, so the offline replay delivers it once.
+    let intent = t
+        .ctx
+        .queue
+        .lock()
+        .unwrap()
+        .entries()
+        .unwrap()
+        .pop()
+        .unwrap()
+        .intent;
+    assert_eq!(intent.kind, IntentKind::KioskGamePlayRecorded);
+    assert_eq!(intent.issued_at, NOW_MS + 25 * MIN);
+    assert_eq!(intent.actor.kind, arena_proto::ActorKind::Device);
+
+    // Written once: the game is no longer tracked, however often it is checked.
+    assert_eq!(reap(&t.ctx), 0);
+    assert_eq!(list_of(&t.ctx, entries.clone())["running"], json!(false));
+    assert_eq!(plays(&t).len(), 1);
+
+    // Played again: a new play from the new start.
+    t.clock.advance(5 * MIN);
+    go(&t, &entries, "G1").await;
+    t.clock.advance(MIN);
+    t.host.exit(t.host.alive_pids()[0]);
+    reap(&t.ctx);
+    let play = plays(&t);
+    assert_eq!(play.len(), 2);
+    assert_eq!(play[1].started_at, NOW_MS + 30 * MIN);
+    assert_eq!(play[1].minutes, 1);
+}
+
+#[tokio::test]
+async fn a_relaunch_right_after_an_exit_records_the_first_play_first() {
+    let entries = vec![entry("G1", "Valorant", r"C:\Games\v.exe")];
+    let t = t(&entries);
+    go(&t, &entries, "G1").await;
+    t.clock.advance(10 * MIN);
+    t.host.exit(t.host.alive_pids()[0]);
+    // No sweep ran in between: the launch itself notices the exit.
+    assert_eq!(go(&t, &entries, "G1").await["outcome"], "started");
+    let play = plays(&t);
+    assert_eq!(play.len(), 1);
+    assert_eq!(play[0].minutes, 10);
+    assert!(t.ctx.games.any_running());
+}
+
+#[tokio::test]
+async fn the_session_ending_records_a_running_game_now_and_its_later_exit_records_nothing() {
+    let entries = vec![
+        entry("G1", "One", r"C:\Games\1.exe"),
+        entry("G2", "Two", r"C:\Games\2.exe"),
+    ];
+    let t = t(&entries);
+    go(&t, &entries, "G1").await;
+    t.clock.advance(7 * MIN);
+    go(&t, &entries, "G2").await;
+    let pids = t.host.alive_pids();
+    // G2 exits a minute later and is noticed then: it ends there, not when the session does.
+    t.clock.advance(MIN);
+    t.host.exit(pids[1]);
+    assert_eq!(reap(&t.ctx), 1);
+    t.clock.advance(2 * MIN);
+
+    record_running(&t.ctx);
+    let play = plays(&t);
+    let got: Vec<_> = play
+        .iter()
+        .map(|p| (p.game_id.as_str(), p.started_at, p.ended_at, p.minutes))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("G2", NOW_MS + 7 * MIN, NOW_MS + 8 * MIN, 1),
+            ("G1", NOW_MS, NOW_MS + 10 * MIN, 10),
+        ]
+    );
+    // The programs are ended afterwards; the exit records nothing.
+    t.host.exit(pids[0]);
+    t.clock.advance(MIN);
+    assert_eq!(reap(&t.ctx), 0);
+    record_running(&t.ctx);
+    assert_eq!(plays(&t).len(), 2);
+    assert!(!t.ctx.games.any_running());
+}
+
+#[test]
+fn a_play_is_whole_minutes_to_the_nearest_and_always_one_the_hub_accepts() {
+    let at = |span_ms: i64| play_of("G", 1_000_000, 1_000_000 + span_ms);
+    for (span, minutes) in [
+        (0, 0),
+        (20_000, 0),
+        (29_999, 0),
+        (30_000, 1),
+        (89_999, 1),
+        (90_000, 2),
+        (25 * MIN, 25),
+    ] {
+        let p = at(span);
+        assert_eq!(p.minutes, minutes, "{span} ms");
+        p.validate().unwrap();
+    }
+    // A clock that went back is a zero-minute play, not an invalid one.
+    let back = play_of("G", 5_000_000, 4_000_000);
+    assert_eq!(
+        (back.started_at, back.ended_at, back.minutes),
+        (4_000_000, 4_000_000, 0)
+    );
+    back.validate().unwrap();
+    // A game left running for weeks is capped at the Hub's limit, its start pulled forward.
+    let long = play_of("G", 1_000_000, 1_000_000 + 40 * 24 * 60 * MIN);
+    assert_eq!(long.minutes, MAX_PLAY_MINUTES);
+    assert_eq!(long.ended_at - long.started_at, MAX_PLAY_MINUTES * MIN);
+    long.validate().unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_run_loop_records_an_exited_game_by_itself_within_one_poll() {
+    let entries = vec![entry("G1", "Valorant", r"C:\Games\v.exe")];
+    let t = t(&entries);
+    go(&t, &entries, "G1").await;
+    let pid = t.host.alive_pids()[0];
+    t.host.show_window(pid);
+    let (stop, stop_rx) = watch::channel(false);
+    let worker = tokio::spawn(run(Arc::clone(&t.ctx), stop_rx));
+
+    // Running: the loop records nothing.
+    tokio::time::sleep(POLL * 2).await;
+    assert!(plays(&t).is_empty());
+
+    // The process exits; no list, launch or reap call follows. The loop notices on its own.
+    t.clock.advance(4 * MIN);
+    t.host.exit(pid);
+    tokio::time::sleep(POLL * 2).await;
+    let play = plays(&t);
+    assert_eq!(play.len(), 1);
+    assert_eq!((play[0].game_id.as_str(), play[0].minutes), ("G1", 4));
+    // And only once, however long the loop keeps running.
+    tokio::time::sleep(POLL * 5).await;
+    assert_eq!(plays(&t).len(), 1);
+    assert!(!t.ctx.games.any_running());
+
+    stop.send(true).unwrap();
+    worker.await.unwrap();
 }

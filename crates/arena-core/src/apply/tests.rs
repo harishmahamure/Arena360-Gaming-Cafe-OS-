@@ -29,6 +29,7 @@ mod discount;
 mod extend;
 mod force_end;
 mod game_match;
+mod game_play;
 mod group_bill;
 mod gst;
 mod import_plans;

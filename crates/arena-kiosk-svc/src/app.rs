@@ -35,6 +35,8 @@
 //! - `launchers` lists the launcher cards and `launcher_open{id}` opens one ([`crate::launchers`],
 //!   Story 6.26).
 //! - `games` lists the Games tab and `game_launch{id}` starts a game ([`crate::games`], Story 6.23).
+//! - `most_played` asks the Hub for the branch's top games of the last 7 days and the player's
+//!   last-played times ([`crate::player_session::most_played`], Story 6.27).
 //! - `call_staff` (Story 6.15) is forwarded the same way as `device.call_staff`; `volume` reads the
 //!   slider level, and `volume{percent}` sets the system volume ([`crate::volume`]).
 
@@ -691,6 +693,14 @@ async fn serve(
             Ok(IpcMsg::Request { rid, kind, .. }) if kind == "games" => {
                 let reply = reply_of(rid, crate::games::list(&ctx));
                 let _ = out_tx.send(reply).await;
+            }
+            Ok(IpcMsg::Request { rid, kind, .. }) if kind == "most_played" => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(rid, crate::player_session::most_played(&ctx).await);
+                    let _ = out.send(reply).await;
+                });
             }
             Ok(IpcMsg::Request { rid, kind, .. }) if kind == "launchers" => {
                 let reply = reply_of(

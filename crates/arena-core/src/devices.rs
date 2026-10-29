@@ -175,6 +175,8 @@ impl std::fmt::Debug for LoginCandidate {
 /// LAN sessions can verify tokens on a primary or a follower.
 pub struct DeviceDirectory {
     reader: Mutex<Store>,
+    /// The most-played list, kept for 15 minutes (Story 6.27).
+    most_played: crate::game_plays::MostPlayedCache,
 }
 
 impl std::fmt::Debug for DeviceDirectory {
@@ -188,6 +190,7 @@ impl DeviceDirectory {
     pub fn open(db_path: impl AsRef<Path>) -> Result<Self, AppError> {
         Ok(Self {
             reader: Mutex::new(Store::open_reader(db_path)?),
+            most_played: crate::game_plays::MostPlayedCache::default(),
         })
     }
 
@@ -272,6 +275,20 @@ impl DeviceDirectory {
             .lock()
             .map_err(|_| internal("device directory lock poisoned"))?;
         crate::player_extend::extend_options(&store, device_id, now_ms)
+    }
+
+    /// The branch's most-played games over the last 7 days (recomputed at most every 15
+    /// minutes) and the last-played times of the player live on `device_id` (Story 6.27).
+    pub fn most_played(
+        &self,
+        device_id: &str,
+        now_ms: i64,
+    ) -> Result<arena_proto::MostPlayed, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?;
+        crate::game_plays::most_played(&store, &self.most_played, device_id, now_ms)
     }
 
     /// The id of the session an extend on `device_id` applies to (Story 6.21).

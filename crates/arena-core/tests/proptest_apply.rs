@@ -144,6 +144,14 @@ enum Op {
         slot: u8,
         kind: u8,
     },
+    /// `game.play_recorded` (Story 6.27) by a registered device: a good play writes exactly one
+    /// `game_plays` row; minutes that disagree with the times, a bad game id, a `base_rev` or a
+    /// non-device actor is refused and writes nothing.
+    PlayRecord {
+        slot: u8,
+        kind: u8,
+        minutes: u16,
+    },
     /// `kiosk.scan_reported` (Story 6.4) by a registered kiosk: a good report at a random time
     /// before now, or one with too many entries, a control character, an empty path or a future
     /// time. It is stored only when it is valid and newer than the device's stored scan; a refusal
@@ -657,6 +665,11 @@ fn op() -> impl Strategy<Value = Op> {
             }),
         1 => (0..3u8, 0..4u8).prop_map(|(slot, kind)| Op::GameLaunch { slot, kind }),
         1 => (0..3u8, 0..6u8).prop_map(|(slot, kind)| Op::LauncherOpen { slot, kind }),
+        1 => (0..3u8, 0..5u8, 0..2_000u16).prop_map(|(slot, kind, minutes)| Op::PlayRecord {
+            slot,
+            kind,
+            minutes,
+        }),
         2 => (0..3u8, 0..8u8, 0..4u8, 1..=60_000i64)
             .prop_map(|(slot, kind, entries, back_ms)| Op::Scan {
                 slot,
@@ -2402,6 +2415,56 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 prop_assert!(out.is_err(), "{:?}", out);
                 prop_assert_eq!(hub.change_count(), before);
                 prop_assert_eq!(events(hub), rows);
+            }
+        }
+        Op::PlayRecord {
+            slot,
+            kind,
+            minutes,
+        } => {
+            if !hub.bootstrapped {
+                return Ok(());
+            }
+            let devices = hub.reader.rows(Table::Devices).unwrap();
+            let Some(row) = devices.get(usize::from(*slot)) else {
+                return Ok(());
+            };
+            let device = text(row, "device_id");
+            let minutes = i64::from(*minutes);
+            let ended_at = hub.clock_now();
+            let play = arena_proto::KioskGamePlayRecorded {
+                game_id: if *kind == 1 {
+                    "not a game".into()
+                } else {
+                    "01JGAMEAAAAAAAAAAAAAAAAAAA".into()
+                },
+                started_at: ended_at - minutes * 60_000,
+                ended_at,
+                // Out of step with the two times by an hour.
+                minutes: if *kind == 4 { minutes + 60 } else { minutes },
+            };
+            let mut intent = hub.intent(IntentPayload::KioskGamePlayRecorded(play), None);
+            intent.actor = Actor {
+                kind: if *kind == 2 {
+                    ActorKind::System
+                } else {
+                    ActorKind::Device
+                },
+                id: device,
+            };
+            if *kind == 3 {
+                intent.base_rev = Some(1);
+            }
+            let plays = |hub: &Hub| hub.reader.rows(Table::GamePlays).unwrap().len();
+            let (before, rows) = (hub.change_count(), plays(hub));
+            let out = hub.submit_new(intent);
+            if *kind == 0 && out.is_ok() {
+                prop_assert_eq!(hub.change_count(), before + 1);
+                prop_assert_eq!(plays(hub), rows + 1);
+            } else {
+                prop_assert!(out.is_err(), "{:?}", out);
+                prop_assert_eq!(hub.change_count(), before);
+                prop_assert_eq!(plays(hub), rows);
             }
         }
         Op::Scan {

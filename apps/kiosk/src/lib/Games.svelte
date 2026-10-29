@@ -2,12 +2,21 @@
   import { t } from "@arena/ui";
   import GameTile from "./GameTile.svelte";
   import LauncherCard from "./LauncherCard.svelte";
-  import { railLabels, visibleGames, type GameCard, type LauncherCardData } from "./games";
+  import MostPlayedCarousel from "./MostPlayed.svelte";
+  import {
+    railLabels,
+    visibleGames,
+    type GameCard,
+    type LauncherCardData,
+    type RankedGame,
+  } from "./games";
 
   let {
     games,
     gameRunning = false,
     launchers = [],
+    mostPlayed = [],
+    branch = "",
     onlaunch,
     onopenlauncher = () => {},
   }: {
@@ -17,6 +26,10 @@
     gameRunning?: boolean;
     /** The launchers installed on this PC, for the "Play on your own account" row (Story 6.26). */
     launchers?: LauncherCardData[];
+    /** The "Most played here" tiles, ranked, already limited to this PC's games (Story 6.27). */
+    mostPlayed?: RankedGame[];
+    /** The branch's name, for the carousel's caption. */
+    branch?: string;
     /** A tile was activated. */
     onlaunch: (game: GameCard) => void;
     /** A launcher card was activated. */
@@ -100,6 +113,9 @@
         {/each}
       </ul>
     </section>
+  {/if}
+  {#if mostPlayed.length > 0}
+    <MostPlayedCarousel tiles={mostPlayed} {branch} {gameRunning} {onlaunch} />
   {/if}
   {#if games === null}
     <!-- Not answered yet: nothing to say, so no flash of the empty line. -->

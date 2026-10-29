@@ -1374,3 +1374,42 @@ async fn a_wallet_session_at_or_below_the_branch_amount_reports_what_is_left() {
     tick(Some(100));
     assert_eq!(low(), None);
 }
+
+#[tokio::test]
+async fn a_game_still_open_at_session_end_has_its_play_recorded_once_by_the_programs_step() {
+    let t = start().await;
+    t.start_session();
+    t.ctx
+        .games
+        .set_host(Arc::new(crate::games::fake::FakeGames::default()));
+    let started = t.ctx.clock.now_ms() - 12 * 60_000;
+    assert_eq!(t.ctx.games.started("G1", 1001, started), None);
+    t.lock(LockReason::PayAtCounter);
+    t.shows(LockReason::PayAtCounter).await;
+
+    let intents = t.intents();
+    let plays: Vec<_> = intents
+        .iter()
+        .filter_map(|i| match &i.payload {
+            IntentPayload::KioskGamePlayRecorded(p) => Some(p.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(plays.len(), 1);
+    assert_eq!((plays[0].game_id.as_str(), plays[0].minutes), ("G1", 12));
+    assert_eq!(plays[0].started_at, started);
+    // Recorded before the cleanup finished, and nothing more once the process is gone.
+    let at = |f: &dyn Fn(&IntentPayload) -> bool| intents.iter().position(|i| f(&i.payload));
+    let play_at = at(&|p| matches!(p, IntentPayload::KioskGamePlayRecorded(_))).unwrap();
+    let done_at = at(&|p| matches!(p, IntentPayload::KioskLog(l) if l.code == DONE_CODE)).unwrap();
+    assert!(play_at < done_at);
+    crate::games::reap(&t.ctx);
+    assert_eq!(
+        t.intents()
+            .iter()
+            .filter(|i| matches!(i.payload, IntentPayload::KioskGamePlayRecorded(_)))
+            .count(),
+        1
+    );
+    t.stop();
+}

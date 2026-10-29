@@ -30,10 +30,12 @@ import {
   gamesOf,
   launchOf,
   launchersOf,
+  mostPlayedOf,
   type GameCard,
   type GamesView,
   type LaunchResult,
   type LauncherCardData,
+  type MostPlayedView,
 } from "./games";
 import { LOGIN_TIMEOUT_MS, outcomeOf, type LoginOutcome } from "./login";
 import { PICKER_TIMEOUT_MS, plansOf, startOf, type PlansOutcome, type StartOutcome } from "./plans";
@@ -611,6 +613,17 @@ export async function openLauncher(
   if (!inTauri()) return "failed";
   const answer = await ask(CMD.launcherOpen, { id: card.id, name: card.name });
   return isAnswer(answer) && answer.ok ? launchOf(answer.body) : "failed";
+}
+
+/**
+ * The branch's most-played games of the last 7 days and the player's last-played times (Story
+ * 6.27), from the Hub. `null` outside Tauri, when the Hub cannot be asked (the carousel is then
+ * hidden) or the answer is not one.
+ */
+export async function loadMostPlayed(): Promise<MostPlayedView | null> {
+  if (!inTauri()) return null;
+  const answer = await ask(CMD.mostPlayed);
+  return isAnswer(answer) && answer.ok ? mostPlayedOf(answer.body) : null;
 }
 
 /** Calls `cb` with the game's name when a game would not start (the HUD words the toast). */

@@ -11,6 +11,7 @@
 //! `NOT_PRIMARY`. Committed intents are pushed to every session ([`registry`]).
 
 mod call_staff;
+mod games;
 pub mod listener;
 mod media;
 mod pair;

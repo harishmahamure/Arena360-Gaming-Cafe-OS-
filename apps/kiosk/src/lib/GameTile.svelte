@@ -6,6 +6,7 @@
     cover = null,
     running = false,
     gameRunning = false,
+    rank = null,
     onactivate,
   }: {
     name: string;
@@ -15,6 +16,8 @@
     running?: boolean;
     /** Any game is running: the media inside stops its video (Story 6.6). */
     gameRunning?: boolean;
+    /** The tile's place in the "Most played here" carousel (1 is first); `null` elsewhere. */
+    rank?: number | null;
     /** Enter, Space or a click. */
     onactivate: () => void;
   } = $props();
@@ -28,12 +31,19 @@
   type="button"
   class="game-tile"
   class:running
-  aria-label={running ? t("player.games.tile_running", { name }) : name}
+  aria-label={rank !== null ? undefined : running ? t("player.games.tile_running", { name }) : name}
   data-testid="game-tile"
   data-running={running ? "true" : "false"}
   data-game-running={gameRunning ? "true" : "false"}
   onclick={onactivate}
 >
+  {#if rank !== null}
+    <!-- The rank: `bg` fill, `text` ink, top-left (the running badge moves to the top-right). A
+         ranked tile has no `aria-label`: its text, "#1 Name", is its accessible name. -->
+    <span class="badge rank type-kiosk-label" data-testid="game-tile-rank">
+      {t("player.games.most_played_rank", { rank })}
+    </span>
+  {/if}
   <GameMedia class="media" scrim="tile" {cover} {gameRunning} data-testid="game-tile-media">
     {#if hasCover}
       <span class="name type-kiosk-tile-name" data-testid="game-tile-name">{name}</span>
@@ -43,7 +53,12 @@
     <span class="name fallback type-kiosk-tile-name" data-testid="game-tile-name">{name}</span>
   {/if}
   {#if running}
-    <span class="badge type-kiosk-label" data-testid="game-tile-running" aria-hidden="true">
+    <span
+      class="badge type-kiosk-label"
+      class:beside-rank={rank !== null}
+      data-testid="game-tile-running"
+      aria-hidden={rank === null ? "true" : undefined}
+    >
       {t("player.games.running")}
     </span>
   {/if}
@@ -103,6 +118,11 @@
     border-radius: var(--radius-full);
     background-color: var(--bg);
     color: var(--text);
+  }
+
+  .badge.beside-rank {
+    right: var(--space-2);
+    left: auto;
   }
 
   .game-tile:hover {

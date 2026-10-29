@@ -961,6 +961,102 @@ async fn kiosk_events_share_one_rate_limit() {
     }
 }
 
+// ---- Story 6.27: game.play_recorded and games.most_played ----
+
+fn play_recorded_body(game: &str, minutes: i64) -> serde_json::Value {
+    serde_json::to_value(IntentSubmit {
+        intent: intent(
+            owner(),
+            IntentPayload::KioskGamePlayRecorded(arena_proto::KioskGamePlayRecorded {
+                game_id: game.into(),
+                started_at: T0 - minutes * 60_000,
+                ended_at: T0,
+                minutes,
+            }),
+            None,
+        ),
+    })
+    .unwrap()
+}
+
+async fn most_played_frame(client: &HubClient) -> Result<arena_proto::MostPlayed, ClientError> {
+    match client
+        .request("games.most_played", serde_json::Value::Null)
+        .await?
+        .body
+    {
+        FrameBody::GamesMostPlayedResult(r) => Ok(r),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plays_are_rate_limited_with_the_other_kiosk_events() {
+    let hub = start("0.1.0", true).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    for i in 0..60 {
+        let frame = client
+            .request("intent.submit", play_recorded_body("G1", 5))
+            .await
+            .unwrap_or_else(|e| panic!("play {i}: {e}"));
+        let FrameBody::IntentResult(r) = frame.body else {
+            panic!("{frame:?}")
+        };
+        assert_eq!(r.applied.changes[0].tbl, "game_plays");
+    }
+    let err = client
+        .request("intent.submit", play_recorded_body("G1", 5))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Some(ErrorCode::HubSlow));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_kiosk_gets_the_top_games_and_only_its_own_players_last_played_times() {
+    let hub = start("0.1.0", true).await;
+    let (client, player) = playing(&hub).await;
+    for (game, minutes) in [("G1", 40), ("G2", 70), ("G1", 10)] {
+        client
+            .request("intent.submit", play_recorded_body(game, minutes))
+            .await
+            .unwrap();
+    }
+    // The Hub named the player on the PC; the kiosk never did.
+    let rows = Store::open_reader(&hub.path)
+        .unwrap()
+        .rows(arena_store::Table::GamePlays)
+        .unwrap();
+    assert_eq!(rows.len(), 3);
+    assert!(
+        rows.iter()
+            .all(|r| r["player_id"] == arena_store::RowValue::Text(player.clone()))
+    );
+    let got = most_played_frame(&client).await.unwrap();
+    let top: Vec<_> = got
+        .top
+        .iter()
+        .map(|g| (g.game_id.as_str(), g.minutes))
+        .collect();
+    assert_eq!(top, [("G2", 70), ("G1", 50)]);
+    let last: Vec<_> = got
+        .last_played
+        .iter()
+        .map(|l| (l.game_id.as_str(), l.at))
+        .collect();
+    assert_eq!(last, [("G1", T0), ("G2", T0)]);
+    assert!(!serde_json::to_string(&got).unwrap().contains(&player));
+    // The top list is kept for 15 minutes; the player's own times are always current.
+    client
+        .request("intent.submit", play_recorded_body("G3", 200))
+        .await
+        .unwrap();
+    let again = most_played_frame(&client).await.unwrap();
+    assert_eq!(again.top, got.top);
+    assert_eq!(again.last_played.len(), 3);
+}
+
 // ---- Story 6.11: kiosk.cleanup_failed ----
 
 fn cleanup_failed_body(step: &str) -> serde_json::Value {
@@ -3801,6 +3897,7 @@ async fn the_account_frames_are_for_paired_sessions_and_a_follower_refuses_them(
         r#"{"v":1,"kind":"player.end_session","rid":"b"}"#,
         r#"{"v":1,"kind":"player.unlock","rid":"c","password":"x"}"#,
         r#"{"v":1,"kind":"player.extend_options","rid":"d"}"#,
+        r#"{"v":1,"kind":"games.most_played","rid":"g"}"#,
         r#"{"v":1,"kind":"player.extend","rid":"e","minutes":30,"source":"wallet"}"#,
     ] {
         send(&mut ws, line).await;

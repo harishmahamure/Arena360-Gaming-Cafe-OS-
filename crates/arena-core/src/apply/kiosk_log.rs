@@ -16,14 +16,20 @@
 //!
 //! `launcher.opened` (Story 6.26) writes an `info` row `launcher_opened` whose detail is the JSON
 //! `{launcher, session_id, player_id}`, named the same way.
+//!
+//! `game.play_recorded` (Story 6.27) writes one `game_plays` row. The session is the one the device
+//! was running when the play started (it may have ended since: a play is also recorded when the
+//! session ends), the live one if the kiosk's clock puts the start before every session; the
+//! player is that session's (none for a guest).
 
 use arena_proto::{
     AlertKind, AppError, ErrorCode, Intent, KioskCleanupFailed, KioskGameLaunched,
-    KioskLauncherOpened, KioskLog, KioskProcessBlocked,
+    KioskGamePlayRecorded, KioskLauncherOpened, KioskLog, KioskProcessBlocked,
 };
 use arena_store::{
-    ChangeOp, NewAlert, NewDeviceEvent, RowKey, StoreTx, current_branch_id, find_open_alert,
-    insert_alert, insert_device_event, live_session_on_device,
+    ChangeOp, NewAlert, NewDeviceEvent, NewGamePlay, RowKey, StoreTx, current_branch_id,
+    find_open_alert, insert_alert, insert_device_event, insert_game_play, live_session_on_device,
+    session_on_device_at,
 };
 
 use super::Target;
@@ -56,6 +62,7 @@ pub(super) enum Event<'a> {
     CleanupFailed(&'a KioskCleanupFailed),
     GameLaunched(&'a KioskGameLaunched),
     LauncherOpened(&'a KioskLauncherOpened),
+    PlayRecorded(&'a KioskGamePlayRecorded),
 }
 
 pub(super) fn validate(
@@ -75,6 +82,7 @@ pub(super) fn validate(
         Event::CleanupFailed(p) => p.validate()?,
         Event::GameLaunched(p) => p.validate()?,
         Event::LauncherOpened(p) => p.validate()?,
+        Event::PlayRecorded(p) => p.validate()?,
     }
     if branch.is_none() {
         return Err(AppError::new(
@@ -83,6 +91,42 @@ pub(super) fn validate(
         ));
     }
     Ok(())
+}
+
+/// One `game_plays` row for a play the device reported.
+fn record_play(
+    tx: &StoreTx<'_>,
+    intent: &Intent,
+    play: &KioskGamePlayRecorded,
+    branch_id: &str,
+) -> Result<Vec<Written>, AppError> {
+    let device = intent.actor.id.as_str();
+    let session = match session_on_device_at(tx, device, play.started_at)? {
+        Some(s) => Some(s),
+        None => live_session_on_device(tx, device)?,
+    };
+    let (session_id, player_id) = session.unzip();
+    let player_id = player_id.flatten();
+    let id = ulid::Ulid::generate().to_string();
+    insert_game_play(
+        tx,
+        &NewGamePlay {
+            id: &id,
+            branch_id,
+            device_id: device,
+            session_id: session_id.as_deref(),
+            player_id: player_id.as_deref(),
+            game_id: &play.game_id,
+            started_at: play.started_at,
+            ended_at: play.ended_at,
+            minutes: play.minutes,
+        },
+    )?;
+    Ok(vec![Written {
+        key: RowKey::GamePlays { id },
+        op: ChangeOp::Insert,
+        before: None,
+    }])
 }
 
 pub(super) fn mutate(
@@ -120,6 +164,7 @@ pub(super) fn mutate(
             .to_string();
             ("info", GAME_LAUNCHED_CODE, detail.as_str())
         }
+        Event::PlayRecorded(p) => return record_play(tx, intent, p, branch_id),
         Event::LauncherOpened(l) => {
             let (session_id, player_id) = live_session_on_device(tx, &intent.actor.id)?.unzip();
             detail = serde_json::json!({

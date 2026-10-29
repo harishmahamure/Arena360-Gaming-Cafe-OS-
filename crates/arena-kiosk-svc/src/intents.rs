@@ -218,3 +218,26 @@ pub fn game_launched(
         payload: IntentPayload::KioskGameLaunched(launched),
     }
 }
+
+/// A `game.play_recorded` intent from `device_id`, minted at `now_ms` (when the game stopped), so
+/// the offline replay delivers it exactly once. The Hub names the player and session itself.
+pub fn game_play_recorded(
+    device_id: &str,
+    now_ms: i64,
+    play: arena_proto::KioskGamePlayRecorded,
+) -> Intent {
+    Intent {
+        intent_id: ulid::Ulid::generate().to_string(),
+        kind: IntentKind::KioskGamePlayRecorded,
+        idempotency_key: ulid::Ulid::generate().to_string(),
+        issued_at: now_ms,
+        base_rev: None,
+        actor: Actor {
+            kind: ActorKind::Device,
+            id: device_id.to_owned(),
+        },
+        elevated_by: None,
+        reason: None,
+        payload: IntentPayload::KioskGamePlayRecorded(play),
+    }
+}

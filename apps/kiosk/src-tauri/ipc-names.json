@@ -55,6 +55,7 @@
     "games": "games",
     "gameLaunch": "game_launch",
     "launchers": "launchers",
-    "launcherOpen": "launcher_open"
+    "launcherOpen": "launcher_open",
+    "mostPlayed": "most_played"
   }
 }

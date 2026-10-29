@@ -42,6 +42,7 @@ import type { ImportSetup } from "./ImportSetup";
 import type { InvoiceIssue } from "./InvoiceIssue";
 import type { KioskCleanupFailed } from "./KioskCleanupFailed";
 import type { KioskGameLaunched } from "./KioskGameLaunched";
+import type { KioskGamePlayRecorded } from "./KioskGamePlayRecorded";
 import type { KioskLauncherOpened } from "./KioskLauncherOpened";
 import type { KioskLog } from "./KioskLog";
 import type { KioskProcessBlocked } from "./KioskProcessBlocked";
@@ -126,6 +127,7 @@ export type IntentPayload =
   | ({ kind: "kiosk.cleanup_failed" } & KioskCleanupFailed)
   | ({ kind: "game.launched" } & KioskGameLaunched)
   | ({ kind: "launcher.opened" } & KioskLauncherOpened)
+  | ({ kind: "game.play_recorded" } & KioskGamePlayRecorded)
   | ({ kind: "kiosk.scan_reported" } & KioskScanReported)
   | ({ kind: "device.admin_exit" } & DeviceAdminExit)
   | ({ kind: "device.admin_relock" } & DeviceAdminRelock)

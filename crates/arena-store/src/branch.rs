@@ -74,11 +74,12 @@ pub enum Table {
     GameMatches,
     LibraryInstalls,
     LibraryDismissals,
+    GamePlays,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 47] = [
+    pub const ALL: [Table; 48] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -126,6 +127,7 @@ impl Table {
         Table::GameMatches,
         Table::LibraryInstalls,
         Table::LibraryDismissals,
+        Table::GamePlays,
     ];
 
     /// The SQL table name.
@@ -178,6 +180,7 @@ impl Table {
             Self::GameMatches => "game_matches",
             Self::LibraryInstalls => "library_installs",
             Self::LibraryDismissals => "library_dismissals",
+            Self::GamePlays => "game_plays",
         }
     }
 
@@ -214,7 +217,8 @@ impl Table {
             | Self::StockHolds
             | Self::NotifyOutbox
             | Self::Refunds
-            | Self::LibraryEntries => &["id"],
+            | Self::LibraryEntries
+            | Self::GamePlays => &["id"],
             Self::Plans => &["plan_id"],
             Self::PricingRules => &["rule_id"],
             Self::Coupons => &["coupon_id"],
@@ -275,6 +279,7 @@ impl Table {
             | Self::GameMatches
             | Self::LibraryInstalls
             | Self::LibraryDismissals
+            | Self::GamePlays
             | Self::Plans => true,
             Self::Settings
             | Self::RolePerms
@@ -440,6 +445,9 @@ pub enum RowKey {
         entry_id: String,
         device_id: String,
     },
+    GamePlays {
+        id: String,
+    },
     LibraryDismissals {
         key: String,
     },
@@ -491,6 +499,7 @@ impl RowKey {
             Self::GameMatches { .. } => Table::GameMatches,
             Self::LibraryInstalls { .. } => Table::LibraryInstalls,
             Self::LibraryDismissals { .. } => Table::LibraryDismissals,
+            Self::GamePlays { .. } => Table::GamePlays,
             Self::Coupons { .. } => Table::Coupons,
             Self::CouponTargets { .. } => Table::CouponTargets,
             Self::Players { .. } => Table::Players,
@@ -529,6 +538,7 @@ impl RowKey {
                 device_id,
             } => format!("{entry_id}/{device_id}"),
             Self::LibraryDismissals { key } => key.clone(),
+            Self::GamePlays { id } => id.clone(),
             Self::DeviceGroups { group_id } => group_id.clone(),
             Self::FloorZones { zone_id } => zone_id.clone(),
             Self::Products { product_id } => product_id.clone(),
@@ -676,6 +686,7 @@ impl RowKey {
                 device_id: text("device_id")?,
             },
             Table::LibraryDismissals => Self::LibraryDismissals { key: text("key")? },
+            Table::GamePlays => Self::GamePlays { id: text("id")? },
             Table::Coupons => Self::Coupons {
                 coupon_id: text("coupon_id")?,
             },
@@ -721,6 +732,7 @@ impl RowKey {
                 device_id,
             } => vec![entry_id, device_id],
             Self::LibraryDismissals { key } => vec![key],
+            Self::GamePlays { id } => vec![id],
             Self::DeviceGroups { group_id } => vec![group_id],
             Self::FloorZones { zone_id } => vec![zone_id],
             Self::Products { product_id } => vec![product_id],

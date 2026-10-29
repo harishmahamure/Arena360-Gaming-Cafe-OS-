@@ -1,3 +1,5 @@
+import type { LastPlayed, MostPlayed, MostPlayedGame } from "@arena/ui/generated";
+
 // The Games tab's rules (Story 6.23): what the service's `games` and `game_launch` answers hold.
 // Pure, so the page, the tab and their tests share them.
 
@@ -114,4 +116,57 @@ export function launchersOf(body: unknown): LauncherCardData[] | null {
   const list = (body as Record<string, unknown>).launchers;
   if (!Array.isArray(list) || !list.every(isLauncher)) return null;
   return [...list].sort((a, b) => LAUNCHER_IDS.indexOf(a.id) - LAUNCHER_IDS.indexOf(b.id));
+}
+
+// "Most played here" (Story 6.27): the branch's top games of the last 7 days, from the Hub.
+
+/** How often the open Games tab asks again; the Hub itself recomputes at most every 15 minutes. */
+export const MOST_PLAYED_POLL_MS = 5 * 60_000;
+
+/** The carousel never shows more than this many tiles. */
+export const MOST_PLAYED_LIMIT = 10;
+
+/** The Hub's `games.most_played_result`: its top games, and when this player last played each. */
+export type MostPlayedView = MostPlayed;
+
+const isTop = (v: unknown): v is MostPlayedGame => {
+  if (typeof v !== "object" || v === null) return false;
+  const g = v as Record<string, unknown>;
+  return typeof g.game_id === "string" && typeof g.minutes === "number";
+};
+
+const isLast = (v: unknown): v is LastPlayed => {
+  if (typeof v !== "object" || v === null) return false;
+  const g = v as Record<string, unknown>;
+  return typeof g.game_id === "string" && typeof g.at === "number";
+};
+
+/** The view in a `most_played` answer body, or `null` when it is not one. */
+export function mostPlayedOf(body: unknown): MostPlayedView | null {
+  if (typeof body !== "object" || body === null) return null;
+  const b = body as Record<string, unknown>;
+  if (!Array.isArray(b.top) || !b.top.every(isTop)) return null;
+  const last = Array.isArray(b.last_played) ? b.last_played.filter(isLast) : [];
+  return { top: b.top.slice(0, MOST_PLAYED_LIMIT), last_played: last };
+}
+
+/** A carousel tile: a game of this PC's library and its place among the tiles shown. */
+export type RankedGame = { rank: number; game: GameCard };
+
+/**
+ * The tiles the carousel shows: the Hub's top games that this PC has, in the Hub's order. A game
+ * not installed here is skipped and the next one moves up, so the ranks ("#1"...) number the tiles
+ * shown, not the Hub's list. Empty (no carousel) when the window has no minutes or the Hub could
+ * not be asked (`null`).
+ */
+export function rankedGames(view: MostPlayedView | null, games: GameCard[] | null): RankedGame[] {
+  if (view === null || games === null) return [];
+  const here = new Map(games.map((g) => [g.id, g]));
+  const ranked: RankedGame[] = [];
+  for (const { game_id, minutes } of view.top) {
+    const game = here.get(game_id);
+    if (game === undefined || minutes <= 0) continue;
+    ranked.push({ rank: ranked.length + 1, game });
+  }
+  return ranked;
 }

@@ -28,7 +28,8 @@
 //!   Credential Manager. A failure uses the path above and names the step.
 //!
 //! The OS parts sit behind [`CleanupHost`] (Windows: [`cleanup_windows`](crate::cleanup_windows);
-//! tests: [`fake::FakeHost`]). The `programs` step uses the process enforcer's kill path through
+//! tests: [`fake::FakeHost`]). The `programs` step first records the play of any game still
+//! open (Story 6.27, [`games::record_running`](crate::games::record_running)), then uses the process enforcer's kill path through
 //! [`Ctx::closer`](crate::Ctx).
 
 use std::path::PathBuf;
@@ -120,6 +121,9 @@ impl CleanupStep for Programs {
     }
 
     fn run(&self, env: &StepEnv<'_>) -> Result<(), String> {
+        // Story 6.27: a game still open ends with the session; its play is recorded now, before
+        // any program is ended (a retry of this step records nothing more).
+        crate::games::record_running(env.ctx);
         let report = close(env.ctx, CloseScope::All)?;
         tracing::info!(
             closed = report.closed,

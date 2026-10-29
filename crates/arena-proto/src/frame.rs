@@ -14,6 +14,7 @@ use ts_rs::TS;
 use crate::admin::{AdminPinOk, AdminUnlockAck, ManagerVerifier, VerifyAdminPin};
 use crate::error::{AppError, ErrorCode};
 use crate::intent::Intent;
+use crate::kiosk::MostPlayed;
 use crate::pc_command::{LockReason, PcAck, PcAction};
 use crate::player_login::{PlayerAuthResult, PlayerAuthenticate};
 use crate::player_session::{
@@ -139,6 +140,13 @@ pub enum FrameBody {
     /// The player confirmed an extend (paired sessions only).
     #[serde(rename = "player.extend")]
     PlayerExtend(PlayerExtend),
+    /// A paired kiosk asks which games are played most at this branch and when the live player
+    /// last played each (Story 6.27).
+    #[serde(rename = "games.most_played")]
+    GamesMostPlayed,
+    /// The branch top games over the last 7 days and the live player's last-played times.
+    #[serde(rename = "games.most_played_result")]
+    GamesMostPlayedResult(MostPlayed),
     /// Whether the Hub added the time, or why it refused.
     #[serde(rename = "player.extend_result")]
     PlayerExtendResult(PlayerExtendResult),
@@ -148,7 +156,7 @@ pub enum FrameBody {
 }
 
 /// Every known `kind`.
-pub const FRAME_KINDS: [&str; 35] = [
+pub const FRAME_KINDS: [&str; 37] = [
     "hello",
     "hello.ok",
     "intent.submit",
@@ -183,6 +191,8 @@ pub const FRAME_KINDS: [&str; 35] = [
     "player.extend_options_result",
     "player.extend",
     "player.extend_result",
+    "games.most_played",
+    "games.most_played_result",
     "ack",
 ];
 
@@ -224,6 +234,8 @@ impl FrameBody {
             Self::PlayerExtendOptionsResult(_) => "player.extend_options_result",
             Self::PlayerExtend(_) => "player.extend",
             Self::PlayerExtendResult(_) => "player.extend_result",
+            Self::GamesMostPlayed => "games.most_played",
+            Self::GamesMostPlayedResult(_) => "games.most_played_result",
             Self::Ack => "ack",
         }
     }

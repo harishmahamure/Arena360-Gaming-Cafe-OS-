@@ -15,6 +15,7 @@ mod coupons;
 mod credit;
 mod dedupe;
 mod devices;
+mod game_plays;
 mod group_bills;
 mod gst;
 mod identity;
@@ -100,6 +101,9 @@ pub use devices::{
     set_device_label, set_device_meta_deleted, set_device_place, set_device_reported_version,
     set_device_revoked, set_device_state, set_group_deleted, set_zone_deleted, tv_number_taken,
     update_device_meta, update_group, update_zone,
+};
+pub use game_plays::{
+    NewGamePlay, insert_game_play, last_played, session_on_device_at, top_played,
 };
 pub use group_bills::{
     GroupBillRow, find_group_bill, find_group_order, insert_group_bill, list_active_group_bills,
@@ -1531,6 +1535,23 @@ impl Store {
             return Ok(Vec::new());
         }
         list_game_launches(&self.conn, since)
+    }
+
+    /// The branch's games by minutes played since `since` (empty before migration 65): see
+    /// [`top_played`].
+    pub fn top_played(&self, since: i64, limit: usize) -> Result<Vec<(String, i64)>, AppError> {
+        if !self.table_exists("game_plays")? {
+            return Ok(Vec::new());
+        }
+        top_played(&self.conn, since, limit)
+    }
+
+    /// When `player_id` last finished each game (empty before migration 65): see [`last_played`].
+    pub fn last_played(&self, player_id: &str) -> Result<Vec<(String, i64)>, AppError> {
+        if !self.table_exists("game_plays")? {
+            return Ok(Vec::new());
+        }
+        last_played(&self.conn, player_id)
     }
 
     /// Every device's stored scan, ordered by device id (empty before migration 63).

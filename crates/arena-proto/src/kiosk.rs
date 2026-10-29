@@ -107,6 +107,119 @@ impl KioskLauncherOpened {
     }
 }
 
+/// Longest single play a `game.play_recorded` may carry, in minutes (7 days: the most-played
+/// window, so one record can never outweigh it).
+pub const MAX_PLAY_MINUTES: i64 = 7 * 24 * 60;
+
+/// How many games the most-played list holds (Story 6.27).
+pub const MOST_PLAYED_LIMIT: usize = 10;
+
+/// The most-played window, in days (Story 6.27).
+pub const MOST_PLAYED_DAYS: i64 = 7;
+
+/// The payload of `game.play_recorded` (Story 6.27): a game started at this PC stopped running
+/// (its last process exited, or the session ended). As with `game.launched`, the Hub names the
+/// player and session itself; the kiosk never does. Times are Unix milliseconds on the kiosk's
+/// clock; `minutes` is the played time in whole minutes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KioskGamePlayRecorded {
+    /// The library entry id of the game.
+    pub game_id: String,
+    /// When the game was started.
+    #[ts(type = "number")]
+    pub started_at: i64,
+    /// When it stopped running.
+    #[ts(type = "number")]
+    pub ended_at: i64,
+    /// The played time in whole minutes (rounded to the nearest).
+    #[ts(type = "number")]
+    pub minutes: i64,
+}
+
+impl KioskGamePlayRecorded {
+    /// `game_id` is 1-64 of `A-Z a-z 0-9 _ -`; `started_at` is positive and not after `ended_at`;
+    /// `minutes` is within [`MAX_PLAY_MINUTES`] and agrees with the two times to within a minute.
+    /// A failure is `VALIDATION_FAILED` naming the field.
+    pub fn validate(&self) -> Result<(), crate::AppError> {
+        use crate::{AppError, ErrorCode};
+        let id_ok = (1..=MAX_GAME_ID_LEN).contains(&self.game_id.len())
+            && self
+                .game_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+        if !id_ok {
+            return Err(AppError::with_field(
+                ErrorCode::ValidationFailed,
+                "game_id",
+                "game_id must be 1-64 characters of a-z, A-Z, 0-9, '_' or '-'",
+            ));
+        }
+        if self.started_at <= 0 {
+            return Err(AppError::with_field(
+                ErrorCode::ValidationFailed,
+                "started_at",
+                "started_at must be a positive time",
+            ));
+        }
+        if self.ended_at < self.started_at {
+            return Err(AppError::with_field(
+                ErrorCode::ValidationFailed,
+                "ended_at",
+                "ended_at must not be before started_at",
+            ));
+        }
+        if !(0..=MAX_PLAY_MINUTES).contains(&self.minutes) {
+            return Err(AppError::with_field(
+                ErrorCode::ValidationFailed,
+                "minutes",
+                "minutes must be within 0 and 7 days",
+            ));
+        }
+        let span_ms = self.ended_at - self.started_at;
+        if (self.minutes * 60_000 - span_ms).abs() > 60_000 {
+            return Err(AppError::with_field(
+                ErrorCode::ValidationFailed,
+                "minutes",
+                "minutes must match the time between started_at and ended_at",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// One game of the most-played list (Story 6.27): the branch's minutes played in the window.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct MostPlayedGame {
+    pub game_id: String,
+    #[ts(type = "number")]
+    pub minutes: i64,
+}
+
+/// When the live player last played a game (Story 6.27), in any window.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct LastPlayed {
+    pub game_id: String,
+    /// When that play ended, in Unix milliseconds.
+    #[ts(type = "number")]
+    pub at: i64,
+}
+
+/// `games.most_played_result` (Hub -> kiosk, Story 6.27): the branch's top games by minutes
+/// played over the last 7 days and the live player's own last-played times. It names no other
+/// player.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct MostPlayed {
+    /// At most [`MOST_PLAYED_LIMIT`] games with minutes above zero, most minutes first (ties by
+    /// game id).
+    pub top: Vec<MostPlayedGame>,
+    /// The live player's last play of each game, newest first; empty for a guest or no session.
+    pub last_played: Vec<LastPlayed>,
+}
+
 /// The payload of `game.launched` (Story 6.23): a player started a library game at this PC. The
 /// Hub names the player and session itself from the device's live session; the kiosk never does.
 /// `name` is the library name at the time, so the log reads the same after a rename.
@@ -220,6 +333,52 @@ mod tests {
     }
 
     #[test]
+    fn a_play_record_names_a_game_and_agrees_with_its_times() {
+        let play = |game_id: &str, started_at, ended_at, minutes| KioskGamePlayRecorded {
+            game_id: game_id.into(),
+            started_at,
+            ended_at,
+            minutes,
+        };
+        assert!(
+            play("01JABC-def_9", 1_000, 1_000 + 25 * 60_000, 25)
+                .validate()
+                .is_ok()
+        );
+        // Rounding either way is accepted; a zero-minute play is a play.
+        assert!(
+            play("g", 1_000, 1_000 + 25 * 60_000 + 20_000, 25)
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            play("g", 1_000, 1_000 + 25 * 60_000 - 20_000, 25)
+                .validate()
+                .is_ok()
+        );
+        assert!(play("g", 1_000, 1_000 + 20_000, 0).validate().is_ok());
+        let too_long = play(
+            "g",
+            1_000,
+            1_000 + (MAX_PLAY_MINUTES + 1) * 60_000,
+            MAX_PLAY_MINUTES + 1,
+        );
+        for (p, field) in [
+            (play("", 1_000, 61_000, 1), "game_id"),
+            (play("a b", 1_000, 61_000, 1), "game_id"),
+            (play(&"g".repeat(65), 1_000, 61_000, 1), "game_id"),
+            (play("g", 0, 61_000, 1), "started_at"),
+            (play("g", 2_000, 1_000, 0), "ended_at"),
+            (play("g", 1_000, 61_000, -1), "minutes"),
+            (play("g", 1_000, 61_000, 5), "minutes"),
+            (too_long, "minutes"),
+        ] {
+            let err = p.validate().unwrap_err();
+            assert_eq!(err.field.as_deref(), Some(field), "{p:?}");
+        }
+    }
+
+    #[test]
     fn a_launcher_open_names_steam_epic_or_riot() {
         for ok in OPENABLE_LAUNCHERS {
             assert!(
@@ -285,5 +444,38 @@ mod tests {
         let log: KioskLog =
             serde_json::from_value(serde_json::json!({"level": "warn", "code": "x"})).unwrap();
         assert_eq!(log.detail, "");
+    }
+
+    #[test]
+    fn the_most_played_frames_round_trip_and_name_no_other_player() {
+        use crate::frame::{Frame, FrameBody, parse_frame};
+        let ask = parse_frame(r#"{"v":1,"kind":"games.most_played","rid":"m"}"#).unwrap();
+        assert_eq!(ask.body, FrameBody::GamesMostPlayed);
+        let reply = Frame::new(
+            "m",
+            FrameBody::GamesMostPlayedResult(MostPlayed {
+                top: vec![MostPlayedGame {
+                    game_id: "G1".into(),
+                    minutes: 90,
+                }],
+                last_played: vec![LastPlayed {
+                    game_id: "G1".into(),
+                    at: 5,
+                }],
+            }),
+        );
+        let v: serde_json::Value = serde_json::from_str(&reply.to_text()).unwrap();
+        assert_eq!(v["kind"], "games.most_played_result");
+        assert_eq!(
+            v["top"][0],
+            serde_json::json!({"game_id": "G1", "minutes": 90})
+        );
+        assert_eq!(
+            v["last_played"][0],
+            serde_json::json!({"game_id": "G1", "at": 5})
+        );
+        assert_eq!(parse_frame(&reply.to_text()).unwrap(), reply);
+        let empty = serde_json::to_value(MostPlayed::default()).unwrap();
+        assert_eq!(empty, serde_json::json!({"top": [], "last_played": []}));
     }
 }

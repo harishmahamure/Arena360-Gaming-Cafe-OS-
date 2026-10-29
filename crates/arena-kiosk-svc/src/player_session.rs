@@ -12,6 +12,10 @@
 //! `player.extend_options` and `player.extend`. The service only checks that the extend is one of
 //! the offered steps before it leaves the PC; the Hub quotes, charges and refuses.
 //!
+//! Most played (Story 6.27) adds `most_played`, forwarded as `games.most_played`: the branch's top
+//! games of the last 7 days and the live player's last-played times, which the Games tab's
+//! carousel shows.
+//!
 //! The service decides nothing and keeps no player context: the Hub remembers who logged in on this
 //! PC and builds the session itself, so the app never names a player. Nothing is queued: with no
 //! live connection (or no answer in time) the app gets `HUB_SLOW` and shows "Counter is
@@ -139,6 +143,21 @@ pub async fn extend_options(ctx: &Ctx) -> Result<Value, AppError> {
             other => Err(unexpected("player.extend_options", other)),
         },
         Err(e) => Err(failed("player.extend_options", e)),
+    }
+}
+
+/// Asks the Hub which games are played most at this branch and when the player on this PC last
+/// played each (Story 6.27): the `games.most_played_result` as the reply body. Nothing is queued:
+/// with no live link the app gets `HUB_SLOW` and shows no carousel.
+pub async fn most_played(ctx: &Ctx) -> Result<Value, AppError> {
+    let client = client(ctx)?;
+    match client.request("games.most_played", Value::Null).await {
+        Ok(frame) => match frame.body {
+            FrameBody::GamesMostPlayedResult(r) => serde_json::to_value(r)
+                .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string())),
+            other => Err(unexpected("games.most_played", other)),
+        },
+        Err(e) => Err(failed("games.most_played", e)),
     }
 }
 

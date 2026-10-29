@@ -192,8 +192,14 @@ async fn opening_a_launcher_starts_only_its_executable_and_queues_launcher_opene
     assert_eq!(opened(&t), vec!["steam".to_owned()]);
     let kinds: Vec<IntentKind> = queued(&t).into_iter().map(|(k, _)| k).collect();
     assert_eq!(kinds, vec![IntentKind::KioskLauncherOpened]);
-    // An open launcher is not a game running: the media keeps playing behind the tab.
+    // An open launcher is not a game running: the media keeps playing behind the tab, and its
+    // time is not game hours (Story 6.27).
     assert!(!t.ctx.games.any_running());
+    t.host.exit(t.host.alive_pids()[0]);
+    crate::games::reap(&t.ctx);
+    crate::games::record_running(&t.ctx);
+    let kinds: Vec<IntentKind> = queued(&t).into_iter().map(|(k, _)| k).collect();
+    assert_eq!(kinds, vec![IntentKind::KioskLauncherOpened]);
 }
 
 #[tokio::test]

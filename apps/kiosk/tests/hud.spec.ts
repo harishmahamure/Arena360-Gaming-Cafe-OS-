@@ -4,11 +4,15 @@ import en from "../../../packages/ui/src/messages/en.json" with { type: "json" }
 import names from "../src-tauri/ipc-names.json" with { type: "json" };
 import {
   INFO_TOAST_MS,
+  WARNING_KEY,
   clock,
+  dropWarning,
+  graceMinutes,
   hasContent,
   lifetime,
   live,
   raise,
+  raiseWarning,
   staffToastKey,
   type HudToast,
 } from "../src/lib/hud";
@@ -493,4 +497,109 @@ test("a refused I'm done keeps the session and says so", async ({ page }) => {
   await page.getByTestId("hud-done-yes").click();
   await expect(page.getByTestId("hud-done-line")).toHaveText("⚠ Couldn't log out — try again.");
   await expect(page.getByTestId("hud-panel")).toBeVisible();
+});
+
+// ---- Story 6.19: time warnings as HUD toasts ----
+
+const prepaid = (warning_min: number | null, over: Record<string, unknown> = {}) =>
+  shown({
+    username: "asha",
+    balance_minor: 10_000,
+    remaining_ms: (warning_min ?? 20) * 60_000,
+    grace_ms: 120_000,
+    warning_min,
+    ...over,
+  });
+
+test("a 10-minute warning is a toast with the end time, the grace line and the Extend key caps", async ({
+  page,
+}) => {
+  await openHud(page);
+  await attract(page);
+  await emit(page, names.events.pcScreen, prepaid(10));
+  const toast = page.getByTestId("toast");
+  await expect(toast).toHaveCount(1);
+  await expect(toast).toHaveAttribute("data-kind", "warning");
+  await expect(page.getByTestId("toast-text")).toHaveText("10 min left. Extend?");
+  await expect(page.getByTestId("toast-detail")).toHaveText(
+    /^Time's up at \d{1,2}:\d{2}( [AP]M)?\. You get a 2-min grace after that\.$/,
+  );
+  await expect(page.getByTestId("toast-keys")).toHaveAccessibleName(en["player.warning.hotkey"]);
+  await expect(page.getByTestId("toast-keys").locator("kbd")).toHaveText(["Ctrl", "Shift", "E"]);
+  await expect(toast.getByRole("button", { name: en["common.dismiss"] })).toBeVisible();
+  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(true);
+});
+
+test("a warning without a grace says only when time is up", async ({ page }) => {
+  await openHud(page);
+  await emit(page, names.events.pcScreen, prepaid(5, { grace_ms: 0 }));
+  await expect(page.getByTestId("toast-detail")).toHaveText(
+    /^Time's up at \d{1,2}:\d{2}( [AP]M)?\.$/,
+  );
+  await expect(page.getByTestId("toast-detail")).not.toContainText("grace");
+});
+
+test("a postpaid warning shows the title with no end time", async ({ page }) => {
+  await openHud(page);
+  await emit(page, names.events.pcScreen, shown({ guest_no: 1, warning_min: 5 }));
+  await expect(page.getByTestId("toast-text")).toHaveText("5 min left. Extend?");
+  await expect(page.getByTestId("toast-detail")).toHaveCount(0);
+});
+
+test("a newer warning replaces the older, and it stays until dismissed", async ({ page }) => {
+  await openHud(page);
+  await emit(page, names.events.pcScreen, prepaid(10));
+  await expect(page.getByTestId("toast-text")).toHaveText("10 min left. Extend?");
+  await emit(page, names.events.pcScreen, prepaid(5));
+  await expect(page.getByTestId("toast")).toHaveCount(1);
+  await expect(page.getByTestId("toast-text")).toHaveText("5 min left. Extend?");
+  // The same mark on the next tick is not raised again.
+  await emit(page, names.events.pcScreen, prepaid(5));
+  await expect(page.getByTestId("toast")).toHaveCount(1);
+  await page.getByRole("button", { name: en["common.dismiss"] }).click();
+  await expect(page.getByTestId("toast")).toHaveCount(0);
+  await emit(page, names.events.pcScreen, prepaid(5));
+  await expect(page.getByTestId("toast")).toHaveCount(0);
+  await emit(page, names.events.pcScreen, prepaid(1));
+  await expect(page.getByTestId("toast-text")).toHaveText("1 min left. Extend?");
+});
+
+test("time-up, the end of the session or an extension takes the warning away", async ({ page }) => {
+  await openHud(page);
+  await emit(page, names.events.pcScreen, prepaid(5));
+  await expect(page.getByTestId("toast")).toHaveCount(1);
+  await emit(page, names.events.pcScreen, prepaid(5, { warning_min: null }));
+  await expect(page.getByTestId("toast")).toHaveCount(0);
+  await emit(page, names.events.pcScreen, prepaid(1));
+  await expect(page.getByTestId("toast")).toHaveCount(1);
+  await emit(page, names.events.pcScreen, { ...prepaid(1), locked: true, reason: "times_up" });
+  await expect(page.getByTestId("toast")).toHaveCount(0);
+  await emit(page, names.events.pcScreen, prepaid(1));
+  await emit(page, names.events.pcScreen, shown(null));
+  await expect(page.getByTestId("toast")).toHaveCount(0);
+});
+
+test("a warning toast passes axe in the high-contrast theme", async ({ page }) => {
+  await openHud(page);
+  await emit(page, names.events.theme, { hc: true });
+  await emit(page, names.events.pcScreen, prepaid(5));
+  await expect(page.getByTestId("toast")).toBeVisible();
+  expect(await serious(page)).toEqual([]);
+});
+
+test("a time warning is one toast under one key and stays until dismissed", () => {
+  const first = raiseWarning([], "10 min left. Extend?", "Time's up at 7:23 pm.", 1);
+  expect(first).toHaveLength(1);
+  expect(first[0]).toMatchObject({ key: WARNING_KEY, kind: "warning", until: null, hotkey: true });
+  expect(live(first, 10 * 60_000)).toHaveLength(1);
+  const next = raiseWarning(raise(first, "player.app.blocked", "warning", 0, 2), "5 min", null, 3);
+  expect(next.map((x) => x.id)).toEqual([2, 3]);
+  expect("detail" in next[1]).toBe(false);
+  expect(dropWarning(next).map((x) => x.id)).toEqual([2]);
+});
+
+test("grace is said in whole minutes, a part of a minute counting as one", () => {
+  expect(graceMinutes(0)).toBe(0);
+  expect(graceMinutes(120_000)).toBe(2);
+  expect(graceMinutes(90_000)).toBe(2);
 });

@@ -1162,3 +1162,32 @@ async fn a_player_who_logged_out_is_taken_back_to_attract_with_no_lock() {
     assert!(s.reason.is_none() && s.session.is_none());
     assert!(ctx.pc.staff_notes().is_empty());
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_warning_mark_passes_on_the_kiosk_clock_with_no_hub() {
+    let (_dir, ctx) = bare_ctx();
+    let mut s = session_screen();
+    s.remaining_ms = Some(11 * 60_000);
+    s.lock_after_ms = 11 * 60_000;
+    crate::session::sync(&ctx, s, true);
+    let (stop, stop_rx) = watch::channel(false);
+    let worker = tokio::spawn(crate::session::run(Arc::clone(&ctx), stop_rx));
+    let mark = || {
+        ctx.pc
+            .screen
+            .borrow()
+            .session
+            .as_ref()
+            .and_then(|v| v.warning_min)
+    };
+    tokio::time::sleep(Duration::from_secs(30)).await;
+    assert_eq!(mark(), None, "11 min left: no mark yet");
+    tokio::time::sleep(Duration::from_secs(40)).await;
+    assert_eq!(mark(), Some(10));
+    tokio::time::sleep(Duration::from_secs(5 * 60)).await;
+    assert_eq!(mark(), Some(5));
+    tokio::time::sleep(Duration::from_secs(4 * 60)).await;
+    assert_eq!(mark(), Some(1));
+    let _ = stop.send(true);
+    let _ = worker.await;
+}

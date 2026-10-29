@@ -470,9 +470,17 @@ fn main() {
                         ),
                         Emit::TestSessionEnded => handle.emit(TEST_SESSION_ENDED_EVENT, ()),
                         Emit::PcScreen(screen) => {
-                            handle
-                                .state::<Arc<hud::Hud>>()
-                                .set_session(screen.session.is_some() && !screen.locked);
+                            let hud = Arc::clone(handle.state::<Arc<hud::Hud>>().inner());
+                            let running = screen.session.is_some() && !screen.locked;
+                            hud.set_session(running);
+                            let mark = screen
+                                .session
+                                .as_ref()
+                                .filter(|_| running)
+                                .and_then(|s| s.warning_min);
+                            if hud.note_warning(mark) {
+                                hud::flash_taskbar(&handle);
+                            }
                             handle.emit(PC_SCREEN_EVENT, screen)
                         }
                         Emit::StaffMessage(message) => handle.emit(STAFF_MESSAGE_EVENT, message),

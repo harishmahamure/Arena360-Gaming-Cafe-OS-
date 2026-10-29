@@ -72,6 +72,13 @@ pub fn window_visible(content: (f64, f64), exclusive_fullscreen: bool) -> bool {
     content.0 > 0.0 && content.1 > 0.0 && !exclusive_fullscreen
 }
 
+/// Whether a time warning must flash the taskbar instead of drawing (Story 6.19): the 5- and
+/// 1-minute marks, newly reached, while a fullscreen-exclusive game hides the HUD. The 10-minute
+/// mark is the chip's warning border only.
+pub fn warning_flash(previous: Option<u8>, now: Option<u8>, exclusive_fullscreen: bool) -> bool {
+    exclusive_fullscreen && previous != now && matches!(now, Some(5 | 1))
+}
+
 /// The HUD window's rectangle in physical px: `content` (logical px, clamped to the monitor and
 /// [`MAX_WIDTH`]) at the top-right of `monitor`, `MARGIN` in from both edges, at `scale`.
 pub fn place(monitor: Rect, scale: f64, content: (f64, f64)) -> Rect {
@@ -101,6 +108,28 @@ mod tests {
             shift,
             win,
         }
+    }
+
+    #[test]
+    fn only_a_new_5_or_1_minute_mark_over_an_exclusive_game_flashes() {
+        assert!(warning_flash(Some(10), Some(5), true));
+        assert!(warning_flash(None, Some(1), true));
+        assert!(
+            !warning_flash(Some(5), Some(5), true),
+            "not again for the same mark"
+        );
+        assert!(
+            !warning_flash(None, Some(10), true),
+            "10 min is the chip only"
+        );
+        assert!(
+            !warning_flash(Some(10), Some(5), false),
+            "the HUD draws it instead"
+        );
+        assert!(
+            !warning_flash(Some(5), None, true),
+            "an extension clears it"
+        );
     }
 
     #[test]

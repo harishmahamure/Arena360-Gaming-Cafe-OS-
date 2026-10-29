@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { formatMoney, t } from "@arena/ui";
+  import { formatMoney, formatTime, t } from "@arena/ui";
   import type { MessageKey } from "@arena/ui/messages";
   import type { SnapshotLocale } from "@arena/ui/generated";
   import { onMount, tick } from "svelte";
@@ -23,7 +23,18 @@
     type PcScreen,
     type ToastKey,
   } from "./bridge";
-  import { clock, hasContent, live, raise, staffToastKey, type HudToast } from "./hud";
+  import {
+    EXTEND_KEYS,
+    clock,
+    dropWarning,
+    graceMinutes,
+    hasContent,
+    live,
+    raise,
+    raiseWarning,
+    staffToastKey,
+    type HudToast,
+  } from "./hud";
 
   // The overlay HUD (Story 6.14). It is its own always-on-top window: solid, never translucent,
   // and it never takes keyboard focus except while the player has expanded it with Ctrl+Shift+E.
@@ -52,6 +63,8 @@
   let doneLine: "reconnecting" | "failed" | null = $state(null);
   let toasts: HudToast[] = $state([]);
   let nextId = 1;
+  /** The warning mark (minutes) last seen on this session, so each is raised once (Story 6.19). */
+  let lastWarning: number | null = null;
   let root: HTMLDivElement | undefined = $state();
   let panel: HTMLDivElement | undefined = $state();
 
@@ -81,7 +94,7 @@
     balance === null ? timeLabel : t("player.hud.pill_label", { time: timeLabel, balance }),
   );
 
-  const follow = (s: PcScreen) => {
+  const follow = (s: PcScreen, fresh = true) => {
     now = performance.now();
     locked = s.locked;
     const v = s.session;
@@ -97,7 +110,37 @@
     // A session that ends or locks closes the panel; the shell must make the window
     // non-focusable again and hand the focus back, or the next Ctrl+Shift+E would not.
     if ((session === null || locked) && expanded) collapse();
+    followWarning(s, fresh);
   };
+
+  /**
+   * A time warning (Story 6.19): raised when the service reports a new mark, kept until it is
+   * dismissed or time-up, and dropped when the session ends, locks or is extended past the mark.
+   * A snapshot read at start (`fresh` false) only records the mark: it is not a new warning.
+   */
+  function followWarning(s: PcScreen, fresh: boolean) {
+    const mark = s.locked ? null : (s.session?.warning_min ?? null);
+    if (mark === null) {
+      lastWarning = null;
+      toasts = dropWarning(toasts);
+      return;
+    }
+    if (mark === lastWarning) return;
+    lastWarning = mark;
+    if (!fresh || !s.session) return;
+    const left = s.session.remaining_ms;
+    const grace = graceMinutes(s.session.grace_ms);
+    const at = left === null ? null : formatTime(Date.now() + left, locale?.tz);
+    const detail =
+      at === null
+        ? null
+        : t(grace > 0 ? "player.warning.ends" : "player.warning.ends_no_grace", {
+            time: at,
+            grace,
+          });
+    toasts = raiseWarning(toasts, t("player.warning.title", { minutes: mark }), detail, nextId++);
+    chime("warning");
+  }
 
   /** A short tone for a new toast: a two-note chime for a warning, one note for info. */
   function chime(kind: "info" | "warning") {
@@ -233,7 +276,7 @@
       const link = await currentHubStatus();
       if (link && hub === null) hub = link.state;
       const screen = await currentPcScreen();
-      if (screen && !screened) follow(screen);
+      if (screen && !screened) follow(screen, false);
       const known = await currentAttract();
       if (known && !attracted) locale = known.view?.locale ?? locale;
       const hc = await currentTheme();
@@ -263,9 +306,27 @@
   <div class="toasts" aria-live="polite" data-testid="toasts">
     {#each toasts as toast (toast.id)}
       <div class="toast" data-kind={toast.kind} data-testid="toast">
-        <p class="type-kiosk-body" data-testid="toast-text">
-          {toast.text ?? t(toast.key as MessageKey)}
-        </p>
+        <div class="words">
+          <p class="type-kiosk-body" data-testid="toast-text">
+            {toast.text ?? t(toast.key as MessageKey)}
+          </p>
+          {#if toast.detail}
+            <p class="type-kiosk-body" data-testid="toast-detail">{toast.detail}</p>
+          {/if}
+          {#if toast.hotkey}
+            <p
+              class="keys"
+              role="img"
+              aria-label={t("player.warning.hotkey")}
+              data-testid="toast-keys"
+            >
+              {#each EXTEND_KEYS as key, i (key)}
+                {#if i > 0}<span aria-hidden="true">+</span>{/if}
+                <kbd class="cap type-kiosk-label" aria-hidden="true">{key}</kbd>
+              {/each}
+            </p>
+          {/if}
+        </div>
         <button
           type="button"
           class="dismiss type-kiosk-label"
@@ -440,6 +501,27 @@
   .toast p {
     margin: 0;
     overflow-wrap: anywhere;
+  }
+
+  .words {
+    display: grid;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  .keys {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  /* A key cap: solid, outlined in the toast colour, readable in HC without the accent. */
+  .cap {
+    padding: 0 var(--space-2);
+    border: 2px solid var(--hud-toast-title);
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--hud-toast-foreground);
   }
 
   .panel {

@@ -12,10 +12,10 @@
 //!   notification state; while a Direct3D exclusive game is in front the window is hidden and
 //!   nothing is drawn over it.
 
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
-use arena_kiosk_core::hud::{place, window_visible};
+use arena_kiosk_core::hud::{place, warning_flash, window_visible};
 use arena_kiosk_core::monitors::Rect;
 use tauri::{
     AppHandle, Emitter, EventTarget, Manager, PhysicalPosition, PhysicalSize, Runtime,
@@ -41,6 +41,8 @@ pub struct Hud {
     previous: AtomicIsize,
     /// A session runs: only then does the hotkey open the panel.
     session: AtomicBool,
+    /// The time-warning mark last seen on the session (minutes; 0: none), so a mark flashes once.
+    warned: AtomicU8,
 }
 
 impl Hud {
@@ -61,6 +63,17 @@ impl Hud {
 
     pub fn session(&self) -> bool {
         self.session.load(Ordering::SeqCst)
+    }
+
+    /// The session's warning mark is now `mark` (Story 6.19). Whether the taskbar must flash:
+    /// a newly reached 5- or 1-minute mark while a fullscreen-exclusive game hides the HUD.
+    pub fn note_warning(&self, mark: Option<u8>) -> bool {
+        let before = self.warned.swap(mark.unwrap_or(0), Ordering::SeqCst);
+        warning_flash(
+            (before != 0).then_some(before),
+            mark,
+            self.exclusive.load(Ordering::SeqCst),
+        )
     }
 
     fn set_exclusive(&self, now: bool) -> bool {
@@ -170,6 +183,16 @@ pub fn collapse<R: Runtime>(handle: &AppHandle<R>) {
     sys::restore_foreground(hud.previous.swap(0, Ordering::SeqCst));
 }
 
+/// Flashes the kiosk's taskbar button and plays the warning sound: a fullscreen-exclusive game
+/// hides the overlay, so this is all a 5- or 1-minute warning can draw (Story 6.19).
+pub fn flash_taskbar<R: Runtime>(handle: &AppHandle<R>) {
+    let hwnd = handle
+        .get_webview_window("main")
+        .and_then(|w| w.hwnd().ok())
+        .map_or(0, |h| h.0 as isize);
+    sys::flash(hwnd);
+}
+
 /// Asks Windows once a second whether a fullscreen-exclusive game is in front and refreshes the
 /// window when the answer changes.
 pub fn watch_fullscreen<R: Runtime>(handle: AppHandle<R>) {
@@ -213,6 +236,27 @@ mod sys {
         }
     }
 
+    /// Flashes `hwnd`'s taskbar button until it is brought forward, and sounds the system alert.
+    pub fn flash(hwnd: isize) {
+        use windows::Win32::System::Diagnostics::Debug::MessageBeep;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            FLASHW_ALL, FLASHW_TIMERNOFG, FLASHWINFO, FlashWindowEx, MB_ICONEXCLAMATION,
+        };
+        if hwnd != 0 {
+            let info = FLASHWINFO {
+                cbSize: std::mem::size_of::<FLASHWINFO>() as u32,
+                hwnd: HWND(hwnd as *mut _),
+                dwFlags: FLASHW_ALL | FLASHW_TIMERNOFG,
+                uCount: 0,
+                dwTimeout: 0,
+            };
+            // SAFETY: a plain call with a fully set structure; a stale handle fails harmlessly.
+            let _ = unsafe { FlashWindowEx(&info) };
+        }
+        // SAFETY: a plain call.
+        let _ = unsafe { MessageBeep(MB_ICONEXCLAMATION) };
+    }
+
     /// Whether a Direct3D fullscreen-exclusive game is in the foreground.
     pub fn exclusive_fullscreen() -> bool {
         // SAFETY: a plain query.
@@ -229,6 +273,7 @@ mod sys {
         0
     }
     pub fn restore_foreground(_hwnd: isize) {}
+    pub fn flash(_hwnd: isize) {}
     pub fn exclusive_fullscreen() -> bool {
         false
     }
@@ -257,6 +302,23 @@ mod tests {
         let hud = Hud::default();
         hud.set_content(f64::NAN, -5.0);
         assert_eq!(hud.content(), (0.0, 0.0));
+    }
+
+    #[test]
+    fn a_warning_mark_flashes_once_and_only_over_an_exclusive_game() {
+        let hud = Hud::default();
+        assert!(!hud.note_warning(Some(5)), "the HUD is drawing: no flash");
+        hud.set_exclusive(true);
+        assert!(
+            hud.note_warning(Some(1)),
+            "a new mark over the game flashes"
+        );
+        assert!(!hud.note_warning(Some(1)), "once");
+        assert!(!hud.note_warning(None));
+        assert!(
+            hud.note_warning(Some(5)),
+            "after an extension the mark can come again"
+        );
     }
 
     #[test]

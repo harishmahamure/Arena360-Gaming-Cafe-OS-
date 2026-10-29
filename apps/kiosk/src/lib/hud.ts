@@ -19,6 +19,10 @@ export type HudToast = {
   kind: ToastKind;
   /** When an info toast goes away, on the monotonic clock (`null`: it stays). */
   until: number | null;
+  /** A second line under the text (a time warning's end time and grace). */
+  detail?: string;
+  /** The toast shows the Extend hotkey's key caps (a time warning, Story 6.19). */
+  hotkey?: boolean;
 };
 
 /** How long a toast of this kind stays, in ms (`null`: until dismissed). */
@@ -49,6 +53,43 @@ export function raise(
       until: ms === null ? null : now + ms,
     },
   ];
+}
+
+/** The key every time warning shares, so a newer one replaces the older (Story 6.19). */
+export const WARNING_KEY = "time-warning"; // i18n-ignore (a toast key)
+
+/** The key caps shown beside the Extend hotkey, one per cap. */
+export const EXTEND_KEYS = ["Ctrl", "Shift", "E"] as const; // i18n-ignore (key caps)
+
+/** A warning that stays until dismissed or time-up; it replaces any warning already showing. */
+export function raiseWarning(
+  toasts: readonly HudToast[],
+  text: string,
+  detail: string | null,
+  id: number,
+): HudToast[] {
+  return [
+    ...toasts.filter((x) => x.key !== WARNING_KEY),
+    {
+      id,
+      key: WARNING_KEY,
+      text,
+      ...(detail === null ? {} : { detail }),
+      kind: "warning",
+      until: null,
+      hotkey: true,
+    },
+  ];
+}
+
+/** The toasts without the time warning (time-up, the session ending, or an extension). */
+export function dropWarning(toasts: readonly HudToast[]): HudToast[] {
+  return toasts.filter((x) => x.key !== WARNING_KEY);
+}
+
+/** Whole minutes of grace to say aloud: a part of a minute counts as a minute. */
+export function graceMinutes(graceMs: number): number {
+  return graceMs > 0 ? Math.ceil(graceMs / 60_000) : 0;
 }
 
 /** The key of the toast for staff message `id`: every message has its own, so they stack. */

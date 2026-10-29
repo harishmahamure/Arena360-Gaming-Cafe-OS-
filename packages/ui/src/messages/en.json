@@ -973,7 +973,10 @@
   "gallery.tabs.panel_yearly": "Showing yearly prices.",
   "gallery.alert.add": "Add alert",
 
-  "player.hud.time_left": "{minutes} min left. Extend?",
+  "player.warning.title": "{minutes} min left. Extend?",
+  "player.warning.ends": "Time's up at {time}. You get a {grace}-min grace after that.",
+  "player.warning.ends_no_grace": "Time's up at {time}.",
+  "player.warning.hotkey": "Extend with Ctrl+Shift+E",
   "player.login.failure": "Username or password didn't match.",
   "player.login.locked": "Too many tries. Try again in {countdown}.",
   "player.login.forgot_password": "Ask staff at the counter to reset it.",

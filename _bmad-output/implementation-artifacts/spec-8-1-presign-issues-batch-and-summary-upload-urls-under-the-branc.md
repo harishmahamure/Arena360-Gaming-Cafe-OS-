@@ -2,7 +2,7 @@
 title: 'Story 8.1: Presign issues batch and summary upload URLs under the branch''s own R2 prefix'
 type: 'feature'
 created: '2026-10-29'
-status: 'in-review'
+status: 'done'
 baseline_commit: '001a4d5bb08d78333922583b20b950dfd6bfcdb5'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -98,3 +98,8 @@ Status: in-review (implemented; verification run on the touched crates).
 - Deferred: the Grafana/OpenTelemetry export of the per-tenant PUT counters (with Story 2.3's exporter); `ARENA_DATA_S3_*` in the Kubernetes control Deployment (production answers 503 until set).
 - Decisions: a stale epoch asking for batch plus summary gets the batch URL with `summary_fenced: true`; a stale epoch asking for only summary, rollup or snapshot gets `FENCED` (409); `kind` together with `batch` or `summary` is `VALIDATION_FAILED`.
 - Two `arena-cloud` tests fail on a clean checkout too (`binary::unreachable_at_start_…`, `backup::a_hung_run_times_out_with_its_own_code`); workspace clippy fails in `arena-kiosk-svc` and `arena-e2e`, untouched by this story.
+
+## Review Triage Log (code review)
+
+- Reviewed the diff of 910829e against the spec and I/O matrix: no blocking findings. fmt and clippy (arena-cloud, arena-proto, arena-store) are clean; the presign tests (11) and unit tests pass.
+- Remaining failures are pre-existing and unrelated: `binary::unreachable_at_start_…` and `backup::a_hung_run_times_out_with_its_own_code`. The MinIO PUT round trip is still unrun here (no MinIO).

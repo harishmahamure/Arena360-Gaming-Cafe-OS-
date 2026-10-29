@@ -29,11 +29,13 @@
     locale = null,
     connected = false,
     games = null,
+    apps = null,
     gameRunning = false,
     launchers = [],
     mostPlayed = [],
     branch = "",
     onlaunch = () => {},
+    onlaunchapp = () => {},
     onopenlauncher = () => {},
   }: {
     session: ShellSession;
@@ -53,6 +55,8 @@
     connected?: boolean;
     /** The Games tab's tiles (Story 6.23); `null` until the service has answered. */
     games?: GameCard[] | null;
+    /** The Apps tab's tiles (Story 6.28); `null` until the service has answered. */
+    apps?: GameCard[] | null;
     /** A game is running: the shell's signal, wired into every `game-media` inside. */
     gameRunning?: boolean;
     /** The launchers installed on this PC (Story 6.26), for the Games tab's card row. */
@@ -63,6 +67,8 @@
     branch?: string;
     /** A game tile was activated. */
     onlaunch?: (game: GameCard) => void;
+    /** An app tile was activated (Story 6.28). */
+    onlaunchapp?: (app: GameCard) => void;
     /** A launcher card was activated. */
     onopenlauncher?: (launcher: LauncherCardData) => void;
   } = $props();
@@ -240,6 +246,8 @@
     {@render status?.()}
     {#if tab === "games"}
       <Games {games} {gameRunning} {launchers} {mostPlayed} {branch} {onlaunch} {onopenlauncher} />
+    {:else if tab === "apps"}
+      <Games kind="apps" games={apps} {gameRunning} onlaunch={onlaunchapp} />
     {:else}
       <p class="empty type-kiosk-body" data-testid={"tab-empty-" + tab}>
         {t("player.shell.empty")}

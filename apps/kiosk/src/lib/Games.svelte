@@ -12,6 +12,7 @@
   } from "./games";
 
   let {
+    kind = "games",
     games,
     gameRunning = false,
     launchers = [],
@@ -20,7 +21,13 @@
     onlaunch,
     onopenlauncher = () => {},
   }: {
-    /** The games this PC lists, sorted by name; `null` until the service has answered. */
+    /**
+     * What the tab lists (Story 6.28): "games", or "apps" for the Apps tab, which has the same
+     * filter rail, search and tile grid but no launcher cards and no carousel, and its own title,
+     * search label and empty line.
+     */
+    kind?: "games" | "apps";
+    /** The games (or, for the Apps tab, the apps) this PC lists, sorted by name; `null` until the service has answered. */
     games: GameCard[] | null;
     /** Any game is running (the shell's signal, wired into every tile's media). */
     gameRunning?: boolean;
@@ -35,6 +42,8 @@
     /** A launcher card was activated. */
     onopenlauncher?: (launcher: LauncherCardData) => void;
   } = $props();
+
+  const apps = $derived(kind === "apps");
 
   // The filter rail and the search field (Story 6.24). One rail item is active at a time and
   // the grid follows at once; an item the library no longer has counts as All.
@@ -95,8 +104,12 @@
   }
 </script>
 
-<section class="games" aria-label={t("player.games.grid_label")} data-testid="games">
-  {#if launchers.length > 0}
+<section
+  class="games"
+  aria-label={apps ? t("player.apps.grid_label") : t("player.games.grid_label")}
+  data-testid={apps ? "apps" : "games"}
+>
+  {#if !apps && launchers.length > 0}
     <!-- The row of `launcher-card`s: installed launchers only, whatever the games below hold. -->
     <section class="launchers" aria-labelledby="launchers-title" data-testid="launchers">
       <h2 id="launchers-title" class="type-kiosk-title">{t("player.games.launchers_title")}</h2>
@@ -114,7 +127,7 @@
       </ul>
     </section>
   {/if}
-  {#if mostPlayed.length > 0}
+  {#if !apps && mostPlayed.length > 0}
     <MostPlayedCarousel tiles={mostPlayed} {branch} {gameRunning} {onlaunch} />
   {/if}
   {#if games === null}
@@ -127,7 +140,7 @@
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
       <nav
         class="rail"
-        aria-label={t("player.games.filter_label")}
+        aria-label={apps ? t("player.apps.filter_label") : t("player.games.filter_label")}
         data-testid="filter-rail"
         bind:this={railEl}
         onkeydown={(e) => move(e, railEl, "button", false)}
@@ -153,26 +166,28 @@
 
       <div class="content">
         <div class="title-row">
-          <h2 class="type-kiosk-title">{t("player.games.title")}</h2>
+          <h2 class="type-kiosk-title">
+            {apps ? t("player.apps.title") : t("player.games.title")}
+          </h2>
           <input
             bind:this={searchEl}
             bind:value={query}
             class="search type-kiosk-body"
             type="search"
-            name="game-search"
+            name={apps ? "app-search" : "game-search"}
             autocomplete="off"
             autocapitalize="off"
             spellcheck="false"
             maxlength={64}
-            aria-label={t("player.games.search_label")}
-            placeholder={t("player.games.search_label")}
+            aria-label={apps ? t("player.apps.search_label") : t("player.games.search_label")}
+            placeholder={apps ? t("player.apps.search_label") : t("player.games.search_label")}
             data-testid="games-search"
           />
         </div>
 
         {#if shown.length === 0}
           <p class="empty type-kiosk-body" data-testid="games-no-match">
-            {t("player.games.no_match")}
+            {apps ? t("player.apps.no_match") : t("player.games.no_match")}
             <button
               type="button"
               class="clear type-kiosk-body"

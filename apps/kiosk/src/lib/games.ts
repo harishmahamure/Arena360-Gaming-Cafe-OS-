@@ -27,25 +27,35 @@ const isCard = (v: unknown): v is GameCard => {
   return typeof c.id === "string" && typeof c.name === "string" && typeof c.running === "boolean";
 };
 
+const cardOf = (c: GameCard): GameCard => {
+  const { id, name, running, category, tags } = c as Record<string, unknown> & GameCard;
+  return {
+    id,
+    name,
+    running,
+    category: typeof category === "string" ? category : "",
+    tags: Array.isArray(tags) ? tags.filter((x): x is string => typeof x === "string") : [],
+  };
+};
+
 /** The view in a `games` answer body, or `null` when it is not one. */
 export function gamesOf(body: unknown): GamesView | null {
   if (typeof body !== "object" || body === null) return null;
   const b = body as Record<string, unknown>;
   if (!Array.isArray(b.games) || typeof b.running !== "boolean") return null;
   if (!b.games.every(isCard)) return null;
-  return {
-    games: b.games.map((c) => {
-      const { id, name, running, category, tags } = c as Record<string, unknown> & GameCard;
-      return {
-        id,
-        name,
-        running,
-        category: typeof category === "string" ? category : "",
-        tags: Array.isArray(tags) ? tags.filter((x): x is string => typeof x === "string") : [],
-      };
-    }),
-    running: b.running,
-  };
+  return { games: b.games.map(cardOf), running: b.running };
+}
+
+/**
+ * The tiles in an `apps` answer body (Story 6.28), or `null` when it is not one. An app tile has
+ * the shape of a game tile; `running` there means the app is open, not that a game is running.
+ */
+export function appsOf(body: unknown): GameCard[] | null {
+  if (typeof body !== "object" || body === null) return null;
+  const apps = (body as Record<string, unknown>).apps;
+  if (!Array.isArray(apps) || !apps.every(isCard)) return null;
+  return apps.map(cardOf);
 }
 
 /** What a tile's activation did: it started, it was running already, or it did not start. */

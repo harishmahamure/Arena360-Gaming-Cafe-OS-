@@ -180,7 +180,7 @@ fn the_tab_lists_games_only_sorted_by_name_with_their_running_flag() {
         entry("A", "Apex", r"C:\G\a.exe"),
         entry("C", "Apex", r"C:\G\a2.exe"),
     ];
-    let cards = cards(entries, |id| id == "B");
+    let cards = cards(entries, "game", |id| id == "B");
     let names: Vec<_> = cards
         .iter()
         .map(|c| (c.name.as_str(), c.id.as_str(), c.running))
@@ -200,7 +200,7 @@ fn a_card_carries_the_category_and_tags_the_filter_rail_lists() {
     let mut e = entry("A", "Apex", r"C:\G\a.exe");
     e.category = "Shooter".into();
     e.tags = vec!["fps".into(), "co-op".into()];
-    let cards = cards(vec![e], |_| false);
+    let cards = cards(vec![e], "game", |_| false);
     assert_eq!(cards[0].category, "Shooter");
     assert_eq!(cards[0].tags, ["fps", "co-op"]);
     let body = serde_json::to_value(&cards[0]).unwrap();
@@ -867,4 +867,178 @@ async fn the_run_loop_records_an_exited_game_by_itself_within_one_poll() {
 
     stop.send(true).unwrap();
     worker.await.unwrap();
+}
+
+// ---- Story 6.28: the Apps tab ----
+
+fn app_entry(id: &str, name: &str, exe: &str) -> KioskLibraryEntry {
+    let mut e = entry(id, name, exe);
+    e.kind = "app".into();
+    e
+}
+
+async fn go_app(t: &T, entries: &[KioskLibraryEntry], id: &str) -> serde_json::Value {
+    launch_app_in(&t.ctx, ME, entries.to_vec(), id.into())
+        .await
+        .unwrap()
+}
+
+/// The `(level, code, detail)` of the `kiosk.log` events waiting for the Hub, oldest first.
+fn logs(t: &T) -> Vec<(arena_proto::KioskLogLevel, String, String)> {
+    queued(t)
+        .into_iter()
+        .filter_map(|(_, p)| match p {
+            Some(IntentPayload::KioskLog(l)) => Some((l.level, l.code, l.detail)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_apps_list_holds_only_apps_sorted_by_name_with_their_open_flag() {
+    let entries = vec![
+        app_entry("B", "discord", r"C:\A\d.exe"),
+        entry("G", "Apex", r"C:\G\a.exe"),
+        app_entry("A", "Chrome", r"C:\A\c.exe"),
+    ];
+    let t = t(&entries);
+    let list = apps_of(&t.ctx, entries.clone());
+    let names: Vec<_> = list["apps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| (c["name"].as_str().unwrap(), c["running"].as_bool().unwrap()))
+        .collect();
+    assert_eq!(names, [("Chrome", false), ("discord", false)]);
+    // The games list is unchanged by apps.
+    let games = list_of(&t.ctx, entries);
+    assert_eq!(games["games"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn an_app_starts_after_the_allow_list_and_is_logged_as_an_app_launch_not_a_play() {
+    let entries = vec![app_entry("APP1", "Discord", r"C:\Apps\discord.exe")];
+    let t = t(&entries);
+
+    let out = go_app(&t, &entries, "APP1").await;
+    assert_eq!(out, json!({"outcome": "started"}));
+    assert_eq!(t.host.started().len(), 1);
+    assert_eq!(
+        t.host.started()[0].exe.as_deref(),
+        Some(r"C:\Apps\discord.exe")
+    );
+    // Not a game: no running signal, no game.launched, no booster step.
+    assert!(!t.ctx.games.any_running());
+    let list = list_of(&t.ctx, vec![]);
+    assert_eq!(list["running"], json!(false));
+    assert!(t.host.priorities().is_empty());
+    assert!(t.host.plan_sets().is_empty());
+    let q = queued(&t);
+    assert_eq!(q.len(), 1);
+    assert_eq!(q[0].0, IntentKind::KioskLog);
+    assert_eq!(
+        logs(&t),
+        [(
+            arena_proto::KioskLogLevel::Info,
+            APP_LAUNCHED_CODE.to_owned(),
+            "Discord (APP1)".to_owned()
+        )]
+    );
+    // It shows as open in the list.
+    assert_eq!(apps_of(&t.ctx, entries.clone())["apps"][0]["running"], true);
+
+    // Ending it and the session end record no play.
+    t.host.exit(t.host.alive_pids()[0]);
+    reap(&t.ctx);
+    record_running(&t.ctx);
+    assert_eq!(queued(&t).len(), 1);
+    assert!(plays(&t).is_empty());
+}
+
+#[tokio::test]
+async fn an_open_app_is_brought_forward_and_nothing_is_queued() {
+    let entries = vec![app_entry("APP1", "Discord", r"C:\Apps\discord.exe")];
+    let t = t(&entries);
+    go_app(&t, &entries, "APP1").await;
+    let pid = t.host.alive_pids()[0];
+
+    let out = go_app(&t, &entries, "APP1").await;
+    assert_eq!(out, json!({"outcome": "already_running", "pid": pid}));
+    assert_eq!(t.host.started().len(), 1, "no second copy");
+    assert_eq!(queued(&t).len(), 1, "no second app_launched");
+
+    // Once it exits the next click starts it again.
+    t.host.exit(pid);
+    assert_eq!(
+        go_app(&t, &entries, "APP1").await,
+        json!({"outcome": "started"})
+    );
+    assert_eq!(t.host.started().len(), 2);
+}
+
+#[tokio::test]
+async fn an_app_that_is_not_here_not_allowed_or_will_not_start_is_logged_and_failed() {
+    let entries = vec![
+        app_entry("APP1", "Discord", r"C:\Apps\discord.exe"),
+        entry("G1", "Valorant", r"C:\Games\v.exe"),
+    ];
+    let t = t(&entries);
+
+    // Not in this PC's apps.
+    assert_eq!(
+        go_app(&t, &entries, "NOPE").await,
+        json!({"outcome": "failed"})
+    );
+    // A game id is not an app.
+    assert_eq!(go_app(&t, &entries, "G1").await["outcome"], "failed");
+    // Not allowed: the entry's rule is not in the allow-list.
+    let other = vec![app_entry("APP2", "Other", r"C:\Apps\other.exe")];
+    assert_eq!(go_app(&t, &other, "APP2").await["outcome"], "failed");
+    // The executable fails to start.
+    t.host.fail_with(Some("CreateProcessAsUserW: not found"));
+    assert_eq!(go_app(&t, &entries, "APP1").await["outcome"], "failed");
+
+    assert!(t.host.started().is_empty());
+    let l = logs(&t);
+    assert_eq!(l.len(), 4);
+    for (level, code, _) in &l {
+        assert_eq!(*level, arena_proto::KioskLogLevel::Error);
+        assert_eq!(code, FAILED_CODE);
+    }
+    assert_eq!(l[0].2, "NOPE: not in this PC's apps");
+    assert_eq!(l[1].2, "G1: not in this PC's apps");
+    assert_eq!(l[2].2, "Other: not allowed on this PC");
+    assert_eq!(l[3].2, "Discord: CreateProcessAsUserW: not found");
+    assert!(
+        queued(&t).iter().all(|(k, _)| *k == IntentKind::KioskLog),
+        "no game.launched"
+    );
+}
+
+#[tokio::test]
+async fn the_apps_tab_is_empty_and_app_launch_refused_without_a_session_or_while_locked() {
+    let entries = vec![app_entry("APP1", "Discord", r"C:\Apps\discord.exe")];
+    let t = t(&entries);
+    t.ctx.pc.screen.send_modify(|s| {
+        s.locked = true;
+        s.reason = Some(LockReason::TimesUp);
+    });
+    assert_eq!(list_apps(&t.ctx).unwrap(), json!({"apps": []}));
+    let err = launch_app(&t.ctx, json!({"id": "APP1"})).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::Forbidden);
+
+    t.ctx.pc.screen.send_replace(Screen::default());
+    assert_eq!(list_apps(&t.ctx).unwrap(), json!({"apps": []}));
+    let err = launch_app(&t.ctx, json!({"id": "APP1"})).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::Forbidden);
+    assert!(t.host.started().is_empty());
+
+    // No id: a bad frame; no host: unsupported.
+    for body in [json!({}), json!({"id": ""}), json!({"id": 5})] {
+        let err = launch_app(&t.ctx, body).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::BadFrame);
+    }
+    let (_dir, ctx, _) = bare(&[]);
+    let err = launch_app(&ctx, json!({"id": "APP1"})).await.unwrap_err();
+    assert_eq!(err.code, ErrorCode::Unsupported);
 }

@@ -80,7 +80,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// The Tauri commands the webview calls: the `generate_handler!` list in `main.rs`, pinned
 /// against `ipc-names.json` (the list the webview reads) by a test.
 #[cfg(test)]
-const COMMANDS: [&str; 39] = [
+const COMMANDS: [&str; 41] = [
     "report_app_state",
     "hub_status",
     "take_restore_state",
@@ -117,6 +117,8 @@ const COMMANDS: [&str; 39] = [
     "player_extend",
     "games",
     "game_launch",
+    "apps",
+    "app_launch",
     "launchers",
     "launcher_open",
     "most_played",

@@ -97,3 +97,19 @@ Borderless-fullscreen games are not affected: the HUD draws over them like any w
   up. Tab visits each tile; Enter and Space launch the game; focus wears the 3px ring.
 - Left and Right move focus from tile to tile and scroll the focused tile into view; the row also
   scrolls with the pointer. The keys stop at the first and the last tile.
+
+## The Apps tab (Story 6.28)
+
+- The Apps tab is the Games tab structure for the library apps (Discord, a browser, music): a
+  `filter-rail` (a labelled `nav`, "Filter apps") of the apps categories and tags, a search field
+  named "Search apps", and a grid of the same `game-tile` buttons, in name order, under the heading
+  "Apps". The region is named "Apps on this PC". It has no launcher cards and no carousel.
+- Reading order, Tab and arrow-key movement, the focus rings and the "No apps match." line with its
+  "Clear filters" button are those of the Games tab (Stories 6.23 and 6.24). Enter or Space on a tile
+  opens the app; an app that is already open has its window brought to the front instead of a second
+  copy, and its tile is named "<app>, running" with the "Running" chip.
+- An open app is not a game running: it does not stop the background video.
+- An app that will not start raises the same info toast as a game ("Couldn't start <app> — ask at
+  the counter.").
+- With no apps on the PC the tab shows "No games here yet — ask at the counter." and no rail or
+  search.

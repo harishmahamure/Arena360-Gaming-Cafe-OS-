@@ -27,6 +27,7 @@ import {
   type UnlockOutcome,
 } from "./account";
 import {
+  appsOf,
   gamesOf,
   launchOf,
   launchersOf,
@@ -589,6 +590,27 @@ export async function loadGames(): Promise<GamesView | null> {
 export async function launchGame(card: Pick<GameCard, "id" | "name">): Promise<LaunchResult> {
   if (!inTauri()) return "failed";
   const answer = await ask(CMD.gameLaunch, { id: card.id, name: card.name });
+  return isAnswer(answer) && answer.ok ? launchOf(answer.body) : "failed";
+}
+
+/**
+ * The Apps tab (Story 6.28): the library apps this PC has and whether each is open. `null` outside
+ * Tauri, or when the service does not answer.
+ */
+export async function loadApps(): Promise<GameCard[] | null> {
+  if (!inTauri()) return null;
+  const answer = await ask(CMD.apps);
+  return isAnswer(answer) && answer.ok ? appsOf(answer.body) : null;
+}
+
+/**
+ * Opens an app from its tile (Story 6.28). The service checks it against the library and the
+ * allow-list; the shell brings an open app's window forward and raises the HUD toast when the
+ * start fails, so the caller only reads the result.
+ */
+export async function launchApp(card: Pick<GameCard, "id" | "name">): Promise<LaunchResult> {
+  if (!inTauri()) return "failed";
+  const answer = await ask(CMD.appLaunch, { id: card.id, name: card.name });
   return isAnswer(answer) && answer.ok ? launchOf(answer.body) : "failed";
 }
 

@@ -298,6 +298,40 @@ async fn game_launch<R: Runtime>(
     Ok(answer)
 }
 
+/// The Apps tab (Story 6.28): IPC `apps`, answered with `{apps: [{id, name, running, category,
+/// tags}]}` (only the library's apps this PC has). `None` when the service did not answer.
+#[tauri::command]
+async fn apps(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
+    Ok(service_request(&bridge, "apps", serde_json::Value::Null).await)
+}
+
+/// Opens an app from its tile (Story 6.28): IPC `app_launch{id}`, answered like `game_launch`
+/// (`{outcome: started | already_running | failed}`). An app that is already open has its window
+/// brought to the front here (this runs in the player's session); one that did not start raises
+/// the HUD's "Couldn't start <name>" toast. `name` only words that toast: the service takes the
+/// app from `id`.
+#[tauri::command]
+async fn app_launch<R: Runtime>(
+    id: String,
+    name: String,
+    app: tauri::AppHandle<R>,
+    bridge: tauri::State<'_, Arc<Bridge>>,
+) -> Result<Option<Answer>, ()> {
+    let answer = service_request(&bridge, "app_launch", serde_json::json!({ "id": id })).await;
+    match bridge::launch_outcome(answer.as_ref()) {
+        LaunchOutcome::Started => {}
+        LaunchOutcome::AlreadyRunning(pid) => {
+            if !games::bring_forward(pid) {
+                tracing::warn!(pid, "no window to bring forward for the open app");
+            }
+        }
+        LaunchOutcome::Failed => {
+            let _ = app.emit(GAME_LAUNCH_FAILED_EVENT, name);
+        }
+    }
+    Ok(answer)
+}
+
 /// The launcher cards (Story 6.26): IPC `launchers`, answered with `{launchers: [{id, name,
 /// running}]}` (only the launchers installed on this PC). `None` when the service did not
 /// answer.
@@ -550,6 +584,8 @@ fn main() {
             player_extend,
             games,
             game_launch,
+            apps,
+            app_launch,
             launchers,
             launcher_open,
             most_played

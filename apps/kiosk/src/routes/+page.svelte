@@ -7,7 +7,9 @@
     currentHubStatus,
     currentPcScreen,
     currentTestSession,
+    launchApp,
     launchGame,
+    loadApps,
     loadGames,
     loadLaunchers,
     loadMostPlayed,
@@ -62,6 +64,8 @@
   /** The Games tab's tiles and whether any game is running (Story 6.23); asked of the service. */
   let games: GameCard[] | null = $state(null);
   let gameRunning = $state(false);
+  /** The Apps tab's tiles (Story 6.28); `null` until the service has answered. */
+  let apps: GameCard[] | null = $state(null);
   /** The launcher cards (Story 6.26): the launchers installed on this PC. */
   let launchers: LauncherCardData[] = $state([]);
   /** The Hub's most-played list (Story 6.27); `null` until asked, or when the Hub is unreachable. */
@@ -74,6 +78,16 @@
     if (view === null) return;
     games = view.games;
     gameRunning = view.running;
+  }
+
+  async function refreshApps() {
+    const cards = await loadApps();
+    if (cards !== null) apps = cards;
+  }
+
+  async function launchAppTile(app: GameCard) {
+    await launchApp(app);
+    await refreshApps();
   }
 
   async function openOwnAccount(card: LauncherCardData) {
@@ -100,6 +114,29 @@
     void refreshGames();
     const timer = setInterval(() => void refreshGames(), GAMES_POLL_MS);
     return () => clearInterval(timer);
+  });
+
+  // The Apps tab's tiles are asked of the service only while that tab is open (now, then every few
+  // seconds); a session end forgets them.
+  $effect(() => {
+    if (!inSession) {
+      apps = null;
+      return;
+    }
+    if (tab !== "apps") return;
+    // An answer that arrives after this run is over (the session ended, the tab changed) is
+    // dropped, so a slow reply never shows an old list to the next player.
+    let live = true;
+    const refresh = async () => {
+      const cards = await loadApps();
+      if (live && cards !== null) apps = cards;
+    };
+    void refresh();
+    const timer = setInterval(() => void refresh(), GAMES_POLL_MS);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
   });
 
   // The carousel's list is asked of the Hub when the Games tab opens and every few minutes while
@@ -233,11 +270,13 @@
       locale={attract.view?.locale ?? null}
       connected={hub === "connected"}
       {games}
+      {apps}
       {gameRunning}
       {launchers}
       mostPlayed={ranked}
       branch={attract.view?.branch_name ?? ""}
       onlaunch={launch}
+      onlaunchapp={launchAppTile}
       onopenlauncher={openOwnAccount}
       bind:tab
     >

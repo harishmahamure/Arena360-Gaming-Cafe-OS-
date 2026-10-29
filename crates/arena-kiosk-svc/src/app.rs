@@ -35,6 +35,7 @@
 //! - `launchers` lists the launcher cards and `launcher_open{id}` opens one ([`crate::launchers`],
 //!   Story 6.26).
 //! - `games` lists the Games tab and `game_launch{id}` starts a game ([`crate::games`], Story 6.23).
+//! - `apps` lists the Apps tab and `app_launch{id}` starts an app ([`crate::games`], Story 6.28).
 //! - `most_played` asks the Hub for the branch's top games of the last 7 days and the player's
 //!   last-played times ([`crate::player_session::most_played`], Story 6.27).
 //! - `call_staff` (Story 6.15) is forwarded the same way as `device.call_staff`; `volume` reads the
@@ -693,6 +694,18 @@ async fn serve(
             Ok(IpcMsg::Request { rid, kind, .. }) if kind == "games" => {
                 let reply = reply_of(rid, crate::games::list(&ctx));
                 let _ = out_tx.send(reply).await;
+            }
+            Ok(IpcMsg::Request { rid, kind, .. }) if kind == "apps" => {
+                let reply = reply_of(rid, crate::games::list_apps(&ctx));
+                let _ = out_tx.send(reply).await;
+            }
+            Ok(IpcMsg::Request { rid, kind, body }) if kind == "app_launch" => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(rid, crate::games::launch_app(&ctx, body).await);
+                    let _ = out.send(reply).await;
+                });
             }
             Ok(IpcMsg::Request { rid, kind, .. }) if kind == "most_played" => {
                 let ctx = Arc::clone(&ctx);

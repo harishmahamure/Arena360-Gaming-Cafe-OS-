@@ -12,6 +12,14 @@
 //!   window to the front. A start queues a `game.launched` intent for the Hub (player and session
 //!   are the Hub's to name); a refused or failed start queues a `kiosk.log{error,
 //!   game_launch_failed}` and answers `failed`.
+//! - **Apps (Story 6.28).** `apps` lists the library's `kind: app` entries this PC has, the same
+//!   way, and `app_launch{id}` starts one through the same `spec_of` and allow-list check as a
+//!   game, but with no booster, no play tracking, no `game.launched` and nothing in
+//!   [`GameState::any_running`]: an app is not a game. A start queues a `kiosk.log{info,
+//!   app_launched}` (detail `<name> (<app id>)`) for the Hub. An app that is already open (one
+//!   this service started) is brought forward, not started twice. A refused or failed start
+//!   queues `kiosk.log{error, game_launch_failed}` and answers `failed`; the id of a game is not
+//!   an app.
 //! - A game started from a launcher URI hands over to the launcher, so what is tracked is the
 //!   process the service started (the launcher's URI handler), not the game it goes on to start.
 //!
@@ -66,6 +74,8 @@ pub const POLL: Duration = Duration::from_secs(2);
 pub const WINDOW_POLL: Duration = Duration::from_millis(250);
 /// The `kiosk.log` code of a game that would not start.
 pub const FAILED_CODE: &str = "game_launch_failed";
+/// The `kiosk.log` code of an app that was started (Story 6.28).
+pub const APP_LAUNCHED_CODE: &str = "app_launched";
 /// The `kiosk.log` code of a booster step that did not work (the game started anyway).
 pub const BOOSTER_CODE: &str = "booster_failed";
 /// The id of Windows' High performance power plan.
@@ -234,11 +244,16 @@ pub struct Card {
     pub tags: Vec<String>,
 }
 
-/// The games this PC lists, sorted by name (case-insensitive, then id).
-pub fn cards(entries: Vec<KioskLibraryEntry>, running: impl Fn(&str) -> bool) -> Vec<Card> {
+/// The entries of `kind` (`game` or `app`) this PC lists, sorted by name (case-insensitive, then
+/// id).
+pub fn cards(
+    entries: Vec<KioskLibraryEntry>,
+    kind: &str,
+    running: impl Fn(&str) -> bool,
+) -> Vec<Card> {
     let mut cards: Vec<Card> = entries
         .into_iter()
-        .filter(|e| e.kind == "game")
+        .filter(|e| e.kind == kind)
         .map(|e| Card {
             running: running(&e.id),
             id: e.id,
@@ -341,7 +356,31 @@ fn list_of(ctx: &Ctx, entries: Vec<KioskLibraryEntry>) -> Value {
         host.as_deref()
             .is_some_and(|h| ctx.games.running_pid(id, h).is_some())
     };
-    json!({ "games": cards(entries, is_running), "running": running })
+    json!({ "games": cards(entries, "game", is_running), "running": running })
+}
+
+/// The `apps` request: `{apps: [{id, name, running, category, tags}]}`; empty with no session on
+/// screen or while locked (Story 6.28).
+pub fn list_apps(ctx: &Ctx) -> Result<Value, AppError> {
+    if !on_screen(ctx) {
+        return Ok(json!({ "apps": [] }));
+    }
+    let device = device_id(ctx)?;
+    let entries = {
+        let queue = ctx.queue.lock().unwrap_or_else(|p| p.into_inner());
+        crate::library::load_visible(&queue, &device)
+    };
+    Ok(apps_of(ctx, entries))
+}
+
+/// [`list_apps`] for the library `entries` this PC has.
+fn apps_of(ctx: &Ctx, entries: Vec<KioskLibraryEntry>) -> Value {
+    let host = ctx.games.host();
+    let is_open = |id: &str| {
+        host.as_deref()
+            .is_some_and(|h| ctx.games.launcher_pid(id, h).is_some())
+    };
+    json!({ "apps": cards(entries, "app", is_open) })
 }
 
 /// Logs the refusal or failure for the Hub and answers `failed`.
@@ -409,6 +448,101 @@ async fn launch_in(
     let result = start_entry(ctx, device, &entry, &host).await;
     ctx.games.end(&entry.id);
     result
+}
+
+/// The `app_launch` request: `{id}`; the answer is `{outcome: started | already_running | failed,
+/// pid?}` (Story 6.28).
+pub async fn launch_app(ctx: &Arc<Ctx>, body: Value) -> Result<Value, AppError> {
+    let id = body
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::new(ErrorCode::BadFrame, "app_launch needs an id"))?
+        .to_owned();
+    if ctx.games.host().is_none() {
+        return Err(AppError::new(
+            ErrorCode::Unsupported,
+            "this PC cannot start apps",
+        ));
+    }
+    if !on_screen(ctx) {
+        return Err(AppError::new(
+            ErrorCode::Forbidden,
+            "apps start only in a session",
+        ));
+    }
+    let device = device_id(ctx)?;
+    let entries = {
+        let queue = ctx.queue.lock().unwrap_or_else(|p| p.into_inner());
+        crate::library::load_visible(&queue, &device)
+    };
+    launch_app_in(ctx, &device, entries, id).await
+}
+
+/// [`launch_app`] of app `id` among the library `entries` this PC has, as device `device`. An
+/// app is tracked only to bring it forward (in the launcher maps: library ids cannot collide with
+/// `steam|epic|riot`), never as a game.
+async fn launch_app_in(
+    ctx: &Arc<Ctx>,
+    device: &str,
+    entries: Vec<KioskLibraryEntry>,
+    id: String,
+) -> Result<Value, AppError> {
+    let host = ctx
+        .games
+        .host()
+        .ok_or_else(|| AppError::new(ErrorCode::Unsupported, "this PC cannot start apps"))?;
+    let Some(entry) = entries.into_iter().find(|e| e.id == id && e.kind == "app") else {
+        return Ok(failed(ctx, &id, "not in this PC's apps"));
+    };
+    if let Some(pid) = ctx.games.launcher_pid(&entry.id, host.as_ref()) {
+        return Ok(json!({ "outcome": "already_running", "pid": pid }));
+    }
+    if !ctx.games.begin_launcher(&entry.id) {
+        // Another request is starting this app right now (a double click): not an error.
+        return Ok(json!({ "outcome": "started" }));
+    }
+    let result = start_app(ctx, device, &entry, &host).await;
+    ctx.games.end_launcher(&entry.id);
+    result
+}
+
+/// Checks and starts app `entry` (the caller holds its start claim).
+async fn start_app(
+    ctx: &Arc<Ctx>,
+    device: &str,
+    entry: &KioskLibraryEntry,
+    host: &Arc<dyn GameHost>,
+) -> Result<Value, AppError> {
+    // Seen again under the claim: a start that finished meanwhile is open now.
+    if let Some(pid) = ctx.games.launcher_pid(&entry.id, host.as_ref()) {
+        return Ok(json!({ "outcome": "already_running", "pid": pid }));
+    }
+    let Some(spec) = spec_of(entry, device, crate::library::path_exists) else {
+        return Ok(failed(ctx, &entry.name, "nothing to start on this PC"));
+    };
+    let lists = Arc::clone(&ctx.lists.borrow());
+    if !allowed(&lists, entry, &spec) {
+        return Ok(failed(ctx, &entry.name, "not allowed on this PC"));
+    }
+    let start_host = Arc::clone(host);
+    let started = tokio::task::spawn_blocking(move || start_host.start(&spec))
+        .await
+        .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string()))?;
+    let pid = match started {
+        Ok(pid) => pid,
+        Err(why) => return Ok(failed(ctx, &entry.name, &why)),
+    };
+    ctx.games.launcher_started(&entry.id, pid);
+    tracing::info!(app = %entry.id, pid, "an app started");
+    let detail: String = format!("{} ({})", entry.name, entry.id)
+        .chars()
+        .take(DETAIL_MAX)
+        .collect();
+    if let Err(e) = ctx.log_event(KioskLogLevel::Info, APP_LAUNCHED_CODE, &detail) {
+        tracing::error!(error = %e, "the app launch could not be queued");
+    }
+    Ok(json!({ "outcome": "started" }))
 }
 
 /// Checks and starts `entry` (the caller holds its start claim).

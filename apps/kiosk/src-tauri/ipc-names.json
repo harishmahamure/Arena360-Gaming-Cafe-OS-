@@ -54,6 +54,8 @@
     "playerExtend": "player_extend",
     "games": "games",
     "gameLaunch": "game_launch",
+    "apps": "apps",
+    "appLaunch": "app_launch",
     "launchers": "launchers",
     "launcherOpen": "launcher_open",
     "mostPlayed": "most_played"

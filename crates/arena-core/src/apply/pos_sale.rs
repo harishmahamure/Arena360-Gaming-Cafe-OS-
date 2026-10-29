@@ -494,6 +494,7 @@ pub(super) fn mutate_sale(
         op: ChangeOp::Insert,
         before: None,
     }];
+    let mut kitchen_lines = Vec::new();
     for (i, ((line, item), (rate_bp, amount))) in s
         .lines
         .iter()
@@ -525,11 +526,27 @@ pub(super) fn mutate_sale(
             },
         )?;
         written.push(Written {
-            key: RowKey::OrderLines { id },
+            key: RowKey::OrderLines { id: id.clone() },
             op: ChangeOp::Insert,
             before: None,
         });
+        if p.kitchen {
+            kitchen_lines.push(super::kitchen_ticket::PlacedKitchenLine {
+                line_id: id,
+                label: p.name.clone(),
+                qty: line.qty,
+                notes: super::kitchen_notes::clean(&line.kitchen_notes),
+            });
+        }
     }
+    written.extend(super::kitchen_ticket::open(
+        tx,
+        &order_id,
+        s.kiosk.as_ref().map(|k| k.device_id.as_str()),
+        &intent.intent_id,
+        &kitchen_lines,
+        now_ms,
+    )?);
     if let Some(q) = &adjust.coupon {
         super::coupon::redeem(tx, q, &order_id, false, &mut written)?;
     }
@@ -628,6 +645,8 @@ pub(crate) struct RevertTarget {
     lots: BTreeMap<String, Vec<LotRow>>,
     credit_blocked: bool,
     effect: bool,
+    /// The kitchen tickets the sale opened (Story 7.3).
+    tickets: Vec<arena_store::TicketRow>,
     now: i64,
 }
 
@@ -667,6 +686,7 @@ pub(super) fn load_sale_reverted(
         lots,
         credit_blocked,
         effect: effect_recorded(tx, forward.as_deref(), &order.id)?,
+        tickets: arena_store::list_order_tickets(tx, &order.id)?,
         order: Some(order),
         now,
     })
@@ -709,6 +729,7 @@ pub(super) fn validate_sale_reverted(intent: &Intent, t: &RevertTarget) -> Resul
     if t.credit_blocked {
         return Err(undo_denied("the credit has already been collected"));
     }
+    super::kitchen_ticket::check_undoable(&t.tickets)?;
     if !super::stock::sale_restorable(&t.moves, &t.stocks, &t.lots) {
         return Err(undo_denied("the stock has changed since the sale"));
     }
@@ -746,6 +767,7 @@ pub(super) fn mutate_sale_reverted(
         )?);
     }
     super::coupon::release_on_revert(tx, &o.id, false, &mut written)?;
+    super::kitchen_ticket::delete_order_tickets(tx, &t.tickets, &mut written)?;
     super::plan_sales::delete_sale_rows(tx, &o.id, &t.payments, &t.txns, &t.lines, &mut written)?;
     Ok(written)
 }

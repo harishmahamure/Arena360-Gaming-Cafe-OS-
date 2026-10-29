@@ -502,6 +502,18 @@ pub(super) fn mutate(
             Target::OrderPlace(t) => super::order_place::mutate_place(tx, intent, p, t, now_ms),
             _ => Err(mismatch()),
         },
+        IntentPayload::KitchenAdvance(a) => match target {
+            Target::KitchenAdvance(t) => {
+                super::kitchen_ticket::mutate_advance(tx, intent, a, t, now_ms)
+            }
+            _ => Err(mismatch()),
+        },
+        IntentPayload::KitchenAdvanceReverted(_) => match target {
+            Target::KitchenAdvanceReverted(t) => {
+                super::kitchen_ticket::mutate_advance_reverted(tx, intent, t, now_ms)
+            }
+            _ => Err(mismatch()),
+        },
         IntentPayload::OrderPlaceReverted(r) => match target {
             Target::OrderPlaceReverted(t) => {
                 super::order_place::mutate_place_reverted(tx, intent, r, t, now_ms)

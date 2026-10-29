@@ -143,6 +143,14 @@ pub(super) fn mutate_void(
     for line in &t.lines {
         give_back(tx, intent, line, false, now_ms, &mut written)?;
     }
+    super::kitchen_ticket::cancel_order_tickets(
+        tx,
+        &order.id,
+        reason.as_str(),
+        &intent.actor.id,
+        now_ms,
+        &mut written,
+    )?;
     let approver = intent
         .elevated_by
         .as_ref()

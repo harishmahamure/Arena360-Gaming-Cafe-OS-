@@ -47,6 +47,8 @@ import type { KioskLauncherOpened } from "./KioskLauncherOpened";
 import type { KioskLog } from "./KioskLog";
 import type { KioskProcessBlocked } from "./KioskProcessBlocked";
 import type { KioskScanReported } from "./KioskScanReported";
+import type { KitchenAdvance } from "./KitchenAdvance";
+import type { KitchenAdvanceReverted } from "./KitchenAdvanceReverted";
 import type { LibraryDelete } from "./LibraryDelete";
 import type { LibraryDismiss } from "./LibraryDismiss";
 import type { LibraryDismissClear } from "./LibraryDismissClear";
@@ -162,6 +164,8 @@ export type IntentPayload =
   | ({ kind: "order.place.reverted" } & OrderPlaceReverted)
   | ({ kind: "order.line_served" } & OrderLineServed)
   | ({ kind: "order.ready" } & OrderReady)
+  | ({ kind: "kitchen.advance" } & KitchenAdvance)
+  | ({ kind: "kitchen.advance.reverted" } & KitchenAdvanceReverted)
   | ({ kind: "order.line_cancel" } & OrderLineCancel)
   | ({ kind: "order.void" } & OrderVoid)
   | ({ kind: "refund.create" } & RefundCreate)

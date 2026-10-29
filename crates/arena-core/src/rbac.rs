@@ -26,7 +26,7 @@ pub const BUILTIN_ROLES: [&str; 5] = [
     ROLE_KIOSK_DEVICE,
 ];
 
-const COUNTER_PERMS: [Permission; 14] = [
+const COUNTER_PERMS: [Permission; 15] = [
     Permission::SessionStart,
     Permission::SessionPause,
     Permission::SessionExtend,
@@ -41,6 +41,7 @@ const COUNTER_PERMS: [Permission; 14] = [
     Permission::PlayerManage,
     Permission::PlayerView,
     Permission::DeviceScreen,
+    Permission::KitchenUse,
 ];
 
 /// The permissions a built-in role allows (every row is an `allow`). Kiosk-device has none:
@@ -206,6 +207,17 @@ fn device_extends_own_session(
     Ok(find_session(tx, &extend.session_id)?.is_some_and(|s| s.device_id == intent.actor.id))
 }
 
+/// A kitchen display (class `kds`, a device actor) moves a ticket and takes the move back
+/// (Story 7.3). The LAN class scope keeps every other device from submitting these.
+fn device_moves_ticket(p: Permission, intent: &Intent) -> bool {
+    p == Permission::KitchenUse
+        && matches!(
+            &intent.payload,
+            arena_proto::IntentPayload::KitchenAdvance(_)
+                | arena_proto::IntentPayload::KitchenAdvanceReverted(_)
+        )
+}
+
 /// Whether a paired device may place an order on the session on its own PC (Story 6.31): the
 /// player confirmed their cart at the kiosk. The Hub builds that `order.place` from the device's
 /// session; a kiosk cannot send it (it is outside the paired scope). Another PC's session stays
@@ -283,6 +295,7 @@ pub fn check(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
                     || device_creates_player(p, intent)
                     || device_ends_own_session(tx, p, intent)?
                     || device_extends_own_session(tx, p, intent)?
+                    || device_moves_ticket(p, intent)
                     || device_places_own_order(tx, p, intent)?
                     || device_changes_own_password(tx, p, intent)?
                     || device_saves_own_pc_settings(tx, p, intent)?
@@ -302,7 +315,7 @@ mod tests {
         let manager = builtin_perms(ROLE_MANAGER);
         assert_eq!(manager.len(), Permission::ALL.len() - 1);
         assert!(!manager.contains(&Permission::OpsRestore));
-        assert_eq!(builtin_perms(ROLE_COUNTER).len(), 14);
+        assert_eq!(builtin_perms(ROLE_COUNTER).len(), 15);
         assert!(!builtin_perms(ROLE_COUNTER).contains(&Permission::SettingsEdit));
         assert_eq!(builtin_perms(ROLE_KITCHEN), vec![Permission::KitchenUse]);
         assert!(builtin_perms(ROLE_KIOSK_DEVICE).is_empty());

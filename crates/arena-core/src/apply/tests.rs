@@ -41,6 +41,7 @@ mod invoice;
 mod kiosk_order;
 mod kiosk_scan;
 mod kitchen_notes;
+mod kitchen_ticket;
 mod library;
 mod login;
 mod order_line;

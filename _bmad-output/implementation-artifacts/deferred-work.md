@@ -553,3 +553,14 @@
 - `parse_notes` reads corrupt stored JSON as no notes; a serialise failure falls back to an empty value.
 - Kiosk `Cart.svelte` checks stock per line, so two lines of one product that together exceed stock show no inline problem (the Hub still refuses).
 - Setup-file export/import and `shop::menu` (a settings read on every poll) do not carry or cache the presets.
+
+## Deferred from: Story 7.3 (kitchen tickets)
+
+- Mark ready on a New ticket is two intents from the Hub (Preparing, then Ready); a failure between them leaves the ticket Preparing (visible, retryable).
+- The Hub tile sheet has no Undo for a ticket move; the Undo window is served by the board (Story 7.8). A Served ticket leaves the sheet at once.
+- The kiosk HUD is pushed at once when a ticket reaches Ready, not when the Ready is undone (the next session tick corrects it).
+- `kitchen.advance` is not pushed to other Hub sessions or a board; the snapshot reload carries the new stage (Stories 7.4, 7.7).
+- `order.void` keeps the order's lines but drops the cancelled ticket's lines; the ticket keeps only its reason.
+- Ticket numbers are `MAX + 1`: undoing the newest placement frees its number for the next ticket.
+- Existing branches get `kitchen.use` for the Counter role from `branch.seed_defaults`; custom roles are untouched.
+- No Rust test drives a refused `kitchen.advance` through the LAN `kds` scope (the board does not exist yet).

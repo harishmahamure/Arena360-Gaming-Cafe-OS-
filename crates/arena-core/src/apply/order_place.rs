@@ -17,9 +17,9 @@ use arena_proto::{
 use arena_store::{
     ChangeOp, HoldRow, LiveSession, LotRow, MoveRow, NewHold, NewOrder, NewPosOrder,
     NewProductLine, OrderRow, PRODUCT_LINE_BASE, PlacedLine, RowKey, StockRow, StoreTx, Table,
-    add_order_amount, delete_row, effect_recorded, find_order, find_order_for_session,
-    find_session, find_setting, find_stock, insert_hold, insert_order, insert_pos_order,
-    insert_product_line, list_lots, list_order_line_ids, list_placement_holds,
+    TicketRow, add_order_amount, delete_row, effect_recorded, find_order, find_order_for_session,
+    find_placement_ticket, find_session, find_setting, find_stock, insert_hold, insert_order,
+    insert_pos_order, insert_product_line, list_lots, list_order_line_ids, list_placement_holds,
     list_placement_lines, list_placement_moves, next_product_position, read_row, set_order_ready,
 };
 
@@ -264,6 +264,7 @@ pub(super) fn mutate_place(
         }
     };
     let placement_id = intent.intent_id.as_str();
+    let mut kitchen_lines = Vec::new();
     for (i, ((line, item), (rate_bp, line_amount))) in p
         .lines
         .iter()
@@ -299,6 +300,14 @@ pub(super) fn mutate_place(
             op: ChangeOp::Insert,
             before: None,
         });
+        if product.kitchen {
+            kitchen_lines.push(super::kitchen_ticket::PlacedKitchenLine {
+                line_id: id.clone(),
+                label: product.name.clone(),
+                qty: line.qty,
+                notes: super::kitchen_notes::clean(&line.kitchen_notes),
+            });
+        }
         for h in plan.holds.iter().filter(|h| h.line == i) {
             let hold_id = ulid::Ulid::generate().to_string();
             insert_hold(
@@ -318,6 +327,19 @@ pub(super) fn mutate_place(
             written.extend(super::stock::touch(tx, &h.product_id)?);
         }
     }
+    let seat_device = match (&p.counter, &t.session) {
+        (Some(c), _) => Some(c.device_id.as_str()),
+        (None, Some(s)) => Some(s.device_id.as_str()),
+        (None, None) => None,
+    };
+    written.extend(super::kitchen_ticket::open(
+        tx,
+        &order_id,
+        seat_device,
+        placement_id,
+        &kitchen_lines,
+        now_ms,
+    )?);
     move_stock(
         tx,
         intent,
@@ -351,6 +373,8 @@ pub(crate) struct RevertTarget {
     stocks: BTreeMap<String, StockRow>,
     lots: BTreeMap<String, Vec<LotRow>>,
     effect: bool,
+    /// The kitchen ticket the placement opened (Story 7.3).
+    tickets: Vec<TicketRow>,
     now: i64,
 }
 
@@ -385,6 +409,9 @@ pub(super) fn load_place_reverted(
         stocks,
         lots,
         effect: effect_recorded(tx, Some(&r.placement_id), &order.id)?,
+        tickets: find_placement_ticket(tx, &order.id, &r.placement_id)?
+            .into_iter()
+            .collect(),
         order: Some(order),
         now,
     })
@@ -429,6 +456,7 @@ pub(super) fn validate_place_reverted(intent: &Intent, t: &RevertTarget) -> Resu
     if t.effect {
         return Err(undo_denied("a receipt, drawer or invoice already happened"));
     }
+    super::kitchen_ticket::check_undoable(&t.tickets)?;
     if !super::stock::sale_restorable(&t.moves, &t.stocks, &t.lots) {
         return Err(undo_denied("the stock has changed since the order"));
     }
@@ -476,6 +504,7 @@ pub(super) fn mutate_place_reverted(
         });
         written.extend(super::stock::touch(tx, &h.item_id)?);
     }
+    super::kitchen_ticket::delete_order_tickets(tx, &t.tickets, &mut written)?;
     let mut amount = 0;
     for line in &t.placed {
         amount += line.amount_minor;

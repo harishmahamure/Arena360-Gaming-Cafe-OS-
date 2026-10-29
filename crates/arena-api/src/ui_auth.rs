@@ -889,6 +889,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         ErrorCode::NotFound | ErrorCode::InvoiceNotFound => StatusCode::NOT_FOUND,
         ErrorCode::ValidationFailed
         | ErrorCode::FieldTooLong
+        | ErrorCode::BadStage
         | ErrorCode::Expired
         | ErrorCode::HsnRequired
         | ErrorCode::ReferenceRequired
@@ -2252,6 +2253,20 @@ async fn run_intent(
                 .flatten()
         }
         _ => None,
+    };
+    // A ticket reaching Ready does the same for its order (Story 7.3).
+    let readying = match (&intent.payload, readying) {
+        (arena_proto::IntentPayload::KitchenAdvance(a), None)
+            if a.to == arena_proto::STAGE_READY =>
+        {
+            let (reader, id) = (Arc::clone(&auth.reader), a.ticket_id.clone());
+            tokio::task::spawn_blocking(move || reader.ticket_session(&id))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .flatten()
+        }
+        (_, readying) => readying,
     };
     let cmd_id = intent.idempotency_key.clone();
     match writer.submit_intent(intent).await {

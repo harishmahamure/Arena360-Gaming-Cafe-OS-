@@ -360,6 +360,16 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::OrderPlaceReverted(t) => super::order_place::validate_place_reverted(intent, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::KitchenAdvance(a) => match target {
+            Target::KitchenAdvance(t) => super::kitchen_ticket::validate_advance(intent, a, t),
+            _ => Err(internal_target()),
+        },
+        IntentPayload::KitchenAdvanceReverted(_) => match target {
+            Target::KitchenAdvanceReverted(t) => {
+                super::kitchen_ticket::validate_advance_reverted(intent, t)
+            }
+            _ => Err(internal_target()),
+        },
         IntentPayload::OrderLineServed(s) => match target {
             Target::OrderLineServed(t) => super::order_line::validate_served(intent, s, t),
             _ => Err(internal_target()),

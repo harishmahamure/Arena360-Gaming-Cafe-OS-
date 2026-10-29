@@ -12,11 +12,14 @@ use std::collections::BTreeMap;
 
 use arena_proto::{
     AppError, ErrorCode, Intent, MOVE_WASTE, OrderLineCancel, OrderLineServed, ReasonCode,
+    STAGE_READY, STAGE_SERVED,
 };
 use arena_store::{
-    ChangeOp, HoldRow, LineRow, OrderRow, ProductRow, RowKey, StoreTx, Table, add_order_amount,
-    delete_row, find_line, find_order, find_product, find_stock, list_components, list_line_holds,
-    list_order_line_ids, mark_line_served, read_row, release_hold,
+    ChangeOp, HoldRow, LineRow, OrderRow, ProductRow, RowKey, StoreTx, Table, TicketLineRow,
+    TicketRow, add_order_amount, delete_row, find_line, find_line_for_order_line, find_order,
+    find_product, find_stock, find_ticket, list_components, list_line_holds, list_order_line_ids,
+    list_ticket_lines, mark_line_served, read_row, release_hold, set_ticket_cancelled,
+    set_ticket_stage,
 };
 
 use super::mutate::Written;
@@ -38,6 +41,26 @@ pub(crate) struct LineTarget {
     today: String,
     /// How many lines the order holds in all.
     all_lines: usize,
+    /// The kitchen ticket line that carries this line, and its ticket (Story 7.3).
+    ticket: Option<(TicketRow, TicketLineRow)>,
+    /// How many other lines of that ticket are still unserved.
+    ticket_others_unserved: usize,
+    /// How many other lines the ticket holds.
+    ticket_others: usize,
+}
+
+impl LineTarget {
+    /// Whether the line exists and is not served yet.
+    pub(super) fn is_unserved(&self) -> bool {
+        self.line.as_ref().is_some_and(|l| !l.served)
+    }
+
+    /// Whether the line sits on an open bill that can still change.
+    pub(super) fn on_open_bill(&self) -> bool {
+        self.order
+            .as_ref()
+            .is_some_and(|o| o.status == "open" && is_open_bill(o))
+    }
 }
 
 pub(super) fn load_line(
@@ -76,8 +99,28 @@ pub(super) fn load_line(
             super::stock::takeable(tx, &h.item_id, &today)?,
         );
     }
+    let mut ticket = None;
+    let mut ticket_others = 0;
+    let mut ticket_others_unserved = 0;
+    if let Some(tl) = find_line_for_order_line(tx, &line.id)?
+        && let Some(t) = find_ticket(tx, &tl.ticket_id)?
+    {
+        for other in list_ticket_lines(tx, &t.id)?
+            .iter()
+            .filter(|o| o.id != tl.id)
+        {
+            ticket_others += 1;
+            if find_line(tx, &other.order_line_id)?.is_some_and(|l| !l.served) {
+                ticket_others_unserved += 1;
+            }
+        }
+        ticket = Some((t, tl));
+    }
     Ok(LineTarget {
         all_lines: list_order_line_ids(tx, &line.order_id)?.len(),
+        ticket,
+        ticket_others,
+        ticket_others_unserved,
         line: Some(line),
         order,
         holds,
@@ -98,6 +141,11 @@ fn open_line<'a>(intent: &Intent, t: &'a LineTarget, what: &str) -> Result<&'a L
     if intent.base_rev.is_some() {
         return Err(invalid("base_rev", &format!("{what} takes no base_rev")));
     }
+    live_line(t)
+}
+
+/// The line, when it is a product line on an open bill.
+fn live_line(t: &LineTarget) -> Result<&LineRow, AppError> {
     let Some(line) = &t.line else {
         return Err(AppError::with_field(
             ErrorCode::NotFound,
@@ -123,7 +171,24 @@ pub(super) fn validate_served(
     _s: &OrderLineServed,
     t: &LineTarget,
 ) -> Result<(), AppError> {
-    let line = open_line(intent, t, "order.line_served")?;
+    open_line(intent, t, "order.line_served")?;
+    // A line on a kitchen ticket is served once the ticket is Ready (Story 7.3).
+    if let Some((ticket, _)) = &t.ticket
+        && ticket.stage != STAGE_READY
+    {
+        return Err(AppError::with_field(
+            ErrorCode::BadStage,
+            "line_id",
+            "the kitchen ticket is not ready yet",
+        ));
+    }
+    check_servable(t)
+}
+
+/// Whether a line can be served now: it is a live, unserved product line and the stock it holds
+/// can be taken. Used by the line's own intent and by a ticket reaching Served.
+pub(super) fn check_servable(t: &LineTarget) -> Result<(), AppError> {
+    let line = live_line(t)?;
     if line.served {
         return Err(invalid("line_id", "this line is already served"));
     }
@@ -171,6 +236,26 @@ pub(super) fn mutate_served(
     t: &LineTarget,
     now_ms: i64,
 ) -> Result<Vec<Written>, AppError> {
+    let mut written = serve_line(tx, &intent.actor.id, t, now_ms)?;
+    // The last unserved line of a Ready ticket serves the ticket.
+    if let Some((ticket, _)) = &t.ticket
+        && t.ticket_others_unserved == 0
+    {
+        set_ticket_stage(tx, &ticket.id, STAGE_SERVED, now_ms, &intent.actor.id)?;
+        written.push(update(RowKey::KitchenTickets {
+            id: ticket.id.clone(),
+        }));
+    }
+    Ok(written)
+}
+
+/// Serves one line: takes the stock of its open holds, closes them and marks the line served.
+pub(super) fn serve_line(
+    tx: &StoreTx<'_>,
+    staff_id: &str,
+    t: &LineTarget,
+    now_ms: i64,
+) -> Result<Vec<Written>, AppError> {
     let (Some(line), Some(order)) = (&t.line, &t.order) else {
         return Err(internal("a serve validated without its line"));
     };
@@ -183,33 +268,25 @@ pub(super) fn mutate_served(
     for h in &t.holds {
         let before = find_stock(tx, &h.item_id)?.map_or(0, |s| s.qty);
         written.extend(super::stock::take_for_sale(
-            tx,
-            &h.item_id,
-            h.qty,
-            &tag,
-            &intent.actor.id,
-            now_ms,
+            tx, &h.item_id, h.qty, &tag, staff_id, now_ms,
         )?);
         written.extend(super::stock::low_after_change(
             tx,
             &h.item_id,
             before,
             before - h.qty,
-            &intent.actor.id,
+            staff_id,
             now_ms,
         )?);
         release_hold(tx, &h.id, now_ms)?;
         written.push(update(RowKey::StockHolds { id: h.id.clone() }));
     }
-    mark_line_served(tx, &line.id, now_ms, &intent.actor.id)?;
+    mark_line_served(tx, &line.id, now_ms, staff_id)?;
     written.push(update(RowKey::OrderLines {
         id: line.id.clone(),
     }));
     written.extend(super::alert::close_kiosk_order(
-        tx,
-        order,
-        &intent.actor.id,
-        now_ms,
+        tx, order, staff_id, now_ms,
     )?);
     Ok(written)
 }
@@ -297,6 +374,41 @@ pub(super) fn give_back(
     Ok(())
 }
 
+/// Takes a cancelled line off its kitchen ticket (Story 7.3). The last line cancelled cancels the
+/// ticket, keeping the reason; when the lines left are all served, a Ready ticket is Served.
+fn drop_from_ticket(
+    tx: &StoreTx<'_>,
+    intent: &Intent,
+    t: &LineTarget,
+    now_ms: i64,
+    written: &mut Vec<Written>,
+) -> Result<(), AppError> {
+    let Some((ticket, tl)) = &t.ticket else {
+        return Ok(());
+    };
+    let key = RowKey::KitchenTicketLines { id: tl.id.clone() };
+    let before = read_row(tx, &key)?;
+    delete_row(tx, Table::KitchenTicketLines, &before)?;
+    written.push(Written {
+        key,
+        op: ChangeOp::Delete,
+        before: Some(before),
+    });
+    let by = intent.actor.id.as_str();
+    if t.ticket_others == 0 {
+        let reason = intent.reason.map_or("other", ReasonCode::as_str);
+        set_ticket_cancelled(tx, &ticket.id, reason, now_ms, by)?;
+    } else if t.ticket_others_unserved == 0 && ticket.stage == STAGE_READY {
+        set_ticket_stage(tx, &ticket.id, STAGE_SERVED, now_ms, by)?;
+    } else {
+        return Ok(());
+    }
+    written.push(update(RowKey::KitchenTickets {
+        id: ticket.id.clone(),
+    }));
+    Ok(())
+}
+
 pub(super) fn mutate_cancel(
     tx: &StoreTx<'_>,
     intent: &Intent,
@@ -309,6 +421,7 @@ pub(super) fn mutate_cancel(
     };
     let mut written = Vec::new();
     give_back(tx, intent, t, c.made, now_ms, &mut written)?;
+    drop_from_ticket(tx, intent, t, now_ms, &mut written)?;
     let key = RowKey::OrderLines {
         id: line.id.clone(),
     };

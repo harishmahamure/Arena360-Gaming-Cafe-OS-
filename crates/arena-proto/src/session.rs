@@ -704,6 +704,10 @@ pub struct SnapshotBill {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub ready: Option<bool>,
+    /// The kitchen tickets of the bill's order that are not served or cancelled yet (Story 7.3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<crate::KitchenTicketView>>")]
+    pub tickets: Vec<crate::KitchenTicketView>,
     #[ts(type = "number")]
     pub subtotal_minor: i64,
     #[ts(type = "number")]

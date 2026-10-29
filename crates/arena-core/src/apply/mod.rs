@@ -51,6 +51,7 @@ mod invoice_issue;
 mod kiosk_log;
 mod kiosk_scan;
 mod kitchen_notes;
+mod kitchen_ticket;
 mod library;
 mod library_dismiss;
 mod licence;
@@ -242,6 +243,8 @@ pub(crate) enum Target {
     OrderLineServed(Box<order_line::LineTarget>),
     OrderLineCancel(Box<order_line::LineTarget>),
     OrderReady(Box<order_ready::ReadyTarget>),
+    KitchenAdvance(Box<kitchen_ticket::AdvanceTarget>),
+    KitchenAdvanceReverted(Box<kitchen_ticket::RevertTarget>),
     OrderVoid(Box<order_void::VoidTarget>),
     Refund(Box<refund::RefundTarget>),
     CreditSetLimit(Box<credit::LimitTarget>),
@@ -367,6 +370,12 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
             Target::OrderLineCancel(Box::new(order_line::load_line(tx, &c.line_id, now)?))
         }
         P::OrderReady(r) => Target::OrderReady(Box::new(order_ready::load_ready(tx, r)?)),
+        P::KitchenAdvance(a) => {
+            Target::KitchenAdvance(Box::new(kitchen_ticket::load_advance(tx, a, now)?))
+        }
+        P::KitchenAdvanceReverted(r) => Target::KitchenAdvanceReverted(Box::new(
+            kitchen_ticket::load_advance_reverted(tx, r, now)?,
+        )),
         P::OrderVoid(v) => Target::OrderVoid(Box::new(order_void::load_void(tx, v, now)?)),
         P::RefundCreate(r) => Target::Refund(Box::new(refund::load(tx, r)?)),
         P::CreditSetLimit(c) => Target::CreditSetLimit(Box::new(credit::load_set_limit(tx, c)?)),

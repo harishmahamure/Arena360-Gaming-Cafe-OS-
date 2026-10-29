@@ -55,6 +55,7 @@ export type ErrorCode =
   | "CELL_TAKEN"
   | "TIER_LOCKED"
   | "FIELD_TOO_LONG"
+  | "BAD_STAGE"
   | "FEATURE_NOT_IN_TIER"
   | "DEVICE_LIMIT"
   | "HSN_REQUIRED"

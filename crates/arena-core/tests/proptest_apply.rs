@@ -408,6 +408,18 @@ enum Op {
         pick: u8,
         again: bool,
     },
+    /// The licence flips between Basic (kitchen tickets open) and Free (they stop), as a verified
+    /// licence heartbeat would.
+    KitchenLicence {
+        on: bool,
+    },
+    /// `kitchen.advance` of a ticket to a stage (the next one, or any when `skip`), or its undo:
+    /// a ticket only moves one step at a time, and a refused move writes nothing.
+    KitchenAdvance {
+        pick: u8,
+        skip: bool,
+        undo: bool,
+    },
     /// `order.void` of an open session order by the owner or a staff member of a built-in role,
     /// with a good, missing or wrong reason and note. Only the owner and managers may void; a
     /// voided order is detached from its session, keeps its lines and holds no stock.
@@ -827,6 +839,9 @@ fn op() -> impl Strategy<Value = Op> {
             |(pick, cancel, made)| Op::OrderLine { pick, cancel, made }
         ),
         2 => (any::<u8>(), any::<bool>()).prop_map(|(pick, again)| Op::OrderReady { pick, again }),
+        2 => prop::bool::weighted(0.7).prop_map(|on| Op::KitchenLicence { on }),
+        4 => (any::<u8>(), prop::bool::weighted(0.15), prop::bool::weighted(0.25))
+            .prop_map(|(pick, skip, undo)| Op::KitchenAdvance { pick, skip, undo }),
         2 => (any::<u8>(), any::<u8>(), any::<u8>(), 0..7u8, 0..5u8, any::<Index>()).prop_map(
             |(pick, line, qty, method, reason, who)| Op::Refund { pick, line, qty, method, reason, who }
         ),
@@ -3385,9 +3400,85 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     prop_assert_eq!(int(&now, "served"), 1);
                 }
                 Err(e) => {
-                    // Only short stock refuses a serve; nothing is written.
-                    prop_assert_eq!(e.code, ErrorCode::OutOfStock, "{:?}", e);
+                    // Only short stock, or a kitchen ticket that is not Ready yet, refuses a
+                    // serve; nothing is written.
+                    prop_assert!(
+                        matches!(e.code, ErrorCode::OutOfStock | ErrorCode::BadStage),
+                        "{:?}",
+                        e
+                    );
                     prop_assert!(!*cancel);
+                    prop_assert_eq!(stock_image(hub), stock_before);
+                }
+            }
+        }
+        Op::KitchenLicence { on } => {
+            let limits = arena_proto::Tier::Basic.defaults().limits;
+            let licence = arena_proto::LicenceApply {
+                standing: arena_proto::LicenceStanding::Verified,
+                clock_wrong: false,
+                tier: if *on {
+                    arena_proto::Tier::Basic
+                } else {
+                    arena_proto::Tier::Free
+                },
+                flags: if *on { "kitchen".into() } else { String::new() },
+                device_cap: limits.devices,
+                user_cap: limits.users,
+            };
+            let _ = hub.rt.block_on(hub.writer.apply_licence(licence));
+        }
+        Op::KitchenAdvance { pick, skip, undo } => {
+            let tickets = hub.reader.rows(Table::KitchenTickets).unwrap();
+            let Some(t) = tickets.get(usize::from(*pick) % tickets.len().max(1)) else {
+                return Ok(());
+            };
+            let (id, stage, rev) = (text(t, "id"), text(t, "stage"), int(t, "rev"));
+            let stock_before = stock_image(hub);
+            let before = hub.reader.rows(Table::KitchenTickets).unwrap();
+            let want = if *skip {
+                Some("served")
+            } else {
+                arena_proto::next_stage(&stage)
+            };
+            let payload = if *undo {
+                IntentPayload::KitchenAdvanceReverted(arena_proto::KitchenAdvanceReverted {
+                    ticket_id: id.clone(),
+                })
+            } else {
+                IntentPayload::KitchenAdvance(arena_proto::KitchenAdvance {
+                    ticket_id: id.clone(),
+                    to: want.unwrap_or("served").to_owned(),
+                })
+            };
+            let out = hub.submit_new(hub.intent(payload, Some(rev)));
+            let now = hub.reader.rows(Table::KitchenTickets).unwrap();
+            let after = now.iter().find(|r| text(r, "id") == id).unwrap();
+            match out {
+                Ok(_) => {
+                    // One step at a time: forward to the next stage, or back to the previous.
+                    let expected = if *undo {
+                        arena_proto::previous_stage(&stage)
+                    } else {
+                        arena_proto::next_stage(&stage)
+                    };
+                    let landed = text(after, "stage");
+                    prop_assert_eq!(Some(landed.as_str()), expected);
+                    prop_assert!(*undo || want == expected, "a skipped move applied");
+                }
+                Err(e) => {
+                    prop_assert!(
+                        matches!(
+                            e.code,
+                            ErrorCode::BadStage
+                                | ErrorCode::OutOfStock
+                                | ErrorCode::UndoNotAllowed
+                                | ErrorCode::TierLocked
+                        ),
+                        "{:?}",
+                        e
+                    );
+                    prop_assert_eq!(now, before);
                     prop_assert_eq!(stock_image(hub), stock_before);
                 }
             }
@@ -3436,7 +3527,12 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                         break;
                     }
                     Err(e) => {
-                        prop_assert_eq!(e.code, ErrorCode::ValidationFailed, "{:?}", e);
+                        // A ticket that is New or Preparing says when the food is ready.
+                        prop_assert!(
+                            matches!(e.code, ErrorCode::ValidationFailed | ErrorCode::BadStage),
+                            "{:?}",
+                            e
+                        );
                         prop_assert_eq!(e.field.as_deref(), Some("order_id"));
                         prop_assert_eq!(hub.reader.rows(Table::Orders).unwrap(), before);
                     }
@@ -6495,6 +6591,51 @@ fn assert_sessions_hold(hub: &Hub) -> Result<(), TestCaseError> {
     Ok(())
 }
 
+/// Kitchen ticket invariants (Story 7.3): a live ticket holds lines, a cancelled one holds none,
+/// numbers are unique, and a Served ticket has every live line served.
+fn assert_tickets_hold(hub: &Hub) -> Result<(), TestCaseError> {
+    let tickets = hub.reader.rows(Table::KitchenTickets).unwrap();
+    let ticket_lines = hub.reader.rows(Table::KitchenTicketLines).unwrap();
+    let order_lines = hub.reader.rows(Table::OrderLines).unwrap();
+    let mut numbers = std::collections::BTreeSet::new();
+    for t in &tickets {
+        let id = text(t, "id");
+        prop_assert!(numbers.insert(int(t, "number")), "ticket number reused");
+        let stage = text(t, "stage");
+        let own: Vec<_> = ticket_lines
+            .iter()
+            .filter(|l| text(l, "ticket_id") == id)
+            .collect();
+        match stage.as_str() {
+            "cancelled" => prop_assert!(own.is_empty(), "a cancelled ticket holds lines"),
+            _ => prop_assert!(!own.is_empty(), "a live ticket holds no line"),
+        }
+        if stage == "served" {
+            for l in &own {
+                let line = order_lines
+                    .iter()
+                    .find(|x| text(x, "id") == text(l, "order_line_id"));
+                if let Some(line) = line {
+                    prop_assert_eq!(
+                        int(line, "served"),
+                        1,
+                        "a Served ticket has an unserved line"
+                    );
+                }
+            }
+        }
+    }
+    for l in &ticket_lines {
+        prop_assert!(
+            tickets
+                .iter()
+                .any(|t| text(t, "id") == text(l, "ticket_id")),
+            "a ticket line without its ticket"
+        );
+    }
+    Ok(())
+}
+
 fn assert_orders_hold(hub: &Hub) -> Result<(), TestCaseError> {
     let payments = hub.reader.rows(Table::Payments).unwrap();
     // An order that holds placed products totals its lines, and a placed line has its stamp.
@@ -6777,6 +6918,7 @@ fn apply_invariants_hold_over_random_intent_sequences() {
                 assert_credit_holds(&hub)?;
                 assert_sessions_hold(&hub)?;
                 assert_orders_hold(&hub)?;
+                assert_tickets_hold(&hub)?;
                 assert_cash_holds(&hub)?;
                 assert_stock_holds(&hub)?;
                 assert_holds_hold(&hub)?;

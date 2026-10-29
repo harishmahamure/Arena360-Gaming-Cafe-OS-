@@ -51,6 +51,8 @@ export type IntentKind =
   | "order.place.reverted"
   | "order.line_served"
   | "order.ready"
+  | "kitchen.advance"
+  | "kitchen.advance.reverted"
   | "order.line_cancel"
   | "order.void"
   | "refund.create"

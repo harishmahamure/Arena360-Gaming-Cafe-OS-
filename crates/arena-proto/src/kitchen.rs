@@ -1,3 +1,6 @@
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
 use crate::{IntentPayload, PRINTER_PAPER_WIDTHS_MM};
 
 pub const KEY_LICENCE_FLAGS: &str = "licence.flags";
@@ -27,6 +30,79 @@ pub const MAX_LINE_NOTE_CHARS: usize = 60;
 /// The most notes one order line carries: every preset plus one free-text note.
 pub const MAX_LINE_NOTES: usize = MAX_KITCHEN_PRESETS + 1;
 
+/// Story 7.3: a kitchen ticket's stages, in the order it moves through them.
+pub const STAGE_NEW: &str = "new";
+pub const STAGE_PREPARING: &str = "preparing";
+pub const STAGE_READY: &str = "ready";
+pub const STAGE_SERVED: &str = "served";
+/// The stage of a ticket whose last line was cancelled; it never moves again.
+pub const STAGE_CANCELLED: &str = "cancelled";
+/// The stages a ticket moves through, in order.
+pub const KITCHEN_STAGES: [&str; 4] = [STAGE_NEW, STAGE_PREPARING, STAGE_READY, STAGE_SERVED];
+/// How long a stage change stays undoable, in milliseconds (the Story 3.14 window).
+pub const KITCHEN_UNDO_WINDOW_MS: i64 = 8_000;
+
+/// The stage after `stage`, or `None` for Served and Cancelled.
+pub fn next_stage(stage: &str) -> Option<&'static str> {
+    let i = KITCHEN_STAGES.iter().position(|s| *s == stage)?;
+    KITCHEN_STAGES.get(i + 1).copied()
+}
+
+/// The stage before `stage`, or `None` for New and Cancelled.
+pub fn previous_stage(stage: &str) -> Option<&'static str> {
+    let i = KITCHEN_STAGES.iter().position(|s| *s == stage)?;
+    i.checked_sub(1).map(|p| KITCHEN_STAGES[p])
+}
+
+/// The payload of `kitchen.advance` (Story 7.3): a ticket moves to `to`, which must be exactly the
+/// next stage. The intent's `base_rev` is the ticket's `rev` the caller saw.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KitchenAdvance {
+    pub ticket_id: String,
+    pub to: String,
+}
+
+/// The payload of `kitchen.advance.reverted` (Story 7.3): the ticket returns to its previous
+/// stage. The intent's `base_rev` is the `rev` the advance left, so only the latest advance
+/// can be taken back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KitchenAdvanceReverted {
+    pub ticket_id: String,
+}
+
+/// One line of a kitchen ticket.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KitchenTicketLineView {
+    /// The order line this ticket line stands for.
+    pub line_id: String,
+    pub label: String,
+    #[ts(type = "number")]
+    pub qty: i64,
+    pub notes: Vec<String>,
+}
+
+/// A kitchen ticket as the Hub shows it (Story 7.3). It names the seat and the ticket number,
+/// never a player.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KitchenTicketView {
+    pub id: String,
+    pub order_id: String,
+    #[ts(type = "number")]
+    pub number: i64,
+    /// The seat label: "PC 07", "TV 3" or "Counter".
+    pub seat: String,
+    pub stage: String,
+    #[ts(type = "number")]
+    pub placed_at: i64,
+    #[ts(type = "number")]
+    pub rev: i64,
+    pub lines: Vec<KitchenTicketLineView>,
+}
+
 pub const KITCHEN_GATED_KEYS: [&str; 3] = [
     KEY_KITCHEN_KOT_MODE,
     KEY_KITCHEN_KOT_PRINTER,
@@ -50,6 +126,11 @@ pub fn kitchen_gate(p: &IntentPayload) -> Option<TierGate> {
             if u.kitchen_notes.as_ref().is_some_and(|n| !n.is_empty()) =>
         {
             Some(TierGate::New)
+        }
+        // Story 7.3: a ticket opened before a lapse still finishes; the apply step refuses a
+        // ticket that does not exist on a branch without the flag.
+        IntentPayload::KitchenAdvance(_) | IntentPayload::KitchenAdvanceReverted(_) => {
+            Some(TierGate::ExistingWork)
         }
         IntentPayload::PosSale(s) if s.lines.iter().any(|l| !l.kitchen_notes.is_empty()) => {
             Some(TierGate::New)

@@ -61,8 +61,11 @@ const PAIRED_SCOPE: &[IntentKind] = &[
     IntentKind::DeviceAdminRelock,
     IntentKind::DeviceTestSessionCompleted,
 ];
-/// Kitchen intents only (none exist yet).
-const KDS_SCOPE: &[IntentKind] = &[];
+/// Kitchen intents only: it can advance a ticket and take the advance back, never cancel (Story 7.3).
+const KDS_SCOPE: &[IntentKind] = &[
+    IntentKind::KitchenAdvance,
+    IntentKind::KitchenAdvanceReverted,
+];
 const PHONE_SCOPE: &[IntentKind] = &[IntentKind::ConsolePlanRequested];
 
 /// The intent kinds a session of `class` may submit.
@@ -136,6 +139,16 @@ mod tests {
                 .iter()
                 .all(|k| k.category() == IntentCategory::Kitchen)
         );
+        assert_eq!(
+            class_scope(ClientClass::Kds),
+            &[
+                IntentKind::KitchenAdvance,
+                IntentKind::KitchenAdvanceReverted
+            ]
+        );
+        // A display can move a ticket but never cancel (Story 7.3).
+        assert!(!class_scope(ClientClass::Kds).contains(&IntentKind::OrderLineCancel));
+        assert!(!class_scope(ClientClass::Kds).contains(&IntentKind::OrderVoid));
         assert_eq!(
             class_scope(ClientClass::Phone),
             &[IntentKind::ConsolePlanRequested]

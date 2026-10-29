@@ -102,6 +102,8 @@ pub enum ErrorCode {
     TierLocked,
     /// A text field is longer than its limit (Story 7.2: a kitchen note).
     FieldTooLong,
+    /// A kitchen ticket cannot move to the stage asked for: it is not the next one (Story 7.3).
+    BadStage,
     /// The branch's licence lacks the feature the intent needs (Story 6.30: a kiosk order on a
     /// branch without `kiosk_orders`).
     FeatureNotInTier,
@@ -242,6 +244,7 @@ impl ErrorCode {
             Self::CellTaken => "CELL_TAKEN",
             Self::TierLocked => "TIER_LOCKED",
             Self::FieldTooLong => "FIELD_TOO_LONG",
+            Self::BadStage => "BAD_STAGE",
             Self::FeatureNotInTier => "FEATURE_NOT_IN_TIER",
             Self::DeviceLimit => "DEVICE_LIMIT",
             Self::HsnRequired => "HSN_REQUIRED",
@@ -407,6 +410,7 @@ mod tests {
             (ErrorCode::CellTaken, "CELL_TAKEN"),
             (ErrorCode::TierLocked, "TIER_LOCKED"),
             (ErrorCode::FieldTooLong, "FIELD_TOO_LONG"),
+            (ErrorCode::BadStage, "BAD_STAGE"),
             (ErrorCode::FeatureNotInTier, "FEATURE_NOT_IN_TIER"),
             (ErrorCode::DeviceLimit, "DEVICE_LIMIT"),
             (ErrorCode::HsnRequired, "HSN_REQUIRED"),

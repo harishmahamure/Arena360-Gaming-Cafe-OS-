@@ -5,7 +5,8 @@
 
 use arena_proto::{AppError, ErrorCode, Intent, OrderReady};
 use arena_store::{
-    ChangeOp, OrderRow, RowKey, StoreTx, count_unserved_lines, find_order, set_order_ready,
+    ChangeOp, OrderRow, RowKey, StoreTx, count_unserved_lines, find_order, list_order_tickets,
+    set_order_ready,
 };
 
 use super::mutate::Written;
@@ -18,6 +19,9 @@ pub(crate) struct ReadyTarget {
     order: Option<OrderRow>,
     /// How many lines of the order are not served yet.
     unserved: i64,
+    /// Whether a kitchen ticket of the order is still New or Preparing (Story 7.3): the ticket,
+    /// not the order, then says when the food is ready.
+    ticket_pending: bool,
 }
 
 pub(super) fn load_ready(tx: &StoreTx<'_>, r: &OrderReady) -> Result<ReadyTarget, AppError> {
@@ -26,6 +30,9 @@ pub(super) fn load_ready(tx: &StoreTx<'_>, r: &OrderReady) -> Result<ReadyTarget
     };
     Ok(ReadyTarget {
         unserved: count_unserved_lines(tx, &order.id)?,
+        ticket_pending: list_order_tickets(tx, &order.id)?
+            .iter()
+            .any(|t| matches!(t.stage.as_str(), "new" | "preparing")),
         order: Some(order),
     })
 }
@@ -46,6 +53,13 @@ pub(super) fn validate_ready(intent: &Intent, t: &ReadyTarget) -> Result<(), App
     }
     if t.unserved == 0 {
         return Err(invalid("order_id", "this order has nothing left to serve"));
+    }
+    if t.ticket_pending {
+        return Err(AppError::with_field(
+            ErrorCode::BadStage,
+            "order_id",
+            "the kitchen ticket says when this order is ready",
+        ));
     }
     if order.ready_at.is_some() {
         return Err(invalid("order_id", "this order is already marked ready"));

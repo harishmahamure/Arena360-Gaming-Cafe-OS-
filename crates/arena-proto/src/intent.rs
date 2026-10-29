@@ -173,6 +173,12 @@ pub enum IntentKind {
     /// An order with an unserved line marked ready for the player (Story 6.33).
     #[serde(rename = "order.ready")]
     OrderReady,
+    /// A kitchen ticket moved one stage on (Story 7.3).
+    #[serde(rename = "kitchen.advance")]
+    KitchenAdvance,
+    /// A kitchen ticket's advance taken back within its window (Story 7.3).
+    #[serde(rename = "kitchen.advance.reverted")]
+    KitchenAdvanceReverted,
     /// An unserved placed line cancelled, with a reason.
     #[serde(rename = "order.line_cancel")]
     OrderLineCancel,
@@ -359,7 +365,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 113] = [
+    pub const ALL: [IntentKind; 115] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -407,6 +413,8 @@ impl IntentKind {
         Self::OrderPlaceReverted,
         Self::OrderLineServed,
         Self::OrderReady,
+        Self::KitchenAdvance,
+        Self::KitchenAdvanceReverted,
         Self::OrderLineCancel,
         Self::OrderVoid,
         Self::RefundCreate,
@@ -525,6 +533,8 @@ impl IntentKind {
             Self::OrderPlaceReverted => "order.place.reverted",
             Self::OrderLineServed => "order.line_served",
             Self::OrderReady => "order.ready",
+            Self::KitchenAdvance => "kitchen.advance",
+            Self::KitchenAdvanceReverted => "kitchen.advance.reverted",
             Self::OrderLineCancel => "order.line_cancel",
             Self::OrderVoid => "order.void",
             Self::RefundCreate => "refund.create",
@@ -634,6 +644,7 @@ impl IntentKind {
             | Self::DevicePower
             | Self::RateUpsert => IntentCategory::Device,
             Self::ConsolePlanRequested => IntentCategory::Console,
+            Self::KitchenAdvance | Self::KitchenAdvanceReverted => IntentCategory::Kitchen,
             Self::StaffUpsert
             | Self::RoleUpsert
             | Self::StaffSetCredentials
@@ -819,6 +830,9 @@ impl IntentKind {
             | Self::ReceiptReprint
             | Self::OrderLineCancel => Requirement::Perm(Permission::PosSell),
             Self::OrderVoid => Requirement::Perm(Permission::PosVoid),
+            Self::KitchenAdvance | Self::KitchenAdvanceReverted => {
+                Requirement::Perm(Permission::KitchenUse)
+            }
             Self::RefundCreate => Requirement::Perm(Permission::RefundIssue),
             Self::SessionPause | Self::SessionResume => Requirement::Perm(Permission::SessionPause),
             Self::SessionExtend => Requirement::Perm(Permission::SessionExtend),
@@ -913,6 +927,8 @@ impl IntentKind {
             | Self::OrderPlaceReverted
             | Self::OrderLineServed
             | Self::OrderReady
+            | Self::KitchenAdvance
+            | Self::KitchenAdvanceReverted
             | Self::StaffSetCredentials
             | Self::StaffDeactivate
             | Self::StockIn
@@ -1490,6 +1506,10 @@ pub enum IntentPayload {
     OrderLineServed(crate::OrderLineServed),
     #[serde(rename = "order.ready")]
     OrderReady(crate::OrderReady),
+    #[serde(rename = "kitchen.advance")]
+    KitchenAdvance(crate::KitchenAdvance),
+    #[serde(rename = "kitchen.advance.reverted")]
+    KitchenAdvanceReverted(crate::KitchenAdvanceReverted),
     #[serde(rename = "order.line_cancel")]
     OrderLineCancel(crate::OrderLineCancel),
     #[serde(rename = "order.void")]
@@ -1674,6 +1694,8 @@ impl IntentPayload {
             Self::OrderPlaceReverted(_) => IntentKind::OrderPlaceReverted,
             Self::OrderLineServed(_) => IntentKind::OrderLineServed,
             Self::OrderReady(_) => IntentKind::OrderReady,
+            Self::KitchenAdvance(_) => IntentKind::KitchenAdvance,
+            Self::KitchenAdvanceReverted(_) => IntentKind::KitchenAdvanceReverted,
             Self::OrderLineCancel(_) => IntentKind::OrderLineCancel,
             Self::OrderVoid(_) => IntentKind::OrderVoid,
             Self::RefundCreate(_) => IntentKind::RefundCreate,
@@ -1819,7 +1841,6 @@ mod tests {
         Permission::PlayerView,
         Permission::BookingManage,
         Permission::DiscountManual,
-        Permission::KitchenUse,
         Permission::StockOverride,
         Permission::ShiftOverrideVariance,
         Permission::DevicePair,
@@ -2123,6 +2144,9 @@ mod tests {
                 | "receipt.reprint"
                 | "order.line_cancel" => Requirement::Perm(Permission::PosSell),
                 "order.void" => Requirement::Perm(Permission::PosVoid),
+                "kitchen.advance" | "kitchen.advance.reverted" => {
+                    Requirement::Perm(Permission::KitchenUse)
+                }
                 "refund.create" => Requirement::Perm(Permission::RefundIssue),
                 "session.pause" | "session.resume" => Requirement::Perm(Permission::SessionPause),
                 "session.extend" => Requirement::Perm(Permission::SessionExtend),

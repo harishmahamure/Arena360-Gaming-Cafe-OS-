@@ -92,6 +92,8 @@ const INTENT_LABELS: Record<string, MessageKey> = {
   "order.place.reverted": "hub.audit.intent.order.place.reverted",
   "order.line_served": "hub.audit.intent.order.line_served",
   "order.ready": "hub.audit.intent.order.ready",
+  "kitchen.advance": "hub.audit.intent.kitchen.advance",
+  "kitchen.advance.reverted": "hub.audit.intent.kitchen.advance.reverted",
   "order.line_cancel": "hub.audit.intent.order.line_cancel",
   "order.void": "hub.audit.intent.order.void",
   "refund.create": "hub.audit.intent.refund.create",

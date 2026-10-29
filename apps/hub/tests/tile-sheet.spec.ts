@@ -35,6 +35,12 @@ const STAFF: Record<string, SessionStaff> = {
     role_name: "Counter",
     permissions: ["device.screen", "session.start", "pos.sell"],
   },
+  "cook-token": {
+    staff_id: "01JCOOK0000000000000000000",
+    display_name: "Cook",
+    role_name: "Counter",
+    permissions: ["device.screen", "session.start", "pos.sell", "kitchen.use"],
+  },
 };
 
 type Sent = {
@@ -823,6 +829,87 @@ test("an order already marked ready shows that instead of the button; a served b
   await expect(page.getByTestId("order-section")).toBeVisible();
   await expect(page.getByTestId("order-ready")).toHaveCount(0);
   await expect(page.getByTestId("order-ready-state")).toHaveCount(0);
+});
+
+/** A running bill whose Burger line sits on kitchen ticket K-7 (Story 7.3). */
+const ticketedBill = (stage: string, rev = 4): SnapshotBill => ({
+  ...orderedBill(),
+  items_order_id: "O-run",
+  tickets: [
+    {
+      id: "T-7",
+      order_id: "O-run",
+      number: 7,
+      seat: "PC 2",
+      stage,
+      placed_at: Date.now() - 5 * 60_000,
+      rev,
+      lines: [{ line_id: "L-burger", label: "Burger", qty: 2, notes: ["No onion"] }],
+    },
+  ],
+});
+
+test("a kitchen ticket shows its number, seat, stage, elapsed time and notes", async ({ page }) => {
+  await open(page, "seller-token", { bills: [ticketedBill("preparing")] });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  const ticket = page.getByTestId("kitchen-ticket");
+  await expect(ticket).toHaveAttribute("data-stage", "preparing");
+  await expect(ticket.getByTestId("ticket-number")).toContainText("K-7");
+  await expect(ticket.getByTestId("ticket-number")).toContainText("PC 2");
+  await expect(ticket.getByTestId("ticket-stage")).toHaveText(
+    en["hub.order.ticket_stage.preparing"],
+  );
+  await expect(ticket.getByTestId("ticket-elapsed")).toContainText("5");
+  await expect(ticket.getByTestId("ticket-line")).toContainText("2 × Burger");
+  await expect(ticket.getByTestId("ticket-note")).toContainText("No onion");
+  // The ticket serves its lines and says when the food is ready: no per-line or per-order button.
+  await expect(
+    page
+      .getByTestId("order-line")
+      .nth(1)
+      .getByRole("button", { name: en["hub.order.mark_served"] }),
+  ).toHaveCount(0);
+  await expect(page.getByTestId("order-ready")).toHaveCount(0);
+});
+
+test("Mark ready moves a preparing ticket to ready and Mark served serves a ready one", async ({
+  page,
+}) => {
+  const hub = await open(page, "cook-token", { bills: [ticketedBill("preparing", 5)] });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  const ticket = page.getByTestId("kitchen-ticket");
+  await ticket.getByRole("button", { name: en["hub.order.mark_ready"] }).click();
+  await expect
+    .poll(() => hub.sent.map((s) => [s.payload, s.base_rev]))
+    .toContainEqual([{ kind: "kitchen.advance", ticket_id: "T-7", to: "ready" }, 5]);
+
+  await page.keyboard.press("Escape");
+  hub.bills = [ticketedBill("ready", 6)];
+  await page.reload();
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  await page
+    .getByTestId("kitchen-ticket")
+    .getByRole("button", { name: en["hub.order.mark_served"] })
+    .click();
+  await expect
+    .poll(() => hub.sent.map((s) => [s.payload, s.base_rev]))
+    .toContainEqual([{ kind: "kitchen.advance", ticket_id: "T-7", to: "served" }, 6]);
+});
+
+test("a New ticket marked ready takes its two steps, Preparing first", async ({ page }) => {
+  const hub = await open(page, "cook-token", { bills: [ticketedBill("new", 3)] });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  await page
+    .getByTestId("kitchen-ticket")
+    .getByRole("button", { name: en["hub.order.mark_ready"] })
+    .click();
+  await expect
+    .poll(() => hub.sent.map((s) => [s.payload, s.base_rev]))
+    .toContainEqual([{ kind: "kitchen.advance", ticket_id: "T-7", to: "preparing" }, 3]);
 });
 
 test("cancelling an unserved line asks why, then whether it was already made", async ({ page }) => {

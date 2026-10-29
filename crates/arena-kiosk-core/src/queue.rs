@@ -37,6 +37,7 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::Stale
         | ErrorCode::ValidationFailed
         | ErrorCode::FieldTooLong
+        | ErrorCode::BadStage
         | ErrorCode::AlreadyBootstrapped
         | ErrorCode::BranchCodeLocked
         | ErrorCode::IdempotencyConflict

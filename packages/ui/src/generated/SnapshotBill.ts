@@ -2,6 +2,7 @@
 import type { BillItem } from "./BillItem";
 import type { BillLine } from "./BillLine";
 import type { CreditView } from "./CreditView";
+import type { KitchenTicketView } from "./KitchenTicketView";
 
 export type SnapshotBill = {
   session_id: string;
@@ -35,6 +36,10 @@ export type SnapshotBill = {
    * Whether the order holding `items` is marked ready (Story 6.33); absent until it is.
    */
   ready?: boolean;
+  /**
+   * The kitchen tickets of the bill's order that are not served or cancelled yet (Story 7.3).
+   */
+  tickets?: Array<KitchenTicketView>;
   subtotal_minor: number;
   paid_minor: number;
   remaining_minor: number;

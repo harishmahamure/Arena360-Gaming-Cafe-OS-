@@ -116,6 +116,12 @@ const REFUSALS: Record<string, MessageKey> = {
   "VALIDATION_FAILED:order.line_served": "hub.order.line_refused",
   "NOT_FOUND:order.line_served": "hub.order.line_refused",
   "OUT_OF_STOCK:order.line_served": "hub.order.serve_short",
+  "BAD_STAGE:order.ready": "hub.order.ticket_stale",
+  "BAD_STAGE:order.line_served": "hub.order.ticket_stale",
+  "BAD_STAGE:kitchen.advance": "hub.order.ticket_stale",
+  "STALE:kitchen.advance": "hub.order.ticket_stale",
+  "NOT_FOUND:kitchen.advance": "hub.order.ticket_stale",
+  "OUT_OF_STOCK:kitchen.advance": "hub.order.serve_short",
   "VALIDATION_FAILED:order.ready": "hub.order.ready_refused",
   "NOT_FOUND:order.ready": "hub.order.ready_refused",
   "VALIDATION_FAILED:order.line_cancel": "hub.order.line_refused",
@@ -262,6 +268,17 @@ export const servedJob = (line_id: string) =>
 export const readyJob = (order_id: string) =>
   job({ kind: "order.ready", order_id }, { track: "none", done: "hub.sheet.done.ready" });
 
+/** Moves a kitchen ticket to its next stage (Story 7.3); `rev` is the ticket's revision. */
+export const advanceJob = (ticket_id: string, to: string, rev: number) =>
+  job(
+    { kind: "kitchen.advance", ticket_id, to },
+    {
+      track: "none",
+      rev,
+      done: to === "served" ? "hub.sheet.done.served" : "hub.sheet.done.ready",
+    },
+  );
+
 /** The reasons a placed line is cancelled for, in the order the sheet offers them. */
 export const CANCEL_REASONS: ReasonCode[] = ["changed_mind", "mistake", "other"];
 
@@ -359,17 +376,19 @@ export const permissionFor = (kind: IntentPayload["kind"]): Permission =>
                         kind === "order.ready" ||
                         kind === "order.line_cancel"
                       ? "pos.sell"
-                      : kind === "order.void"
-                        ? "pos.void"
-                        : kind === "credit.collect" || kind === "credit.collect.reverted"
-                          ? "credit.collect"
-                          : kind === "wallet.topup" || kind === "wallet.topup.reverted"
-                            ? "wallet.topup"
-                            : kind === "device.screen" || kind === "device.message"
-                              ? "device.screen"
-                              : kind === "device.power" || kind === "device.admin_unlock"
-                                ? "device.remote"
-                                : "device.manage";
+                      : kind === "kitchen.advance" || kind === "kitchen.advance.reverted"
+                        ? "kitchen.use"
+                        : kind === "order.void"
+                          ? "pos.void"
+                          : kind === "credit.collect" || kind === "credit.collect.reverted"
+                            ? "credit.collect"
+                            : kind === "wallet.topup" || kind === "wallet.topup.reverted"
+                              ? "wallet.topup"
+                              : kind === "device.screen" || kind === "device.message"
+                                ? "device.screen"
+                                : kind === "device.power" || kind === "device.admin_unlock"
+                                  ? "device.remote"
+                                  : "device.manage";
 
 export type Sent = "sent" | "pin_required" | "signed_out";
 

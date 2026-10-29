@@ -136,6 +136,7 @@ fn bills(
     sessions: &[arena_store::LiveSession],
     segments: &[arena_store::SegmentRow],
     (orders, order_lines): (Vec<arena_store::OpenOrder>, Vec<arena_store::OrderLineRow>),
+    tickets: &[(arena_store::TicketRow, Vec<arena_store::TicketLineRow>)],
     rules: &[arena_store::PricingRuleRow],
     now_ms: i64,
 ) -> Vec<arena_proto::SnapshotBill> {
@@ -168,6 +169,7 @@ fn bills(
             items,
             items_order_id: None,
             ready: None,
+            tickets: Vec::new(),
             subtotal_minor,
             paid_minor: 0,
             remaining_minor: subtotal_minor,
@@ -191,6 +193,14 @@ fn bills(
                     amount_minor: l.amount_minor,
                 })
             })
+            .collect()
+    };
+    // The open kitchen tickets of an order (Story 7.3).
+    let tickets_of = |order_id: &str| -> Vec<arena_proto::KitchenTicketView> {
+        tickets
+            .iter()
+            .filter(|(t, _)| t.order_id == order_id)
+            .map(|(t, lines)| ticket_view(t, lines))
             .collect()
     };
     // A running postpaid session shows its placed products on its own live bill; its order is
@@ -235,6 +245,7 @@ fn bills(
             .and_then(|id| orders.iter().find(|o| o.id == id))
             .and_then(|o| o.ready_at)
             .map(|_| true);
+        live_bill.tickets = placed.as_deref().map(tickets_of).unwrap_or_default();
         live_bill.items_order_id = placed.filter(|_| !live_bill.items.is_empty());
         live_bill
     });
@@ -269,6 +280,7 @@ fn bills(
             items,
         );
         open_bill.ready = o.ready_at.map(|_| true);
+        open_bill.tickets = tickets_of(&o.id);
         if o.session_id.is_none() {
             // An unpaid counter order settles for its priced total, tax included (Story 6.32).
             open_bill.subtotal_minor = o.total_minor;
@@ -277,6 +289,31 @@ fn bills(
         open_bill
     });
     live.chain(open).collect()
+}
+
+/// A kitchen ticket as the Hub shows it.
+pub(crate) fn ticket_view(
+    t: &arena_store::TicketRow,
+    lines: &[arena_store::TicketLineRow],
+) -> arena_proto::KitchenTicketView {
+    arena_proto::KitchenTicketView {
+        id: t.id.clone(),
+        order_id: t.order_id.clone(),
+        number: t.number,
+        seat: t.seat.clone(),
+        stage: t.stage.clone(),
+        placed_at: t.placed_at,
+        rev: t.rev,
+        lines: lines
+            .iter()
+            .map(|l| arena_proto::KitchenTicketLineView {
+                line_id: l.order_line_id.clone(),
+                label: l.label.clone(),
+                qty: l.qty,
+                notes: l.notes.clone(),
+            })
+            .collect(),
+    }
 }
 
 fn group_bills(
@@ -349,6 +386,7 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
         ended_group,
         unchecked,
         shift,
+        tickets,
     ) = store.read_consistent(|s| {
         Ok((
             s.branch_summary()?,
@@ -369,6 +407,7 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
             s.ended_group_sessions()?,
             s.unchecked_consoles()?,
             s.shift_state()?,
+            s.open_tickets()?,
         ))
     })?;
     let mut snapshot = build_snapshot(branch, devices, meta, groups, zones, locale, ui);
@@ -383,7 +422,7 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
             d.controller_check = Some(session_id);
         }
     }
-    snapshot.bills = bills(&sessions, &segments, orders, &rules, now_ms);
+    snapshot.bills = bills(&sessions, &segments, orders, &tickets, &rules, now_ms);
     snapshot.group_bills = group_bills(group_rows, &sessions, ended_group, &rules, now_ms);
     snapshot.alerts = alerts
         .into_iter()
@@ -817,6 +856,15 @@ impl SnapshotReader {
             .lock()
             .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
         store.order_session(order_id)
+    }
+
+    /// The session a kitchen ticket's order is billed to.
+    pub fn ticket_session(&self, ticket_id: &str) -> Result<Option<String>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.ticket_session(ticket_id)
     }
 
     /// The session a line sits on (`None` when the line or its order is gone).

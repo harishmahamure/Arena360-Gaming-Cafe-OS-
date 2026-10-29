@@ -13,6 +13,7 @@
   } from "@arena/ui";
   import type {
     BillLine,
+    KitchenTicketView,
     SessionStaff,
     SnapshotBill,
     SnapshotDevice,
@@ -72,6 +73,7 @@
     permissionFor,
     powerJob,
     readyJob,
+    advanceJob,
     resumeJob,
     messageJob,
     messageValid,
@@ -444,6 +446,26 @@
     if (orderId && !busy) void go(readyJob(orderId));
   }
 
+  /**
+   * Moves a kitchen ticket on (Story 7.3). "Mark ready" on a New ticket takes the two steps the
+   * ticket needs, Preparing then Ready; "Mark served" serves a Ready ticket.
+   */
+  async function advanceTicket(ticket: KitchenTicketView) {
+    if (busy) return;
+    if (ticket.stage === "ready")
+      return void (await go(advanceJob(ticket.id, "served", ticket.rev)));
+    let rev = ticket.rev;
+    if (ticket.stage === "new") {
+      await go(advanceJob(ticket.id, "preparing", rev));
+      const now = [...(bill?.tickets ?? []), ...(unpaid?.tickets ?? [])].find(
+        (x) => x.id === ticket.id,
+      );
+      if (now?.stage !== "preparing") return;
+      rev = now.rev;
+    }
+    await go(advanceJob(ticket.id, "ready", rev));
+  }
+
   function cancelLine(lineId: string, made: boolean, reason: ReasonCode) {
     if (!busy) void go(cancelLineJob(lineId, made, reason));
   }
@@ -671,9 +693,11 @@
       />
       <OrderSection
         items={unpaid.items}
+        tickets={unpaid.tickets ?? []}
         {locale}
         {busy}
         onserve={serveLine}
+        onadvance={advanceTicket}
         oncancel={cancelLine}
       />
     {/if}
@@ -856,6 +880,8 @@
               {locale}
               {busy}
               ready={bill.ready === true}
+              tickets={bill.tickets ?? []}
+              onadvance={advanceTicket}
               onserve={serveLine}
               onready={bill.items_order_id || bill.order_id ? markReady : undefined}
               oncancel={cancelLine}

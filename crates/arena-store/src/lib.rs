@@ -21,6 +21,7 @@ mod gst;
 mod identity;
 mod invoices;
 mod kiosk_scans;
+mod kitchen_tickets;
 mod library;
 mod library_installs;
 mod migrations;
@@ -125,6 +126,13 @@ pub use kiosk_scans::{
     GameLaunchRow, KioskScanRow, KioskScanSummary, KioskScanWrite, find_kiosk_scan,
     insert_kiosk_scan, list_game_launches, list_kiosk_scan_summaries, list_kiosk_scans,
     replace_kiosk_scan,
+};
+pub use kitchen_tickets::{
+    NewTicket, NewTicketLine, TicketLineRow, TicketRow, find_line_for_order_line,
+    find_placement_ticket, find_ticket, insert_ticket, insert_ticket_line,
+    list_line_holds_released_at, list_open_tickets, list_order_tickets, list_ticket_lines,
+    list_ticket_lines_served_at, next_ticket_number, reopen_hold, restore_ticket_stage,
+    set_ticket_cancelled, set_ticket_stage, unmark_line_served,
 };
 pub use library::{
     LibraryRow, LibraryWrite, find_library_entry, insert_library_entry, list_library_entries,
@@ -1075,6 +1083,18 @@ impl Store {
         ))
     }
 
+    /// Every kitchen ticket that is not served or cancelled yet, with its lines (empty before
+    /// migration 69).
+    pub fn open_tickets(&self) -> Result<Vec<(TicketRow, Vec<TicketLineRow>)>, AppError> {
+        if !self.table_exists("kitchen_tickets")? {
+            return Ok(Vec::new());
+        }
+        list_open_tickets(&self.conn)?
+            .into_iter()
+            .map(|t| list_ticket_lines(&self.conn, &t.id).map(|l| (t, l)))
+            .collect()
+    }
+
     pub fn wallet_txns(&self, player_id: &str) -> Result<Vec<WalletTxnRow>, AppError> {
         if !self.table_exists("wallet_txns")? {
             return Ok(Vec::new());
@@ -1155,6 +1175,18 @@ impl Store {
             return Ok(None);
         }
         Ok(find_order(&self.conn, order_id)?.and_then(|o| o.session_id))
+    }
+
+    /// The session a kitchen ticket's order is billed to (`None` for a walk-up ticket or an
+    /// unknown one).
+    pub fn ticket_session(&self, ticket_id: &str) -> Result<Option<String>, AppError> {
+        if !self.table_exists("kitchen_tickets")? {
+            return Ok(None);
+        }
+        let Some(ticket) = find_ticket(&self.conn, ticket_id)? else {
+            return Ok(None);
+        };
+        Ok(find_order(&self.conn, &ticket.order_id)?.and_then(|o| o.session_id))
     }
 
     /// The session a line sits on (`None` when the line or its order is gone).

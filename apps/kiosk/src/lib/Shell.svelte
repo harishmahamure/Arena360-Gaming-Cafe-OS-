@@ -324,7 +324,12 @@
     isolation: isolate;
     display: grid;
     grid-template-rows: auto 1fr;
+    box-sizing: border-box;
     min-height: 100vh;
+    /* On an ultrawide the content is capped at 2560px and centred (Story 6.37); the 56px margins
+       sit inside the cap, and the layout reflows rather than scales. */
+    max-width: 2560px;
+    margin-inline: auto;
     padding: 32px var(--space-kiosk-margin) var(--space-kiosk-margin);
     color: var(--text);
   }
@@ -336,6 +341,19 @@
     align-items: center;
     gap: var(--space-5);
     height: 64px;
+  }
+
+  /* Narrower than 1600px the nav no longer needs to sit on the exact centre: the logo and the
+     right-hand controls take what they need and the nav sits in what is left (Story 6.37). */
+  @media (max-width: 1599px) {
+    .bar {
+      grid-template-columns: auto 1fr auto;
+      gap: var(--space-4);
+    }
+
+    .pill-nav {
+      justify-self: center;
+    }
   }
 
   .logo-slot {

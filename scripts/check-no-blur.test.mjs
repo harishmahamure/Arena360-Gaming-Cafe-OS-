@@ -31,6 +31,42 @@ test("comments and blur-ignore lines pass", () => {
   assert.deepEqual(checkSource("x.svelte", text), []);
 });
 
+test("filter: blur is caught, backdrop-filter is not double counted, other filters pass", () => {
+  const text = [
+    ".a { filter: blur(4px); }",
+    ".b { -webkit-filter: blur(2px) brightness(1); }",
+    ".c { filter: brightness(0.5); }",
+    ".d { backdrop-filter: blur(8px); }",
+    '<div style="filter:blur(1px)"></div>',
+  ].join("\n");
+  assert.deepEqual(checkSource("x.svelte", text), [
+    "x.svelte:1 filter-blur",
+    "x.svelte:2 filter-blur",
+    "x.svelte:4 backdrop-filter",
+    "x.svelte:5 filter-blur",
+  ]);
+});
+
+test("autoplaying unmuted media fails, muted video and plain media pass", () => {
+  const text = [
+    "<video autoplay muted loop></video>",
+    "<video autoplay></video>",
+    "<video",
+    "  src={a}",
+    "  autoplay",
+    "></video>",
+    "<audio autoplay muted></audio>",
+    "<video controls></video>",
+    "<audio src={a}></audio>",
+    "<video autoplay></video> <!-- blur-ignore -->",
+  ].join("\n");
+  assert.deepEqual(checkSource("x.svelte", text), [
+    "x.svelte:2 autoplay-unmuted",
+    "x.svelte:3 autoplay-unmuted",
+    "x.svelte:7 autoplay-unmuted",
+  ]);
+});
+
 test("only branch surfaces and the shared UI package are in scope", () => {
   assert.equal(inScope("apps/hub/src/a.css"), true);
   assert.equal(inScope("apps/kiosk/src/a.css"), true);

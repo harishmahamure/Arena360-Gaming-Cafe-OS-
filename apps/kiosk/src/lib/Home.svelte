@@ -435,6 +435,17 @@
     }
   }
 
+  /* An ultrawide (21:9 and wider): the content is capped at 2560px and centred, and the hero copy
+     stays in the left 45% of that content (Story 6.37). */
+  @media (min-aspect-ratio: 21/9) {
+    .hero-copy {
+      max-width: calc((100vw - min(100vw, 2560px)) / 2 + min(100vw, 2560px) * 0.45);
+      padding-left: calc(
+        (100vw - min(100vw, 2560px)) / 2 + var(--space-kiosk-margin) - var(--space-4)
+      );
+    }
+  }
+
   .all-games-tile {
     box-sizing: border-box;
     display: grid;

@@ -332,12 +332,26 @@
 
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, 140px);
+    /* Columns follow the width: 5 at 1366, 7 at 1920, 9 at 2560 and on an ultrawide (the shell
+       caps the content at 2560px, so an ultrawide shows the same 9). */
+    grid-template-columns: repeat(5, 140px);
     justify-content: start;
     gap: var(--space-5);
     margin: 0;
     padding: var(--space-3);
     list-style: none;
+  }
+
+  @media (min-width: 1920px) {
+    .grid {
+      grid-template-columns: repeat(7, 140px);
+    }
+  }
+
+  @media (min-width: 2560px) {
+    .grid {
+      grid-template-columns: repeat(9, 140px);
+    }
   }
 
   .empty {

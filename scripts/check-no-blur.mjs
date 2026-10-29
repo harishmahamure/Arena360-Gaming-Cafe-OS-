@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Blur gate: branch surfaces (Hub, Kiosk, Kitchen) and the shared UI package never use
-// `backdrop-filter` (no live blur or glass; media sits under a solid scrim). Exempt a line with a
-// `blur-ignore` comment. Reads local files only (no network).
+// `backdrop-filter` or `filter: blur(...)` (no live blur or glass; media sits under a solid scrim),
+// and never autoplay unmuted media (a `<video autoplay>` must be `muted`; `<audio autoplay>` is
+// never allowed). Exempt a line with a `blur-ignore` comment. Reads local files only (no network).
 
 import { readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -12,6 +13,9 @@ export const IGNORE_MARKER = "blur-ignore";
 export const BRANCH_SURFACES = ["hub", "kiosk", "kitchen"];
 const SCANNED = [...EXTENSIONS, ".html"];
 const BACKDROP = /backdrop-filter/i;
+// `filter: blur(...)` (also `-webkit-filter`); `backdrop-filter` is reported separately.
+const FILTER_BLUR = /(?<![\w-])(?:-webkit-)?filter\s*:[^;}]*\bblur\s*\(/i;
+const MEDIA_TAG = /<(video|audio)\b[^>]*>/gi;
 const COMMENT = /^\s*(\/\/|\/\*|\*|<!--)/;
 
 /** True for files in a branch surface or the shared UI package. */
@@ -23,15 +27,25 @@ export function inScope(file) {
 }
 
 /**
- * `backdrop-filter` uses in one file (comment lines are skipped).
- * @returns {string[]} `file:line backdrop-filter`
+ * Blur and autoplay violations in one file (comment lines are skipped).
+ * @returns {string[]} `file:line` followed by `backdrop-filter`, `filter-blur` or `autoplay-unmuted`
  */
 export function checkSource(file, text) {
   const out = [];
-  text.split("\n").forEach((line, i) => {
+  const lines = text.split("\n");
+  lines.forEach((line, i) => {
     if (line.includes(IGNORE_MARKER) || COMMENT.test(line)) return;
     if (BACKDROP.test(line)) out.push(`${file}:${i + 1} backdrop-filter`);
+    if (FILTER_BLUR.test(line)) out.push(`${file}:${i + 1} filter-blur`);
   });
+  for (const match of text.matchAll(MEDIA_TAG)) {
+    const tag = match[0];
+    if (!/\sautoplay\b/i.test(tag)) continue;
+    if (match[1].toLowerCase() === "video" && /\smuted\b/i.test(tag)) continue;
+    const line = text.slice(0, match.index).split("\n").length;
+    if (lines[line - 1].includes(IGNORE_MARKER)) continue;
+    out.push(`${file}:${line} autoplay-unmuted`);
+  }
   return out;
 }
 

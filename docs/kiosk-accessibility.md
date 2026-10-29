@@ -241,3 +241,27 @@ Borderless-fullscreen games are not affected: the HUD draws over them like any w
   display went back to what it was."
 - A failed change or an unreachable counter is an `alert` line under the controls with a warning
   mark, not colour alone. A guest is told their choices last for this session only.
+
+## Reflow, keyboard and high contrast (Story 6.37)
+
+- **Widths.** The kiosk reflows at 1366, 1920, 2560 and on a 21:9 ultrawide; nothing is scaled. Home
+  shows 4, 6 or 8 featured tiles plus **All games**, and Games has 5, 7 or 9 columns (9 on an
+  ultrawide). The hero copy is at most 720 px wide at 1366 and 864 px from there up. On an
+  ultrawide the content is capped at 2560 px and centred, with the hero copy kept to the left 45%
+  of it. Margins are 56 px. Under 1600 px the top bar gives the logo and the right-hand controls
+  what they need and seats the pill nav in the space between (so the Shop item never meets the
+  volume button).
+- **Longer text.** The visual suite also runs with every text 30% longer; nothing clips, overlaps
+  or scrolls sideways. The "Most played here" carousel is the one row that scrolls on purpose; the
+  arrow keys step through it.
+- **Keyboard only.** The whole journey (login, plan picker, Home, Games, launch, Shop order,
+  Account, Log out) works with Tab and Shift+Tab, Enter and Space, Esc, and the arrow keys in the
+  pill nav, the account sub-nav, the filter rails, the grids and the carousels. Every stop shows a
+  focus ring. The only keyboard shortcuts are **Ctrl+Shift+E** (Extend, from the Rust keyboard
+  hook) and the staff-only admin-exit chord of Story 1.20; the player pages add none.
+- **High contrast.** Video, covers and scrims, shadows and translucency are gone; every control has
+  a 2px white outline (a 4px ring when focused); axe finds no serious or critical violation on any
+  player screen.
+- **CI.** `pnpm check:no-blur` fails the build on `backdrop-filter`, `filter: blur(...)` and an
+  autoplaying `<video>` that is not `muted` (or any autoplaying `<audio>`) in the kiosk, the Hub,
+  the Kitchen and the shared UI.

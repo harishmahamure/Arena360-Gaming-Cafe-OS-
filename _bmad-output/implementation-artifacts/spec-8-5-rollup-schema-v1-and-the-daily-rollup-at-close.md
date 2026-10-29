@@ -2,7 +2,7 @@
 title: 'Story 8.5: Rollup schema v1 and the daily rollup at close'
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 baseline_commit: '9f7ff0a'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -70,6 +70,8 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+Reviewed 2026-10-30: no blocking findings. fmt, clippy -D warnings, unit tests and check:generated green.
 
 ## Design Notes
 

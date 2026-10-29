@@ -13,7 +13,7 @@ type Shell = { preset: "hc" | "dark" | null; hc: boolean | null };
 const initScript = (preset: "hc" | "dark") =>
   decodeURIComponent(new URL(`./fixtures/theme-init-${preset}.js`, import.meta.url).pathname);
 
-async function openWithShell(page: Page, shell: Shell) {
+async function openWithShell(page: Page, shell: Shell, path = "/") {
   if (shell.preset) await page.addInitScript({ path: initScript(shell.preset) });
   await page.addInitScript(
     ([s, commands]: [Shell, typeof names.commands]) => {
@@ -71,7 +71,7 @@ async function openWithShell(page: Page, shell: Shell) {
     },
     [shell, names.commands] as [Shell, typeof names.commands],
   );
-  await page.goto("/");
+  await page.goto(path);
   await page.waitForFunction(
     (event) =>
       (window as unknown as { __shell: { listening: (e: string) => boolean } }).__shell.listening(
@@ -132,7 +132,7 @@ test("the page takes the shell's current theme when its init script is older", a
 test("the HC placeholder and toast pass axe with HC outlines, focus ring and no motion", async ({
   page,
 }) => {
-  await openWithShell(page, { preset: "hc", hc: true });
+  await openWithShell(page, { preset: "hc", hc: true }, "/hud");
   await emit(page, names.events.toast, "player.app.blocked");
   const dismiss = page.getByRole("button", { name: en["common.dismiss"] });
   await expect(dismiss).toBeVisible();

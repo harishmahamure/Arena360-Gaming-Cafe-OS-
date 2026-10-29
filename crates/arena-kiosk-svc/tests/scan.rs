@@ -411,6 +411,8 @@ fn start_session(kiosk: &Kiosk) {
             username: None,
             guest_no: None,
             ends_at: None,
+            balance_minor: None,
+            plan_name: None,
             hold: false,
         });
     });

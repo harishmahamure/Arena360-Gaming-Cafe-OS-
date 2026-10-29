@@ -20,6 +20,20 @@
         "skipTaskbar": true,
         "visible": false,
         "create": false
+      },
+      {
+        "label": "hud",
+        "title": "Arena 360 HUD",
+        "url": "hud",
+        "decorations": false,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "focusable": false,
+        "shadow": false,
+        "visible": false,
+        "create": false
       }
     ],
     "security": {

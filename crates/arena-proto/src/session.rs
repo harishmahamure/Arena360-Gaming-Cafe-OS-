@@ -819,6 +819,14 @@ pub struct SessionScreen {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub remaining_ms: Option<u64>,
+    /// The player's wallet balance in minor units, for the overlay HUD; `None` for a guest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub balance_minor: Option<i64>,
+    /// The plan (pack or pass) the session runs on; `None` for wallet time or pay-as-you-go.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub plan_name: Option<String>,
 }
 
 #[cfg(test)]

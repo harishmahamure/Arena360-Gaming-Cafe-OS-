@@ -196,6 +196,12 @@ async fn a_pack_session_ends_when_the_minutes_left_run_out() {
     let seg = &table(&f, Table::SessionSegments)[0];
     assert_eq!(int(seg, "rate_minor_per_hour"), 0);
     assert_eq!(state_of(&f, &d), "in_session");
+    let screen = &crate::session_screens(&reopen(&f), T0).unwrap()[0].1;
+    assert_eq!(
+        screen.plan_name,
+        Some(text(&row_of(&f, Table::PlayerPacks, &pack), "name"))
+    );
+    assert_eq!(screen.balance_minor, Some(0));
 }
 
 #[tokio::test]

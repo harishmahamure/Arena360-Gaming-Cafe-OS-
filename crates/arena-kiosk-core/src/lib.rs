@@ -7,6 +7,7 @@
 pub mod admin_exit;
 pub mod backoff;
 pub mod client;
+pub mod hud;
 pub mod ipc;
 pub mod keys;
 pub mod lockdown;

@@ -38,6 +38,8 @@ pub fn sync(ctx: &Ctx, s: SessionScreen, started: bool) {
             username: s.username,
             guest_no: s.guest_no,
             ends_at: s.remaining_ms.map(|ms| now + Duration::from_millis(ms)),
+            balance_minor: s.balance_minor,
+            plan_name: s.plan_name,
             hold: s.time_up_mode == TimeUpMode::StaffHandles.as_str(),
         });
     });

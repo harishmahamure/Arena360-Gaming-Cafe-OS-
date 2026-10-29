@@ -32,6 +32,9 @@ pub struct ScreenSession {
     pub guest_no: Option<i64>,
     /// When a prepaid session's time runs out (`None` for postpaid, which counts up).
     pub ends_at: Option<Instant>,
+    /// The wallet balance (minor units) and plan name the overlay HUD shows.
+    pub balance_minor: Option<i64>,
+    pub plan_name: Option<String>,
     /// The branch's time-up mode is "Staff handles".
     pub hold: bool,
 }

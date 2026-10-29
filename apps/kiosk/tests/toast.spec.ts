@@ -3,11 +3,12 @@ import { expect, test, type Page } from "@playwright/test";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import names from "../src-tauri/ipc-names.json" with { type: "json" };
 
-// The toast the Kiosk service raises after it closed a blocked app (Story 1.18). The Tauri
+// The toast the Kiosk service raises after it closed a blocked app (Story 1.18), shown on the
+// overlay HUD as a persistent warning `hud-toast` (Story 6.14). The Tauri
 // shell is stubbed in the page, and the test emits its `toast` event exactly as
 // `@tauri-apps/api/event` delivers it.
 
-async function openWithShell(page: Page) {
+async function openWithShell(page: Page, path = "/hud") {
   await page.addInitScript((commands: typeof names.commands) => {
     const callbacks = new Map<number, (e: unknown) => void>();
     const listeners: Record<string, number[]> = {};
@@ -35,6 +36,10 @@ async function openWithShell(page: Page) {
           case commands.takeRestoreState:
           case commands.reportAppState:
           case commands.heartbeat:
+          case commands.pcScreen:
+          case commands.attract:
+          case commands.theme:
+          case commands.hudLayout:
             return null;
           default:
             throw new Error(`unexpected command ${cmd}`);
@@ -48,7 +53,7 @@ async function openWithShell(page: Page) {
       listening: (event: string) => (listeners[event] ?? []).length > 0,
     };
   }, names.commands);
-  await page.goto("/");
+  await page.goto(path);
   await page.waitForFunction(
     (event) =>
       (window as unknown as { __shell: { listening: (e: string) => boolean } }).__shell.listening(
@@ -109,14 +114,18 @@ test("a blocked app shows a polite toast that stays until dismissed and never ta
   await expect(page.getByTestId("toast")).toHaveCount(1);
 });
 
-test("the toast region lets clicks through outside the toast", async ({ page }) => {
+test("the toast is the 640px solid hud-toast with an amber border and no blur", async ({
+  page,
+}) => {
   await openWithShell(page);
   await emit(page, names.events.toast, "player.app.blocked");
-  await expect(page.getByTestId("toast")).toHaveCount(1);
-  const hitsRegion = await page.evaluate(() => {
-    const region = document.querySelector("[data-testid=toasts]")!.getBoundingClientRect();
-    const el = document.elementFromPoint(region.x + 4, region.y + region.height / 2);
-    return el?.closest("[data-testid=toasts]") !== null;
-  });
-  expect(hitsRegion).toBe(false);
+  const toast = page.getByTestId("toast");
+  await expect(toast).toHaveCount(1);
+  expect(Math.round((await toast.boundingBox())!.width)).toBe(640);
+  const style = (prop: string) =>
+    toast.evaluate((el, p) => getComputedStyle(el).getPropertyValue(p), prop);
+  expect(await style("background-color")).toBe("rgb(30, 22, 6)");
+  expect(await style("border-top-color")).toBe("rgb(255, 190, 61)");
+  expect(await style("border-top-width")).toBe("2px");
+  expect(await style("backdrop-filter")).toBe("none");
 });

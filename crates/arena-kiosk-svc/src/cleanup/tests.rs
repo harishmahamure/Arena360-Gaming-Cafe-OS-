@@ -188,6 +188,8 @@ impl T {
                 username: None,
                 guest_no: None,
                 remaining_ms: None,
+                balance_minor: None,
+                plan_name: None,
             },
             true,
         );

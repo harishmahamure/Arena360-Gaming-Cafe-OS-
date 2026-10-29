@@ -17,6 +17,7 @@ pub mod vk {
     pub const SPACE: u32 = 0x20;
     pub const A: u32 = 0x41;
     pub const D: u32 = 0x44;
+    pub const E: u32 = 0x45;
     pub const LWIN: u32 = 0x5B;
     pub const RWIN: u32 = 0x5C;
     pub const F4: u32 = 0x73;

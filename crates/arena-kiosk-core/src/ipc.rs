@@ -129,6 +129,11 @@ pub struct PcSession {
     /// Milliseconds a prepaid session has left (`None` for postpaid, which counts up).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remaining_ms: Option<u64>,
+    /// The wallet balance (minor units) and plan name the overlay HUD shows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub balance_minor: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_name: Option<String>,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -576,6 +581,8 @@ mod tests {
                 username: None,
                 guest_no: None,
                 remaining_ms: None,
+                balance_minor: None,
+                plan_name: None,
             }),
         };
         assert_eq!(IpcMsg::parse(&shown.to_line()).unwrap(), shown);

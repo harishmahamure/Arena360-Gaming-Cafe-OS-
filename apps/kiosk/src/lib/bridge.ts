@@ -32,6 +32,7 @@ export const TEST_SESSION_EVENT = names.events.testSession;
 export const TEST_SESSION_ENDED_EVENT = names.events.testSessionEnded;
 export const DISCOVERY_FOUND_EVENT = names.events.discoveryFound;
 export const DISCOVERY_DONE_EVENT = names.events.discoveryDone;
+export const HUD_EXPAND_EVENT = names.events.hudExpand;
 const CMD = names.commands;
 /** How often the webview tells the shell it is alive (the shell answers pings only then). */
 export const HEARTBEAT_MS = 1000;
@@ -81,6 +82,11 @@ export async function onRestoreState(cb: (state: unknown) => void): Promise<() =
 /** The toasts the service may raise (catalogue keys); anything else is ignored. */
 export const TOAST_KEYS = ["player.app.blocked"] as const;
 export type ToastKey = (typeof TOAST_KEYS)[number];
+
+/** How each toast behaves on the HUD (Story 6.14): an info toast goes after 8 s, a warning stays. */
+export const TOAST_KINDS: Record<ToastKey, "info" | "warning"> = {
+  "player.app.blocked": "warning",
+};
 
 export function isToastKey(v: unknown): v is ToastKey {
   return typeof v === "string" && (TOAST_KEYS as readonly string[]).includes(v);
@@ -244,6 +250,10 @@ export type PcScreen = {
     username: string | null;
     guest_no: number | null;
     remaining_ms: number | null;
+    /** The wallet balance in minor units (a profiled player), for the HUD. */
+    balance_minor: number | null;
+    /** The pack or pass the session runs on, for the HUD. */
+    plan_name: string | null;
   } | null;
 };
 
@@ -263,6 +273,8 @@ const screenOf = (v: unknown): PcScreen | null => {
         username?: unknown;
         guest_no?: unknown;
         remaining_ms?: unknown;
+        balance_minor?: unknown;
+        plan_name?: unknown;
       }
     | null
     | undefined;
@@ -278,6 +290,8 @@ const screenOf = (v: unknown): PcScreen | null => {
           username: typeof s.username === "string" ? s.username : null,
           guest_no: typeof s.guest_no === "number" ? s.guest_no : null,
           remaining_ms: typeof s.remaining_ms === "number" ? s.remaining_ms : null,
+          balance_minor: typeof s.balance_minor === "number" ? s.balance_minor : null,
+          plan_name: typeof s.plan_name === "string" ? s.plan_name : null,
         }
       : null;
   return {
@@ -701,4 +715,25 @@ export async function pairInfo(): Promise<{ pcName: string | null }> {
   } catch {
     return { pcName: null };
   }
+}
+
+/** Calls `cb` when Ctrl+Shift+E asks the HUD to expand into its panel (Story 6.14). */
+export async function onHudExpand(cb: () => void): Promise<() => void> {
+  if (!inTauri()) return () => {};
+  return listen<unknown>(HUD_EXPAND_EVENT, () => cb());
+}
+
+/**
+ * Tells the shell how big the HUD's content is, in logical px (`0 × 0`: nothing to draw), so it
+ * can place, show or hide the always-on-top HUD window.
+ */
+export function hudLayout(width: number, height: number): void {
+  if (!inTauri()) return;
+  void invoke(CMD.hudLayout, { width, height }).catch(() => {});
+}
+
+/** Esc in the expanded panel: the shell makes the window non-focusable and returns the focus. */
+export function hudCollapse(): void {
+  if (!inTauri()) return;
+  void invoke(CMD.hudCollapse).catch(() => {});
 }

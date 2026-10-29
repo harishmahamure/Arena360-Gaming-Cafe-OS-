@@ -11,7 +11,8 @@
     "pcScreen": "pc-screen",
     "attract": "attract",
     "discoveryFound": "discovery-found",
-    "discoveryDone": "discovery-done"
+    "discoveryDone": "discovery-done",
+    "hudExpand": "hud-expand"
   },
   "commands": {
     "reportAppState": "report_app_state",
@@ -34,6 +35,8 @@
     "playerPlans": "player_plans",
     "playerStart": "player_start",
     "playerLogout": "player_logout",
-    "playerSignup": "player_signup"
+    "playerSignup": "player_signup",
+    "hudLayout": "hud_layout",
+    "hudCollapse": "hud_collapse"
   }
 }

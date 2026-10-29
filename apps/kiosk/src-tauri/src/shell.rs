@@ -188,6 +188,8 @@ mod win {
     static FILTER: Mutex<KeyFilter> = Mutex::new(KeyFilter::new());
     static ON_REASSERT: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
     static ON_DEGRADED: OnceLock<Box<dyn Fn(bool) + Send + Sync>> = OnceLock::new();
+    /// Called on Ctrl+Shift+E; `true` when the HUD took the key (it is then swallowed).
+    static ON_HOTKEY: OnceLock<Box<dyn Fn() -> bool + Send + Sync>> = OnceLock::new();
     /// The installed hook handle (as isize), 0 when none is installed.
     static HOOK: AtomicIsize = AtomicIsize::new(0);
     static DEGRADED: AtomicBool = AtomicBool::new(false);
@@ -246,6 +248,15 @@ mod win {
                     alt,
                     real_modifiers(),
                 );
+            let event = KeyEvent {
+                vk: kb.vkCode,
+                down,
+            };
+            if arena_kiosk_core::hud::is_expand_hotkey(event, real_modifiers())
+                && ON_HOTKEY.get().is_some_and(|f| f())
+            {
+                return LRESULT(1);
+            }
             if decision == Decision::Swallow {
                 return LRESULT(1);
             }
@@ -337,13 +348,16 @@ mod win {
     /// Starts the input thread: the `WH_KEYBOARD_LL` hook (with retry and a 60 s re-install), a
     /// hidden top-level window that catches display/DPI/activation changes, and the thread's
     /// message loop. `on_reassert` re-covers and re-focuses the window; `on_degraded(true)` is
-    /// called when the hook is not active (and `false` when it comes back).
+    /// called when the hook is not active (and `false` when it comes back). `on_hotkey` runs on
+    /// Ctrl+Shift+E and returns whether the HUD took the key.
     pub fn start_input_thread(
         on_reassert: impl Fn() + Send + Sync + 'static,
         on_degraded: impl Fn(bool) + Send + Sync + 'static,
+        on_hotkey: impl Fn() -> bool + Send + Sync + 'static,
     ) {
         let _ = ON_REASSERT.set(Box::new(on_reassert));
         let _ = ON_DEGRADED.set(Box::new(on_degraded));
+        let _ = ON_HOTKEY.set(Box::new(on_hotkey));
         let spawned = std::thread::Builder::new()
             .name("kiosk-input".into())
             .spawn(|| {

@@ -635,6 +635,8 @@ mod tests {
             username: None,
             guest_no: None,
             remaining_ms: None,
+            balance_minor: None,
+            plan_name: None,
         };
         let tick = serde_json::to_value(HubEvent::SessionTick(screen.clone())).unwrap();
         assert_eq!(tick["kind"], "session.tick");

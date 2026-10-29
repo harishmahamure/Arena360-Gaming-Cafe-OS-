@@ -60,12 +60,14 @@ pub const PC_SCREEN_EVENT: &str = "pc-screen";
 pub const ATTRACT_EVENT: &str = "attract";
 pub const DISCOVERY_FOUND_EVENT: &str = "discovery-found";
 pub const DISCOVERY_DONE_EVENT: &str = "discovery-done";
+/// The Tauri event the HUD window listens to: Ctrl+Shift+E expands the pill into its panel.
+pub const HUD_EXPAND_EVENT: &str = "hud-expand";
 /// How long the shell waits for the service's answer to a PIN.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// The Tauri commands the webview calls: the `generate_handler!` list in `main.rs`, pinned
 /// against `ipc-names.json` (the list the webview reads) by a test.
 #[cfg(test)]
-const COMMANDS: [&str; 21] = [
+const COMMANDS: [&str; 23] = [
     "report_app_state",
     "hub_status",
     "take_restore_state",
@@ -87,6 +89,8 @@ const COMMANDS: [&str; 21] = [
     "player_start",
     "player_logout",
     "player_signup",
+    "hud_layout",
+    "hud_collapse",
 ];
 /// How recent the webview's last heartbeat must be for a `ping` to be answered.
 pub const HEARTBEAT_FRESH: Duration = Duration::from_secs(3);
@@ -628,6 +632,7 @@ mod tests {
         assert_eq!(names["events"]["attract"], ATTRACT_EVENT);
         assert_eq!(names["events"]["discoveryFound"], DISCOVERY_FOUND_EVENT);
         assert_eq!(names["events"]["discoveryDone"], DISCOVERY_DONE_EVENT);
+        assert_eq!(names["events"]["hudExpand"], HUD_EXPAND_EVENT);
         let mut listed: Vec<&str> = names["commands"]
             .as_object()
             .unwrap()
@@ -1130,6 +1135,8 @@ mod tests {
                     username: None,
                     guest_no: None,
                     remaining_ms: None,
+                    balance_minor: None,
+                    plan_name: None,
                 }),
             },
             at,

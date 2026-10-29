@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use arena_proto::{
     AppError, DEFAULT_OPENING_HOURS, KEY_OPENING_HOURS, OpeningDay, SessionScreen,
     parse_opening_hours,
@@ -87,14 +89,33 @@ pub fn session_screens(
     store: &Store,
     now_ms: i64,
 ) -> Result<Vec<(String, SessionScreen)>, AppError> {
-    let (sessions, devices, meta, settings, branch, ordered) = store.read_consistent(|s| {
+    let (sessions, devices, meta, settings, branch, ordered, hud) = store.read_consistent(|s| {
+        let sessions = s.live_sessions()?;
+        // What the overlay HUD shows beside the clock: the profiled player's wallet balance and
+        // the name of the pack or pass the session runs on.
+        let mut hud: HashMap<String, (i64, Option<String>)> = HashMap::new();
+        for session in &sessions {
+            let Some(player) = &session.player_id else {
+                continue;
+            };
+            let plan = match &session.pack_id {
+                Some(pack) => s
+                    .player_packs(player)?
+                    .into_iter()
+                    .find(|p| &p.id == pack)
+                    .map(|p| p.name),
+                None => None,
+            };
+            hud.insert(session.id.clone(), (s.wallet_balance(player)?, plan));
+        }
         Ok((
-            s.live_sessions()?,
+            sessions,
             s.devices()?,
             s.devices_meta()?,
             s.settings()?,
             s.branch_locale()?,
             s.ordered_counts()?,
+            hud,
         ))
     })?;
     let lock_after = closing_in(branch, &settings, now_ms).unwrap_or(DAY_MS);
@@ -121,10 +142,16 @@ pub fn session_screens(
             let remaining_ms = s
                 .ends_at
                 .map(|at| u64::try_from(at - s.paused_at.unwrap_or(now_ms)).unwrap_or(0));
+            let (balance_minor, plan_name) = match hud.get(&s.id) {
+                Some((balance, plan)) => (Some(*balance), plan.clone()),
+                None => (None, None),
+            };
             let screen = SessionScreen {
                 username: s.username,
                 guest_no: s.guest_no,
                 remaining_ms,
+                balance_minor,
+                plan_name,
                 ordered_items: ordered
                     .get(&s.id)
                     .map_or(0, |n| u64::try_from(*n).unwrap_or(0)),

@@ -7,6 +7,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod bridge;
+mod hud;
 mod shell;
 mod theme;
 
@@ -181,6 +182,27 @@ async fn admin_exit_status(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Opti
         .await)
 }
 
+/// The HUD page's content size in logical px (`0 × 0`: nothing to draw): the shell places,
+/// shows or hides the HUD window for it (Story 6.14).
+#[tauri::command]
+fn hud_layout<R: Runtime>(
+    width: f64,
+    height: f64,
+    app: tauri::AppHandle<R>,
+    state: tauri::State<'_, Arc<hud::Hud>>,
+) {
+    state.set_content(width, height);
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || hud::refresh(&handle));
+}
+
+/// Esc in the expanded HUD panel: the pill again, focus back to the game.
+#[tauri::command]
+fn hud_collapse<R: Runtime>(app: tauri::AppHandle<R>) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || hud::collapse(&handle));
+}
+
 async fn service_request(bridge: &Bridge, kind: &str, body: serde_json::Value) -> Option<Answer> {
     let kind = kind.to_owned();
     bridge
@@ -310,6 +332,7 @@ fn main() {
     }
     tauri::Builder::default()
         .manage(Arc::new(Bridge::default()))
+        .manage(Arc::new(hud::Hud::default()))
         .invoke_handler(tauri::generate_handler![
             report_app_state,
             hub_status,
@@ -331,7 +354,9 @@ fn main() {
             player_plans,
             player_start,
             player_logout,
-            player_signup
+            player_signup,
+            hud_layout,
+            hud_collapse
         ])
         .on_window_event(|_window, event| {
             // The kiosk is the shell: nothing closes it (admin exit comes in Story 1.20).
@@ -364,7 +389,12 @@ fn main() {
                             serde_json::json!({ "remaining_ms": remaining_ms }),
                         ),
                         Emit::TestSessionEnded => handle.emit(TEST_SESSION_ENDED_EVENT, ()),
-                        Emit::PcScreen(screen) => handle.emit(PC_SCREEN_EVENT, screen),
+                        Emit::PcScreen(screen) => {
+                            handle
+                                .state::<Arc<hud::Hud>>()
+                                .set_session(screen.session.is_some() && !screen.locked);
+                            handle.emit(PC_SCREEN_EVENT, screen)
+                        }
                         Emit::Attract(shown) => handle.emit(ATTRACT_EVENT, shown),
                         Emit::Theme(hc) => {
                             if let Some(path) = theme_file(&handle)
@@ -415,7 +445,19 @@ fn main() {
                             }
                             bridge.set_lockdown_degraded(degraded);
                         };
-                        shell::start_input_thread(reassert, on_degraded);
+                        let on_hotkey = {
+                            let handle = handle.clone();
+                            move || {
+                                let hud = handle.state::<Arc<hud::Hud>>();
+                                if !hud.session() {
+                                    return false;
+                                }
+                                let h = handle.clone();
+                                let _ = handle.run_on_main_thread(move || hud::expand(&h));
+                                true
+                            }
+                        };
+                        shell::start_input_thread(reassert, on_degraded, on_hotkey);
                     }
                 }
             } else {
@@ -424,6 +466,11 @@ fn main() {
                 tracing::error!("no kiosk window; exiting so the service relaunches the app");
                 std::process::exit(1);
             }
+            // The overlay HUD (Story 6.14): hidden until its page reports something to draw.
+            if hud::build(app).is_none() {
+                tracing::warn!("no HUD window; the player gets no overlay");
+            }
+            hud::watch_fullscreen(app.handle().clone());
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -26,4 +26,12 @@ export type SessionScreen = {
    * Time left on a prepaid session (it counts down); `None` for postpaid (it counts up).
    */
   remaining_ms?: number;
+  /**
+   * The player's wallet balance in minor units, for the overlay HUD; `None` for a guest.
+   */
+  balance_minor?: number;
+  /**
+   * The plan (pack or pass) the session runs on; `None` for wallet time or pay-as-you-go.
+   */
+  plan_name?: string;
 };

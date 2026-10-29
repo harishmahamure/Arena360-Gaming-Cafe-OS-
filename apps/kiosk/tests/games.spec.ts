@@ -8,7 +8,7 @@ import { gamesOf, launchOf } from "../src/lib/games";
 // page asked of it and `__service` holds what the Kiosk service would answer to `games` and
 // `game_launch` (starting a game flips its `running` flag, the way the service's list would).
 
-type Game = { id: string; name: string; running: boolean };
+type Game = { id: string; name: string; running: boolean; category?: string; tags?: string[] };
 type Options = { games?: Game[] | null; outcome?: string };
 
 async function openGames(page: Page, options: Options = {}) {
@@ -258,7 +258,10 @@ test("tiles are keyboard reachable in order and keep a focus ring", async ({ pag
 test("the answers are read defensively", () => {
   expect(
     gamesOf({ games: [{ id: "a", name: "A", running: false, extra: 1 }], running: true }),
-  ).toEqual({ games: [{ id: "a", name: "A", running: false }], running: true });
+  ).toEqual({
+    games: [{ id: "a", name: "A", running: false, category: "", tags: [] }],
+    running: true,
+  });
   for (const bad of [
     null,
     "x",
@@ -274,4 +277,157 @@ test("the answers are read defensively", () => {
   for (const bad of [null, {}, { outcome: "failed" }, { outcome: "later" }, "started"]) {
     expect(launchOf(bad)).toBe("failed");
   }
+});
+
+// Story 6.24: the filter rail and the search field.
+
+const SHELF: Game[] = [
+  {
+    id: "G1",
+    name: "Apex Legends",
+    running: false,
+    category: "Shooter",
+    tags: ["fps", "Battle Royale"],
+  },
+  { id: "G2", name: "Counter-Strike 2", running: false, category: "Shooter", tags: ["FPS"] },
+  { id: "G3", name: "FIFA 25", running: false, category: "Sports", tags: [] },
+  { id: "G4", name: "Valorant", running: false, category: "", tags: ["fps"] },
+];
+
+const names_ = (page: Page) => page.getByTestId("game-tile-name");
+
+test("the rail lists All plus every category and tag once, and All is active first", async ({
+  page,
+}) => {
+  await openGames(page, { games: SHELF });
+  await page.getByTestId("tab-games").click();
+  const items = page.getByTestId("filter-item");
+  await expect(items).toHaveText(["All", "Battle Royale", "fps", "Shooter", "Sports"]);
+  await expect(items.first()).toHaveAttribute("aria-pressed", "true");
+  await expect(items.nth(1)).toHaveAttribute("aria-pressed", "false");
+  await expect(names_(page)).toHaveCount(4);
+  expect(await serious(page)).toEqual([]);
+});
+
+test("choosing an item filters at once, one at a time, with no Apply button", async ({ page }) => {
+  await openGames(page, { games: SHELF });
+  await page.getByTestId("tab-games").click();
+  const items = page.getByTestId("filter-item");
+  await items.filter({ hasText: "Shooter" }).click();
+  await expect(names_(page)).toHaveText(["Apex Legends", "Counter-Strike 2"]);
+  await items.filter({ hasText: "fps" }).click();
+  await expect(names_(page)).toHaveText(["Apex Legends", "Counter-Strike 2", "Valorant"]);
+  await expect(items.filter({ hasText: "Shooter" })).toHaveAttribute("aria-pressed", "false");
+  await expect(items.filter({ hasText: "fps" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: /apply/i })).toHaveCount(0);
+  await items.first().click();
+  await expect(names_(page)).toHaveCount(4);
+});
+
+test("the active item is in text and the others are muted", async ({ page }) => {
+  await openGames(page, { games: SHELF });
+  await page.getByTestId("tab-games").click();
+  const items = page.getByTestId("filter-item");
+  const colour = (i: number) => items.nth(i).evaluate((el) => getComputedStyle(el).color);
+  const [active, other] = [await colour(0), await colour(1)];
+  expect(active).not.toBe(other);
+});
+
+test("search filters by name, ignoring case, together with the active item", async ({ page }) => {
+  await openGames(page, { games: SHELF });
+  await page.getByTestId("tab-games").click();
+  const search = page.getByTestId("games-search");
+  await search.fill("  ST ");
+  await expect(names_(page)).toHaveText(["Counter-Strike 2"]);
+  await search.fill("l");
+  await expect(names_(page)).toHaveText(["Apex Legends", "Valorant"]);
+  await page.getByTestId("filter-item").filter({ hasText: "Shooter" }).click();
+  await expect(names_(page)).toHaveText(["Apex Legends"]);
+});
+
+test("the search field sits right-aligned in the title row", async ({ page }) => {
+  await openGames(page, { games: SHELF });
+  await page.getByTestId("tab-games").click();
+  const search = (await page.getByTestId("games-search").boundingBox())!;
+  const title = (await page
+    .getByRole("heading", { name: en["player.games.title"] })
+    .boundingBox())!;
+  const grid = (await page.getByTestId("games-grid").boundingBox())!;
+  expect(search.x).toBeGreaterThan(title.x + title.width);
+  expect(Math.abs(search.y - title.y)).toBeLessThan(40);
+  expect(search.y + search.height).toBeLessThanOrEqual(grid.y);
+  expect(Math.abs(search.x + search.width - (grid.x + grid.width))).toBeLessThan(40);
+});
+
+test("no match shows an underlined Clear filters link that resets to All and an empty search", async ({
+  page,
+}) => {
+  await openGames(page, { games: SHELF });
+  await page.getByTestId("tab-games").click();
+  await page.getByTestId("filter-item").filter({ hasText: "Sports" }).click();
+  await page.getByTestId("games-search").fill("zzz");
+  await expect(page.getByTestId("game-tile")).toHaveCount(0);
+  await expect(page.getByTestId("games-no-match")).toContainText(en["player.games.no_match"]);
+  const clear = page.getByTestId("games-clear");
+  await expect(clear).toHaveText(en["player.games.clear_filters"]);
+  expect(await clear.evaluate((el) => getComputedStyle(el).textDecorationLine)).toBe("underline");
+  expect(await serious(page)).toEqual([]);
+  await clear.click();
+  await expect(names_(page)).toHaveCount(4);
+  await expect(page.getByTestId("games-search")).toHaveValue("");
+  await expect(page.getByTestId("filter-item").first()).toHaveAttribute("aria-pressed", "true");
+});
+
+test("Tab and the arrow keys move rail, search, grid in reading order with a focus ring", async ({
+  page,
+}) => {
+  await openGames(page, { games: SHELF });
+  await page.getByTestId("tab-games").click();
+  const items = page.getByTestId("filter-item");
+  await items.first().focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(items.nth(1)).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(items.first()).toBeFocused();
+  // Tab goes through every rail item, then the search, then the first tile.
+  for (let i = 0; i < 5; i++) await page.keyboard.press("Tab");
+  await expect(page.getByTestId("games-search")).toBeFocused();
+  expect(
+    await page.getByTestId("games-search").evaluate((el) => getComputedStyle(el).outlineStyle),
+  ).toBe("solid");
+  await page.keyboard.press("Tab");
+  const tiles = page.getByTestId("game-tile");
+  await expect(tiles.first()).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(tiles.nth(1)).toBeFocused();
+  await page.keyboard.press("ArrowLeft");
+  await expect(tiles.first()).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  const wide = (await page.viewportSize())!.width;
+  if (wide < 800) await expect(tiles.nth(1)).toBeFocused();
+  await items.first().focus();
+  expect(await items.first().evaluate((el) => getComputedStyle(el).outlineStyle)).toBe("solid");
+});
+
+test("a rail item the library drops falls back to All, and a library with no games has no rail", async ({
+  page,
+}) => {
+  await openGames(page, { games: SHELF });
+  await page.getByTestId("tab-games").click();
+  await page.getByTestId("filter-item").filter({ hasText: "Sports" }).click();
+  await expect(names_(page)).toHaveText(["FIFA 25"]);
+  await page.evaluate(() => {
+    const w = window as unknown as { __service: { games: Game[] } };
+    w.__service.games = w.__service.games.filter((g) => g.id !== "G3");
+  });
+  await expect(names_(page)).toHaveCount(3);
+  await expect(page.getByTestId("filter-item").first()).toHaveAttribute("aria-pressed", "true");
+});
+
+test("a library with no games shows the empty line and no rail or search", async ({ page }) => {
+  await openGames(page, { games: [] });
+  await page.getByTestId("tab-games").click();
+  await expect(page.getByTestId("games-empty")).toHaveText(en["player.shell.empty"]);
+  await expect(page.getByTestId("filter-rail")).toHaveCount(0);
+  await expect(page.getByTestId("games-search")).toHaveCount(0);
 });

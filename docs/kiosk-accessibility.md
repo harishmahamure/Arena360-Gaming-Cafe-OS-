@@ -58,3 +58,16 @@ Borderless-fullscreen games are not affected: the HUD draws over them like any w
   counter."); it uses the same polite live region as every other toast.
 - While any game is running the shell stops all background video (the cover shows instead), so the
   game gets the PC's decode and GPU time.
+
+## Filter and search the Games tab (Story 6.24)
+
+- A `filter-rail` (a labelled `nav`) sits left of the grid: "All", then every category and tag in
+  the library, once each, sorted. Each item is a button with `aria-pressed`; the active one is in
+  `text`, bold, with a left bar (so it is not colour alone), the others in `text-muted`.
+- Choosing an item filters the grid at once; there is no Apply button and one item is active at a
+  time. A search field (`type="search"`, named "Search games") sits right-aligned in the title row
+  and filters by name, ignoring case, together with the active item.
+- Reading order is rail, search, grid. Tab visits every stop; Up and Down also step through the
+  rail, and the arrow keys step through the grid. Every stop wears the 4px focus ring (3px on tiles).
+- When nothing matches the grid is replaced by "No games match." and an underlined "Clear filters"
+  button that resets to All with an empty search and puts focus in the search field.

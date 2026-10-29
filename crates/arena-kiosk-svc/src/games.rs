@@ -123,12 +123,14 @@ impl GameState {
     }
 }
 
-/// One tile of the Games tab.
+/// One tile of the Games tab. The category and tags feed the tab's filter rail (Story 6.24).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Card {
     pub id: String,
     pub name: String,
     pub running: bool,
+    pub category: String,
+    pub tags: Vec<String>,
 }
 
 /// The games this PC lists, sorted by name (case-insensitive, then id).
@@ -140,6 +142,8 @@ pub fn cards(entries: Vec<KioskLibraryEntry>, running: impl Fn(&str) -> bool) ->
             running: running(&e.id),
             id: e.id,
             name: e.name,
+            category: e.category,
+            tags: e.tags,
         })
         .collect();
     cards.sort_by(|a, b| {

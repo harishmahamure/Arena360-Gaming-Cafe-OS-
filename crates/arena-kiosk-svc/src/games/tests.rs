@@ -179,6 +179,19 @@ fn the_tab_lists_games_only_sorted_by_name_with_their_running_flag() {
 }
 
 #[test]
+fn a_card_carries_the_category_and_tags_the_filter_rail_lists() {
+    let mut e = entry("A", "Apex", r"C:\G\a.exe");
+    e.category = "Shooter".into();
+    e.tags = vec!["fps".into(), "co-op".into()];
+    let cards = cards(vec![e], |_| false);
+    assert_eq!(cards[0].category, "Shooter");
+    assert_eq!(cards[0].tags, ["fps", "co-op"]);
+    let body = serde_json::to_value(&cards[0]).unwrap();
+    assert_eq!(body["category"], "Shooter");
+    assert_eq!(body["tags"], serde_json::json!(["fps", "co-op"]));
+}
+
+#[test]
 fn a_game_starts_from_its_install_here_else_its_path_else_its_link() {
     let mut e = entry("G", "G", r"C:\Games\elsewhere.exe");
     e.installs = vec![

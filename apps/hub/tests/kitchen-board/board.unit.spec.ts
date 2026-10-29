@@ -17,9 +17,18 @@ import {
   stillPending,
   ticketLabel,
   undoRev,
+  unpend,
   visibleTickets,
   type Column,
 } from "../../../kitchen/src/lib/board";
+import {
+  QUEUE_TTL_MS,
+  liveEntries,
+  memoryStore,
+  predictedRev,
+  without,
+  type Queued,
+} from "../../../kitchen/src/lib/queue";
 
 // Unit tests for the kitchen board rules (no browser page is used).
 
@@ -210,4 +219,44 @@ test("a ticket that arrives past New, or leaves the board, holds no badge", () =
   expect(skipped.ids.size).toBe(0);
   expect(skipped.arrived).toBe(0);
   expect(freshTickets([ticket(1, "new")], [], new Set(["T1"])).ids.size).toBe(0);
+});
+
+test("taking a move back drops it when the Hub already has that stage, else rewinds it", () => {
+  const chained = new Map([["T1", { from: "new", to: "ready" }]]);
+  expect(unpend(chained, "T1", "preparing").get("T1")).toEqual({ from: "new", to: "preparing" });
+  expect(unpend(chained, "T1", "new").size).toBe(0);
+  expect(unpend(chained, "T2", "new")).toEqual(chained);
+  // The original map is not touched.
+  expect(chained.get("T1")).toEqual({ from: "new", to: "ready" });
+});
+
+const entry = (key: string, ticketId: string, issuedAt: number): Queued => ({
+  key,
+  ticketId,
+  to: "preparing",
+  baseRev: 1,
+  issuedAt,
+  expiresAt: issuedAt + QUEUE_TTL_MS,
+});
+
+test("the queue keeps creation order, drops what is older than 24 hours and predicts each rev", () => {
+  const at = 1_000_000;
+  const all = [
+    entry("B", "T2", at + 2),
+    entry("A", "T1", at + 1),
+    entry("old", "T1", at - QUEUE_TTL_MS - 1),
+  ];
+  expect(liveEntries(all, at + 5).map((e) => e.key)).toEqual(["A", "B"]);
+  expect(liveEntries(all, at + QUEUE_TTL_MS + 1).map((e) => e.key)).toEqual(["B"]);
+  expect(predictedRev([entry("A", "T1", at), entry("B", "T1", at + 1)], "T1", 3)).toBe(5);
+  expect(predictedRev([entry("A", "T1", at)], "T2", 3)).toBe(3);
+  expect(without(all, "A").map((e) => e.key)).toEqual(["B", "old"]);
+});
+
+test("the memory store holds, lists and removes entries", async () => {
+  const store = memoryStore();
+  await store.put(entry("A", "T1", 1));
+  await store.put(entry("B", "T2", 2));
+  await store.remove("A");
+  expect((await store.load()).map((e) => e.key)).toEqual(["B"]);
 });

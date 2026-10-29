@@ -131,6 +131,19 @@ export function stillPending(
   return next;
 }
 
+/** `pending` after `ticketId` is taken back to `stage` (dropped when that is where the Hub has it). */
+export function unpend(
+  pending: ReadonlyMap<string, Pending>,
+  ticketId: string,
+  stage: string,
+): Map<string, Pending> {
+  const next = new Map(pending);
+  const move = next.get(ticketId);
+  if (move && stage === move.from) next.delete(ticketId);
+  else if (move) next.set(ticketId, { from: move.from, to: stage });
+  return next;
+}
+
 /** The rev an Undo is based on: the board's, once it shows the new stage, else the tapped rev + 1. */
 export function undoRev(
   tickets: KitchenBoardTicket[],

@@ -3,7 +3,9 @@
 // URL) and sends it only in the `hello` frame. Once connected it asks the Hub for the board
 // (`kitchen.board`) and takes every whole board the Hub pushes after a ticket changes (Story 7.7).
 // A tap moves a ticket on with `kitchen.advance` and Undo takes it back with
-// `kitchen.advance.reverted` (Story 7.8). There is no chime or queueing yet (Stories 7.9, 7.10).
+// `kitchen.advance.reverted` (Story 7.8). A request with no reply in 5 s counts as a lost link (the
+// socket is closed and the link reconnects with a jittered pause); the page queues the moves it
+// could not send and replays them on reconnect (Story 7.10).
 
 import type {
   Frame,
@@ -27,6 +29,8 @@ const APP_VERSION = "0.1.0";
 const TIMEOUT_MS = 8000;
 const RETRY_MIN_MS = 2000;
 const RETRY_MAX_MS = 30_000;
+/** A request with no reply in this long means the Hub is gone. */
+const REPLY_MS = 5000;
 
 /** The high-contrast key of one display: `display.hc.<display id>`. */
 export const hcKey = (displayId: string) => `display.hc.${displayId}`; // i18n-ignore (a setting key)
@@ -122,8 +126,14 @@ export type Move = { ok: true } | { ok: false; code: string };
 /** What a connected display can ask of the Hub. */
 export type Connection = {
   close: () => void;
-  /** Moves a ticket to `to` (the next stage) as the ticket stood at `baseRev`. `key` is minted at the tap. */
-  advance: (ticketId: string, to: string, baseRev: number, key: string) => Promise<Move>;
+  /** Moves a ticket to `to` (the next stage) as the ticket stood at `baseRev`. `key` and `issuedAt` are minted at the tap. */
+  advance: (
+    ticketId: string,
+    to: string,
+    baseRev: number,
+    key: string,
+    issuedAt?: number,
+  ) => Promise<Move>;
   /** Takes the latest advance of a ticket back; `baseRev` is the rev that advance left. */
   revert: (ticketId: string, baseRev: number) => Promise<Move>;
   /** Asks the Hub for the whole board again, to snap to its state. */
@@ -180,10 +190,25 @@ export function connect(token: string, link: Link): Connection {
     waiting.clear();
   };
 
-  function submit(kind: string, payload: Record<string, unknown>, baseRev: number, key: string) {
+  function submit(
+    kind: string,
+    payload: Record<string, unknown>,
+    baseRev: number,
+    key: string,
+    issuedAt = Date.now(),
+  ) {
     return new Promise<Move>((resolve) => {
       const rid = ulid();
-      waiting.set(rid, resolve);
+      const silent = setTimeout(() => {
+        // No reply in 5 s: the Hub is gone. Drop the socket so the link reconnects.
+        if (!waiting.delete(rid)) return;
+        resolve({ ok: false, code: "OFFLINE" });
+        socket?.close();
+      }, REPLY_MS);
+      waiting.set(rid, (move) => {
+        clearTimeout(silent);
+        resolve(move);
+      });
       const sent = send({
         rid,
         kind: "intent.submit",
@@ -191,7 +216,7 @@ export function connect(token: string, link: Link): Connection {
           intent_id: ulid(),
           kind,
           idempotency_key: key,
-          issued_at: Date.now(),
+          issued_at: issuedAt,
           base_rev: baseRev,
           // The Hub overwrites the actor with this session's.
           actor: { kind: "device", id: displayId ?? "" },
@@ -200,6 +225,7 @@ export function connect(token: string, link: Link): Connection {
       });
       if (!sent) {
         waiting.delete(rid);
+        clearTimeout(silent);
         resolve({ ok: false, code: "OFFLINE" });
       }
     });
@@ -279,7 +305,8 @@ export function connect(token: string, link: Link): Connection {
       settleAll({ ok: false, code: "OFFLINE" });
       if (stopped) return;
       if (ready) link.onLost();
-      timer = setTimeout(open, retryMs);
+      // Jittered backoff, 2 to 30 s, so a Hub that returns is not met by every display at once.
+      timer = setTimeout(open, Math.max(RETRY_MIN_MS, retryMs * (0.5 + Math.random() * 0.5)));
       retryMs = Math.min(RETRY_MAX_MS, retryMs * 2);
     };
     ws.onerror = () => ws.close();
@@ -292,8 +319,8 @@ export function connect(token: string, link: Link): Connection {
       clearTimeout(timer);
       socket?.close();
     },
-    advance: (ticketId, to, baseRev, key) =>
-      submit("kitchen.advance", { ticket_id: ticketId, to }, baseRev, key),
+    advance: (ticketId, to, baseRev, key, issuedAt) =>
+      submit("kitchen.advance", { ticket_id: ticketId, to }, baseRev, key, issuedAt),
     revert: (ticketId, baseRev) =>
       submit("kitchen.advance.reverted", { ticket_id: ticketId }, baseRev, ulid()),
     refresh: () => void send({ rid: ulid(), kind: "kitchen.board" }),

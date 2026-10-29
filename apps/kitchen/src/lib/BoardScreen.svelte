@@ -79,7 +79,7 @@
     {#if connected}
       <StatusBadge state="free" label="kitchen.board.connected" />
     {:else}
-      <StatusBadge state="offline" label="kitchen.board.offline" />
+      <StatusBadge state="warning" label="kitchen.board.reconnecting" />
     {/if}
   </header>
   {#if needsTap}

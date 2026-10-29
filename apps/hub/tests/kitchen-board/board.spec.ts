@@ -2,7 +2,8 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type WebSocketRoute } from "@playwright/test";
 import type { KitchenBoard, KitchenBoardTicket } from "@arena/ui/generated";
 
-// The kitchen board (Story 7.7) and its one-tap advance with Undo (Story 7.8), in a browser against the built Kitchen app. The Hub is a
+// The kitchen board (Story 7.7), its one-tap advance with Undo (Story 7.8) and its work through
+// LAN loss (Story 7.10), in a browser against the built Kitchen app. The Hub is a
 // `routeWebSocket` stub that answers `hello` and `kitchen.board` and pushes boards.
 
 const DISPLAY = "01JKITCHENDISPLAY00000000A";
@@ -35,8 +36,16 @@ function board(tickets: KitchenBoardTicket[]): KitchenBoard {
 
 type Stub = {
   sent: Record<string, unknown>[];
-  /** Makes the Hub refuse intents of this kind with this error code (null accepts again). */
-  refuse: (kind: string, code: string | null) => void;
+  /** Makes the Hub refuse intents of this kind (of one ticket, if given) with this error code (null accepts again). */
+  refuse: (kind: string, code: string | null, ticketId?: string) => void;
+  /** The board the Hub answers the next request with, without pushing it. */
+  setBoard: (next: KitchenBoard) => void;
+  /** Takes the Hub off the LAN (it closes every new connection) or brings it back. */
+  reachable: (up: boolean) => void;
+  /** Whether the Hub answers requests at all (false: it takes them and says nothing). */
+  silent: (on: boolean) => void;
+  /** How many intents of each idempotency key the Hub received (it applies a key once). */
+  received: Map<string, number>;
   push: (event: Record<string, unknown>) => void;
   revoke: () => void;
   drop: () => void;
@@ -51,7 +60,14 @@ async function connectDisplay(page: Page, first: KitchenBoard, hc = false): Prom
   // The Hub answers a board request with its latest board, the last one it pushed.
   let current = first;
   const refusals = new Map<string, string>();
+  const received = new Map<string, number>();
+  let up = true;
+  let mute = false;
   await page.routeWebSocket(/\/ws$/, (ws) => {
+    if (!up) {
+      void ws.close();
+      return;
+    }
     stub.route = ws;
     ws.onMessage((raw) => {
       const frame = JSON.parse(String(raw)) as { rid: string; kind: string };
@@ -69,8 +85,20 @@ async function connectDisplay(page: Page, first: KitchenBoard, hc = false): Prom
       } else if (frame.kind === "kitchen.board") {
         reply({ kind: "kitchen.board_result", ...current });
       } else if (frame.kind === "intent.submit") {
-        const intent = (frame as unknown as { intent: { kind: string; intent_id: string } }).intent;
-        const code = refusals.get(intent.kind);
+        const intent = (
+          frame as unknown as {
+            intent: {
+              kind: string;
+              intent_id: string;
+              idempotency_key: string;
+              payload: { ticket_id?: string };
+            };
+          }
+        ).intent;
+        received.set(intent.idempotency_key, (received.get(intent.idempotency_key) ?? 0) + 1);
+        if (mute) return;
+        const code =
+          refusals.get(`${intent.kind}:${intent.payload.ticket_id}`) ?? refusals.get(intent.kind);
         if (code) reply({ kind: "error", error: { code, message: code } });
         else
           reply({ kind: "intent.result", applied: { intent_id: intent.intent_id, changes: [] } });
@@ -85,7 +113,15 @@ async function connectDisplay(page: Page, first: KitchenBoard, hc = false): Prom
   await page.addInitScript((token) => localStorage.setItem("arena.kitchen.token", token), TOKEN);
   return {
     sent: stub.sent,
-    refuse: (kind, code) => void (code ? refusals.set(kind, code) : refusals.delete(kind)),
+    refuse: (kind, code, ticketId) => {
+      const at = ticketId ? `${kind}:${ticketId}` : kind;
+      if (code) refusals.set(at, code);
+      else refusals.delete(at);
+    },
+    setBoard: (next) => void (current = next),
+    reachable: (on) => void (up = on),
+    silent: (on) => void (mute = on),
+    received,
     push: (event) => {
       if (event.kind === "kitchen.board") current = event as unknown as KitchenBoard;
       stub.route?.send(JSON.stringify({ v: 1, rid: "ev-1", kind: "event", event }));
@@ -332,12 +368,14 @@ test("high contrast uses 2px outlines and the yellow focus ring", async ({ page 
   await expect(t).toHaveCSS("outline-color", "rgb(255, 225, 77)");
 });
 
-test("the board shows Offline when the Hub is lost and keeps its tickets", async ({ page }) => {
+test("the board shows Reconnecting when the Hub is lost and keeps its tickets", async ({
+  page,
+}) => {
   const stub = await connectDisplay(page, board([ticket(1, "new")]));
   await page.goto("/kitchen/");
   await expect(page.getByTestId("kitchen-top-bar").getByText("Connected")).toBeVisible();
   stub.drop();
-  await expect(page.getByTestId("kitchen-top-bar").getByText("Offline")).toBeVisible();
+  await expect(page.getByTestId("kitchen-top-bar").getByText("Reconnecting")).toBeVisible();
   await expect(page.getByTestId("kitchen-ticket")).toHaveCount(1);
   // The page reconnects by itself and asks for the board again.
   await page.clock.runFor(2_500);
@@ -537,17 +575,6 @@ test("an Undo the Hub refuses as EXPIRED keeps the Hub's state and says it is to
   await page.getByRole("button", { name: "Undo" }).click();
   await expect(page.getByTestId("undo-notice")).toContainText("Too late to undo");
   await expect(column(page, "preparing").locator('[data-ticket="T1"]')).toHaveCount(1);
-});
-
-test("with the Hub lost a tap is refused with a note and the ticket stays", async ({ page }) => {
-  const stub = await connectDisplay(page, board([ticket(1, "new")]));
-  await page.goto("/kitchen/");
-  await expect(page.getByTestId("kitchen-top-bar").getByText("Connected")).toBeVisible();
-  stub.drop();
-  await expect(page.getByTestId("kitchen-top-bar").getByText("Offline")).toBeVisible();
-  await page.locator('[data-ticket="T1"]').click();
-  await expect(page.getByTestId("undo-notice")).toContainText("Offline");
-  await expect(column(page, "new").locator('[data-ticket="T1"]')).toHaveCount(1);
 });
 
 test("a board push about another ticket does not undo a move that is still waiting", async ({
@@ -780,4 +807,307 @@ test("the board with NEW badges, the toggle and the tap bar has no accessibility
   await expect(page.getByTestId("chime-toggle")).toHaveText("Chime off");
   const muted = await new AxeBuilder({ page }).analyze();
   expect(muted.violations).toEqual([]);
+});
+
+// Work through LAN loss (Story 7.10).
+
+type Stored = {
+  key: string;
+  ticketId: string;
+  to: string;
+  baseRev: number;
+  issuedAt: number;
+  expiresAt: number;
+};
+
+/** The advances waiting in the display's IndexedDB queue, oldest first. */
+const stored = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise<Stored[]>((resolve) => {
+        const open = indexedDB.open("arena.kitchen", 1);
+        open.onsuccess = () => {
+          const all = open.result.transaction("queue").objectStore("queue").getAll();
+          all.onsuccess = () =>
+            resolve((all.result as Stored[]).sort((a, b) => a.issuedAt - b.issuedAt));
+        };
+        open.onerror = () => resolve([]);
+      }),
+  );
+
+/** Runs the page's clock a second at a time until `done` holds (the reconnect pause is jittered). */
+async function advanceUntil(page: Page, done: () => Promise<boolean> | boolean, seconds = 120) {
+  for (let i = 0; i < seconds; i++) {
+    if (await done()) return;
+    await page.clock.runFor(1_000);
+  }
+  expect(await done()).toBe(true);
+}
+
+const bar = (page: Page) => page.getByTestId("kitchen-top-bar");
+const showsConnected = async (page: Page) => (await bar(page).getByText("Connected").count()) > 0;
+const advances = (stub: Stub) =>
+  intents(stub, "kitchen.advance").map((f) => f.intent as Record<string, unknown>);
+const settled = async (page: Page) =>
+  (await showsConnected(page)) && (await stored(page)).length === 0;
+
+async function loseHub(page: Page, stub: Stub) {
+  stub.reachable(false);
+  stub.drop();
+  await expect(bar(page).getByText("Reconnecting")).toBeVisible();
+}
+
+test("with the Hub lost a tap moves the ticket at once, is queued and an Undo takes it out", async ({
+  page,
+}) => {
+  const stub = await connectDisplay(page, board([ticket(1, "new"), ticket(2, "new")]));
+  await page.goto("/kitchen/");
+  await expect(bar(page).getByText("Connected")).toBeVisible();
+  await loseHub(page, stub);
+
+  await page.locator('[data-ticket="T1"]').click();
+  await expect(column(page, "preparing").locator('[data-ticket="T1"]')).toHaveCount(1);
+  await expect(page.getByTestId("undo-toast")).toBeVisible();
+  await expect.poll(() => stored(page)).toHaveLength(1);
+  const [first] = await stored(page);
+  expect(first).toMatchObject({ ticketId: "T1", to: "preparing", baseRev: 1 });
+  expect(first.key).toMatch(/^[0-9A-Z]{26}$/);
+  expect(first.expiresAt - first.issuedAt).toBe(24 * 60 * MIN);
+
+  // A second tap on the same ticket chains: it is based on the rev the first will leave.
+  await page.locator('[data-ticket="T1"]').click();
+  await expect(column(page, "ready").locator('[data-ticket="T1"]')).toHaveCount(1);
+  await expect.poll(() => stored(page)).toHaveLength(2);
+  expect((await stored(page))[1]).toMatchObject({ ticketId: "T1", to: "ready", baseRev: 2 });
+
+  // No marker on any ticket, and the page has nothing to flag.
+  await expect(page.getByTestId("kitchen-ticket").first()).not.toContainText(/offline|queued/i);
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+
+  // Undo of a move that was never sent removes it from the queue.
+  await page.getByRole("button", { name: "Undo" }).click();
+  await expect(column(page, "preparing").locator('[data-ticket="T1"]')).toHaveCount(1);
+  await expect.poll(async () => (await stored(page)).map((e) => e.to)).toEqual(["preparing"]);
+  expect(advances(stub)).toHaveLength(0);
+
+  // Another ticket's move and its Undo leave the queue as it was.
+  await page.locator('[data-ticket="T2"]').click();
+  await expect.poll(async () => (await stored(page)).length).toBe(2);
+  await page.getByRole("button", { name: "Undo" }).click();
+  await expect(column(page, "new").locator('[data-ticket="T2"]')).toHaveCount(1);
+  await expect.poll(async () => (await stored(page)).map((e) => e.ticketId)).toEqual(["T1"]);
+});
+
+test("the Hub's return replays the queue in order once each, redraws the board and only then says Connected", async ({
+  page,
+}) => {
+  const stub = await connectDisplay(page, board([ticket(1, "new"), ticket(2, "new")]));
+  await page.goto("/kitchen/");
+  await expect(bar(page).getByText("Connected")).toBeVisible();
+  await loseHub(page, stub);
+
+  await page.locator('[data-ticket="T1"]').click();
+  await page.locator('[data-ticket="T2"]').click();
+  await page.locator('[data-ticket="T1"]').click();
+  await expect.poll(() => stored(page)).toHaveLength(3);
+  const keys = (await stored(page)).map((e) => e.key);
+  expect(new Set(keys).size).toBe(3);
+
+  // An order placed at the counter meanwhile is not on the display yet.
+  stub.setBoard(
+    board([
+      ticket(1, "ready", { rev: 3 }),
+      ticket(2, "preparing", { rev: 2 }),
+      ticket(3, "new", { placed_at: HUB_NOW }),
+    ]),
+  );
+  await page.clock.runFor(5_000);
+  await expect(page.locator('[data-ticket="T3"]')).toHaveCount(0);
+
+  // The Hub is back but does not answer yet: the badge stays on Reconnecting.
+  stub.silent(true);
+  stub.reachable(true);
+  await advanceUntil(page, () => advances(stub).length === 1);
+  await expect(bar(page).getByText("Reconnecting")).toBeVisible();
+  expect(advances(stub)[0].idempotency_key).toBe(keys[0]);
+
+  // No reply in 5 s drops the link; the same key is sent again, never a new one.
+  stub.silent(false);
+  await advanceUntil(page, () => settled(page));
+  const sent = advances(stub);
+  expect(sent.map((i) => i.idempotency_key).filter((k, at, all) => all.indexOf(k) === at)).toEqual(
+    keys,
+  );
+  expect(sent.map((i) => [i.idempotency_key, i.base_rev]).slice(-3)).toEqual([
+    [keys[0], 1],
+    [keys[1], 1],
+    [keys[2], 2],
+  ]);
+  expect(stub.received.get(keys[0])).toBe(2);
+  expect(stub.received.get(keys[1])).toBe(1);
+  expect(stub.received.get(keys[2])).toBe(1);
+
+  // The board is the Hub's: T3 arrived, with the NEW badge.
+  await expect(column(page, "ready").locator('[data-ticket="T1"]')).toHaveCount(1);
+  await expect(column(page, "preparing").locator('[data-ticket="T2"]')).toHaveCount(1);
+  await expect(column(page, "new").locator('[data-ticket="T3"]')).toHaveCount(1);
+  await expect(page.getByTestId("ticket-new")).toHaveCount(1);
+});
+
+test("a queued advance the Hub refuses is dropped without a word and the ticket shows the Hub's state", async ({
+  page,
+}) => {
+  const stub = await connectDisplay(page, board([ticket(1, "new"), ticket(2, "new")]));
+  await page.goto("/kitchen/");
+  await expect(bar(page).getByText("Connected")).toBeVisible();
+  await loseHub(page, stub);
+  await page.locator('[data-ticket="T1"]').click();
+  await page.locator('[data-ticket="T2"]').click();
+  await expect.poll(() => stored(page)).toHaveLength(2);
+
+  // The counter moved T1 to Ready while the display was away.
+  stub.refuse("kitchen.advance", "STALE", "T1");
+  stub.setBoard(board([ticket(1, "ready", { rev: 3 }), ticket(2, "preparing", { rev: 2 })]));
+  stub.reachable(true);
+  await advanceUntil(page, () => settled(page));
+
+  await expect(column(page, "ready").locator('[data-ticket="T1"]')).toHaveCount(1);
+  await expect(column(page, "preparing").locator('[data-ticket="T2"]')).toHaveCount(1);
+  await expect(page.getByTestId("undo-notice")).toHaveCount(0);
+});
+
+test("after 10 minutes without the Hub 20 advances apply once each, a cancelled ticket shows Cancelled and elapsed time kept counting", async ({
+  page,
+}) => {
+  const tickets = Array.from({ length: 21 }, (_, i) => ticket(i + 1, "new"));
+  const stub = await connectDisplay(page, board(tickets));
+  await page.goto("/kitchen/");
+  await expect(bar(page).getByText("Connected")).toBeVisible();
+  await loseHub(page, stub);
+
+  for (let n = 1; n <= 20; n++) await page.locator(`[data-ticket="T${n}"]`).click();
+  await expect.poll(async () => (await stored(page)).length).toBe(20);
+  const keys = (await stored(page)).map((e) => e.key);
+
+  // Ten minutes pass; the untouched ticket was placed 5 minutes before the last board.
+  await page.clock.runFor(10 * MIN);
+  await expect(bar(page).getByText("Reconnecting")).toBeVisible();
+  await expect(page.locator('[data-ticket="T21"]').getByTestId("ticket-elapsed")).toHaveText(
+    /^15:0\d$/,
+  );
+
+  // Meanwhile the counter cancelled T7: the Hub refuses that advance.
+  const later = HUB_NOW + 10 * MIN;
+  stub.refuse("kitchen.advance", "BAD_STAGE", "T7");
+  stub.setBoard({
+    branch_name: "Arena Indiranagar",
+    now_ms: later,
+    tickets: tickets.map((t) =>
+      t.id === "T7"
+        ? { ...t, stage: "cancelled", stage_at: later - 1_000, rev: 2 }
+        : t.id === "T21"
+          ? t
+          : { ...t, stage: "preparing", stage_at: later - 5_000, rev: 2 },
+    ),
+  });
+  stub.reachable(true);
+  await advanceUntil(page, () => settled(page));
+
+  const sent = advances(stub).map((i) => i.idempotency_key as string);
+  expect(sent).toEqual(keys);
+  for (const key of keys) expect(stub.received.get(key)).toBe(1);
+  await expect(column(page, "preparing").getByTestId("kitchen-ticket")).toHaveCount(19);
+  await expect(column(page, "new").locator('[data-ticket="T7"]')).toContainText("Cancelled");
+  await expect(column(page, "new").locator('[data-ticket="T21"]')).toHaveCount(1);
+});
+
+test("a reload during LAN loss keeps the queue, and it replays before new taps are sent", async ({
+  page,
+}) => {
+  const stub = await connectDisplay(page, board([ticket(1, "new"), ticket(2, "new")]));
+  await page.goto("/kitchen/");
+  await expect(bar(page).getByText("Connected")).toBeVisible();
+  await loseHub(page, stub);
+  await page.locator('[data-ticket="T1"]').click();
+  await expect.poll(() => stored(page)).toHaveLength(1);
+  const [kept] = await stored(page);
+
+  // The board cannot load while the Hub is out of reach, but the queue stays.
+  await page.reload();
+  await expect(page.getByTestId("kitchen-board")).toHaveCount(0);
+  await page.clock.runFor(5_000);
+  await expect(page.getByTestId("kitchen-board")).toHaveCount(0);
+  expect(await stored(page)).toHaveLength(1);
+
+  // The Hub returns but is slow to answer: the board is up, the stored move goes first, and a
+  // new tap waits behind it.
+  stub.silent(true);
+  stub.reachable(true);
+  await advanceUntil(page, () => advances(stub).length === 1);
+  await expect(page.getByTestId("kitchen-board")).toBeVisible();
+  expect(advances(stub)[0].idempotency_key).toBe(kept.key);
+  await page.locator('[data-ticket="T2"]').click();
+  expect(advances(stub)).toHaveLength(1);
+
+  stub.silent(false);
+  await advanceUntil(page, () => settled(page));
+  const order = advances(stub)
+    .map((i) => i.idempotency_key as string)
+    .filter((k, at, all) => all.indexOf(k) === at);
+  expect(order).toHaveLength(2);
+  expect(order[0]).toBe(kept.key);
+  expect(stub.received.get(order[1])).toBe(1);
+});
+
+test("a tap the Hub does not answer within 5 s counts as a lost link and is kept for the replay", async ({
+  page,
+}) => {
+  const stub = await connectDisplay(page, board([ticket(1, "new")]));
+  await page.goto("/kitchen/");
+  await expect(bar(page).getByText("Connected")).toBeVisible();
+  stub.silent(true);
+  await page.locator('[data-ticket="T1"]').click();
+  await expect(column(page, "preparing").locator('[data-ticket="T1"]')).toHaveCount(1);
+  await page.clock.runFor(4_000);
+  await expect(bar(page).getByText("Connected")).toBeVisible();
+  await page.clock.runFor(1_500);
+  await expect(bar(page).getByText("Reconnecting")).toBeVisible();
+  await expect(column(page, "preparing").locator('[data-ticket="T1"]')).toHaveCount(1);
+  await expect.poll(() => stored(page)).toHaveLength(1);
+
+  stub.silent(false);
+  await advanceUntil(page, () => settled(page));
+  const key = advances(stub)[0].idempotency_key as string;
+  expect(stub.received.get(key)).toBe(2);
+});
+
+test("a stored move older than 24 hours is dropped instead of sent", async ({ page }) => {
+  const stub = await connectDisplay(page, board([ticket(1, "new")]));
+  await page.goto("/kitchen/");
+  await expect(bar(page).getByText("Connected")).toBeVisible();
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        const open = indexedDB.open("arena.kitchen", 1);
+        open.onsuccess = () => {
+          const tx = open.result.transaction("queue", "readwrite");
+          const old = Date.now() - 25 * 60 * 60_000;
+          tx.objectStore("queue").put({
+            key: "01JOLDADVANCE0000000000000",
+            ticketId: "T1",
+            to: "preparing",
+            baseRev: 1,
+            issuedAt: old,
+            expiresAt: old + 24 * 60 * 60_000,
+          });
+          tx.oncomplete = () => resolve();
+        };
+      }),
+  );
+  await page.reload();
+  await expect(bar(page).getByText("Connected")).toBeVisible();
+  await expect.poll(() => stored(page)).toHaveLength(0);
+  expect(advances(stub)).toHaveLength(0);
+  await expect(column(page, "new").locator('[data-ticket="T1"]')).toHaveCount(1);
 });

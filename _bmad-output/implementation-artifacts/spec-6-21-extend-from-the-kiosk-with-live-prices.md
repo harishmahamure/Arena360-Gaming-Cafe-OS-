@@ -2,7 +2,7 @@
 title: 'Story 6.21: Extend from the kiosk with live prices'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: 'd44187a'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'

@@ -25,6 +25,9 @@
     onadded: () => void;
   } = $props();
 
+  /** How long a panel that lost the Hub waits before asking again. */
+  const RETRY_MS = 5000;
+
   type Phase = "loading" | "ready" | "unreachable" | "unavailable";
   let options = $state<PlayerExtendOptions | null>(null);
   let phase = $state<Phase>("loading");
@@ -66,6 +69,7 @@
     const result = await playerExtendOptions();
     if (result.kind !== "ok") {
       phase = result.kind;
+      if (result.kind === "unavailable") lost = false;
       return;
     }
     options = result.options;
@@ -83,6 +87,14 @@
   // The link coming back after it dropped: ask again.
   $effect(() => {
     if (connected && phase === "unreachable") void load(true);
+  });
+
+  // The Hub did not answer an extend: every option stays disabled, and the panel asks again every
+  // few seconds so a slow answer never strands it. `load` clears `lost` once the Hub answers.
+  $effect(() => {
+    if (!lost) return;
+    const timer = setInterval(() => void load(false), RETRY_MS);
+    return () => clearInterval(timer);
   });
 
   async function confirm() {

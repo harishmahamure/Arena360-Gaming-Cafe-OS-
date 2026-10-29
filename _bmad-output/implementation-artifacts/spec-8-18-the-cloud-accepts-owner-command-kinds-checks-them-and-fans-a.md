@@ -2,7 +2,7 @@
 title: 'Story 8.18: The cloud accepts owner command kinds, checks them, and fans "all branches" out'
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 baseline_commit: '3eafeba'
 review_loop_iteration: 0
 followup_review_recommended: false

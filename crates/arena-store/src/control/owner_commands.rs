@@ -94,7 +94,8 @@ impl ControlDb {
     ) -> Result<(), ControlError> {
         let n = SqlValue::Integer(i64::from(schema));
         self.transact(vec![Stmt::new(
-            "UPDATE hubs SET command_schema_max = ? WHERE id = ? AND revoked_at IS NULL              AND command_schema_max IS NOT ?",
+            "UPDATE hubs SET command_schema_max = ? WHERE id = ? AND revoked_at IS NULL \
+             AND command_schema_max IS NOT ?",
             vec![n.clone(), text(hub_id), n],
         )])
         .await?;

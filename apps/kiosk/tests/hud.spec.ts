@@ -46,6 +46,8 @@ async function openHud(page: Page) {
       };
       w.__layouts = [] as Array<[number, number]>;
       w.__collapses = 0;
+      w.__ends = [] as unknown[];
+      w.__endAnswers = [] as unknown[];
       w.__TAURI_INTERNALS__ = {
         transformCallback: (cb: (e: unknown) => void) => {
           const id = next++;
@@ -68,8 +70,12 @@ async function openHud(page: Page) {
             case commands.hudCollapse:
               (w.__collapses as number)++;
               return null;
+            case commands.playerEnd:
+              (w.__ends as unknown[]).push(cmd);
+              return (w.__endAnswers as unknown[]).shift() ?? null;
             case commands.pcScreen:
             case commands.attract:
+            case commands.hubStatus:
             case commands.theme:
               return null;
             default:
@@ -400,4 +406,91 @@ test("a staff message toast carries its text under a key of its own, so two stac
   expect(two[0].until).toBe(INFO_TOAST_MS);
   expect(live(two, INFO_TOAST_MS + 1).map((x) => x.id)).toEqual([2]);
   expect("text" in raise([], "a", "info", 0, 1)).toBe(false);
+});
+
+// ---- Story 6.18: "I'm done" in the expanded panel ----
+
+const ends = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __ends: unknown[] }).__ends.length);
+
+const endAnswer = (page: Page, answer: unknown) =>
+  page.evaluate(
+    (a) => (window as unknown as { __endAnswers: unknown[] }).__endAnswers.push(a),
+    answer,
+  );
+
+async function expandPostpaid(page: Page) {
+  await openHud(page);
+  await attract(page);
+  await emit(page, names.events.pcScreen, shown({ username: "asha", balance_minor: 10_000 }));
+  await emit(page, names.events.hudExpand);
+  await expect(page.getByTestId("hud-panel")).toBeVisible();
+}
+
+test("a postpaid panel offers I'm done, asks in place and ends only on confirm", async ({
+  page,
+}) => {
+  await expandPostpaid(page);
+  await expect(page.getByTestId("hud-done")).toHaveText("I'm done");
+  await page.getByTestId("hud-done").click();
+  await expect(page.getByTestId("hud-done-confirm")).toHaveText(
+    /^End your session\? You'll pay at the counter\./,
+  );
+  await expect(page.getByTestId("hud-done-cancel")).toBeFocused();
+  expect(await serious(page)).toEqual([]);
+  expect(await ends(page)).toBe(0);
+  await endAnswer(page, { ok: true, body: { outcome: "ok" } });
+  await page.getByTestId("hud-done-yes").click();
+  await expect.poll(() => ends(page)).toBe(1);
+});
+
+test("Esc on the I'm done question cancels it and keeps the panel; a second Esc collapses", async ({
+  page,
+}) => {
+  await expandPostpaid(page);
+  await page.getByTestId("hud-done").click();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("hud-done-confirm")).toHaveCount(0);
+  await expect(page.getByTestId("hud-panel")).toBeVisible();
+  await page.getByTestId("hud-done").click();
+  await page.getByTestId("hud-done-cancel").click();
+  await expect(page.getByTestId("hud-done-confirm")).toHaveCount(0);
+  expect(await ends(page)).toBe(0);
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("hud-panel")).toHaveCount(0);
+});
+
+test("a prepaid panel has no I'm done", async ({ page }) => {
+  await openHud(page);
+  await attract(page);
+  await emit(
+    page,
+    names.events.pcScreen,
+    shown({ username: "asha", remaining_ms: 1_800_000, balance_minor: 10_000 }),
+  );
+  await emit(page, names.events.hudExpand);
+  await expect(page.getByTestId("hud-panel")).toBeVisible();
+  await expect(page.getByTestId("hud-done")).toHaveCount(0);
+});
+
+test("I'm done with the Hub unreachable sends nothing and says the counter is reconnecting", async ({
+  page,
+}) => {
+  await expandPostpaid(page);
+  await emit(page, names.events.hubStatus, { state: "reconnecting" });
+  await page.getByTestId("hud-done").click();
+  await expect(page.getByTestId("hud-done-line")).toHaveText(
+    "⚠ Counter is reconnecting — try again shortly.",
+  );
+  await expect(page.getByTestId("hud-done-confirm")).toHaveCount(0);
+  expect(await ends(page)).toBe(0);
+});
+
+test("a refused I'm done keeps the session and says so", async ({ page }) => {
+  await expandPostpaid(page);
+  await endAnswer(page, { ok: true, body: { outcome: "refused", code: "STALE", message: "x" } });
+  await page.getByTestId("hud-done").click();
+  await page.getByTestId("hud-done-yes").click();
+  await expect(page.getByTestId("hud-done-line")).toHaveText("⚠ Couldn't log out — try again.");
+  await expect(page.getByTestId("hud-panel")).toBeVisible();
 });

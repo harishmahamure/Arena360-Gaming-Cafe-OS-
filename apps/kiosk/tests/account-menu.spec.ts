@@ -210,7 +210,7 @@ test("a guest's menu has no Balance and no Lock, and a postpaid chip says time p
   await page.getByTestId("account-chip").click();
   await expect(page.getByTestId("account-menu-name")).toHaveText("Guest 3");
   await expect(page.getByTestId("account-menu-balance")).toHaveCount(0);
-  await expect(menu(page).getByRole("button")).toHaveText(["Messages", "Log out"]);
+  await expect(menu(page).getByRole("button")).toHaveText(["Messages", "I'm done", "Log out"]);
   await expect(page.getByTestId("account-menu-time")).toHaveText(/^Time played /);
 });
 
@@ -440,6 +440,76 @@ test("a Hub refusal of Log out keeps the player in the session with a line", asy
   await row(page, "logout").click();
   await expect(page.getByTestId("account-menu-line")).toHaveText("⚠ Couldn't log out — try again.");
   await expect(page.getByTestId("shell")).toBeVisible();
+});
+
+test("a postpaid menu lists I'm done above Log out; prepaid has none", async ({ page }) => {
+  await open(page);
+  await session(page, POSTPAID);
+  await page.getByTestId("account-chip").click();
+  await expect(menu(page).getByRole("button")).toHaveText([
+    "Balance",
+    "Messages",
+    "Lock",
+    "I'm done",
+    "Log out",
+  ]);
+  await page.keyboard.press("Escape");
+  await session(page, PREPAID);
+  await page.getByTestId("account-chip").click();
+  await expect(row(page, "done")).toHaveCount(0);
+});
+
+test("I'm done asks in place and ends the session only on confirm", async ({ page }) => {
+  await open(page);
+  await session(page, POSTPAID);
+  await page.getByTestId("account-chip").click();
+  await row(page, "done").click();
+  await expect(page.getByTestId("account-done-confirm")).toHaveText(
+    "End your session? You'll pay at the counter.",
+  );
+  await expect(page.getByRole("button", { name: "Cancel" })).toBeFocused();
+  expect(await serious(page)).toEqual([]);
+  expect(await asked(page)).toEqual([]);
+  await answer(page, names.commands.playerEnd, { ok: true, body: { outcome: "ok" } });
+  await page.getByRole("button", { name: "End session" }).click();
+  await expect(menu(page)).toHaveCount(0);
+  expect(await asked(page)).toEqual([names.commands.playerEnd]);
+});
+
+test("Cancel on the I'm done question changes nothing", async ({ page }) => {
+  await open(page);
+  await session(page, POSTPAID);
+  await page.getByTestId("account-chip").click();
+  await row(page, "done").click();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByTestId("account-done-confirm")).toHaveCount(0);
+  await expect(row(page, "done")).toBeVisible();
+  expect(await asked(page)).toEqual([]);
+});
+
+test("Esc on the I'm done question closes the menu and sends nothing", async ({ page }) => {
+  await open(page);
+  await session(page, POSTPAID);
+  await page.getByTestId("account-chip").click();
+  await row(page, "done").click();
+  await page.keyboard.press("Escape");
+  await expect(menu(page)).toHaveCount(0);
+  await expect(page.getByTestId("shell")).toBeVisible();
+  expect(await asked(page)).toEqual([]);
+});
+
+test("I'm done with the Hub unreachable sends nothing and says the counter is reconnecting", async ({
+  page,
+}) => {
+  await open(page, "reconnecting");
+  await session(page, POSTPAID);
+  await page.getByTestId("account-chip").click();
+  await row(page, "done").click();
+  await expect(page.getByTestId("account-menu-line")).toHaveText(
+    "⚠ Counter is reconnecting — try again shortly.",
+  );
+  await expect(page.getByTestId("account-done-confirm")).toHaveCount(0);
+  expect(await asked(page)).toEqual([]);
 });
 
 // ---- the pure rules ----

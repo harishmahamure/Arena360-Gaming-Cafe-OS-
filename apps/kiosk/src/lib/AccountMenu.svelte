@@ -7,7 +7,8 @@
   import { chipText } from "./shell";
 
   // The account menu (Story 6.17): a `surface` panel under the top bar with the player's name,
-  // wallet and time left, and the rows Balance, Messages, Lock and Log out. Esc closes it and
+  // wallet and time left, and the rows Balance, Messages, Lock, I'm done (Story 6.18, postpaid
+  // only) and Log out. Esc closes it and
   // focus goes back to the chip that opened it. Nothing here decides anything: Balance asks the
   // Hub, Log out asks the Hub to end the player's own session, and Lock is a screen the service
   // covers while the clock goes on.
@@ -42,7 +43,7 @@
     onmessages: () => void;
   } = $props();
 
-  type View = "menu" | "balance" | "confirm";
+  type View = "menu" | "balance" | "confirm" | "done";
   let view: View = $state("menu");
   let root: HTMLDivElement | undefined = $state();
   let rows: HTMLButtonElement[] = $state([]);
@@ -73,7 +74,9 @@
   async function focusFirst() {
     await tick();
     const buttons = root?.querySelectorAll<HTMLElement>(".actions button");
-    if (view === "confirm" && buttons?.length) return buttons[buttons.length - 1].focus();
+    if ((view === "confirm" || view === "done") && buttons?.length) {
+      return buttons[buttons.length - 1].focus();
+    }
     (root?.querySelector<HTMLElement>("[data-first]") ?? buttons?.[0])?.focus();
   }
 
@@ -146,6 +149,17 @@
       return;
     }
     await end();
+  }
+
+  /** "I'm done": a postpaid session ends once the player has said yes in place. */
+  function done() {
+    line = null;
+    if (!connected) {
+      line = "reconnecting";
+      return;
+    }
+    view = "done";
+    void focusFirst();
   }
 
   async function end() {
@@ -221,9 +235,21 @@
           >
         </li>
       {/if}
+      {#if !prepaid}
+        <li>
+          <button
+            bind:this={rows[3]}
+            type="button"
+            class="row type-kiosk-label"
+            data-testid="account-row-done"
+            aria-disabled={busy ? "true" : undefined}
+            onclick={done}>{t("player.account.row.done")}</button
+          >
+        </li>
+      {/if}
       <li>
         <button
-          bind:this={rows[3]}
+          bind:this={rows[4]}
           type="button"
           class="row type-kiosk-label"
           data-testid="account-row-logout"
@@ -274,6 +300,21 @@
       </p>
       <div class="actions">
         <Button variant="secondary" label="player.account.back" onclick={stay} />
+      </div>
+    </section>
+  {:else if view === "done"}
+    <section class="panel" aria-label={t("player.account.row.done")}>
+      <p class="type-kiosk-body" role="alert" data-testid="account-done-confirm">
+        {t("player.account.done_confirm")}
+      </p>
+      <div class="actions">
+        <Button
+          label="player.account.done_yes"
+          disabled={busy}
+          disabledReason="player.unlock.checking"
+          onclick={end}
+        />
+        <Button variant="secondary" label="player.account.done_cancel" onclick={stay} />
       </div>
     </section>
   {:else}

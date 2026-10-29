@@ -6,16 +6,19 @@
   import {
     applyTheme,
     currentAttract,
+    currentHubStatus,
     currentPcScreen,
     currentTheme,
     hudCollapse,
     hudLayout,
     onAttract,
+    onHubStatus,
     onHudExpand,
     onPcScreen,
     onStaffMessage,
     onTheme,
     onToast,
+    playerEnd,
     TOAST_KINDS,
     type PcScreen,
     type ToastKey,
@@ -40,6 +43,13 @@
   let locale: SnapshotLocale | null = $state(null);
   let now = $state(performance.now());
   let expanded = $state(false);
+  /** The Hub link as the service last said (`null`: not told yet). */
+  let hub: string | null = $state(null);
+  /** "I'm done" (Story 6.18): the in-place question is showing. */
+  let confirming = $state(false);
+  let ending = $state(false);
+  /** Why the last "I'm done" did not end the session. */
+  let doneLine: "reconnecting" | "failed" | null = $state(null);
   let toasts: HudToast[] = $state([]);
   let nextId = 1;
   let root: HTMLDivElement | undefined = $state();
@@ -128,8 +138,28 @@
     panel?.focus();
   }
 
+  /** Asks "End your session?" in place, unless the counter cannot be reached. */
+  async function askDone() {
+    doneLine = hub !== null && hub !== "connected" ? "reconnecting" : null;
+    confirming = doneLine === null;
+    await tick();
+    panel?.querySelector<HTMLElement>("[data-testid=hud-done-cancel]")?.focus();
+  }
+
+  async function endSession() {
+    if (ending) return;
+    ending = true;
+    const outcome = await playerEnd();
+    ending = false;
+    if (outcome.kind === "ok") return;
+    doneLine = outcome.kind === "refused" ? "failed" : "reconnecting";
+    confirming = false;
+  }
+
   function collapse() {
     if (!expanded) return;
+    confirming = false;
+    doneLine = null;
     expanded = false;
     hudCollapse();
   }
@@ -137,7 +167,9 @@
   function onKeyDown(e: KeyboardEvent) {
     if (e.key === "Escape" && expanded) {
       e.preventDefault();
-      collapse();
+      // Esc on the question is "Cancel": nothing changes and the panel stays.
+      if (confirming) confirming = false;
+      else collapse();
     }
   }
 
@@ -191,12 +223,15 @@
         }),
       );
       add(await onHudExpand(() => void expand()));
+      add(await onHubStatus((s) => (hub = s.state)));
       add(
         await onAttract((s) => {
           attracted = true;
           locale = s.view?.locale ?? locale;
         }),
       );
+      const link = await currentHubStatus();
+      if (link && hub === null) hub = link.state;
       const screen = await currentPcScreen();
       if (screen && !screened) follow(screen);
       const known = await currentAttract();
@@ -280,6 +315,50 @@
           <dd class="type-kiosk-body" data-testid="hud-panel-plan">{plan}</dd>
         </div>
       </dl>
+      {#if !prepaid}
+        {#if confirming}
+          <div class="ask" role="alert" data-testid="hud-done-confirm">
+            <p class="type-kiosk-body">{t("player.account.done_confirm")}</p>
+            <div class="foot">
+              <button
+                type="button"
+                class="dismiss type-kiosk-label"
+                aria-disabled={ending ? "true" : undefined}
+                data-testid="hud-done-yes"
+                onclick={endSession}
+              >
+                {t("player.account.done_yes")}
+              </button>
+              <button
+                type="button"
+                class="dismiss type-kiosk-label"
+                data-testid="hud-done-cancel"
+                onclick={() => (confirming = false)}
+              >
+                {t("player.account.done_cancel")}
+              </button>
+            </div>
+          </div>
+        {:else}
+          <button
+            type="button"
+            class="dismiss type-kiosk-label"
+            data-testid="hud-done"
+            onclick={() => void askDone()}
+          >
+            {t("player.account.row.done")}
+          </button>
+        {/if}
+        {#if doneLine}
+          <p class="hint type-kiosk-body" role="alert" data-testid="hud-done-line">
+            ⚠ {t(
+              doneLine === "reconnecting"
+                ? "player.hub.reconnecting_retry"
+                : "player.account.logout_failed",
+            )}
+          </p>
+        {/if}
+      {/if}
       <div class="foot">
         <p class="hint type-kiosk-body">{t("player.hud.hint")}</p>
         <button type="button" class="dismiss type-kiosk-label" onclick={collapse}>
@@ -406,8 +485,14 @@
     gap: var(--space-4);
   }
 
-  .hint {
+  .hint,
+  .ask p {
     margin: 0;
+  }
+
+  .ask {
+    display: grid;
+    gap: var(--space-3);
   }
 
   .dismiss {

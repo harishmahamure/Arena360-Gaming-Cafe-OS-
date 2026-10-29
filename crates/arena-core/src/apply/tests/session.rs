@@ -1436,6 +1436,7 @@ async fn pausing_freezes_the_session_and_resuming_adds_the_paused_time() {
     assert_eq!(snap.bills[0].lines[0].minutes, 30);
     let screens = crate::session_screens(&reopen(&f), f.clock.now_ms()).unwrap();
     assert_eq!(screens[0].1.elapsed_ms, 20 * 60_000);
+    assert_eq!(screens[0].1.remaining_ms, None);
 
     f.clock.advance(15 * 60_000);
     let a = resume(&f, &id).await.unwrap();

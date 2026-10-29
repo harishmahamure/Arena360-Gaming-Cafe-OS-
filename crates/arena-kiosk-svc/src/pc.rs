@@ -28,6 +28,10 @@ pub struct ScreenSession {
     pub lock_at: Instant,
     pub grace_ms: u64,
     pub ordered_items: u64,
+    pub username: Option<String>,
+    pub guest_no: Option<i64>,
+    /// When a prepaid session's time runs out (`None` for postpaid, which counts up).
+    pub ends_at: Option<Instant>,
     /// The branch's time-up mode is "Staff handles".
     pub hold: bool,
 }

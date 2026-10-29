@@ -408,6 +408,9 @@ fn start_session(kiosk: &Kiosk) {
             lock_at: now + Duration::from_secs(3600),
             grace_ms: 0,
             ordered_items: 0,
+            username: None,
+            guest_no: None,
+            ends_at: None,
             hold: false,
         });
     });

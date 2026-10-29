@@ -241,6 +241,9 @@ export type PcScreen = {
     grace_in_ms: number | null;
     grace_ms: number;
     ordered_items: number;
+    username: string | null;
+    guest_no: number | null;
+    remaining_ms: number | null;
   } | null;
 };
 
@@ -257,6 +260,9 @@ const screenOf = (v: unknown): PcScreen | null => {
         grace_in_ms?: unknown;
         grace_ms?: unknown;
         ordered_items?: unknown;
+        username?: unknown;
+        guest_no?: unknown;
+        remaining_ms?: unknown;
       }
     | null
     | undefined;
@@ -269,6 +275,9 @@ const screenOf = (v: unknown): PcScreen | null => {
           grace_in_ms: typeof s.grace_in_ms === "number" ? s.grace_in_ms : null,
           grace_ms: typeof s.grace_ms === "number" ? s.grace_ms : 0,
           ordered_items: typeof s.ordered_items === "number" ? s.ordered_items : 0,
+          username: typeof s.username === "string" ? s.username : null,
+          guest_no: typeof s.guest_no === "number" ? s.guest_no : null,
+          remaining_ms: typeof s.remaining_ms === "number" ? s.remaining_ms : null,
         }
       : null;
   return {

@@ -14,4 +14,16 @@ export type SessionScreen = {
    * How many items were placed on the session's bill; the kiosk shows "Ordered: n items".
    */
   ordered_items: number;
+  /**
+   * The profiled player's username; the shell's account chip greets them by it.
+   */
+  username?: string;
+  /**
+   * A guest's number ("Guest <n>"), when there is no profile.
+   */
+  guest_no?: number;
+  /**
+   * Time left on a prepaid session (it counts down); `None` for postpaid (it counts up).
+   */
+  remaining_ms?: number;
 };

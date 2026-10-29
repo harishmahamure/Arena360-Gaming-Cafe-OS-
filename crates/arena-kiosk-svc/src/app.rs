@@ -334,6 +334,12 @@ fn screen_message(s: crate::pc::Screen) -> IpcMsg {
             }),
             grace_ms: v.grace_ms,
             ordered_items: v.ordered_items,
+            username: v.username,
+            guest_no: v.guest_no,
+            remaining_ms: v.ends_at.map(|at| {
+                at.saturating_duration_since(tokio::time::Instant::now())
+                    .as_millis() as u64
+            }),
         }),
     }
 }

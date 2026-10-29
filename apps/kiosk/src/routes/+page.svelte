@@ -16,6 +16,8 @@
     type PcScreen,
   } from "../lib/bridge";
   import Attract from "../lib/Attract.svelte";
+  import Shell from "../lib/Shell.svelte";
+  import { type Tab } from "../lib/shell";
 
   /** The idle screen: the last attract view and logo (from the service cache at first). */
   let attract: AttractShown = $state({ view: null, logo: null });
@@ -35,7 +37,13 @@
     graceFrom: number | null;
     graceMs: number;
     ordered: number;
+    username: string | null;
+    guestNo: number | null;
+    /** When a prepaid session runs out, on the monotonic clock (`null`: it counts up). */
+    until: number | null;
   } | null>(null);
+  /** The shell's active item: it lasts for the session and is forgotten when the session ends. */
+  let tab: Tab = $state("home");
   const graceLeft = $derived(
     session === null || session.graceFrom === null
       ? null
@@ -52,10 +60,9 @@
   const elapsed = $derived(
     session === null ? 0 : Math.max(0, Math.floor((now - session.from) / 1000)),
   );
-  const watch = $derived(
-    [Math.floor(elapsed / 3600), Math.floor((elapsed % 3600) / 60), elapsed % 60]
-      .map((n, i) => (i === 0 ? String(n) : String(n).padStart(2, "0")))
-      .join(":"),
+  /** What the time chip counts: seconds left (prepaid) or played (postpaid). */
+  const chipSeconds = $derived(
+    session?.until != null ? Math.max(0, Math.ceil((session.until - now) / 1000)) : elapsed,
   );
 
   const follow = (s: PcScreen) => {
@@ -69,8 +76,12 @@
           graceFrom: s.session.grace_in_ms === null ? null : now + s.session.grace_in_ms,
           graceMs: s.session.grace_ms,
           ordered: s.session.ordered_items,
+          username: s.session.username,
+          guestNo: s.session.guest_no,
+          until: s.session.remaining_ms === null ? null : now + s.session.remaining_ms,
         }
       : null;
+    if (session === null) tab = "home";
   };
 
   const start = (remainingMs: number) => {
@@ -125,28 +136,40 @@
     <p class="hint type-kiosk-body">{t("player.test_session.hint")}</p>
   </main>
 {:else if session !== null}
-  <main class="locked" data-testid="session">
-    <p class="brand type-kiosk-eyebrow">{t("app.name")}</p>
-    <h1 class="type-kiosk-headline" data-testid="session-device">{session.name}</h1>
-    <p class="clock type-kiosk-display tabular-nums" data-testid="session-clock">{watch}</p>
-    {#if inGrace}
-      <p class="warning type-kiosk-body" role="status" data-testid="session-grace">
-        <span aria-hidden="true">⚠</span>
-        {t("player.session.grace", { time: graceClock })}
-      </p>
-    {:else if session.warning !== null}
-      <p class="warning type-kiosk-body" role="status" data-testid="session-warning">
-        <span aria-hidden="true">⚠</span>
-        {t("player.session.warning", { minutes: session.warning })}
-      </p>
-    {/if}
-    {#if session.ordered > 0}
-      <p class="ordered type-kiosk-body" data-testid="ordered">
-        {session.ordered === 1
-          ? t("player.session.ordered_one")
-          : t("player.session.ordered", { count: session.ordered })}
-      </p>
-    {/if}
+  <main class="session" data-testid="session">
+    <Shell
+      session={{
+        device: session.name,
+        username: session.username,
+        guestNo: session.guestNo,
+        prepaid: session.until !== null,
+        warningMin: session.warning,
+      }}
+      logo={attract.logo}
+      seconds={chipSeconds}
+      bind:tab
+    >
+      {#snippet status()}
+        {#if inGrace}
+          <p class="warning type-kiosk-body" role="status" data-testid="session-grace">
+            <span aria-hidden="true">⚠</span>
+            {t("player.session.grace", { time: graceClock })}
+          </p>
+        {:else if session?.warning != null}
+          <p class="warning type-kiosk-body" role="status" data-testid="session-warning">
+            <span aria-hidden="true">⚠</span>
+            {t("player.session.warning", { minutes: session.warning })}
+          </p>
+        {/if}
+        {#if session && session.ordered > 0}
+          <p class="ordered type-kiosk-body" data-testid="ordered">
+            {session.ordered === 1
+              ? t("player.session.ordered_one")
+              : t("player.session.ordered", { count: session.ordered })}
+          </p>
+        {/if}
+      {/snippet}
+    </Shell>
   </main>
 {:else}
   <!-- No session yet: the attract screen (Story 6.7), painted from the cache at once. -->
@@ -162,6 +185,10 @@
     padding: var(--space-kiosk-margin);
     color: var(--text);
     text-align: center;
+  }
+
+  .session {
+    min-height: 100vh;
   }
 
   h1 {

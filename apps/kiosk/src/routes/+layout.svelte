@@ -1,6 +1,6 @@
 <script lang="ts">
   import "@arena/ui/base.css";
-  import { InlinePin, t } from "@arena/ui";
+  import { BrandMark, InlinePin, t } from "@arena/ui";
   import type { MessageKey } from "@arena/ui/messages";
   import type { KioskHubState } from "@arena/ui/generated";
   import { afterNavigate, goto } from "$app/navigation";
@@ -18,7 +18,9 @@
     isAdminExitCombo,
     onAdminExit,
     onAdminExitEnded,
+    currentAttract,
     currentHubStatus,
+    onAttract,
     onHubStatus,
     onRestoreState,
     onToast,
@@ -58,6 +60,9 @@
    */
   let locked = $state(false);
   let message: string | null = $state(null);
+  /** The branch logo for the lock screen's `logo-slot` (a `data:` URI; the mark when none). */
+  let logo: string | null = $state(null);
+  let brokenLogo: string | null = $state(null);
   let reason: string | null = $state(null);
   const REASONS: Record<string, MessageKey> = {
     pay_at_counter: "player.lock.pay_at_counter",
@@ -138,6 +143,9 @@
         }),
       );
       add(await onToast((key) => (toast = key)));
+      add(await onAttract((s) => (logo = s.logo)));
+      const shown = await currentAttract();
+      if (shown && logo === null) logo = shown.logo;
       add(
         await onAdminExit((until) => {
           adminPanel = false;
@@ -186,6 +194,18 @@
   </div>
   {#if locked}
     <div class="cover" role="status" data-testid="pc-locked">
+      <div class="logo-slot" data-testid="lock-logo">
+        {#if logo !== null && logo !== brokenLogo}
+          <img
+            src={logo}
+            alt={t("player.attract.logo_alt", { name: t("app.name") })}
+            draggable="false"
+            onerror={() => (brokenLogo = logo)}
+          />
+        {:else}
+          <BrandMark size={72} />
+        {/if}
+      </div>
       <h1 class="type-kiosk-headline">{t((reason && REASONS[reason]) || "player.pc.locked")}</h1>
     </div>
   {/if}
@@ -278,6 +298,23 @@
 
   .cover h1 {
     margin: 0;
+  }
+
+  .cover .logo-slot {
+    position: absolute;
+    top: var(--space-kiosk-margin);
+    left: var(--space-kiosk-margin);
+    display: flex;
+    align-items: center;
+    max-width: 40vw;
+    max-height: 144px;
+  }
+
+  .cover .logo-slot img {
+    display: block;
+    max-width: 100%;
+    max-height: 144px;
+    object-fit: contain;
   }
 
   .admin-exit {

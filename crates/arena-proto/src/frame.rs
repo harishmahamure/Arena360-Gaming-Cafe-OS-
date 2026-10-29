@@ -632,6 +632,9 @@ mod tests {
             time_up_mode: "clean_up".into(),
             grace_ms: 0,
             ordered_items: 0,
+            username: None,
+            guest_no: None,
+            remaining_ms: None,
         };
         let tick = serde_json::to_value(HubEvent::SessionTick(screen.clone())).unwrap();
         assert_eq!(tick["kind"], "session.tick");

@@ -207,6 +207,9 @@ async fn the_snapshot_and_the_kiosk_screen_carry_the_end_time() {
     let (device, screen) = &screens[0];
     assert_eq!(device, &d);
     assert_eq!(screen.lock_after_ms, 60_000);
+    assert_eq!(screen.remaining_ms, Some(60_000));
+    assert_eq!(screen.guest_no, None);
+    assert_eq!(screen.username.as_deref(), Some("asha"));
 }
 
 fn device_state(f: &Fixture, device: &str) -> String {

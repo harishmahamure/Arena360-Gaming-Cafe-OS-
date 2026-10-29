@@ -121,6 +121,14 @@ pub struct PcSession {
     /// How many items were placed on the session's bill (shown as "Ordered: n items").
     #[serde(default, skip_serializing_if = "is_zero")]
     pub ordered_items: u64,
+    /// Who the shell greets: the profiled player's username, or a guest's number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_no: Option<i64>,
+    /// Milliseconds a prepaid session has left (`None` for postpaid, which counts up).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remaining_ms: Option<u64>,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -565,6 +573,9 @@ mod tests {
                 grace_in_ms: Some(3),
                 grace_ms: 4,
                 ordered_items: 2,
+                username: None,
+                guest_no: None,
+                remaining_ms: None,
             }),
         };
         assert_eq!(IpcMsg::parse(&shown.to_line()).unwrap(), shown);

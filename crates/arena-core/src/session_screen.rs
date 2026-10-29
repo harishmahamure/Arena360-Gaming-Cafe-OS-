@@ -118,7 +118,13 @@ pub fn session_screens(
                 }
                 _ => None,
             };
+            let remaining_ms = s
+                .ends_at
+                .map(|at| u64::try_from(at - s.paused_at.unwrap_or(now_ms)).unwrap_or(0));
             let screen = SessionScreen {
+                username: s.username,
+                guest_no: s.guest_no,
+                remaining_ms,
                 ordered_items: ordered
                     .get(&s.id)
                     .map_or(0, |n| u64::try_from(*n).unwrap_or(0)),

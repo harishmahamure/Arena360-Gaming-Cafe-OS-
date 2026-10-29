@@ -807,6 +807,18 @@ pub struct SessionScreen {
     #[serde(default)]
     #[ts(type = "number")]
     pub ordered_items: u64,
+    /// The profiled player's username; the shell's account chip greets them by it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub username: Option<String>,
+    /// A guest's number ("Guest <n>"), when there is no profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub guest_no: Option<i64>,
+    /// Time left on a prepaid session (it counts down); `None` for postpaid (it counts up).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub remaining_ms: Option<u64>,
 }
 
 #[cfg(test)]

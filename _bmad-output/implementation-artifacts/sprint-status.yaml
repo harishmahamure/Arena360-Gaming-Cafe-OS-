@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-29-2026 12:00
+last_updated: 10-29-2026 14:00
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -179,7 +179,7 @@ development_status:
   6-10-a-new-player-signs-up-at-the-kiosk-with-one-consent-box: done
   6-11-session-end-cleanup-ends-the-player-s-programs-and-clears-th: done
   6-12-session-end-cleanup-signs-out-launchers-discord-and-browsers: done
-  6-13-the-player-shell-with-top-bar-pill-nav-and-time-chip: backlog
+  6-13-the-player-shell-with-top-bar-pill-nav-and-time-chip: review
   6-14-the-overlay-hud-shows-time-and-balance-without-stealing-focu: backlog
   6-15-volume-control-and-calling-staff-from-the-top-bar: backlog
   6-16-staff-messages-reach-the-seat-and-stay-in-the-messages-bell: backlog

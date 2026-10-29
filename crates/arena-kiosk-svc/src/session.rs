@@ -35,6 +35,9 @@ pub fn sync(ctx: &Ctx, s: SessionScreen, started: bool) {
             lock_at: now + Duration::from_millis(s.lock_after_ms),
             grace_ms: s.grace_ms,
             ordered_items: s.ordered_items,
+            username: s.username,
+            guest_no: s.guest_no,
+            ends_at: s.remaining_ms.map(|ms| now + Duration::from_millis(ms)),
             hold: s.time_up_mode == TimeUpMode::StaffHandles.as_str(),
         });
     });

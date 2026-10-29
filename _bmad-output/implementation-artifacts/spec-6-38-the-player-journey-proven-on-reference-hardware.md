@@ -2,7 +2,7 @@
 title: 'Story 6.38: The player journey proven on reference hardware'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '6522606'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'

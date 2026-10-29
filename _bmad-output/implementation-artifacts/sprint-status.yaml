@@ -204,7 +204,7 @@ development_status:
   6-35-pc-settings-saved-to-the-player-s-profile: done
   6-36-the-kiosk-keeps-the-session-running-while-the-hub-is-unreach: done
   6-37-kiosk-screens-reflow-at-every-supported-width-by-keyboard-an: done
-  6-38-the-player-journey-proven-on-reference-hardware: review
+  6-38-the-player-journey-proven-on-reference-hardware: done
   epic-6-retrospective: optional
 
   epic-7: in-progress

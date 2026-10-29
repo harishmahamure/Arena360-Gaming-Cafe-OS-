@@ -93,10 +93,12 @@ impl ReadCache {
         let key = summary_key(&branch_prefix(tenant_id, branch_id));
         let etag = presigner.head(&key).await?;
         let entry = match (cached, etag) {
-            (Some(c), etag) if c.etag == etag => LiveEntry {
-                checked_at: now,
-                ..c
-            },
+            (Some(c), etag) if c.etag == etag && etag.as_ref().is_some_and(|e| !e.is_empty()) => {
+                LiveEntry {
+                    checked_at: now,
+                    ..c
+                }
+            }
             (_, None) => LiveEntry {
                 checked_at: now,
                 etag: None,
@@ -202,7 +204,7 @@ impl ReadCache {
                 continue;
             }
             match cached.as_ref().and_then(|c| c.days.get(date)) {
-                Some(old) if old.etag == etag => {
+                Some(old) if old.etag == etag && !etag.is_empty() => {
                     days.insert(date.to_owned(), old.clone());
                 }
                 _ => stale.push((date.to_owned(), key)),

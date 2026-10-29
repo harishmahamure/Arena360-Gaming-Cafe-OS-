@@ -2,7 +2,7 @@
 title: 'Story 8.9: The owner read API serves the live summary and rollup ranges from files'
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 baseline_commit: 'd32312f'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -78,6 +78,9 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+Code review (4 layers) fixed: range expansion built every date before the 400-day cap (`dates_between` now stops at cap+1); sums saturate instead of overflowing and `add_rollup` delegates to `add` (one field list); `live` takes the branch row's currency and drops a summary of another currency or branch (as rollup days already were); a rollup day whose `branch_id`/`business_day` do not match its key counts as missing; an empty ETag never counts as unchanged. Tests added for every summed field, saturation and the cap.
+Deferred: MinIO-backed tests of `S3Store::{head,read,list_etags}`; single-flight on cache refresh and per-key eviction; one failed day read failing the month; fan-out cost of `all` ranges against the rate limit; corrupt `latest.json` reading as "no summary"; 422 range errors answered before the rate counter (no data touched).
 
 ## Design Notes
 

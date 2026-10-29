@@ -230,7 +230,7 @@ development_status:
   8-6-the-daily-rollup-publishes-at-close-and-catches-up-missed-da: done
   8-7-rollups-regenerate-after-a-schema-bump-and-the-cloud-accepts: done
   8-8-the-hub-uploads-a-daily-snapshot-after-close: done
-  8-9-the-owner-read-api-serves-the-live-summary-and-rollup-ranges: review
+  8-9-the-owner-read-api-serves-the-live-summary-and-rollup-ranges: done
   8-10-the-owner-app-shell-navigation-themes-install-and-free-limit: done
   8-11-the-owner-app-offers-a-high-contrast-theme: done
   8-12-on-free-the-owner-app-shows-only-subscription-pairing-and-su: done

@@ -152,54 +152,44 @@ pub struct OwnerRangeTotals {
 impl OwnerRangeTotals {
     /// Adds one day's rollup.
     pub fn add_rollup(&mut self, r: &RollupV1) {
-        self.days += 1;
-        let (a, b) = (&mut self.revenue, &r.revenue);
-        a.total += b.total;
-        a.by_type.play += b.by_type.play;
-        a.by_type.products += b.by_type.products;
-        a.by_type.plans += b.by_type.plans;
-        a.by_type.other += b.by_type.other;
-        a.by_method.cash += b.by_method.cash;
-        a.by_method.upi += b.by_method.upi;
-        a.by_method.card += b.by_method.card;
-        a.by_method.wallet += b.by_method.wallet;
-        a.by_method.credit += b.by_method.credit;
-        for (s, o) in [
-            (&mut self.refunds, &r.refunds),
-            (&mut self.discounts, &r.discounts),
-            (&mut self.voids, &r.voids),
-        ] {
-            s.count += o.count;
-            s.amount += o.amount;
-        }
-        self.sessions.count += r.sessions.count;
-        self.sessions.minutes += r.sessions.minutes;
+        self.add(&Self {
+            days: 1,
+            revenue: r.revenue.clone(),
+            refunds: r.refunds.clone(),
+            discounts: r.discounts.clone(),
+            voids: r.voids.clone(),
+            sessions: r.sessions.clone(),
+        });
     }
 
-    /// Adds another set of totals.
+    /// Adds another set of totals. The Hub wrote the files the cloud sums, so the sums saturate
+    /// rather than overflow.
     pub fn add(&mut self, o: &Self) {
-        self.days += o.days;
+        fn sat(a: &mut i64, b: i64) {
+            *a = a.saturating_add(b);
+        }
+        sat(&mut self.days, o.days);
         let (a, b) = (&mut self.revenue, &o.revenue);
-        a.total += b.total;
-        a.by_type.play += b.by_type.play;
-        a.by_type.products += b.by_type.products;
-        a.by_type.plans += b.by_type.plans;
-        a.by_type.other += b.by_type.other;
-        a.by_method.cash += b.by_method.cash;
-        a.by_method.upi += b.by_method.upi;
-        a.by_method.card += b.by_method.card;
-        a.by_method.wallet += b.by_method.wallet;
-        a.by_method.credit += b.by_method.credit;
+        sat(&mut a.total, b.total);
+        sat(&mut a.by_type.play, b.by_type.play);
+        sat(&mut a.by_type.products, b.by_type.products);
+        sat(&mut a.by_type.plans, b.by_type.plans);
+        sat(&mut a.by_type.other, b.by_type.other);
+        sat(&mut a.by_method.cash, b.by_method.cash);
+        sat(&mut a.by_method.upi, b.by_method.upi);
+        sat(&mut a.by_method.card, b.by_method.card);
+        sat(&mut a.by_method.wallet, b.by_method.wallet);
+        sat(&mut a.by_method.credit, b.by_method.credit);
         for (s, x) in [
             (&mut self.refunds, &o.refunds),
             (&mut self.discounts, &o.discounts),
             (&mut self.voids, &o.voids),
         ] {
-            s.count += x.count;
-            s.amount += x.amount;
+            sat(&mut s.count, x.count);
+            sat(&mut s.amount, x.amount);
         }
-        self.sessions.count += o.sessions.count;
-        self.sessions.minutes += o.sessions.minutes;
+        sat(&mut self.sessions.count, o.sessions.count);
+        sat(&mut self.sessions.minutes, o.sessions.minutes);
     }
 }
 
@@ -298,9 +288,14 @@ pub fn date_from_days(days: i64) -> String {
 }
 
 /// Every date from `from` to `to` inclusive; empty when either is not a date or `from` is later.
+/// At most [`OWNER_RANGE_MAX_DAYS`] + 1 dates are built, so a caller can tell a range is too long
+/// without allocating all of it.
 pub fn dates_between(from: &str, to: &str) -> Vec<String> {
     match (days_from_date(from), days_from_date(to)) {
-        (Some(a), Some(b)) if a <= b => (a..=b).map(date_from_days).collect(),
+        (Some(a), Some(b)) if a <= b => (a..=b)
+            .take(usize::try_from(OWNER_RANGE_MAX_DAYS + 1).unwrap_or(usize::MAX))
+            .map(date_from_days)
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -330,6 +325,87 @@ mod tests {
         assert_eq!(dates_between("2026-10-30", "2026-10-30").len(), 1);
         assert!(dates_between("2026-10-31", "2026-10-30").is_empty());
         assert!(dates_between("nope", "2026-10-30").is_empty());
+        // A huge range is cut at the cap plus one, never fully built.
+        assert_eq!(
+            dates_between("0001-01-01", "9999-12-31").len(),
+            usize::try_from(OWNER_RANGE_MAX_DAYS + 1).unwrap()
+        );
+    }
+
+    #[test]
+    fn totals_add_every_field_and_saturate() {
+        let one = |n: i64| {
+            let mut r = RollupV1 {
+                schema: 1,
+                branch_id: "b".into(),
+                business_day: "2026-10-30".into(),
+                currency: "INR".into(),
+                revenue: RollupRevenue::default(),
+                refunds: RollupAmount {
+                    count: n,
+                    amount: n,
+                },
+                discounts: RollupAmount {
+                    count: n + 1,
+                    amount: n + 2,
+                },
+                voids: RollupAmount {
+                    count: n + 3,
+                    amount: n + 4,
+                },
+                sessions: RollupSessions {
+                    count: n + 5,
+                    minutes: n + 6,
+                },
+                shifts: Vec::new(),
+                stock: Default::default(),
+                credit: Default::default(),
+                play_hours: Vec::new(),
+            };
+            r.revenue.total = n;
+            r.revenue.by_type.play = n + 1;
+            r.revenue.by_type.products = n + 2;
+            r.revenue.by_type.plans = n + 3;
+            r.revenue.by_type.other = n + 4;
+            r.revenue.by_method.cash = n + 5;
+            r.revenue.by_method.upi = n + 6;
+            r.revenue.by_method.card = n + 7;
+            r.revenue.by_method.wallet = n + 8;
+            r.revenue.by_method.credit = n + 9;
+            r
+        };
+        let mut t = OwnerRangeTotals::default();
+        t.add_rollup(&one(10));
+        t.add_rollup(&one(100));
+        assert_eq!(t.days, 2);
+        assert_eq!(t.revenue.total, 110);
+        assert_eq!(t.revenue.by_type.play, 112);
+        assert_eq!(t.revenue.by_type.products, 114);
+        assert_eq!(t.revenue.by_type.plans, 116);
+        assert_eq!(t.revenue.by_type.other, 118);
+        assert_eq!(t.revenue.by_method.cash, 120);
+        assert_eq!(t.revenue.by_method.upi, 122);
+        assert_eq!(t.revenue.by_method.card, 124);
+        assert_eq!(t.revenue.by_method.wallet, 126);
+        assert_eq!(t.revenue.by_method.credit, 128);
+        assert_eq!((t.refunds.count, t.refunds.amount), (110, 110));
+        assert_eq!((t.discounts.count, t.discounts.amount), (112, 114));
+        assert_eq!((t.voids.count, t.voids.amount), (116, 118));
+        assert_eq!((t.sessions.count, t.sessions.minutes), (120, 122));
+        let mut sum = OwnerRangeTotals::default();
+        sum.add(&t);
+        sum.add(&t);
+        assert_eq!(sum, {
+            let mut d = t.clone();
+            d.add(&t);
+            d
+        });
+        assert_eq!(sum.revenue.total, 220);
+        let mut big = one(i64::MAX - 20);
+        big.revenue.total = i64::MAX;
+        t.add_rollup(&big);
+        t.add_rollup(&big);
+        assert_eq!(t.revenue.total, i64::MAX);
     }
 
     #[test]

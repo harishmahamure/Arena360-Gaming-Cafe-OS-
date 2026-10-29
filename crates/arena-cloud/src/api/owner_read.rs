@@ -133,7 +133,10 @@ async fn live_of(
         .read_cache
         .live(presigner, &b.tenant_id, &b.id, now)
         .await
-        .map_err(ApiError::unavailable)?;
+        .map_err(ApiError::unavailable)?
+        // A summary in another currency than the branch's is not this branch's figure (as with
+        // a rollup day): it is not served, so `all` never totals it under the wrong currency.
+        .filter(|s| s.currency == b.currency && s.branch_id == b.id);
     let last_heartbeat_at = st
         .db
         .active_hub(&b.id)
@@ -142,9 +145,7 @@ async fn live_of(
         .and_then(|h| h.last_seen_at);
     Ok(OwnerLive {
         branch_id: b.id.clone(),
-        currency: summary
-            .as_ref()
-            .map_or_else(|| b.currency.clone(), |s| s.currency.clone()),
+        currency: b.currency.clone(),
         as_of: summary.as_ref().map(|s| s.as_of),
         branch_online: last_heartbeat_at.is_some_and(|t| now - t <= BRANCH_ONLINE_WINDOW_MS),
         last_heartbeat_at,
@@ -243,7 +244,10 @@ async fn range_of(
         let row = periods.entry(period).or_default();
         // A day written in another currency is not this branch's figure: it counts as missing
         // rather than being added to the wrong one.
-        match files.get(d).filter(|f| f.currency == b.currency) {
+        match files
+            .get(d)
+            .filter(|f| f.currency == b.currency && f.branch_id == b.id && f.business_day == *d)
+        {
             Some(f) => {
                 row.add_rollup(f);
                 totals.add_rollup(f);

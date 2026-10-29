@@ -183,12 +183,14 @@ fn fixture() -> RollupRows {
         ThresholdRow {
             product_id: "P2".into(),
             name: "Chips".into(),
+            category: "Snacks".into(),
             qty: 3,
             low_stock_qty: None,
         },
         ThresholdRow {
             product_id: "P1".into(),
             name: "Cola".into(),
+            category: "Drinks".into(),
             qty: 12,
             low_stock_qty: Some(5),
         },

@@ -940,3 +940,10 @@ Each entry gives the story, the decision point, the choice taken (the recommende
 - **Totals.** Labelled "Revenue, days with data"; "Partial" shows when any other day has no rollup. Refunds, discounts and voids are negative lines.
 - **Dates.** Today/week/month use the date in the first picked branch's time zone; weeks start on Monday; Custom is capped at 400 days and refuses an inverted range before any call.
 - **Badge colours.** `StatusBadge` takes its background from the dark Hub tile, which fails contrast on the paper theme, so Reports sets `--status-badge-background` to the surface. The same flaw exists on Today's badges (not changed here).
+
+## Story 8.16: Reports — stock
+
+- **Stock on the range answer.** `OwnerRange` gains `stock` (`OwnerRangeStock`): newest levels and expiring lots plus waste summed over the accepted days, built by `OwnerRangeStock::from_rollups`; the cloud only passes it through.
+- **Category.** `RollupStockLevel` gains optional `category` (additive, no schema bump) so All branches can match by name and category; older files match by name alone.
+- **Two reads.** Waste from the picked range; levels and expiring lots from a separate 7-day `summary` call made only while the Stock tab is open, so Today and past custom ranges still show the newest levels with their date.
+- **Expiring.** Limited to the rollup's own warning window (default 3 days), so lots 4–7 days out may be missing on branches with a narrow window.

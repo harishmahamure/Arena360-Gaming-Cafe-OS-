@@ -249,8 +249,9 @@ pub use operating::{
 pub use owner_read::{
     BRANCH_ONLINE_WINDOW_MS, DataAgeReport, GroupBy, OWNER_ALL_BRANCHES, OWNER_API_LIMIT_PER_MIN,
     OWNER_RANGE_MAX_DAYS, OWNER_READ_CACHE_MS, OwnerLive, OwnerLiveAll, OwnerLiveTotal, OwnerRange,
-    OwnerRangeAll, OwnerRangeCurrency, OwnerRangeRow, OwnerRangeShift, OwnerRangeTotals,
-    date_from_days, dates_between, days_from_date,
+    OwnerRangeAll, OwnerRangeCurrency, OwnerRangeExpiring, OwnerRangeRow, OwnerRangeShift,
+    OwnerRangeStock, OwnerRangeTotals, OwnerRangeWaste, date_from_days, dates_between,
+    days_from_date,
 };
 pub use pairing::{
     ActivePairingCode, BOOTSTRAP_DAY_START_MIN, BootstrapOwner, BootstrapProfile,

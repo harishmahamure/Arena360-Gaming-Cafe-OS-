@@ -28,8 +28,8 @@
   ],
   "stock": {
     "levels": [
-      { "product_id": "P2", "name": "Chips", "qty": 3 },
-      { "product_id": "P1", "name": "Cola", "qty": 12, "low_qty": 5 }
+      { "product_id": "P2", "name": "Chips", "category": "Snacks", "qty": 3 },
+      { "product_id": "P1", "name": "Cola", "category": "Drinks", "qty": 12, "low_qty": 5 }
     ],
     "waste": [
       { "product_id": "P2", "qty": 3, "value": 30, "reason": "expired" },

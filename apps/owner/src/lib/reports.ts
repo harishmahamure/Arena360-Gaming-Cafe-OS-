@@ -3,6 +3,7 @@ import type {
   OwnerLive,
   OwnerRange,
   OwnerRangeShift,
+  OwnerRangeStock,
   OwnerRangeTotals,
 } from "@arena/ui/generated";
 import { load } from "./api";
@@ -204,3 +205,192 @@ export const shiftsOf = (reports: BranchReport[]): ShiftRow[] =>
       (range?.shifts ?? []).map((s) => ({ ...s, branch, currency: range?.currency ?? "INR" })),
     )
     .sort((a, b) => a.shift.closed_at - b.shift.closed_at);
+
+/** The days of rollups that stock levels and expiring lots are read from (the newest one wins). */
+export const LEVELS_DAYS = 7;
+/** Lots expiring within this many days of today are listed. */
+export const EXPIRY_DAYS = 7;
+
+/** One branch's stock as of its newest rollup in the last week. */
+export type LevelsWindow = {
+  branchId: string;
+  stock: OwnerRangeStock | null;
+  asOf: string;
+  fresh: boolean;
+};
+
+/** Fetches the last week's stock levels and expiring lots of each branch. */
+export async function loadLevels(
+  branches: OwnerBranch[],
+  today: string,
+): Promise<LevelsWindow[] | "signed-out"> {
+  const from = fromDays(toDays(today) - (LEVELS_DAYS - 1));
+  const parts = await Promise.all(
+    branches.map(async (b) => ({
+      id: b.id,
+      res: await load<OwnerRange>(`${base(b.id)}/summary?from=${from}&to=${today}&group_by=day`), // i18n-ignore
+    })),
+  );
+  if (parts.some((p) => p.res === "signed-out")) return "signed-out";
+  return parts.map(({ id, res }) => {
+    const r = res === "signed-out" ? null : res;
+    return { branchId: id, stock: r?.data.stock ?? null, asOf: r?.asOf ?? "", fresh: !!r?.live };
+  });
+}
+
+/** Products match across branches by name and category, ignoring case and spacing. */
+const productKey = (name: string, category?: string | null) =>
+  `${name.trim().toLowerCase()}\u0000${(category ?? "").trim().toLowerCase()}`; // i18n-ignore
+
+export type StockCell = { qty: number; low: number | null };
+export type StockProduct = {
+  key: string;
+  name: string;
+  category: string;
+  /** By branch id; a branch without the product has no cell. */
+  cells: Record<string, StockCell>;
+  total: number;
+};
+export type WasteCell = { qty: number; value: number };
+export type WasteLine = {
+  key: string;
+  name: string;
+  category: string;
+  reason: string;
+  cells: Record<string, WasteCell>;
+  qty: number;
+  value: number;
+};
+export type LowLine = { branch: string; name: string; qty: number; low: number };
+export type ExpiringLine = {
+  branch: string;
+  name: string;
+  lot: string;
+  qty: number;
+  expiresOn: string;
+  expired: boolean;
+};
+/** A low-stock attention item from a branch's live summary. */
+export type LiveLow = { branch: string; product: string; qty: string; asOf: number };
+
+export type StockBranch = {
+  id: string;
+  name: string;
+  /** The business day of the rollup the levels come from; null when the week has none. */
+  levelsAsOf: string | null;
+  tracked: boolean;
+};
+
+/** The stock report of the branches that share one currency. */
+export type StockView = {
+  currency: string;
+  branches: StockBranch[];
+  products: StockProduct[];
+  low: LowLine[];
+  waste: WasteLine[];
+  expiring: ExpiringLine[];
+  live: LiveLow[];
+};
+
+const byName = <T extends { name: string; category?: string }>(a: T, b: T) =>
+  a.name.localeCompare(b.name) || (a.category ?? "").localeCompare(b.category ?? "");
+
+/**
+ * Groups the branches' stock by currency, so waste value is never mixed. Levels and expiring lots
+ * come from each branch's newest rollup of the last week, waste from the picked range, and the
+ * live low-stock items from the branch's current summary.
+ */
+export function stockViews(
+  reports: BranchReport[],
+  windows: LevelsWindow[],
+  today: string,
+): StockView[] {
+  const views = new Map<string, StockView>();
+  const horizon = fromDays(toDays(today) + EXPIRY_DAYS);
+  for (const { branch, range, live } of reports) {
+    if (!range) continue;
+    const view = views.get(range.currency) ?? {
+      currency: range.currency,
+      branches: [],
+      products: [],
+      low: [],
+      waste: [],
+      expiring: [],
+      live: [],
+    };
+    views.set(range.currency, view);
+
+    const stock = windows.find((w) => w.branchId === branch.id)?.stock ?? null;
+    const levels = stock?.levels ?? [];
+    view.branches.push({
+      id: branch.id,
+      name: branch.name,
+      levelsAsOf: stock?.levels_as_of ?? null,
+      tracked: levels.length > 0,
+    });
+    for (const l of levels) {
+      const key = productKey(l.name, l.category);
+      let p = view.products.find((x) => x.key === key);
+      if (!p) {
+        p = { key, name: l.name, category: l.category ?? "", cells: {}, total: 0 };
+        view.products.push(p);
+      }
+      p.cells[branch.id] = { qty: l.qty, low: l.low_qty ?? null };
+      p.total += l.qty;
+      if (l.low_qty != null && l.qty <= l.low_qty) {
+        view.low.push({ branch: branch.name, name: l.name, qty: l.qty, low: l.low_qty });
+      }
+    }
+    for (const e of stock?.expiring ?? []) {
+      if (e.expires_on > horizon) continue;
+      view.expiring.push({
+        branch: branch.name,
+        name: e.name,
+        lot: e.lot,
+        qty: e.qty,
+        expiresOn: e.expires_on,
+        expired: e.expires_on < today,
+      });
+    }
+    for (const w of range.stock.waste) {
+      const key = productKey(w.name, w.category) + "\u0000" + w.reason; // i18n-ignore
+      let line = view.waste.find((x) => x.key === key);
+      if (!line) {
+        line = {
+          key,
+          name: w.name,
+          category: w.category ?? "",
+          reason: w.reason,
+          cells: {},
+          qty: 0,
+          value: 0,
+        };
+        view.waste.push(line);
+      }
+      const cell = (line.cells[branch.id] ??= { qty: 0, value: 0 });
+      cell.qty += w.qty;
+      cell.value += w.value;
+      line.qty += w.qty;
+      line.value += w.value;
+    }
+    for (const a of live?.summary?.attention ?? []) {
+      if (a.kind !== "low_stock") continue;
+      view.live.push({
+        branch: branch.name,
+        product: a.text_params.product ?? "",
+        qty: a.text_params.qty ?? "",
+        asOf: live?.summary?.as_of ?? 0,
+      });
+    }
+  }
+  const out = [...views.values()];
+  for (const v of out) {
+    v.products.sort(byName);
+    v.low.sort((a, b) => a.name.localeCompare(b.name) || a.branch.localeCompare(b.branch));
+    v.waste.sort((a, b) => b.value - a.value || byName(a, b) || a.reason.localeCompare(b.reason));
+    v.expiring.sort(
+      (a, b) => a.expiresOn.localeCompare(b.expiresOn) || a.name.localeCompare(b.name),
+    );
+  }
+  return out;
+}

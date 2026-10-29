@@ -3,4 +3,13 @@
 /**
  * A tracked product's stock at the end of the build.
  */
-export type RollupStockLevel = { product_id: string; name: string; qty: number; low_qty?: number };
+export type RollupStockLevel = {
+  product_id: string;
+  name: string;
+  /**
+   * The product's category (Story 8.16); absent in files built before the Hub wrote it.
+   */
+  category?: string;
+  qty: number;
+  low_qty?: number;
+};

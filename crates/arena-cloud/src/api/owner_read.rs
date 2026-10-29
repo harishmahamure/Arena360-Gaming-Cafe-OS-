@@ -16,8 +16,8 @@ use std::sync::Arc;
 use arena_proto::{
     AppError, BRANCH_ONLINE_WINDOW_MS, DataAgeReport, ErrorCode, GroupBy, OWNER_ALL_BRANCHES,
     OWNER_API_LIMIT_PER_MIN, OWNER_RANGE_MAX_DAYS, OwnerLive, OwnerLiveAll, OwnerRange,
-    OwnerRangeAll, OwnerRangeRow, OwnerRangeShift, OwnerRangeTotals, Tier, dates_between,
-    is_rollup_date,
+    OwnerRangeAll, OwnerRangeRow, OwnerRangeShift, OwnerRangeStock, OwnerRangeTotals, Tier,
+    dates_between, is_rollup_date,
 };
 use arena_store::control::{Branch, RateRule};
 use axum::extract::rejection::QueryRejection;
@@ -240,6 +240,7 @@ async fn range_of(
     let mut periods: BTreeMap<String, OwnerRangeTotals> = BTreeMap::new();
     let mut missing_days = Vec::new();
     let mut shifts = Vec::new();
+    let mut accepted = Vec::new();
     for d in &r.dates {
         let period = r
             .group_by
@@ -255,6 +256,7 @@ async fn range_of(
             Some(f) => {
                 row.add_rollup(f);
                 totals.add_rollup(f);
+                accepted.push(&**f);
                 shifts.extend(f.shifts.iter().map(|shift| OwnerRangeShift {
                     business_day: d.clone(),
                     shift: shift.clone(),
@@ -277,6 +279,7 @@ async fn range_of(
             .collect(),
         missing_days,
         shifts,
+        stock: OwnerRangeStock::from_rollups(&accepted),
     })
 }
 

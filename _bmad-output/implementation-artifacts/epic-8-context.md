@@ -41,3 +41,13 @@ The café owner sees every branch and changes it from a phone or laptop, without
 - **Totals.** Labelled "Revenue, days with data"; "Partial" shows when any other day has no rollup. Refunds, discounts and voids are negative lines.
 - **Dates.** Today/week/month use the date in the first picked branch's time zone; weeks start on Monday; Custom is capped at 400 days and refuses an inverted range before any call.
 - **Badge colours.** `StatusBadge` takes its background from the dark Hub tile, which fails contrast on the paper theme, so Reports sets `--status-badge-background` to the surface. The same flaw exists on Today's badges (not changed here).
+
+## Story 8.16: Reports — stock
+
+- **Stock on the range answer.** `OwnerRange` gains `stock` (`OwnerRangeStock`): levels and expiring lots from the newest accepted rollup of the range (`levels_as_of` names its day, null with no accepted day) and waste summed over every accepted day per product and reason, with names resolved from the newest rollup that lists the product (the id when none does). Built by `OwnerRangeStock::from_rollups` in `arena-proto`; the cloud only passes it through.
+- **Category.** `RollupStockLevel` gains optional `category` (the Hub's `ThresholdRow` now carries it), additive like `over_threshold`: no schema bump, and files built before it match across branches by name alone with an empty category.
+- **Two reads.** Waste comes from the picked range. Levels and expiring lots come from a separate `summary` call over the last 7 days (`LEVELS_DAYS`), made only while the Stock tab is open, so "Today" (no rollup yet) and past custom ranges still show the newest levels with their date.
+- **Low stock.** Two lists: "Low right now" is the live summary's `low_stock` attention items (same line as Today); "Low stock" is every level with `low_qty` set and `qty <= low_qty` from the rollup, with its date.
+- **Expiring.** Lots in the newest rollup with `expires_on` within 7 days of today (already-expired ones carry an "Expired" badge). The Hub's rollup lists lots inside the branch's own warning window (default 3 days), so a lot 4–7 days out shows only when that window is at least as wide.
+- **All branches.** One section per currency; levels and waste are tables with a column per branch and a Total, rows matched by trimmed, case-insensitive name and category, "—" where a branch lacks the product. Waste cells read "qty · value" and value is summed only inside a currency.
+- **Untracked.** A branch whose newest rollup lists no tracked products reads "No tracked products at this branch."; one with no rollup in the week reads "No stock figures yet."

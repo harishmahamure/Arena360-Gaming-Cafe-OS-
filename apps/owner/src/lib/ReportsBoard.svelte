@@ -5,14 +5,18 @@
   import CashPanel from "./CashPanel.svelte";
   import RevenuePanel from "./RevenuePanel.svelte";
   import SetupGate from "./SetupGate.svelte";
+  import StockPanel from "./StockPanel.svelte";
   import {
     byCurrency,
     dateIn,
+    loadLevels,
     loadReport,
     rangeOf,
     rangeProblem,
     shiftsOf,
+    stockViews,
     type BranchReport,
+    type LevelsWindow,
     type RangeKind,
   } from "./reports";
   import { age, isLive, liveBranches, refresh, shell } from "./shell.svelte";
@@ -26,6 +30,7 @@
   const TABS = [
     { id: "revenue", label: "owner.reports.tab.revenue" },
     { id: "cash", label: "owner.reports.tab.cash" },
+    { id: "stock", label: "owner.reports.tab.stock" },
   ] as const satisfies readonly { id: string; label: MessageKey }[];
   const ALL = "all";
 
@@ -39,11 +44,14 @@
   let branchId = $state(ALL);
   let custom = $state({ from: "", to: "" });
   let report: BranchReport[] = $state([]);
+  let windows: LevelsWindow[] = $state([]);
+  let windowsLoaded = $state(false);
   let loaded = $state(false);
   let failed = $state(false);
   let loading = $state(false);
   let now = $state(Date.now());
   let ticket = 0;
+  let windowTicket = 0;
 
   const picked = $derived(
     branchId === ALL || paid.length < 2 ? paid : paid.filter((b) => b.id === branchId),
@@ -54,13 +62,16 @@
   const problem = $derived(rangeProblem(range.from, range.to));
   const views = $derived(byCurrency(report, range.from, range.to));
   const shifts = $derived(shiftsOf(report));
+  const stock = $derived(stockViews(report, windows, today));
   const asOf = $derived(
-    report
-      .map((r) => r.asOf)
+    [...report.map((r) => r.asOf), ...(tab === "stock" ? windows.map((w) => w.asOf) : [])]
       .filter(Boolean)
       .sort()[0] ?? "",
   );
-  const stale = $derived(report.length > 0 && report.some((r) => !r.fresh));
+  const stale = $derived(
+    report.length > 0 &&
+      (report.some((r) => !r.fresh) || (tab === "stock" && windows.some((w) => !w.fresh))),
+  );
 
   async function run() {
     const mine = ++ticket;
@@ -83,10 +94,30 @@
     loaded = true;
   }
 
+  // The stock tab also reads the newest levels of the last week, once per branch pick.
+  async function runLevels() {
+    const mine = ++windowTicket;
+    if (!picked.length) return;
+    const res = await loadLevels(picked, today);
+    if (mine !== windowTicket) return;
+    if (res === "signed-out") {
+      await refresh();
+      return;
+    }
+    windows = res;
+    windowsLoaded = true;
+  }
+
   // Load again whenever the branches, the range or the pick change.
   $effect(() => {
     void [picked.map((b) => b.id).join(), range.from, range.to, problem];
     void run();
+  });
+
+  $effect(() => {
+    void [picked.map((b) => b.id).join(), today];
+    windowsLoaded = false;
+    if (tab === "stock") void runLevels();
   });
 
   // Choosing Custom starts from this week, so both dates always hold something.
@@ -156,7 +187,7 @@
 
   <div
     role="tabpanel"
-    aria-label={t(tab === "cash" ? "owner.reports.tab.cash" : "owner.reports.tab.revenue")}
+    aria-label={t(TABS.find((x) => x.id === tab)?.label ?? "owner.reports.tab.revenue")}
     class="panel"
   >
     {#if !loaded && !failed}
@@ -166,6 +197,12 @@
       <Button label="common.retry" variant="secondary" onclick={run} />
     {:else if tab === "cash"}
       <CashPanel {shifts} many={picked.length > 1} />
+    {:else if tab === "stock"}
+      {#if windowsLoaded}
+        <StockPanel views={stock} many={picked.length > 1} />
+      {:else}
+        <p>{t("owner.loading")}</p>
+      {/if}
     {:else}
       <RevenuePanel {views} many={views.length > 1} {now} />
     {/if}
@@ -218,6 +255,7 @@
   }
   .panel {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-4);
   }
   h2 {

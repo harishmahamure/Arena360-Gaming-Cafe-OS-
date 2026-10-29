@@ -329,6 +329,7 @@ pub fn expired_qty(conn: &Connection, product_id: &str, today: &str) -> Result<i
 pub struct ThresholdRow {
     pub product_id: String,
     pub name: String,
+    pub category: String,
     pub qty: i64,
     pub low_stock_qty: Option<i64>,
 }
@@ -373,7 +374,7 @@ fn threshold_rows(conn: &Connection, only_low: bool) -> Result<Vec<ThresholdRow>
     };
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT p.product_id, p.name, COALESCE(s.qty, 0), p.low_stock_qty
+            "SELECT p.product_id, p.name, p.category, COALESCE(s.qty, 0), p.low_stock_qty
              FROM products p LEFT JOIN stock s ON s.product_id = p.product_id
              WHERE p.deleted_at IS NULL AND p.track_stock = 1 AND p.bundle = 0 {filter}
              ORDER BY p.name COLLATE NOCASE, p.product_id"
@@ -384,8 +385,9 @@ fn threshold_rows(conn: &Connection, only_low: bool) -> Result<Vec<ThresholdRow>
             Ok(ThresholdRow {
                 product_id: r.get(0)?,
                 name: r.get(1)?,
-                qty: r.get(2)?,
-                low_stock_qty: r.get(3)?,
+                category: r.get(2)?,
+                qty: r.get(3)?,
+                low_stock_qty: r.get(4)?,
             })
         })
         .map_err(db_error)?;

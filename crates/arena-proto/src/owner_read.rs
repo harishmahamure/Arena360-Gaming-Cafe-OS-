@@ -5,10 +5,14 @@
 //! Money stays in integer minor units. Branches in different currencies are never summed: the
 //! `all` answers carry one total per currency.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::rollup::{RollupAmount, RollupRevenue, RollupSessions, RollupShift, RollupV1};
+use crate::rollup::{
+    RollupAmount, RollupRevenue, RollupSessions, RollupShift, RollupStockLevel, RollupV1,
+};
 use crate::summary::BranchSummary;
 
 /// How long the cloud serves a branch's summary or a month of rollups from memory before it asks
@@ -209,6 +213,104 @@ pub struct OwnerRangeShift {
     pub shift: RollupShift,
 }
 
+/// Stock written off over a range for one product and reason, at cost (Story 8.16).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OwnerRangeWaste {
+    pub product_id: String,
+    /// The name in the newest rollup that lists the product; the id when none does.
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub category: Option<String>,
+    pub reason: String,
+    #[ts(type = "number")]
+    pub qty: i64,
+    #[ts(type = "number")]
+    pub value: i64,
+}
+
+/// A lot with stock left that is near its expiry, from the newest rollup of a range (Story 8.16).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OwnerRangeExpiring {
+    pub product_id: String,
+    pub name: String,
+    pub lot: String,
+    #[ts(type = "number")]
+    pub qty: i64,
+    pub expires_on: String,
+}
+
+/// The stock figures of a range (Story 8.16): levels and expiring lots as of the newest accepted
+/// rollup, waste summed over every accepted day.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OwnerRangeStock {
+    /// The business day of the rollup the levels come from; null when no day was accepted.
+    pub levels_as_of: Option<String>,
+    pub levels: Vec<RollupStockLevel>,
+    pub waste: Vec<OwnerRangeWaste>,
+    pub expiring: Vec<OwnerRangeExpiring>,
+}
+
+impl OwnerRangeStock {
+    /// Builds the stock of a range from its accepted rollups, oldest day first.
+    pub fn from_rollups(days: &[&RollupV1]) -> Self {
+        let Some(newest) = days.last() else {
+            return Self::default();
+        };
+        // Name and category of a product: the newest rollup that lists it.
+        let named = |id: &str| {
+            days.iter()
+                .rev()
+                .find_map(|r| r.stock.levels.iter().find(|l| l.product_id == id))
+        };
+        let mut waste: BTreeMap<(String, String), (i64, i64)> = BTreeMap::new();
+        for w in days.iter().flat_map(|r| &r.stock.waste) {
+            let e = waste
+                .entry((w.product_id.clone(), w.reason.clone()))
+                .or_default();
+            e.0 = e.0.saturating_add(w.qty);
+            e.1 = e.1.saturating_add(w.value);
+        }
+        let mut waste: Vec<OwnerRangeWaste> = waste
+            .into_iter()
+            .filter(|(_, (qty, value))| *qty != 0 || *value != 0)
+            .map(|((product_id, reason), (qty, value))| {
+                let level = named(&product_id);
+                OwnerRangeWaste {
+                    name: level.map_or_else(|| product_id.clone(), |l| l.name.clone()),
+                    category: level.and_then(|l| l.category.clone()),
+                    product_id,
+                    reason,
+                    qty,
+                    value,
+                }
+            })
+            .collect();
+        waste.sort_by(|a, b| b.value.cmp(&a.value).then_with(|| a.name.cmp(&b.name)));
+        let expiring = newest
+            .stock
+            .expiring
+            .iter()
+            .map(|e| OwnerRangeExpiring {
+                name: named(&e.product_id).map_or_else(|| e.product_id.clone(), |l| l.name.clone()),
+                product_id: e.product_id.clone(),
+                lot: e.lot.clone(),
+                qty: e.qty,
+                expires_on: e.expires_on.clone(),
+            })
+            .collect();
+        Self {
+            levels_as_of: Some(newest.business_day.clone()),
+            levels: newest.stock.levels.clone(),
+            waste,
+            expiring,
+        }
+    }
+}
+
 /// `GET /v1/branches/{id}/summary`: one branch over `from`..`to`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
@@ -224,6 +326,8 @@ pub struct OwnerRange {
     pub missing_days: Vec<String>,
     /// Shifts closed on the accepted days, oldest closing first.
     pub shifts: Vec<OwnerRangeShift>,
+    /// Stock levels, waste and expiring lots from the accepted days (Story 8.16).
+    pub stock: OwnerRangeStock,
 }
 
 /// The branches of one currency over a range, added up.
@@ -427,6 +531,82 @@ mod tests {
         t.add_rollup(&big);
         t.add_rollup(&big);
         assert_eq!(t.revenue.total, i64::MAX);
+    }
+
+    #[test]
+    fn range_stock_takes_levels_from_the_newest_day_and_sums_waste() {
+        use crate::rollup::{RollupExpiring, RollupWaste};
+        let level = |id: &str, name: &str, qty: i64| RollupStockLevel {
+            product_id: id.into(),
+            name: name.into(),
+            category: Some("Drinks".into()),
+            qty,
+            low_qty: Some(5),
+        };
+        let waste = |id: &str, reason: &str, qty: i64, value: i64| RollupWaste {
+            product_id: id.into(),
+            qty,
+            value,
+            reason: reason.into(),
+        };
+        let day = |date: &str, levels, waste| RollupV1 {
+            schema: 1,
+            branch_id: "b".into(),
+            business_day: date.into(),
+            currency: "INR".into(),
+            revenue: RollupRevenue::default(),
+            refunds: RollupAmount::default(),
+            discounts: RollupAmount::default(),
+            voids: RollupAmount::default(),
+            sessions: RollupSessions::default(),
+            shifts: Vec::new(),
+            stock: crate::rollup::RollupStock {
+                levels,
+                waste,
+                expiring: vec![RollupExpiring {
+                    product_id: "P1".into(),
+                    lot: "L1".into(),
+                    qty: 2,
+                    expires_on: "2026-11-02".into(),
+                }],
+            },
+            credit: Default::default(),
+            play_hours: Vec::new(),
+        };
+        let a = day(
+            "2026-10-28",
+            vec![level("P1", "Cola", 20), level("P2", "Chips", 9)],
+            vec![
+                waste("P1", "spoiled", 2, 400),
+                waste("P2", "damaged", 1, 100),
+            ],
+        );
+        let b = day(
+            "2026-10-29",
+            vec![level("P1", "Cola", 12)],
+            vec![waste("P1", "spoiled", 1, 200), waste("P3", "expired", 0, 0)],
+        );
+        let s = OwnerRangeStock::from_rollups(&[&a, &b]);
+        assert_eq!(s.levels_as_of.as_deref(), Some("2026-10-29"));
+        assert_eq!(s.levels.len(), 1);
+        assert_eq!(s.levels[0].qty, 12);
+        // Summed per product and reason, biggest value first; a zero line is dropped.
+        let w: Vec<_> = s
+            .waste
+            .iter()
+            .map(|w| (w.name.as_str(), w.reason.as_str(), w.qty, w.value))
+            .collect();
+        assert_eq!(
+            w,
+            [("Cola", "spoiled", 3, 600), ("Chips", "damaged", 1, 100)]
+        );
+        assert_eq!(s.waste[1].category.as_deref(), Some("Drinks"));
+        assert_eq!(s.expiring.len(), 1);
+        assert_eq!(s.expiring[0].name, "Cola");
+        assert_eq!(
+            OwnerRangeStock::from_rollups(&[]),
+            OwnerRangeStock::default()
+        );
     }
 
     #[test]

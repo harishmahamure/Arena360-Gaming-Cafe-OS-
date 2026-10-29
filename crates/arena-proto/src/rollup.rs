@@ -171,6 +171,10 @@ pub struct RollupShift {
 pub struct RollupStockLevel {
     pub product_id: String,
     pub name: String,
+    /// The product's category (Story 8.16); absent in files built before the Hub wrote it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub category: Option<String>,
     #[ts(type = "number")]
     pub qty: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]

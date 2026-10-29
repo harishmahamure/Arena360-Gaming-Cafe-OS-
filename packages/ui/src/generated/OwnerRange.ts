@@ -2,6 +2,7 @@
 import type { GroupBy } from "./GroupBy";
 import type { OwnerRangeRow } from "./OwnerRangeRow";
 import type { OwnerRangeShift } from "./OwnerRangeShift";
+import type { OwnerRangeStock } from "./OwnerRangeStock";
 import type { OwnerRangeTotals } from "./OwnerRangeTotals";
 
 /**
@@ -23,4 +24,8 @@ export type OwnerRange = {
    * Shifts closed on the accepted days, oldest closing first.
    */
   shifts: Array<OwnerRangeShift>;
+  /**
+   * Stock levels, waste and expiring lots from the accepted days (Story 8.16).
+   */
+  stock: OwnerRangeStock;
 };

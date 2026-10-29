@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-30-2026 22:00
+last_updated: 10-30-2026 23:00
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -237,7 +237,7 @@ development_status:
   8-13-today-shows-every-branch-with-its-figures-cash-variance-and: done
   8-14-the-owner-app-stays-in-setup-mode-until-a-branch-goes-live-t: done
   8-15-reports-revenue-and-cash-reconciliation: done
-  8-16-reports-stock: backlog
+  8-16-reports-stock: review
   8-17-owner-reports-export-to-csv-and-pdf-and-match-the-hub-s-z-re: backlog
   8-18-the-cloud-accepts-owner-command-kinds-checks-them-and-fans-a: backlog
   8-19-the-hub-applies-owner-commands-exactly-once-and-the-owner-s: backlog

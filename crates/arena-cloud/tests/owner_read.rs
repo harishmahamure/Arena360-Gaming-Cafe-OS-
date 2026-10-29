@@ -12,8 +12,9 @@ use arena_cloud::presign::Presigner;
 use arena_cloud::store::{MemoryStore, ObjectStore, S3Config, StoreCalls};
 use arena_cloud::{Clock, app_with_auth, auth_state};
 use arena_proto::{
-    BranchSummary, RollupAmount, RollupByMethod, RollupByType, RollupCredit, RollupRevenue,
-    RollupSessions, RollupShift, RollupStock, RollupV1, SUMMARY_SCHEMA, SummaryCatalogue, Tier,
+    BranchSummary, RollupAmount, RollupByMethod, RollupByType, RollupCredit, RollupExpiring,
+    RollupRevenue, RollupSessions, RollupShift, RollupStock, RollupStockLevel, RollupV1,
+    RollupWaste, SUMMARY_SCHEMA, SummaryCatalogue, Tier,
 };
 use arena_store::control::{CompGrant, ControlDb, LATEST_CONTROL_VERSION, NewBackupCode};
 use axum::body::{Body, to_bytes};
@@ -361,6 +362,29 @@ impl Harness {
         currency: &str,
         shifts: Vec<RollupShift>,
     ) {
+        self.put_rollup_full(
+            c,
+            date,
+            schema,
+            total,
+            currency,
+            shifts,
+            RollupStock::default(),
+        )
+        .await;
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn put_rollup_full(
+        &self,
+        c: &Cafe,
+        date: &str,
+        schema: u32,
+        total: i64,
+        currency: &str,
+        shifts: Vec<RollupShift>,
+        stock: RollupStock,
+    ) {
         let r = RollupV1 {
             schema,
             branch_id: c.branch.clone(),
@@ -388,7 +412,7 @@ impl Harness {
                 minutes: 90,
             },
             shifts,
-            stock: RollupStock::default(),
+            stock,
             credit: RollupCredit::default(),
             play_hours: vec![],
         };
@@ -674,6 +698,87 @@ async fn a_range_lists_the_shifts_closed_on_its_accepted_days_oldest_first() {
     assert_eq!(first["over_threshold"], true);
     assert_eq!(first["approver_name"], "Ravi");
     assert!(r.body["shifts"][1]["shift"].get("over_threshold").is_none());
+}
+
+#[tokio::test]
+async fn a_range_carries_the_newest_levels_expiring_lots_and_the_waste_of_every_accepted_day() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    let level = |qty: i64| RollupStockLevel {
+        product_id: "p1".into(),
+        name: "Cola".into(),
+        category: Some("Drinks".into()),
+        qty,
+        low_qty: Some(5),
+    };
+    let waste = |qty: i64, value: i64| RollupWaste {
+        product_id: "p1".into(),
+        qty,
+        value,
+        reason: "spoiled".into(),
+    };
+    let stock = |qty: i64, w: RollupWaste| RollupStock {
+        levels: vec![level(qty)],
+        waste: vec![w],
+        expiring: vec![RollupExpiring {
+            product_id: "p1".into(),
+            lot: "L1".into(),
+            qty: 3,
+            expires_on: "2026-11-02".into(),
+        }],
+    };
+    h.put_rollup_full(
+        &a,
+        "2026-10-26",
+        1,
+        1_000,
+        "INR",
+        vec![],
+        stock(20, waste(2, 400)),
+    )
+    .await;
+    h.put_rollup_full(
+        &a,
+        "2026-10-27",
+        1,
+        1_000,
+        "INR",
+        vec![],
+        stock(12, waste(1, 200)),
+    )
+    .await;
+    // A day at a schema the cloud does not read gives no levels and no waste.
+    h.put_rollup_full(
+        &a,
+        "2026-10-28",
+        7,
+        1_000,
+        "INR",
+        vec![],
+        stock(1, waste(9, 900)),
+    )
+    .await;
+
+    let r = h
+        .get(&a, &summary(&a, "from=2026-10-26&to=2026-10-28"))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let s = &r.body["stock"];
+    assert_eq!(s["levels_as_of"], "2026-10-27");
+    assert_eq!(s["levels"][0]["qty"], 12);
+    assert_eq!(s["levels"][0]["category"], "Drinks");
+    assert_eq!(s["waste"][0]["name"], "Cola");
+    assert_eq!(s["waste"][0]["qty"], 3);
+    assert_eq!(s["waste"][0]["value"], 600);
+    assert_eq!(s["expiring"][0]["name"], "Cola");
+    assert_eq!(s["expiring"][0]["expires_on"], "2026-11-02");
+
+    // No accepted day: no levels date and nothing listed.
+    let r = h
+        .get(&a, &summary(&a, "from=2026-10-29&to=2026-10-29"))
+        .await;
+    assert_eq!(r.body["stock"]["levels_as_of"], Value::Null);
+    assert_eq!(r.body["stock"]["levels"], json!([]));
 }
 
 #[tokio::test]

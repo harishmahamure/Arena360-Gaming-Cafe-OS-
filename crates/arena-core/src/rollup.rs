@@ -212,6 +212,7 @@ pub fn fold_rollup(
                 .map(|l| RollupStockLevel {
                     product_id: l.product_id.clone(),
                     name: l.name.clone(),
+                    category: Some(l.category.clone()),
                     qty: l.qty,
                     low_qty: l.low_stock_qty,
                 })

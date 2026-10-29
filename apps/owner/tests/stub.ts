@@ -127,6 +127,7 @@ export function rangeOfBranch(id: string, over: Partial<OwnerRange> = {}): Owner
     rows: [],
     missing_days: [],
     shifts: [],
+    stock: { levels_as_of: null, levels: [], waste: [], expiring: [] },
     ...over,
   };
 }

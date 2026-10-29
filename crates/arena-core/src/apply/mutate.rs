@@ -563,6 +563,10 @@ pub(super) fn mutate(
             Target::Summary(t) => super::summary::mutate(tx, p, t),
             _ => Err(mismatch()),
         },
+        IntentPayload::RollupPublish(p) => match target {
+            Target::Summary(t) => super::summary::mutate_rollup(tx, p, t),
+            _ => Err(mismatch()),
+        },
         IntentPayload::AlertRaise(_) | IntentPayload::AlertAck(_) => match target {
             Target::Alert(t) => super::alert::mutate(tx, intent, t, now_ms),
             _ => Err(mismatch()),

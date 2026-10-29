@@ -397,7 +397,10 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
             credit_collect::load_collect_reverted(tx, r, now)?,
         )),
         P::CreditAutoPause(p) => Target::CreditAutoPause(Box::new(credit_pause::load(tx, p, now)?)),
-        P::SummaryPublish(_) => Target::Summary(Box::new(summary::load(tx)?)),
+        P::SummaryPublish(_) => {
+            Target::Summary(Box::new(summary::load(tx, arena_proto::SUMMARY_LOG_DATE)?))
+        }
+        P::RollupPublish(p) => Target::Summary(Box::new(summary::load(tx, &p.date)?)),
         P::SessionExpire(e) => Target::SessionExpire(Box::new(session_expire::load(tx, e)?)),
         P::SessionRateFlip(f) => Target::SessionRateFlip(Box::new(rate_flip::load(tx, f, now)?)),
         P::InvoiceIssue(p) => Target::InvoiceIssue(Box::new(invoice_issue::load(tx, p, now)?)),

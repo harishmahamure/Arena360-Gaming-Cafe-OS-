@@ -1387,6 +1387,18 @@ mod tests {
                 .publish_summary(T0 + 1, "state/latest.json".into())
                 .await
                 .unwrap();
+            // A daily rollup was published, and then regenerated (the second only updates it).
+            for built_at in [T0, T0 + 1] {
+                writer
+                    .publish_rollup(
+                        "2026-10-01".into(),
+                        1,
+                        built_at,
+                        "rollups/2026-10-01.json".into(),
+                    )
+                    .await
+                    .unwrap();
+            }
             // The counter sale kept above is long past its Undo window: the system numbers it.
             let mut number = submit(
                 IntentPayload::InvoiceIssue(arena_proto::InvoiceIssue {
@@ -1493,7 +1505,11 @@ mod tests {
         dest.write_tx_mut(|tx| replay(source.changes().unwrap(), tx))
             .unwrap();
         let want = source.rows(Table::RollupLog).unwrap();
-        assert_eq!(want.len(), 1, "one row, published twice");
+        assert_eq!(
+            want.len(),
+            2,
+            "the summary and one day's rollup, each published twice"
+        );
         assert_eq!(dest.rows(Table::RollupLog).unwrap(), want);
     }
 

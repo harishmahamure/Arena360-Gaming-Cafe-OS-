@@ -11,6 +11,27 @@ use ts_rs::TS;
 
 /// The schema of `rollups/<date>.json`.
 pub const ROLLUP_SCHEMA: u32 = 1;
+/// The object key of the rollup of `date` (`yyyy-mm-dd`) under the branch's prefix of the data
+/// bucket; what `rollup_log.key` records for that day.
+pub fn rollup_object_key(date: &str) -> String {
+    format!("rollups/{date}.json")
+}
+
+/// Whether `s` is a `rollup_log.date` of a daily rollup (`yyyy-mm-dd`, month 01–12, day 01–31), as
+/// opposed to the summary's `latest`.
+pub fn is_rollup_date(s: &str) -> bool {
+    let b = s.as_bytes();
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+        return false;
+    }
+    let num =
+        |r: std::ops::Range<usize>| s.get(r).filter(|p| p.bytes().all(|c| c.is_ascii_digit()));
+    let (Some(_), Some(m), Some(d)) = (num(0..4), num(5..7), num(8..10)) else {
+        return false;
+    };
+    matches!(m.parse::<u8>(), Ok(1..=12)) && matches!(d.parse::<u8>(), Ok(1..=31))
+}
+
 /// The most credit players one rollup lists (largest balance first); the totals cover everyone.
 pub const ROLLUP_PLAYERS_CAP: usize = 500;
 
@@ -212,9 +233,34 @@ pub struct RollupV1 {
     pub play_hours: Vec<RollupPlayHours>,
 }
 
+/// The payload of `rollup.publish` (Story 8.6, system only): the rollup of `date` was PUT to the
+/// cloud. Upserts the `rollup_log` row of that day and writes nothing else.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct RollupPublish {
+    /// The business day, `yyyy-mm-dd`.
+    pub date: String,
+    /// The rollup's schema.
+    pub schema: u32,
+    /// When it was built (Hub clock, ms).
+    #[ts(type = "number")]
+    pub built_at: i64,
+    /// The object key it was PUT to (`.../rollups/<date>.json`).
+    pub key: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rollup_date_is_a_calendar_looking_date_not_latest() {
+        assert!(is_rollup_date("2026-10-29"));
+        assert!(!is_rollup_date("latest"));
+        assert!(!is_rollup_date("2026-13-01"));
+        assert!(!is_rollup_date("2026-1-001"));
+        assert_eq!(rollup_object_key("2026-10-29"), "rollups/2026-10-29.json");
+    }
 
     #[test]
     fn an_unset_optional_field_has_no_key() {

@@ -200,8 +200,8 @@ pub use reports::{
     SalesOrderRow, SegmentSpan, SessionReportRow, StaffCountRow, StaffShiftRow,
 };
 pub use rollup::{
-    RollupDebtorRow, RollupLotRow, RollupPaymentRow, RollupPlayRow, RollupRows, RollupVoidRow,
-    load_rollup_rows,
+    ChangedRow, ROLLUP_LEDGER_TABLES, RollupDebtorRow, RollupFacts, RollupLotRow, RollupPaymentRow,
+    RollupPlayRow, RollupRows, RollupVoidRow, load_rollup_facts, load_rollup_rows,
 };
 pub use rusqlite::{Connection as DbConn, Transaction};
 pub use sessions::{
@@ -256,13 +256,13 @@ pub use stock::{
 pub use stock_reports::{StockLevelRow, StockMoveReportRow, StockMovesRows};
 pub use summary::{
     ClosedShiftVariance, RollupLogRow, catalogue as summary_catalogue, closed_shift_variances,
-    count_live_sessions, find_rollup_log, insert_rollup_log, update_rollup_log,
+    count_live_sessions, find_rollup_log, insert_rollup_log, last_rollup_date, update_rollup_log,
 };
 pub use upload::{
     BATCH_MAX_ROWS, BatchFork, BatchHeader, DecodedBatch, EpochProgress, PendingBatch, RangeRead,
     UploadCursor, count_pending_rows, decode_batch, encode_batch, read_epoch_progress,
-    read_lease_fork, read_pending_batch, read_range_batch, read_upload_cursor, write_lease_fork,
-    write_upload_cursor,
+    read_lease_fork, read_paid_since, read_pending_batch, read_range_batch, read_upload_cursor,
+    write_lease_fork, write_upload_cursor,
 };
 pub use wallet::{
     NewTopupOrder, NewWalletTxn, OrderTxn, WalletRow, WalletTxnRow, adjust_wallet, find_wallet,
@@ -1635,6 +1635,11 @@ impl Store {
         self.read_consistent(|s| {
             load_rollup_rows(&s.conn, day, from_ms, to_ms, expiry_until, now_ms)
         })
+    }
+
+    /// What the planner of the daily rollups reads (Story 8.6), in one snapshot.
+    pub fn rollup_facts(&self, changes: &[ChangedRow]) -> Result<RollupFacts, AppError> {
+        self.read_consistent(|s| load_rollup_facts(&s.conn, changes))
     }
 
     /// The shift `id` (open or closed) with its Z-report, if one was stored (Story 5.28).

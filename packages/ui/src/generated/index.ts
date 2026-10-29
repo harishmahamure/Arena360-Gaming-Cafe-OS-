@@ -410,6 +410,7 @@ export type { RollupCredit } from "./RollupCredit";
 export type { RollupCreditPlayer } from "./RollupCreditPlayer";
 export type { RollupExpiring } from "./RollupExpiring";
 export type { RollupPlayHours } from "./RollupPlayHours";
+export type { RollupPublish } from "./RollupPublish";
 export type { RollupRevenue } from "./RollupRevenue";
 export type { RollupSessions } from "./RollupSessions";
 export type { RollupShift } from "./RollupShift";

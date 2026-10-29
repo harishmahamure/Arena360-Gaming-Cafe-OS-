@@ -7,7 +7,7 @@ use super::stock::owner;
 use super::z_report::{cash_sum, close, fixture_shift, only_shift, z_of};
 use super::*;
 use crate::snapshot::SnapshotReader;
-use arena_proto::{DeviceKind, RollupV1, ShiftClose};
+use arena_proto::{DeviceKind, ROLLUP_SCHEMA, RollupPublish, RollupV1, ShiftClose};
 
 fn amount(list: &[arena_proto::ReportAmount], key: &str) -> i64 {
     list.iter()
@@ -181,4 +181,191 @@ async fn a_busy_day_rolls_up_within_its_budget() {
     assert_eq!(r.revenue.total, 500 * 5000);
     assert_eq!(r.revenue.by_method.cash, 500 * 5000);
     assert!(took.as_secs() < 5, "the rollup took {took:?} (budget 5 s)");
+}
+
+fn rollup_system() -> Actor {
+    Actor {
+        kind: ActorKind::System,
+        id: "hub-rollup".into(),
+    }
+}
+
+fn publish(date: &str, built_at: i64) -> IntentPayload {
+    IntentPayload::RollupPublish(RollupPublish {
+        date: date.into(),
+        schema: ROLLUP_SCHEMA,
+        built_at,
+        key: format!("rollups/{date}.json"),
+    })
+}
+
+fn system_intent(payload: IntentPayload) -> Intent {
+    super::stock::intent(rollup_system(), payload)
+}
+
+#[tokio::test]
+async fn a_rollup_publish_upserts_only_that_days_rollup_log_row() {
+    let f = bootstrapped_closed().await;
+    let first = f
+        .writer
+        .submit_intent(system_intent(publish("2026-10-29", T0)))
+        .await
+        .unwrap();
+    assert_eq!(first.changes.len(), 1);
+    let c = &first.changes[0];
+    assert_eq!(
+        (c.tbl.as_str(), c.row_id.as_str(), c.op),
+        ("rollup_log", "2026-10-29", ChangeOp::Insert)
+    );
+    f.writer
+        .submit_intent(system_intent(publish("2026-10-30", T0)))
+        .await
+        .unwrap();
+    // A regeneration overwrites: the same row, updated.
+    let again = f
+        .writer
+        .submit_intent(system_intent(publish("2026-10-29", T0 + 600_000)))
+        .await
+        .unwrap();
+    assert_eq!(again.changes[0].op, ChangeOp::Update);
+
+    let store = reopen(&f);
+    let rows = store.rows(Table::RollupLog).unwrap();
+    assert_eq!(rows.len(), 2);
+    let day = store.rollup_log("2026-10-29").unwrap().unwrap();
+    assert_eq!(
+        (day.schema, day.built_at, day.key.as_str()),
+        (1, T0 + 600_000, "rollups/2026-10-29.json")
+    );
+    assert_eq!(store.rollup_log("latest").unwrap(), None);
+}
+
+#[tokio::test]
+async fn only_the_system_can_publish_a_rollup_and_the_payload_is_checked() {
+    let f = bootstrapped_closed().await;
+    let refused = f
+        .writer
+        .submit_intent(super::stock::intent(owner(), publish("2026-10-29", T0)))
+        .await;
+    assert!(refused.is_err(), "an owner cannot publish a rollup");
+    for (date, built_at, key) in [
+        ("latest", T0, "rollups/x.json"),
+        ("2026-13-40", T0, "rollups/x.json"),
+        ("2026-10-29", -1, "rollups/x.json"),
+        ("2026-10-29", T0, ""),
+    ] {
+        let mut p = RollupPublish {
+            date: date.into(),
+            schema: ROLLUP_SCHEMA,
+            built_at,
+            key: key.into(),
+        };
+        let e = f
+            .writer
+            .submit_intent(system_intent(IntentPayload::RollupPublish(p.clone())))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            e.code,
+            ErrorCode::ValidationFailed,
+            "{date} {built_at} {key:?}"
+        );
+        p.schema = 0;
+        p.date = "2026-10-29".into();
+        p.key = "rollups/x.json".into();
+        p.built_at = T0;
+        assert!(
+            f.writer
+                .submit_intent(system_intent(IntentPayload::RollupPublish(p)))
+                .await
+                .is_err(),
+            "schema 0"
+        );
+    }
+    assert!(reopen(&f).rows(Table::RollupLog).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn the_planner_reads_the_real_ledger_shifts_and_late_changes() {
+    use std::collections::BTreeSet;
+
+    let f = bootstrapped_closed().await;
+    fixture_shift(&f).await;
+    let expected = 100_000 + 12_000 - 4_000 - 5_000 - 20_000;
+    let day = business_day(&f);
+    let reader = SnapshotReader::open(&f.path).unwrap();
+    let none = BTreeSet::new();
+    let plan = |changes: &[arena_store::ChangedRow], carried: &BTreeSet<String>| {
+        reader
+            .rollup_plan(f.clock.now_ms(), changes, carried, false)
+            .unwrap()
+    };
+
+    // Not paid as far as the Hub can tell: no upload yet.
+    assert_eq!(plan(&[], &none), None);
+    f.writer
+        .submit(|tx| {
+            arena_store::write_upload_cursor(
+                tx,
+                &arena_store::UploadCursor {
+                    epoch: "1:X".into(),
+                    last_seq_uploaded: 0,
+                    uploaded_at: T0,
+                },
+            )
+        })
+        .await
+        .unwrap();
+    // A shift is open and the day is not over: nothing is due, the clock time is ahead.
+    let p = plan(&[], &none).unwrap();
+    assert!(p.due.is_empty(), "{p:?}");
+    assert!(p.next_at.is_some());
+
+    // The last shift closes: today is due at once.
+    submit(
+        &f,
+        owner(),
+        IntentPayload::ShiftClose(ShiftClose {
+            counted_minor: expected,
+            ..close(0)
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(plan(&[], &none).unwrap().due, std::slice::from_ref(&day));
+
+    // Published: quiet again, until a ledger row stamped to the day changes.
+    f.writer
+        .submit_intent(super::stock::intent(rollup_system(), publish(&day, T0)))
+        .await
+        .unwrap();
+    assert!(plan(&[], &none).unwrap().due.is_empty());
+    let order = text(table(&f, Table::Orders).first().unwrap(), "id");
+    let seq = reopen(&f)
+        .changes()
+        .unwrap()
+        .iter()
+        .rfind(|c| c.tbl == "orders" && c.row_id == order)
+        .unwrap()
+        .seq;
+    let late = arena_store::ChangedRow {
+        epoch: reopen(&f).changes().unwrap().last().unwrap().epoch.clone(),
+        seq,
+        tbl: "orders".into(),
+        row_id: order,
+    };
+    let p = plan(std::slice::from_ref(&late), &none).unwrap();
+    assert_eq!(p.due, std::slice::from_ref(&day));
+    assert_eq!(p.dirty, BTreeSet::from([day.clone()]));
+    // A change outside the ledger tables re-opens nothing.
+    let config = arena_store::ChangedRow {
+        tbl: "settings".into(),
+        ..late
+    };
+    assert!(plan(&[config], &none).unwrap().due.is_empty());
+    // A day carried over from a pass that could not publish it is still due.
+    assert_eq!(
+        plan(&[], &BTreeSet::from([day.clone()])).unwrap().due,
+        [day]
+    );
 }

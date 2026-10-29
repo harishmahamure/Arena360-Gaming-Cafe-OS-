@@ -10,6 +10,17 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::{Store, db_error};
 
+/// The latest business day with a daily-rollup row (`yyyy-mm-dd`), if any (Story 8.6).
+pub fn last_rollup_date(conn: &Connection) -> Result<Option<String>, AppError> {
+    conn.query_row(
+        "SELECT MAX(date) FROM rollup_log
+         WHERE date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'",
+        [],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}
+
 /// A row of `rollup_log`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RollupLogRow {

@@ -11,6 +11,7 @@
 //! A Free Hub (or one whose tier is not known yet), a follower and an unpaired Hub make no
 //! request at all. The task reads through the [`SnapshotReader`], never inside `apply()`.
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -18,10 +19,11 @@ use arena_core::{
     HubStatus, PairGate, PairingState, Role, SnapshotReader, UploadStatus, WriterHandle,
 };
 use arena_proto::{
-    AppError, ErrorCode, PRESIGN_TTL_S, PresignBatch, PresignRequest, ResendUnavailable,
-    SUMMARY_OBJECT_KEY, SeqRange, Tier, VerifyKey, licence::verify_claims,
+    AppError, ErrorCode, PRESIGN_KIND_ROLLUP, PRESIGN_TTL_S, PresignBatch, PresignRequest,
+    ROLLUP_SCHEMA, ResendUnavailable, SUMMARY_OBJECT_KEY, SeqRange, Tier, VerifyKey,
+    licence::verify_claims, rollup_object_key,
 };
-use arena_store::{BATCH_MAX_ROWS, RangeRead, encode_batch};
+use arena_store::{BATCH_MAX_ROWS, ChangedRow, ROLLUP_LEDGER_TABLES, RangeRead, encode_batch};
 use tokio::sync::{broadcast, watch};
 
 use crate::cloud::{CloudClient, CloudFailure};
@@ -35,6 +37,12 @@ pub const MIN_UPLOAD_INTERVAL: Duration = Duration::from_secs(30);
 pub const BACKLOG_TRIGGER_ROWS: i64 = 500;
 /// How much sooner than its expiry a summary link carried from a batch presign stops being used.
 const SUMMARY_LINK_MARGIN_S: u64 = 60;
+/// The most daily rollups one cycle builds and publishes; a longer catch-up goes on next cycle.
+const ROLLUPS_PER_CYCLE: usize = 10;
+/// The wait before the next cycle of a catch-up that is not finished.
+const ROLLUP_CATCH_UP_WAIT: Duration = Duration::from_secs(60);
+/// The most ledger changes remembered between two rollup plans; more means a rescan.
+const MAX_HEARD_CHANGES: usize = 5_000;
 /// How long to wait when the cloud limits the calls but names no time.
 const RATE_LIMIT_WAIT: Duration = Duration::from_secs(60);
 /// The longest Retry-After honoured.
@@ -200,6 +208,14 @@ pub struct UploadTask {
     /// Whether the cycle also publishes the branch summary (Story 8.4); tests of the change-log
     /// upload alone turn it off.
     summary: bool,
+    /// Whether the cycle also publishes the daily rollups (Story 8.6).
+    rollups: bool,
+    /// Ledger changes heard since the last rollup plan (a late Undo re-opens a published day).
+    heard: Vec<ChangedRow>,
+    /// More changes were heard than are remembered: every recently published day is re-checked.
+    rescan: bool,
+    /// Days with a ledger change whose rollup was not (re)published yet.
+    dirty: BTreeSet<String>,
 }
 
 impl UploadTask {
@@ -228,6 +244,10 @@ impl UploadTask {
             summary_link: None,
             last_summary: None,
             summary: true,
+            rollups: true,
+            heard: Vec::new(),
+            rescan: false,
+            dirty: BTreeSet::new(),
         }
     }
 
@@ -240,7 +260,28 @@ impl UploadTask {
     /// Tests: the cycle uploads the change log only.
     pub fn without_summary(mut self) -> Self {
         self.summary = false;
+        self.rollups = false;
         self
+    }
+
+    /// Remembers the ledger rows an applied intent changed, for the rollup plan.
+    fn hear(&mut self, applied: &arena_core::Applied) {
+        for c in applied
+            .changes
+            .iter()
+            .filter(|c| ROLLUP_LEDGER_TABLES.contains(&c.tbl.as_str()))
+        {
+            if self.heard.len() >= MAX_HEARD_CHANGES {
+                self.rescan = true;
+                return;
+            }
+            self.heard.push(ChangedRow {
+                epoch: c.epoch.clone(),
+                seq: c.seq,
+                tbl: c.tbl.clone(),
+                row_id: c.row_id.clone(),
+            });
+        }
     }
 
     /// Tests: the rows per batch.
@@ -272,8 +313,10 @@ impl UploadTask {
             let deadline = ended + next.wait;
             let mut pending = self.status.borrow().upload.pending_rows;
             let mut triggered = next.early && pending >= self.trigger_rows;
+            // A shift closing may be the last of the business day: its rollup is due at once.
+            let mut shift_closed = false;
             loop {
-                let wake = if triggered {
+                let wake = if triggered || shift_closed {
                     deadline.min(ended + self.trigger_gap)
                 } else {
                     deadline
@@ -282,7 +325,13 @@ impl UploadTask {
                     () = tokio::time::sleep_until(wake) => break,
                     event = events.recv() => {
                         match event {
-                            Ok(applied) => pending += applied.changes.len() as i64,
+                            Ok(applied) => {
+                                pending += applied.changes.len() as i64;
+                                if self.rollups && next.active {
+                                    self.hear(&applied);
+                                    shift_closed |= applied.changes.iter().any(|c| c.tbl == "shifts");
+                                }
+                            }
                             Err(broadcast::error::RecvError::Lagged(_)) => {
                                 if let Some(p) = self.progress().await {
                                     pending = p.pending_rows;
@@ -371,9 +420,22 @@ impl UploadTask {
             self.refresh_progress().await;
             return next;
         }
+        let mut wait = interval;
+        if self.rollups {
+            match self
+                .publish_rollups(&writer, &token, &epoch, interval)
+                .await
+            {
+                Ok(sooner) => wait = sooner.map_or(interval, |s| s.min(interval)),
+                Err(next) => {
+                    self.refresh_progress().await;
+                    return next;
+                }
+            }
+        }
         self.refresh_progress().await;
         Next {
-            wait: interval,
+            wait,
             active: true,
             early: true,
         }
@@ -607,6 +669,150 @@ impl UploadTask {
                 tracing::warn!(
                     code = e.code.as_str(),
                     "summary: could not record the publish"
+                );
+                None
+            }
+        }
+    }
+
+    /// Builds, PUTs and records the daily rollups that are due (Story 8.6): every business day
+    /// since the branch went paid with no `rollup_log` row, oldest first, a day whose closing time
+    /// plus 30 minutes has passed, the day whose last shift just closed, and a published day a
+    /// late ledger change re-opened (its file is overwritten). At most [`ROLLUPS_PER_CYCLE`] a
+    /// cycle. A day that cannot be built is skipped; a refused or failed PUT stops the pass and the
+    /// day is planned again next cycle. `Ok` carries how soon the next wake should be, if sooner
+    /// than the interval; `Err` what to do instead.
+    async fn publish_rollups(
+        &mut self,
+        writer: &WriterHandle,
+        token: &str,
+        epoch: &str,
+        interval: Duration,
+    ) -> Result<Option<Duration>, Next> {
+        let now = writer.now_ms();
+        let heard = std::mem::take(&mut self.heard);
+        let rescan = std::mem::take(&mut self.rescan);
+        let carried = self.dirty.clone();
+        let snapshots = Arc::clone(&self.snapshots);
+        let planned = {
+            let heard = heard.clone();
+            tokio::task::spawn_blocking(move || {
+                snapshots.rollup_plan(now, &heard, &carried, rescan)
+            })
+            .await
+        };
+        let plan = match planned {
+            Ok(Ok(Some(plan))) => plan,
+            Ok(Ok(None)) => return Ok(None),
+            Ok(Err(e)) => {
+                tracing::warn!(code = e.code.as_str(), error = %e, "rollup: could not plan");
+                self.heard = heard;
+                self.rescan |= rescan;
+                return Ok(None);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "rollup: plan task failed");
+                self.heard = heard;
+                self.rescan |= rescan;
+                return Ok(None);
+            }
+        };
+        self.dirty = plan.dirty.clone();
+        for day in plan.due.iter().take(ROLLUPS_PER_CYCLE) {
+            if let Some(next) = self
+                .publish_rollup(writer, token, epoch, interval, day)
+                .await
+            {
+                return Err(next);
+            }
+        }
+        if plan.due.len() > ROLLUPS_PER_CYCLE {
+            return Ok(Some(ROLLUP_CATCH_UP_WAIT));
+        }
+        // The next day to fall due by the clock: wake for it rather than a whole interval later.
+        Ok(plan.next_at.map(|at| {
+            Duration::from_millis(u64::try_from(at.saturating_sub(now)).unwrap_or(0))
+                .max(Duration::from_secs(1))
+        }))
+    }
+
+    /// One daily rollup: build, presign `kind: rollup`, PUT, then `rollup.publish`. `None` when
+    /// the pass goes on; otherwise what to do instead.
+    async fn publish_rollup(
+        &mut self,
+        writer: &WriterHandle,
+        token: &str,
+        epoch: &str,
+        interval: Duration,
+        day: &str,
+    ) -> Option<Next> {
+        let built_at = writer.now_ms();
+        let snapshots = Arc::clone(&self.snapshots);
+        let build_day = day.to_owned();
+        let doc = match tokio::task::spawn_blocking(move || {
+            snapshots.daily_rollup(&build_day, built_at)
+        })
+        .await
+        {
+            Ok(Ok(Some(doc))) => doc,
+            Ok(Ok(None)) => return None,
+            Ok(Err(e)) => {
+                tracing::warn!(day, code = e.code.as_str(), error = %e, "rollup: could not build");
+                return None;
+            }
+            Err(e) => {
+                tracing::warn!(day, error = %e, "rollup: build task failed");
+                return None;
+            }
+        };
+        let bytes = match serde_json::to_vec(&doc) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!(day, error = %e, "rollup: could not encode");
+                return None;
+            }
+        };
+        let req = PresignRequest {
+            epoch: epoch.to_owned(),
+            kind: Some(PRESIGN_KIND_ROLLUP.to_owned()),
+            date: Some(day.to_owned()),
+            ..PresignRequest::default()
+        };
+        let links = match self.cloud.presign(token, &req).await {
+            Ok(l) => l,
+            Err(f) => return Some(self.refused(f, interval)),
+        };
+        let Some(url) = links.url else {
+            tracing::warn!(day, "rollup: the cloud issued no rollup link");
+            return Some(self.failed(interval));
+        };
+        if let Err(f) = self.cloud.put_object(&url, bytes).await {
+            return Some(self.refused(f, interval));
+        }
+        self.fails = 0;
+        match writer
+            .publish_rollup(
+                day.to_owned(),
+                ROLLUP_SCHEMA,
+                built_at,
+                rollup_object_key(day),
+            )
+            .await
+        {
+            Ok(_) => {
+                self.dirty.remove(day);
+                tracing::info!(day, "daily rollup published");
+                None
+            }
+            Err(e) if e.code == ErrorCode::NotPrimary => {
+                tracing::info!("rollup: this hub is no longer the primary");
+                Some(Next::idle(TIER_RECHECK))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    day,
+                    code = e.code.as_str(),
+                    "rollup: could not record the publish"
                 );
                 None
             }
@@ -859,6 +1065,7 @@ mod tests {
         status: watch::Sender<HubStatus>,
         task: UploadTask,
         writer: WriterHandle,
+        clock: Arc<ManualClock>,
     }
 
     async fn fx(port: u16, tier: Tier) -> Fx {
@@ -872,7 +1079,8 @@ mod tests {
         let path = dir.path().join("branch.db");
         let store = Store::open(&path, T0).unwrap();
         let (status, _rx) = status_channel(HubStatus::opened(73, OWN));
-        let clock: Arc<dyn Clock> = Arc::new(ManualClock::new(T0));
+        let manual = Arc::new(ManualClock::new(T0));
+        let clock: Arc<dyn Clock> = manual.clone();
         let lease = LeaseTask::start(store, OWN.into(), Arc::clone(&clock), status.clone())
             .await
             .unwrap();
@@ -951,6 +1159,7 @@ mod tests {
             status,
             task,
             writer,
+            clock: manual,
         }
     }
 
@@ -1013,7 +1222,7 @@ mod tests {
     }
 
     fn progress(f: &Fx) -> UploadStatus {
-        f.status.borrow().upload
+        f.status.borrow().upload.clone()
     }
 
     fn cursor(f: &Fx) -> Option<arena_store::UploadCursor> {
@@ -1066,6 +1275,7 @@ mod tests {
                 last_seq_uploaded: 3,
                 fork_seq: None,
                 last_summary_at: None,
+                last_rollup_date: None,
             }
         );
 
@@ -1416,6 +1626,7 @@ mod tests {
                 last_seq_uploaded: 0,
                 fork_seq: None,
                 last_summary_at: None,
+                last_rollup_date: None,
             }
         );
 
@@ -1845,5 +2056,296 @@ mod tests {
         assert_eq!(inbox.pending().map(|(_, r)| r.from), Some(20), "invalid");
         inbox.advance(30);
         assert_eq!(inbox.pending(), None);
+    }
+
+    // ---- the daily rollup (Story 8.6) ----
+
+    const DAY: i64 = 24 * 60 * 60 * 1000;
+
+    /// A cloud that issues batch and rollup links; `up` false makes the bucket refuse every
+    /// rollup PUT.
+    fn cloud_with_rollups(up: Arc<std::sync::atomic::AtomicBool>) -> impl FnOnce(u16) -> Handler {
+        move |port| {
+            Box::new(move |line, body| {
+                if line.starts_with("POST /v1/presign") {
+                    let req: serde_json::Value = serde_json::from_slice(body).unwrap();
+                    let mut links = serde_json::Map::new();
+                    if let Some(b) = req.get("batch").filter(|b| !b.is_null()) {
+                        links.insert(
+                            "batch_url".into(),
+                            format!(
+                                "http://127.0.0.1:{port}/put/{}/{}-{}",
+                                req["epoch"].as_str().unwrap(),
+                                b["first"],
+                                b["last"]
+                            )
+                            .into(),
+                        );
+                    }
+                    if req["kind"] == "rollup" {
+                        links.insert(
+                            "url".into(),
+                            format!(
+                                "http://127.0.0.1:{port}/put/rollups/{}.json",
+                                req["date"].as_str().unwrap()
+                            )
+                            .into(),
+                        );
+                    }
+                    (200, serde_json::Value::Object(links).to_string())
+                } else if line.starts_with("PUT /put/rollups/")
+                    && !up.load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    (503, "{}".into())
+                } else {
+                    (200, "{}".into())
+                }
+            })
+        }
+    }
+
+    fn rollup_asks(seen: &Seen) -> Vec<String> {
+        presigns(seen)
+            .into_iter()
+            .filter(|p| p["kind"] == "rollup")
+            .map(|p| p["date"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    fn rollup_puts(seen: &Seen) -> Vec<(String, arena_proto::RollupV1)> {
+        puts(seen)
+            .into_iter()
+            .filter(|(k, _)| k.starts_with("/put/rollups/"))
+            .map(|(k, b)| (k, serde_json::from_slice(&b).unwrap()))
+            .collect()
+    }
+
+    fn rollup_row(f: &Fx, day: &str) -> Option<arena_store::RollupLogRow> {
+        Store::open_reader(&f.path)
+            .unwrap()
+            .rollup_log(day)
+            .unwrap()
+    }
+
+    /// Makes the branch paid `days` days before the fixture's clock.
+    async fn paid_since(f: &Fx, days: i64) {
+        f.writer
+            .submit(move |tx| {
+                arena_store::write_upload_cursor(
+                    tx,
+                    &arena_store::UploadCursor {
+                        epoch: EPOCH.into(),
+                        last_seq_uploaded: 0,
+                        uploaded_at: T0 - days * DAY,
+                    },
+                )
+            })
+            .await
+            .unwrap();
+    }
+
+    /// The fixture runs no lease task: after the clock moves, extend the lease it holds.
+    async fn keep_lease(f: &Fx) {
+        let now = f.clock.now_ms();
+        f.writer
+            .submit(move |tx| {
+                tx.execute(
+                    "UPDATE lease SET renewed_at = ?1, expires_at = ?2 WHERE id = 1",
+                    [now, now + 600_000],
+                )
+                .map_err(|e| arena_proto::AppError::new(ErrorCode::Internal, e.to_string()))
+            })
+            .await
+            .unwrap();
+    }
+
+    async fn rollup_fx(tier: Tier, up: bool) -> (Fx, Seen, Arc<std::sync::atomic::AtomicBool>) {
+        let up = Arc::new(std::sync::atomic::AtomicBool::new(up));
+        let (port, seen) = serve(cloud_with_rollups(Arc::clone(&up))).await;
+        let mut f = fx(port, tier).await;
+        f.task.rollups = true;
+        (f, seen, up)
+    }
+
+    #[tokio::test]
+    async fn every_missed_day_since_going_paid_is_rolled_up_oldest_first() {
+        let (mut f, seen, _) = rollup_fx(Tier::Basic, true).await;
+        // T0 is 2027-01-15 13:30 in Asia/Kolkata; paid since the 12th.
+        paid_since(&f, 3).await;
+
+        let next = f.task.cycle().await;
+        assert!(next.active);
+        assert_eq!(
+            rollup_asks(&seen),
+            ["2027-01-12", "2027-01-13", "2027-01-14"]
+        );
+        let sent = rollup_puts(&seen);
+        assert_eq!(sent.len(), 3);
+        for (key, doc) in &sent {
+            assert_eq!(key, &format!("/put/rollups/{}.json", doc.business_day));
+            assert_eq!((doc.schema, doc.branch_id.as_str()), (1, "B"));
+        }
+        for day in ["2027-01-12", "2027-01-13", "2027-01-14"] {
+            let row = rollup_row(&f, day).unwrap_or_else(|| panic!("no rollup_log row for {day}"));
+            assert_eq!(
+                (row.schema, row.built_at, row.key),
+                (1, T0, format!("rollups/{day}.json"))
+            );
+        }
+        assert!(rollup_row(&f, "2027-01-15").is_none(), "today is not over");
+        assert_eq!(progress(&f).last_rollup_date.as_deref(), Some("2027-01-14"));
+
+        // Each publish is a system intent in the audit: one change row per day.
+        let audit: i64 = Store::open_reader(&f.path)
+            .unwrap()
+            .read_with(|c| {
+                Ok(c.query_row(
+                    "SELECT COUNT(*) FROM changes WHERE tbl = 'rollup_log'
+                       AND intent_kind = 'rollup.publish' AND actor_kind = 'system'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap())
+            })
+            .unwrap();
+        assert_eq!(audit, 3);
+
+        // Nothing more is due.
+        f.task.cycle().await;
+        assert_eq!(rollup_asks(&seen).len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_day_is_rolled_up_thirty_minutes_after_the_roll_not_before() {
+        let (mut f, seen, _) = rollup_fx(Tier::Premium, true).await;
+        paid_since(&f, 0).await;
+        // 2027-01-16 00:29 IST: the roll is at midnight (day start 00:00), the rollup 30 min later.
+        f.clock.set(T0 + 10 * 60 * 60_000 + 59 * 60_000);
+        keep_lease(&f).await;
+        let next = f.task.cycle().await;
+        assert!(rollup_asks(&seen).is_empty());
+        assert_eq!(
+            next.wait,
+            Duration::from_secs(60),
+            "wakes for the rollup, not a whole interval later"
+        );
+
+        f.clock.advance(60_000);
+        keep_lease(&f).await;
+        f.task.cycle().await;
+        assert_eq!(rollup_asks(&seen), ["2027-01-15"]);
+        assert!(rollup_row(&f, "2027-01-15").is_some());
+    }
+
+    #[tokio::test]
+    async fn a_failed_put_leaves_no_row_and_the_day_is_planned_again() {
+        let (mut f, seen, up) = rollup_fx(Tier::Basic, false).await;
+        paid_since(&f, 1).await;
+
+        let next = f.task.cycle().await;
+        assert!(next.active && !next.early, "{next:?}");
+        assert_eq!(rollup_asks(&seen), ["2027-01-14"]);
+        assert!(rollup_row(&f, "2027-01-14").is_none());
+
+        up.store(true, std::sync::atomic::Ordering::SeqCst);
+        f.task.cycle().await;
+        assert_eq!(rollup_asks(&seen), ["2027-01-14", "2027-01-14"]);
+        assert!(rollup_row(&f, "2027-01-14").is_some());
+    }
+
+    fn orders_change(seq: i64, tbl: &str) -> arena_core::Applied {
+        arena_core::Applied {
+            intent_id: "I".into(),
+            changes: vec![arena_core::ChangeMeta {
+                epoch: EPOCH.into(),
+                seq,
+                tbl: tbl.into(),
+                row_id: "O1".into(),
+                op: ChangeOp::Update,
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn a_late_change_to_a_rolled_day_regenerates_and_overwrites_its_file() {
+        let (mut f, seen, _) = rollup_fx(Tier::Basic, true).await;
+        paid_since(&f, 1).await;
+        f.task.cycle().await;
+        assert_eq!(rollup_asks(&seen), ["2027-01-14"]);
+        let first = rollup_row(&f, "2027-01-14").unwrap();
+
+        // A late Undo: a change to an order, stamped to the 14th, after its rollup went out.
+        f.clock.advance(5 * 60_000);
+        keep_lease(&f).await;
+        let seq = f
+            .writer
+            .submit(|tx| {
+                let seq = next_change_seq(tx, EPOCH)?;
+                insert_change(
+                    tx,
+                    &ChangeRecord {
+                        epoch: EPOCH.into(),
+                        seq,
+                        tbl: "orders".into(),
+                        row_id: "O1".into(),
+                        op: ChangeOp::Update,
+                        row: vec![0x80],
+                        intent_id: "I".into(),
+                        intent_kind: "order.undo".into(),
+                        actor_kind: "staff".into(),
+                        actor_id: "s".into(),
+                        elevated_by_kind: None,
+                        elevated_by_id: None,
+                        elevated_by_mode: None,
+                        elevated_by_verifier_version: None,
+                        at: T0,
+                        business_day: Some("2027-01-14".into()),
+                        fy: None,
+                        reason: None,
+                    },
+                )?;
+                Ok(seq)
+            })
+            .await
+            .unwrap();
+        f.task.hear(&orders_change(seq, "orders"));
+        // Configuration changes are not heard at all.
+        f.task.hear(&orders_change(1, "settings"));
+        assert_eq!(f.task.heard.len(), 1);
+
+        f.task.cycle().await;
+        assert_eq!(rollup_asks(&seen), ["2027-01-14", "2027-01-14"]);
+        let second = rollup_row(&f, "2027-01-14").unwrap();
+        assert!(second.built_at > first.built_at);
+        assert_eq!(second.key, first.key, "the same file is overwritten");
+
+        // Handled: the next cycle asks for nothing.
+        f.task.cycle().await;
+        assert_eq!(rollup_asks(&seen).len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_free_hub_and_a_hub_that_has_not_uploaded_roll_nothing_up() {
+        let (mut f, seen, _) = rollup_fx(Tier::Free, true).await;
+        paid_since(&f, 3).await;
+        f.task.cycle().await;
+        assert!(seen.lock().unwrap().is_empty());
+
+        // Paid, but nothing was ever uploaded: not paid as far as the Hub can tell.
+        let (mut g, seen, _) = rollup_fx(Tier::Basic, true).await;
+        g.task.cycle().await;
+        assert!(rollup_asks(&seen).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_long_catch_up_is_spread_over_cycles() {
+        let (mut f, seen, _) = rollup_fx(Tier::Basic, true).await;
+        paid_since(&f, 14).await;
+        let next = f.task.cycle().await;
+        assert_eq!(rollup_asks(&seen).len(), ROLLUPS_PER_CYCLE);
+        assert_eq!(next.wait, ROLLUP_CATCH_UP_WAIT);
+        assert_eq!(rollup_asks(&seen)[0], "2027-01-01", "oldest first");
+        f.task.cycle().await;
+        assert_eq!(rollup_asks(&seen).len(), 14);
     }
 }

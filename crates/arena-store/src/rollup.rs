@@ -5,7 +5,7 @@
 //! document lives in `arena-core`.
 
 use arena_proto::AppError;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::reports::{self, SegmentSpan};
 use crate::shifts::ShiftDetail;
@@ -229,5 +229,128 @@ pub fn load_rollup_rows(
         lots: lots(conn, expiry_until)?,
         debtors: debtors(conn, day)?,
         plays: plays(conn, from_ms, to_ms)?,
+    })
+}
+
+// ---- what decides which days to roll up (Story 8.6) ----
+
+/// Tables whose change rows can alter a published rollup: the stamped ledgers it is folded from.
+/// Configuration, credit balances and stock levels move with every sale of a later day, so a
+/// change to them never re-opens a day that was already published.
+pub const ROLLUP_LEDGER_TABLES: &[&str] = &[
+    "orders",
+    "order_lines",
+    "payments",
+    "refunds",
+    "sessions",
+    "session_segments",
+    "shifts",
+    "cash_events",
+    "stock_moves",
+    "game_plays",
+];
+
+/// A change row just committed, as the uploader hears about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangedRow {
+    pub epoch: String,
+    pub seq: i64,
+    pub tbl: String,
+    pub row_id: String,
+}
+
+/// What the planner of the daily rollups reads in one snapshot.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RollupFacts {
+    /// When the branch first uploaded (Hub clock, ms): the start of the paid era.
+    pub paid_since: Option<i64>,
+    /// The days (`yyyy-mm-dd`) with a `rollup_log` row.
+    pub published: std::collections::BTreeSet<String>,
+    /// `closed_at` of every shift closed from the start of the paid era on.
+    pub shifts_closed_at: Vec<i64>,
+    /// A shift is open now.
+    pub shift_open: bool,
+    /// The business days the given changes were stamped to, or touched rows stamped to.
+    pub changed_days: std::collections::BTreeSet<String>,
+}
+
+fn published_days(conn: &Connection) -> Result<std::collections::BTreeSet<String>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT date FROM rollup_log
+             WHERE date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' ORDER BY date",
+        )
+        .map_err(db_error)?;
+    stmt.query_map([], |r| r.get(0))
+        .map_err(db_error)?
+        .collect::<Result<_, _>>()
+        .map_err(db_error)
+}
+
+fn shifts_closed_since(conn: &Connection, since_ms: i64) -> Result<Vec<i64>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT closed_at FROM shifts
+             WHERE state = 'closed' AND closed_at >= ?1 ORDER BY closed_at",
+        )
+        .map_err(db_error)?;
+    stmt.query_map([since_ms], |r| r.get(0))
+        .map_err(db_error)?
+        .collect::<Result<_, _>>()
+        .map_err(db_error)
+}
+
+/// The business days a set of committed changes belong to: the day each change row was stamped
+/// with, and (for orders, refunds and sessions) the day the touched row itself is stamped to, so
+/// an Undo of an earlier day's sale re-opens that day. Only the ledger tables count.
+fn changed_days(
+    conn: &Connection,
+    changes: &[ChangedRow],
+) -> Result<std::collections::BTreeSet<String>, AppError> {
+    let mut days = std::collections::BTreeSet::new();
+    for c in changes
+        .iter()
+        .filter(|c| ROLLUP_LEDGER_TABLES.contains(&c.tbl.as_str()))
+    {
+        let stamped: Option<Option<String>> = conn
+            .query_row(
+                "SELECT business_day FROM changes WHERE epoch = ?1 AND seq = ?2",
+                params![c.epoch, c.seq],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        days.extend(stamped.flatten());
+        if matches!(c.tbl.as_str(), "orders" | "refunds" | "sessions") {
+            let own: Option<String> = conn
+                .query_row(
+                    &format!("SELECT business_day FROM {} WHERE id = ?1", c.tbl),
+                    [&c.row_id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(db_error)?;
+            days.extend(own);
+        }
+    }
+    Ok(days)
+}
+
+/// Reads the facts the rollup planner needs, `changes` being the ledger changes heard since the
+/// last plan.
+pub fn load_rollup_facts(
+    conn: &Connection,
+    changes: &[ChangedRow],
+) -> Result<RollupFacts, AppError> {
+    let paid_since = crate::upload::read_paid_since(conn)?;
+    Ok(RollupFacts {
+        paid_since,
+        published: published_days(conn)?,
+        shifts_closed_at: match paid_since {
+            Some(since) => shifts_closed_since(conn, since)?,
+            None => Vec::new(),
+        },
+        shift_open: crate::shifts::open_shift_id(conn)?.is_some(),
+        changed_days: changed_days(conn, changes)?,
     })
 }

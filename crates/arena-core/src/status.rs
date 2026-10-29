@@ -111,7 +111,7 @@ pub struct HubStatus {
 
 /// How far the change-log upload has got. A Hub that does not upload (Free, follower) keeps the
 /// default.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct UploadStatus {
     /// When the cloud last accepted a batch (Hub clock, ms); `None` before the first.
     pub last_upload_at: Option<i64>,
@@ -125,6 +125,8 @@ pub struct UploadStatus {
     /// When the branch summary was last built and published (Hub clock, ms; `rollup_log`
     /// `latest`) (Story 8.4).
     pub last_summary_at: Option<i64>,
+    /// The latest business day (`yyyy-mm-dd`) whose rollup is in `rollup_log` (Story 8.6).
+    pub last_rollup_date: Option<String>,
 }
 
 impl HubStatus {

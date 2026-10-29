@@ -182,7 +182,13 @@ impl HeartbeatTask {
     async fn exchange(&mut self) -> Duration {
         let (live, schema_version, role, lease, upload) = {
             let s = self.status.borrow();
-            (s.live, s.schema_version, s.role, s.lease.clone(), s.upload)
+            (
+                s.live,
+                s.schema_version,
+                s.role,
+                s.lease.clone(),
+                s.upload.clone(),
+            )
         };
         let setup = match (&self.writer, live) {
             (Some(w), false) => w
@@ -232,7 +238,7 @@ impl HeartbeatTask {
             last_seq_uploaded: upload.last_seq_uploaded,
             last_upload_at: upload.last_upload_at,
             last_summary_at: upload.last_summary_at,
-            last_rollup_date: None,
+            last_rollup_date: upload.last_rollup_date.clone(),
             fork_seq: upload.fork_seq,
             resend_unavailable: self.resend.as_ref().and_then(|r| r.unavailable()),
             setup,
@@ -1445,6 +1451,7 @@ mod tests {
                 last_seq_uploaded: 42,
                 fork_seq: Some(10),
                 last_summary_at: None,
+                last_rollup_date: None,
             }
         });
         f.task.beat().await;

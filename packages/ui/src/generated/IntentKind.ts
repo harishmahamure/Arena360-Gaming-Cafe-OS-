@@ -71,6 +71,7 @@ export type IntentKind =
   | "stock.write_off"
   | "stock.expiry_check"
   | "summary.publish"
+  | "rollup.publish"
   | "stock.threshold"
   | "import.products"
   | "import.players"

@@ -1774,6 +1774,23 @@ impl SnapshotReader {
         crate::rollup::build_rollup(&store, business_day, now_ms)
     }
 
+    /// The business days due for a daily rollup now (Story 8.6) and when the next falls due, or
+    /// `None` before the branch is bootstrapped or has uploaded. `changes` are the ledger changes
+    /// committed since the last plan, `carried` the days still waiting from earlier plans. Blocking (SQLite); writes nothing.
+    pub fn rollup_plan(
+        &self,
+        now_ms: i64,
+        changes: &[arena_store::ChangedRow],
+        carried: &std::collections::BTreeSet<String>,
+        rescan: bool,
+    ) -> Result<Option<crate::rollup_plan::RollupPlan>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        crate::rollup_plan::plan_rollups(&store, now_ms, changes, carried, rescan)
+    }
+
     /// How many change rows are not yet in an accepted batch, and when the cloud last accepted
     /// one (Story 8.2). Blocking (SQLite).
     pub fn upload_progress(&self) -> Result<crate::UploadStatus, AppError> {
@@ -1790,6 +1807,7 @@ impl SnapshotReader {
                 fork_seq: progress.fork_seq,
                 last_summary_at: arena_store::find_rollup_log(conn, arena_proto::SUMMARY_LOG_DATE)?
                     .map(|r| r.built_at),
+                last_rollup_date: arena_store::last_rollup_date(conn)?,
             })
         })
     }

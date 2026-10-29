@@ -85,6 +85,7 @@ import type { ReceiptPrinted } from "./ReceiptPrinted";
 import type { ReceiptReprint } from "./ReceiptReprint";
 import type { RefundCreate } from "./RefundCreate";
 import type { RoleUpsert } from "./RoleUpsert";
+import type { RollupPublish } from "./RollupPublish";
 import type { RuleUpsert } from "./RuleUpsert";
 import type { SessionAssignPlayer } from "./SessionAssignPlayer";
 import type { SessionEnd } from "./SessionEnd";
@@ -191,6 +192,7 @@ export type IntentPayload =
   | ({ kind: "stock.write_off" } & StockWriteOff)
   | ({ kind: "stock.expiry_check" } & StockExpiryCheck)
   | ({ kind: "summary.publish" } & SummaryPublish)
+  | ({ kind: "rollup.publish" } & RollupPublish)
   | ({ kind: "stock.threshold" } & StockThreshold)
   | ({ kind: "import.products" } & ImportProducts)
   | ({ kind: "import.players" } & ImportPlayers)

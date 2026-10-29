@@ -778,6 +778,39 @@ impl WriterHandle {
         .await
     }
 
+    /// Story 8.6: records that the daily rollup of `date` was PUT to the cloud, by submitting
+    /// `rollup.publish` (system actor) through `apply()`: it upserts only that day's `rollup_log`
+    /// row and appears in the audit. `NOT_PRIMARY` on a follower.
+    pub async fn publish_rollup(
+        &self,
+        date: String,
+        schema: u32,
+        built_at: i64,
+        key: String,
+    ) -> Result<Applied, AppError> {
+        let now = self.clock.now_ms();
+        self.submit_intent(Intent {
+            intent_id: ulid::Ulid::generate().to_string(),
+            kind: arena_proto::IntentKind::RollupPublish,
+            idempotency_key: ulid::Ulid::generate().to_string(),
+            issued_at: now,
+            base_rev: None,
+            actor: arena_proto::Actor {
+                kind: arena_proto::ActorKind::System,
+                id: "hub-rollup".into(),
+            },
+            elevated_by: None,
+            reason: None,
+            payload: arena_proto::IntentPayload::RollupPublish(arena_proto::RollupPublish {
+                date,
+                schema,
+                built_at,
+                key,
+            }),
+        })
+        .await
+    }
+
     /// How many jobs this writer has been handed (for tests: a `BAD_FRAME` queues none).
     #[cfg(any(test, feature = "test-jobs"))]
     pub fn jobs_submitted(&self) -> u64 {

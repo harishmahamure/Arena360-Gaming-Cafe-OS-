@@ -413,6 +413,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Summary(t) => super::summary::validate(intent, p, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::RollupPublish(p) => match target {
+            Target::Summary(t) => super::summary::validate_rollup(intent, p, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::AlertRaise(_) | IntentPayload::AlertAck(_) => match target {
             Target::Alert(t) => super::alert::validate(intent, t),
             _ => Err(internal_target()),

@@ -98,8 +98,8 @@ pub fn read_upload_cursor(conn: &Connection) -> Result<Option<UploadCursor>, App
 /// Sets the upload cursor (inserts it the first time).
 pub fn write_upload_cursor(conn: &Connection, c: &UploadCursor) -> Result<(), AppError> {
     conn.execute(
-        "INSERT INTO upload_cursor (id, epoch, last_seq_uploaded, uploaded_at)
-         VALUES (1, ?1, ?2, ?3)
+        "INSERT INTO upload_cursor (id, epoch, last_seq_uploaded, uploaded_at, first_uploaded_at)
+         VALUES (1, ?1, ?2, ?3, ?3)
          ON CONFLICT (id) DO UPDATE SET
            epoch = excluded.epoch,
            last_seq_uploaded = excluded.last_seq_uploaded,
@@ -108,6 +108,18 @@ pub fn write_upload_cursor(conn: &Connection, c: &UploadCursor) -> Result<(), Ap
     )
     .map_err(db_error)?;
     Ok(())
+}
+
+/// When the first batch was accepted (Hub clock, ms): when the branch went paid as far as the Hub
+/// can tell (Story 8.6). `None` before any upload.
+pub fn read_paid_since(conn: &Connection) -> Result<Option<i64>, AppError> {
+    conn.query_row(
+        "SELECT COALESCE(first_uploaded_at, uploaded_at) FROM upload_cursor WHERE id = 1",
+        [],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(db_error)
 }
 
 /// The lease's fork parent, when both columns are set.

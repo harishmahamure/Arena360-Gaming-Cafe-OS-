@@ -77,7 +77,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// The Tauri commands the webview calls: the `generate_handler!` list in `main.rs`, pinned
 /// against `ipc-names.json` (the list the webview reads) by a test.
 #[cfg(test)]
-const COMMANDS: [&str; 27] = [
+const COMMANDS: [&str; 31] = [
     "report_app_state",
     "hub_status",
     "take_restore_state",
@@ -105,6 +105,10 @@ const COMMANDS: [&str; 27] = [
     "volume_get",
     "volume_set",
     "call_staff",
+    "player_account",
+    "player_end",
+    "player_lock",
+    "player_unlock",
 ];
 /// How recent the webview's last heartbeat must be for a `ping` to be answered.
 pub const HEARTBEAT_FRESH: Duration = Duration::from_secs(3);

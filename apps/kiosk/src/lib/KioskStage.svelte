@@ -28,6 +28,7 @@
   } from "./bridge";
   import Discovery from "./Discovery.svelte";
   import { installKioskGuards, placeOnPrimary } from "./guards";
+  import UnlockForm from "./UnlockForm.svelte";
 
   let { children }: { children: Snippet } = $props();
 
@@ -61,6 +62,7 @@
     locked_by_staff: "player.pc.locked",
     paused: "player.lock.paused",
     preparing_pc: "player.lock.preparing_pc",
+    locked_by_player: "player.lock.by_player",
   };
   let adminPanel = $state(false);
   let exitUntil: number | null = $state(null);
@@ -193,6 +195,9 @@
         {/if}
       </div>
       <h1 class="type-kiosk-headline">{t((reason && REASONS[reason]) || "player.pc.locked")}</h1>
+      {#if reason === "locked_by_player"}
+        <UnlockForm connected={hub === "connected"} />
+      {/if}
     </div>
   {/if}
   {#if adminPanel}

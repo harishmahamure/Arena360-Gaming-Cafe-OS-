@@ -16,7 +16,10 @@ use crate::error::{AppError, ErrorCode};
 use crate::intent::Intent;
 use crate::pc_command::{LockReason, PcAck, PcAction};
 use crate::player_login::{PlayerAuthResult, PlayerAuthenticate};
-use crate::player_session::{PlayerPlansResult, PlayerStartResult, PlayerStartSession};
+use crate::player_session::{
+    PlayerAccountResult, PlayerEndResult, PlayerPlansResult, PlayerStartResult, PlayerStartSession,
+    PlayerUnlock, PlayerUnlockResult,
+};
 use crate::player_signup::{PlayerSignup, PlayerSignupResult};
 use crate::scope::ClientClass;
 use crate::session::SessionScreen;
@@ -107,13 +110,32 @@ pub enum FrameBody {
     /// `call_staff` alert for the device; one already open is as good, and both answer `ack`.
     #[serde(rename = "device.call_staff")]
     CallStaff,
+    /// The player on a live session asks what their account holds (paired sessions only; Story
+    /// 6.17).
+    #[serde(rename = "player.account")]
+    PlayerAccount,
+    /// The wallet balance and the packs and passes valid for this PC.
+    #[serde(rename = "player.account_result")]
+    PlayerAccountResult(PlayerAccountResult),
+    /// The player chose Log out: end their own session (paired sessions only).
+    #[serde(rename = "player.end_session")]
+    PlayerEndSession,
+    /// Whether the Hub ended the session, or why it refused.
+    #[serde(rename = "player.end_result")]
+    PlayerEndResult(PlayerEndResult),
+    /// The password typed on the player's own lock screen (paired sessions only).
+    #[serde(rename = "player.unlock")]
+    PlayerUnlock(PlayerUnlock),
+    /// The Hub's typed answer to `player.unlock`.
+    #[serde(rename = "player.unlock_result")]
+    PlayerUnlockResult(PlayerUnlockResult),
     /// The Hub's empty reply to a request that has nothing to return.
     #[serde(rename = "ack")]
     Ack,
 }
 
 /// Every known `kind`.
-pub const FRAME_KINDS: [&str; 25] = [
+pub const FRAME_KINDS: [&str; 31] = [
     "hello",
     "hello.ok",
     "intent.submit",
@@ -138,6 +160,12 @@ pub const FRAME_KINDS: [&str; 25] = [
     "player.signup",
     "player.signup_result",
     "device.call_staff",
+    "player.account",
+    "player.account_result",
+    "player.end_session",
+    "player.end_result",
+    "player.unlock",
+    "player.unlock_result",
     "ack",
 ];
 
@@ -169,6 +197,12 @@ impl FrameBody {
             Self::PlayerSignup(_) => "player.signup",
             Self::PlayerSignupResult(_) => "player.signup_result",
             Self::CallStaff => "device.call_staff",
+            Self::PlayerAccount => "player.account",
+            Self::PlayerAccountResult(_) => "player.account_result",
+            Self::PlayerEndSession => "player.end_session",
+            Self::PlayerEndResult(_) => "player.end_result",
+            Self::PlayerUnlock(_) => "player.unlock",
+            Self::PlayerUnlockResult(_) => "player.unlock_result",
             Self::Ack => "ack",
         }
     }

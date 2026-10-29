@@ -3,7 +3,7 @@
 //!
 //! A named, ordered list of [`CleanupStep`]s ([`Pipeline::standard`]; adding a step is adding
 //! one entry there) runs on the generic session-end signal: [`pc::set_locked`](crate::pc) with
-//! the reason `PayAtCounter`, `EndedByStaff` or `TimesUp` while a session is dirty (any path,
+//! the reason `PayAtCounter`, `EndedByStaff`, `TimesUp` or `LoggedOut` while a session is dirty (any path,
 //! now or later). `TimesUpSeeCounter` (Staff handles at grace end) does not trigger; staff's
 //! later End does.
 //!
@@ -312,7 +312,12 @@ pub(crate) fn mark_dirty(ctx: &Ctx) {
 fn ends_session(reason: Option<LockReason>) -> bool {
     matches!(
         reason,
-        Some(LockReason::PayAtCounter | LockReason::EndedByStaff | LockReason::TimesUp)
+        Some(
+            LockReason::PayAtCounter
+                | LockReason::EndedByStaff
+                | LockReason::TimesUp
+                | LockReason::LoggedOut
+        )
     )
 }
 

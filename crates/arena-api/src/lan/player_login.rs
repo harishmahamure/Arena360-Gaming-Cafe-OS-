@@ -40,14 +40,14 @@ use super::throttle::AdminPinThrottle;
 /// A reserved throttle check. If the request is dropped before it is finished (the session ended
 /// or its task was aborted mid-check) the reservation is given back, so abandoned checks cannot
 /// pile up until the device is locked for good.
-struct Reservation<'a> {
-    throttle: &'a AdminPinThrottle,
-    device: &'a str,
-    live: bool,
+pub(super) struct Reservation<'a> {
+    pub(super) throttle: &'a AdminPinThrottle,
+    pub(super) device: &'a str,
+    pub(super) live: bool,
 }
 
 impl Reservation<'_> {
-    fn finish(mut self, ok: bool, now: Instant) -> Option<u32> {
+    pub(super) fn finish(mut self, ok: bool, now: Instant) -> Option<u32> {
         self.live = false;
         self.throttle.finish(self.device, ok, now)
     }
@@ -258,7 +258,7 @@ async fn record_login(hub: &LanHub, device: &str, player_id: &str) -> Result<(),
 
 /// Raises the `login_lockout` alert for `device` (system actor); one that is already open stays as
 /// it is.
-async fn raise_lockout(hub: &LanHub, device: &str) {
+pub(super) async fn raise_lockout(hub: &LanHub, device: &str) {
     let Some(writer) = hub.writer.clone() else {
         return;
     };

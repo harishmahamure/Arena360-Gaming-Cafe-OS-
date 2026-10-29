@@ -1091,3 +1091,74 @@ async fn a_staff_lock_keeps_the_messages_of_the_session() {
     crate::pc::set_locked(&ctx, true, Some(LockReason::LockedByStaff));
     assert_eq!(texts(&ctx), ["one"]);
 }
+
+// ---- Story 6.17: the account menu's lock and log out ----
+
+fn player_screen() -> SessionScreen {
+    SessionScreen {
+        username: Some("asha".into()),
+        ..session_screen()
+    }
+}
+
+#[tokio::test]
+async fn only_a_signed_in_players_session_can_be_locked_and_time_and_messages_go_on() {
+    let (_dir, ctx) = bare_ctx();
+    crate::session::sync(&ctx, session_screen(), true);
+    assert!(crate::player_session::lock(&ctx).is_err(), "a guest");
+    assert!(!ctx.pc.screen.borrow().locked);
+
+    crate::session::sync(&ctx, player_screen(), true);
+    message(&ctx, "M1", "one");
+    crate::player_session::lock(&ctx).unwrap();
+    {
+        let s = ctx.pc.screen.borrow();
+        assert!(s.locked);
+        assert_eq!(s.reason, Some(LockReason::LockedByPlayer));
+        assert!(s.session.is_some(), "the session is still on screen");
+    }
+    assert_eq!(texts(&ctx), ["one"], "the messages stay");
+    // Already locked: a second lock is refused, and staff Unlock opens the screen.
+    assert!(crate::player_session::lock(&ctx).is_err());
+    let step = crate::pc::apply(&ctx, "U1", PcAction::Unlock, None, None);
+    assert_eq!(step, crate::pc::Step::Ack);
+    let s = ctx.pc.screen.borrow();
+    assert!(!s.locked && s.reason.is_none() && s.session.is_some());
+}
+
+#[tokio::test]
+async fn a_password_opens_only_the_players_own_lock_and_needs_the_hub() {
+    use arena_kiosk_core::ipc::SecretPin;
+    let (_dir, ctx) = bare_ctx();
+    crate::session::sync(&ctx, player_screen(), true);
+    // Not locked, or locked by staff: no password is asked of the Hub.
+    let e = crate::player_session::unlock(&ctx, SecretPin::new("pw"))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, arena_proto::ErrorCode::ValidationFailed);
+    crate::pc::set_locked(&ctx, true, Some(LockReason::LockedByStaff));
+    let e = crate::player_session::unlock(&ctx, SecretPin::new("pw"))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, arena_proto::ErrorCode::ValidationFailed);
+    // The player's own lock with the Hub unreachable stays locked.
+    crate::pc::set_locked(&ctx, false, None);
+    crate::player_session::lock(&ctx).unwrap();
+    let e = crate::player_session::unlock(&ctx, SecretPin::new("pw"))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, arena_proto::ErrorCode::HubSlow);
+    assert!(ctx.pc.screen.borrow().locked);
+}
+
+#[tokio::test]
+async fn a_player_who_logged_out_is_taken_back_to_attract_with_no_lock() {
+    let (_dir, ctx) = bare_ctx();
+    crate::session::sync(&ctx, player_screen(), true);
+    message(&ctx, "M1", "one");
+    crate::pc::set_locked(&ctx, true, Some(LockReason::LoggedOut));
+    let s = ctx.pc.screen.borrow();
+    assert!(!s.locked, "no lock text: the attract screen shows");
+    assert!(s.reason.is_none() && s.session.is_none());
+    assert!(ctx.pc.staff_notes().is_empty());
+}

@@ -14,6 +14,7 @@ mod call_staff;
 pub mod listener;
 mod media;
 mod pair;
+mod player_account;
 mod player_login;
 mod player_session;
 mod player_signup;
@@ -235,6 +236,8 @@ pub struct LanHub {
     admin_pin: throttle::AdminPinThrottle,
     /// Per-device throttle on wrong player logins (the admin-PIN type, a second instance).
     login_throttle: throttle::AdminPinThrottle,
+    /// Per-device throttle on wrong passwords at a player's own lock screen (Story 6.17).
+    unlock_throttle: throttle::AdminPinThrottle,
     /// Who logged in on each device (Story 6.9).
     player_logins: player_login::LoginRecords,
     /// Hands each LAN connection a number, so a login record is good for its connection only.
@@ -268,6 +271,7 @@ impl LanHub {
             kiosk_log_rate: throttle::KioskLogRate::default(),
             admin_pin: throttle::AdminPinThrottle::default(),
             login_throttle: throttle::AdminPinThrottle::default(),
+            unlock_throttle: throttle::AdminPinThrottle::default(),
             player_logins: player_login::LoginRecords::default(),
             next_conn: std::sync::atomic::AtomicU64::new(1),
         }

@@ -39,6 +39,8 @@
     ordered: number;
     username: string | null;
     guestNo: number | null;
+    /** The profiled player's wallet balance in minor units, for the account menu. */
+    balance: number | null;
     /** When a prepaid session runs out, on the monotonic clock (`null`: it counts up). */
     until: number | null;
   } | null>(null);
@@ -78,6 +80,7 @@
           ordered: s.session.ordered_items,
           username: s.session.username,
           guestNo: s.session.guest_no,
+          balance: s.session.username === null ? null : s.session.balance_minor,
           until: s.session.remaining_ms === null ? null : now + s.session.remaining_ms,
         }
       : null;
@@ -147,6 +150,9 @@
       }}
       logo={attract.logo}
       seconds={chipSeconds}
+      balance={session.balance}
+      locale={attract.view?.locale ?? null}
+      connected={hub === "connected"}
       bind:tab
     >
       {#snippet status()}

@@ -2,6 +2,12 @@
 //! forwarded to the Hub as the paired-only frames `player.plans`, `player.start_session` and
 //! `player.logout`, and the Hub's typed answer goes back as the `reply` body.
 //!
+//! The account menu (Story 6.17) adds `player_account`, `player_end` (Log out) and
+//! `player_unlock`, forwarded as `player.account`, `player.end_session` and `player.unlock`, and
+//! `player_lock`, which the service does itself: the player's own lock covers the screen with the
+//! reason `LockedByPlayer`, the session and its clock go on, and only the Hub's `ok` for the
+//! player's password (or staff Unlock) lifts it.
+//!
 //! The service decides nothing and keeps no player context: the Hub remembers who logged in on this
 //! PC and builds the session itself, so the app never names a player. Nothing is queued: with no
 //! live connection (or no answer in time) the app gets `HUB_SLOW` and shows "Counter is
@@ -10,8 +16,9 @@
 
 use std::sync::Arc;
 
+use arena_kiosk_core::ipc::SecretPin;
 use arena_kiosk_core::{ClientError, HubClient};
-use arena_proto::{AppError, ErrorCode, FrameBody, PlayerChoice};
+use arena_proto::{AppError, ErrorCode, FrameBody, LockReason, PlayerChoice, PlayerUnlockResult};
 use serde_json::Value;
 
 use crate::runtime::Ctx;
@@ -83,6 +90,94 @@ pub async fn logout(ctx: &Ctx) -> Result<Value, AppError> {
     match client.request("player.logout", Value::Null).await {
         Ok(_) => Ok(Value::Null),
         Err(e) => Err(failed("player.logout", e)),
+    }
+}
+
+/// Asks the Hub what the player on this PC's session holds (Story 6.17): the
+/// `player.account_result` as the reply body.
+pub async fn account(ctx: &Ctx) -> Result<Value, AppError> {
+    let client = client(ctx)?;
+    match client.request("player.account", Value::Null).await {
+        Ok(frame) => match frame.body {
+            FrameBody::PlayerAccountResult(r) => serde_json::to_value(r)
+                .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string())),
+            other => Err(unexpected("player.account", other)),
+        },
+        Err(e) => Err(failed("player.account", e)),
+    }
+}
+
+/// Asks the Hub to end the player's own session (Story 6.17, Log out): the
+/// `player.end_result` as the reply body. The lock follows from the Hub as a PC command.
+pub async fn end(ctx: &Ctx) -> Result<Value, AppError> {
+    let client = client(ctx)?;
+    match client.request("player.end_session", Value::Null).await {
+        Ok(frame) => match frame.body {
+            FrameBody::PlayerEndResult(r) => serde_json::to_value(r)
+                .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string())),
+            other => Err(unexpected("player.end_session", other)),
+        },
+        Err(e) => Err(failed("player.end_session", e)),
+    }
+}
+
+/// Locks the screen for the player (Story 6.17). Only a profiled player's session on screen can
+/// be locked: a guest has no password to unlock with. Time keeps running; nothing is sent.
+pub fn lock(ctx: &Ctx) -> Result<Value, AppError> {
+    let profiled = {
+        let screen = ctx.pc.screen.borrow();
+        !screen.locked
+            && screen
+                .session
+                .as_ref()
+                .is_some_and(|s| s.username.is_some())
+    };
+    if !profiled {
+        return Err(AppError::new(
+            ErrorCode::ValidationFailed,
+            "only a signed-in player's session can be locked",
+        ));
+    }
+    crate::pc::set_locked(ctx, true, Some(LockReason::LockedByPlayer));
+    Ok(Value::Null)
+}
+
+/// Sends the password typed on the player's own lock screen to the Hub (Story 6.17) and lifts
+/// the lock when the Hub says it is right: the `player.unlock_result` as the reply body. Nothing
+/// is queued, and a screen locked by anyone else is not opened by a password.
+pub async fn unlock(ctx: &Ctx, mut password: SecretPin) -> Result<Value, AppError> {
+    let mine = {
+        let screen = ctx.pc.screen.borrow();
+        screen.locked && screen.reason == Some(LockReason::LockedByPlayer)
+    };
+    if !mine {
+        password.clear();
+        return Err(AppError::new(
+            ErrorCode::ValidationFailed,
+            "this screen is not locked by the player",
+        ));
+    }
+    let client = match client(ctx) {
+        Ok(c) => c,
+        Err(e) => {
+            password.clear();
+            return Err(e);
+        }
+    };
+    let body = serde_json::json!({ "password": password.expose() });
+    password.clear();
+    match client.request("player.unlock", body).await {
+        Ok(frame) => match frame.body {
+            FrameBody::PlayerUnlockResult(r) => {
+                if r == PlayerUnlockResult::Ok {
+                    crate::pc::set_locked(ctx, false, None);
+                }
+                serde_json::to_value(r)
+                    .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string()))
+            }
+            other => Err(unexpected("player.unlock", other)),
+        },
+        Err(e) => Err(failed("player.unlock", e)),
     }
 }
 

@@ -235,6 +235,41 @@ impl DeviceDirectory {
         crate::attract::attract_views(&store, device_ids, now_ms, lookup)
     }
 
+    /// The live session on `device_id` (Story 6.17), read in one snapshot.
+    pub fn device_session(
+        &self,
+        device_id: &str,
+    ) -> Result<Option<crate::player_account::DeviceSession>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?;
+        crate::player_account::device_session(&store, device_id)
+    }
+
+    /// What the account menu shows for `player_id` on `device_id` (Story 6.17).
+    pub fn player_account(
+        &self,
+        player_id: &str,
+        device_id: &str,
+        now_ms: i64,
+    ) -> Result<arena_proto::PlayerAccountResult, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?;
+        crate::player_account::player_account(&store, player_id, device_id, now_ms)
+    }
+
+    /// The stored password hash of `player_id` (Story 6.17), for the player's own lock screen.
+    pub fn player_password_hash(&self, player_id: &str) -> Result<Option<String>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?;
+        crate::player_account::player_password_hash(&store, player_id)
+    }
+
     /// The plan picker's options for `player_id` on `device_id` (Story 6.9), read in one snapshot.
     pub fn player_options(
         &self,

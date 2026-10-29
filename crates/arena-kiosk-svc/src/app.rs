@@ -610,6 +610,34 @@ async fn serve(
                     let _ = out.send(reply).await;
                 });
             }
+            Ok(IpcMsg::PlayerUnlock { rid, password }) => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(rid, crate::player_session::unlock(&ctx, password).await);
+                    let _ = out.send(reply).await;
+                });
+            }
+            Ok(IpcMsg::Request { rid, kind, .. }) if kind == "player_account" => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(rid, crate::player_session::account(&ctx).await);
+                    let _ = out.send(reply).await;
+                });
+            }
+            Ok(IpcMsg::Request { rid, kind, .. }) if kind == "player_end" => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(rid, crate::player_session::end(&ctx).await);
+                    let _ = out.send(reply).await;
+                });
+            }
+            Ok(IpcMsg::Request { rid, kind, .. }) if kind == "player_lock" => {
+                let reply = reply_of(rid, crate::player_session::lock(&ctx));
+                let _ = out_tx.send(reply).await;
+            }
             Ok(IpcMsg::PlayerLogout { rid }) => {
                 let ctx = Arc::clone(&ctx);
                 let out = out_tx.clone();

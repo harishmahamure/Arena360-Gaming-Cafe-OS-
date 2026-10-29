@@ -221,6 +221,39 @@ async fn call_staff<R: Runtime>(
     Ok(answer)
 }
 
+/// What the account menu's Balance row shows (Story 6.17): IPC `player_account`, answered with the
+/// Hub's `player.account_result` as the body. `None` when the service did not answer.
+#[tauri::command]
+async fn player_account(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
+    Ok(service_request(&bridge, "player_account", serde_json::Value::Null).await)
+}
+
+/// Log out from the account menu (Story 6.17): IPC `player_end`, answered with the Hub's
+/// `player.end_result`. The Hub then locks the PC: the cleanup runs and the screen follows.
+#[tauri::command]
+async fn player_end(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
+    Ok(service_request(&bridge, "player_end", serde_json::Value::Null).await)
+}
+
+/// Lock from the account menu (Story 6.17): the service covers the screen; time keeps running.
+#[tauri::command]
+async fn player_lock(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
+    Ok(service_request(&bridge, "player_lock", serde_json::Value::Null).await)
+}
+
+/// The password typed on the player's own lock screen (Story 6.17): sent to the service only, as
+/// IPC `player_unlock`, and dropped here. The answer is the Hub's outcome (`{outcome, ...}`).
+#[tauri::command]
+async fn player_unlock(
+    password: String,
+    bridge: tauri::State<'_, Arc<Bridge>>,
+) -> Result<Option<Answer>, ()> {
+    let password = arena_kiosk_core::ipc::SecretPin::new(password);
+    Ok(bridge
+        .request(move |rid| arena_kiosk_core::ipc::IpcMsg::PlayerUnlock { rid, password })
+        .await)
+}
+
 /// The HUD page's content size in logical px (`0 × 0`: nothing to draw): the shell places,
 /// shows or hides the HUD window for it (Story 6.14).
 #[tauri::command]
@@ -399,7 +432,11 @@ fn main() {
             hud_collapse,
             volume_get,
             volume_set,
-            call_staff
+            call_staff,
+            player_account,
+            player_end,
+            player_lock,
+            player_unlock
         ])
         .on_window_event(|_window, event| {
             // The kiosk is the shell: nothing closes it (admin exit comes in Story 1.20).

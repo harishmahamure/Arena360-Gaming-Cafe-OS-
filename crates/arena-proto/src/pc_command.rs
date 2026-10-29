@@ -35,6 +35,12 @@ pub enum LockReason {
     /// The kiosk is cleaning the PC after a session, or holds after a cleanup step failed.
     /// Kiosk-local: the Hub never sends it (Story 6.11).
     PreparingPc,
+    /// The player locked their own screen from the account menu (Story 6.17). Kiosk-local: the
+    /// session and its clock go on, and the player's password or staff Unlock lifts it.
+    LockedByPlayer,
+    /// A player ended their own prepaid session (Story 6.17): the session-end cleanup runs and
+    /// the PC goes back to the attract screen, with no lock text.
+    LoggedOut,
 }
 
 impl PcAction {

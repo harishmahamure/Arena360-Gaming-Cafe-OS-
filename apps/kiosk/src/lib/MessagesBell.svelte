@@ -36,6 +36,11 @@
     panel?.focus();
   }
 
+  /** Opens the list (the account menu's Messages row); one already open stays so. */
+  export async function show() {
+    if (!open) await toggle();
+  }
+
   function close(refocus: boolean) {
     open = false;
     if (refocus) button?.focus();

@@ -8,11 +8,18 @@
 //! None of them names a player: after a correct `player.authenticate` the Hub remembers who
 //! logged in on that device for a short while and builds the intent itself, with the paired device
 //! as actor and the player on the session row.
+//!
+//! The account menu (Story 6.17) adds three more, for the player on a live session; they name no
+//! player either, the Hub reads it from the session on that device:
+//!
+//! - `player.account{}` -> `player.account_result{balance_minor, packs[]}`.
+//! - `player.end_session{}` -> `player.end_result{outcome}` (Log out).
+//! - `player.unlock{password}` -> `player.unlock_result{outcome}` (the player's own lock screen).
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::error::ErrorCode;
+use crate::error::{AppError, ErrorCode};
 use crate::snapshot::SnapshotActiveRule;
 
 /// How long the Hub remembers a login on a device after its last `player.plans` /
@@ -129,11 +136,162 @@ pub enum PlayerStartResult {
     Refused { code: ErrorCode, message: String },
 }
 
+/// One owned pack or pass the account menu lists.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct AccountPack {
+    pub name: String,
+    /// Minutes left on a pack; `None` for a pass, which has a window and no hours.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub minutes_left: Option<i64>,
+    /// When it expires (epoch ms).
+    #[ts(type = "number")]
+    pub expires_at: i64,
+}
+
+/// `player.account_result` (Hub -> kiosk): what the profiled player on this PC holds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PlayerAccountResult {
+    /// The wallet balance in minor units, less what running wallet sessions have set aside.
+    #[ts(type = "number")]
+    pub balance_minor: i64,
+    /// Packs and passes valid for this PC's group and not expired, soonest expiry first.
+    pub packs: Vec<AccountPack>,
+}
+
+/// `player.end_result` (Hub -> kiosk): whether the Hub ended the player's own session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum PlayerEndResult {
+    /// The session ended; the lock follows as a `pc.command` on the same connection.
+    Ok,
+    /// `apply()` refused: its code and message.
+    Refused { code: ErrorCode, message: String },
+}
+
+/// `player.unlock` (paired kiosk -> Hub): the password a player typed on their own lock screen.
+/// Never printed.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PlayerUnlock {
+    pub password: String,
+}
+
+impl std::fmt::Debug for PlayerUnlock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlayerUnlock")
+            .field("password", &"[redacted]")
+            .finish()
+    }
+}
+
+impl PlayerUnlock {
+    /// The frame rules: a password of 1–1024 bytes. A failure is `BAD_FRAME` naming the field
+    /// (never echoing its value).
+    pub fn validate(&self) -> Result<(), AppError> {
+        if self.password.is_empty() || self.password.len() > crate::MAX_LOGIN_PASSWORD_BYTES {
+            return Err(AppError::with_field(
+                ErrorCode::BadFrame,
+                "password",
+                "password must be 1–1024 bytes",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// `player.unlock_result` (Hub -> kiosk): the typed outcome of a `player.unlock`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum PlayerUnlockResult {
+    /// The player's own password; the kiosk lifts its lock.
+    Ok,
+    /// A wrong password (also: no profiled player on this PC's session).
+    Rejected,
+    /// This PC's field is paused after too many wrong tries; no hash was checked.
+    Locked { retry_s: u32 },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::frame::{Frame, FrameBody, parse_frame};
     use serde_json::json;
+
+    #[test]
+    fn the_account_frames_round_trip() {
+        for (text, body) in [
+            (
+                r#"{"v":1,"kind":"player.account","rid":"a"}"#,
+                FrameBody::PlayerAccount,
+            ),
+            (
+                r#"{"v":1,"kind":"player.end_session","rid":"b"}"#,
+                FrameBody::PlayerEndSession,
+            ),
+            (
+                r#"{"v":1,"kind":"player.unlock","rid":"c","password":"pw"}"#,
+                FrameBody::PlayerUnlock(PlayerUnlock {
+                    password: "pw".into(),
+                }),
+            ),
+        ] {
+            let f = parse_frame(text).unwrap();
+            assert_eq!(f.body, body);
+            assert_eq!(parse_frame(&f.to_text()).unwrap(), f);
+        }
+        let account = Frame::new(
+            "a",
+            FrameBody::PlayerAccountResult(PlayerAccountResult {
+                balance_minor: 25_000,
+                packs: vec![AccountPack {
+                    name: "10 hours".into(),
+                    minutes_left: Some(90),
+                    expires_at: 7,
+                }],
+            }),
+        );
+        let v = serde_json::to_value(&account).unwrap();
+        assert_eq!(v["kind"], "player.account_result");
+        assert_eq!(v["packs"][0]["minutes_left"], 90);
+        assert_eq!(parse_frame(&account.to_text()).unwrap(), account);
+        for (kind, body) in [
+            (
+                "player.end_result",
+                FrameBody::PlayerEndResult(PlayerEndResult::Refused {
+                    code: ErrorCode::Stale,
+                    message: "x".into(),
+                }),
+            ),
+            (
+                "player.unlock_result",
+                FrameBody::PlayerUnlockResult(PlayerUnlockResult::Locked { retry_s: 60 }),
+            ),
+        ] {
+            let f = Frame::new("r", body);
+            assert_eq!(serde_json::to_value(&f).unwrap()["kind"], kind);
+            assert_eq!(parse_frame(&f.to_text()).unwrap(), f);
+        }
+    }
+
+    #[test]
+    fn an_unlock_password_is_bounded_and_never_printed() {
+        let unlock = |p: &str| PlayerUnlock {
+            password: p.to_owned(),
+        };
+        assert!(unlock("x").validate().is_ok());
+        for bad in ["", &"x".repeat(1025)] {
+            assert_eq!(
+                unlock(bad).validate().unwrap_err().code,
+                ErrorCode::BadFrame
+            );
+        }
+        assert!(!format!("{:?}", unlock("hunter2")).contains("hunter2"));
+    }
 
     #[test]
     fn each_choice_is_a_flat_tagged_object() {

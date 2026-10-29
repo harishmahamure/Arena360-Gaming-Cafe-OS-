@@ -242,8 +242,9 @@ pub use player_login::{
     PLAYER_LOGIN_CODE, PlayerAuthResult, PlayerAuthenticate, PlayerContext,
 };
 pub use player_session::{
-    MAX_PLAN_OPTIONS, PLAYER_LOGIN_RECORD_SECONDS, PLAYER_LOGIN_REQUIRED, PlanOption, PlanTag,
-    PlayerChoice, PlayerPlansResult, PlayerStartResult, PlayerStartSession, PlayerWallet,
+    AccountPack, MAX_PLAN_OPTIONS, PLAYER_LOGIN_RECORD_SECONDS, PLAYER_LOGIN_REQUIRED, PlanOption,
+    PlanTag, PlayerAccountResult, PlayerChoice, PlayerEndResult, PlayerPlansResult,
+    PlayerStartResult, PlayerStartSession, PlayerUnlock, PlayerUnlockResult, PlayerWallet,
 };
 pub use player_signup::{
     MAX_SIGNUP_NAME_BYTES, MAX_SIGNUP_PASSWORD_BYTES, MAX_SIGNUP_PHONE_BYTES,

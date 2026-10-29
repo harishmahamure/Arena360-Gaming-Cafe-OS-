@@ -3553,3 +3553,248 @@ async fn setting_a_managers_pin_with_a_setup_code_pushes_the_new_verifier() {
         .unwrap();
     assert_eq!(entry.pin_hash, pin_hash);
 }
+
+async fn account_frame(
+    client: &HubClient,
+) -> Result<arena_proto::PlayerAccountResult, ClientError> {
+    match client
+        .request("player.account", serde_json::Value::Null)
+        .await?
+        .body
+    {
+        FrameBody::PlayerAccountResult(r) => Ok(r),
+        other => panic!("{other:?}"),
+    }
+}
+
+async fn unlock_frame(client: &HubClient, password: &str) -> arena_proto::PlayerUnlockResult {
+    match client
+        .request("player.unlock", serde_json::json!({ "password": password }))
+        .await
+        .unwrap()
+        .body
+    {
+        FrameBody::PlayerUnlockResult(r) => r,
+        other => panic!("{other:?}"),
+    }
+}
+
+async fn end_frame(client: &HubClient) -> arena_proto::PlayerEndResult {
+    match client
+        .request("player.end_session", serde_json::Value::Null)
+        .await
+        .unwrap()
+        .body
+    {
+        FrameBody::PlayerEndResult(r) => r,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The reason of the next lock command pushed to the PC.
+async fn next_lock(events: &mut arena_kiosk_core::EventStream) -> Option<arena_proto::LockReason> {
+    loop {
+        let ev = tokio::time::timeout(Duration::from_secs(3), events.next_event())
+            .await
+            .expect("a lock command within 3 s")
+            .unwrap();
+        if let HubEvent::PcCommand {
+            action: arena_proto::PcAction::Lock,
+            reason,
+            ..
+        } = ev
+        {
+            return reason;
+        }
+    }
+}
+
+/// A logged-in player with a pack and some wallet, running a pack session on the paired PC.
+async fn playing(hub: &TestHub) -> (HubClient, String) {
+    use arena_proto::PlayerStartResult;
+    let group = rated_pc(hub, 6_000).await;
+    let player = add_player(hub, "asha", "right-password", "Asha").await;
+    top_up(hub, &player, 4_000).await;
+    let pack = own_pack(hub, &player, &group).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    login(&client, "asha", "right-password").await;
+    assert_eq!(
+        start_choice(
+            &client,
+            serde_json::json!({"mode": "pack", "pack_id": pack})
+        )
+        .await
+        .unwrap(),
+        PlayerStartResult::Ok
+    );
+    (client, player)
+}
+
+async fn start_postpaid(hub: &TestHub, player: Option<String>) {
+    hub.writer
+        .as_ref()
+        .unwrap()
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::SessionStart(arena_proto::SessionStart {
+                group_with: None,
+                pay_from_wallet: false,
+                device_id: hub.paired_id.clone(),
+                mode: arena_proto::SessionMode::Postpaid,
+                player_id: player,
+                pack_id: None,
+                plan_id: None,
+            }),
+            None,
+        ))
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_account_shows_the_balance_and_owned_pack_hours_of_the_session_player() {
+    let hub = start("0.1.0", true).await;
+    let (client, _) = playing(&hub).await;
+    let account = account_frame(&client).await.unwrap();
+    assert_eq!(account.balance_minor, 4_000);
+    assert_eq!(account.packs.len(), 1);
+    assert_eq!(account.packs[0].name, "5 h");
+    assert_eq!(account.packs[0].minutes_left, Some(300));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_account_of_a_guest_or_an_empty_pc_is_not_found() {
+    let hub = start("0.1.0", true).await;
+    rated_pc(&hub, 6_000).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let ClientError::Hub(e) = account_frame(&client).await.unwrap_err() else {
+        panic!("a hub refusal")
+    };
+    assert_eq!(e.code, ErrorCode::NotFound);
+    start_postpaid(&hub, None).await;
+    let ClientError::Hub(e) = account_frame(&client).await.unwrap_err() else {
+        panic!("a hub refusal")
+    };
+    assert_eq!(e.code, ErrorCode::NotFound);
+    // A guest has no password to unlock with, and nothing counts toward a pause.
+    for _ in 0..6 {
+        assert_eq!(
+            unlock_frame(&client, "anything").await,
+            arena_proto::PlayerUnlockResult::Rejected
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_lock_screen_takes_the_own_password_and_five_wrong_tries_pause_it_for_a_minute() {
+    use arena_proto::PlayerUnlockResult as R;
+    let hub = start("0.1.0", true).await;
+    let (client, _) = playing(&hub).await;
+    assert_eq!(unlock_frame(&client, "wrong-one").await, R::Rejected);
+    assert_eq!(unlock_frame(&client, "right-password").await, R::Ok);
+    // The streak was cleared by the right password: four wrong, then the fifth pauses.
+    for _ in 0..4 {
+        assert_eq!(unlock_frame(&client, "wrong-one").await, R::Rejected);
+    }
+    assert_eq!(
+        unlock_frame(&client, "wrong-one").await,
+        R::Locked { retry_s: 60 }
+    );
+    // While paused even the right password is not checked.
+    assert!(matches!(
+        unlock_frame(&client, "right-password").await,
+        R::Locked { retry_s } if retry_s > 0
+    ));
+    let alerts = Store::open_reader(&hub.path).unwrap().alerts().unwrap();
+    assert!(
+        alerts
+            .iter()
+            .any(|a| a.device_id.as_deref() == Some(hub.paired_id.as_str()))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn logging_out_of_a_prepaid_session_ends_it_and_sends_the_pc_back_to_attract() {
+    use arena_proto::{LockReason, PlayerEndResult};
+    let hub = start("0.1.0", true).await;
+    let (client, _) = playing(&hub).await;
+    let mut events = client.events().unwrap();
+    assert_eq!(end_frame(&client).await, PlayerEndResult::Ok);
+    assert_eq!(next_lock(&mut events).await, Some(LockReason::LoggedOut));
+    let reader = Store::open_reader(&hub.path).unwrap();
+    assert!(reader.live_sessions().unwrap().is_empty());
+    let changes = reader.changes().unwrap();
+    let ended = changes.iter().rev().find(|c| c.tbl == "sessions").unwrap();
+    assert_eq!(
+        (ended.actor_kind.as_str(), ended.actor_id.as_str()),
+        ("device", hub.paired_id.as_str())
+    );
+    // Nothing is left to end.
+    assert!(matches!(
+        end_frame(&client).await,
+        PlayerEndResult::Refused {
+            code: ErrorCode::NotFound,
+            ..
+        }
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn logging_out_of_a_postpaid_session_bills_it_and_locks_to_pay_at_counter() {
+    use arena_proto::{LockReason, PlayerEndResult};
+    let hub = start("0.1.0", true).await;
+    rated_pc(&hub, 6_000).await;
+    let player = add_player(&hub, "asha", "right-password", "Asha").await;
+    start_postpaid(&hub, Some(player)).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let mut events = client.events().unwrap();
+    assert_eq!(end_frame(&client).await, PlayerEndResult::Ok);
+    assert_eq!(next_lock(&mut events).await, Some(LockReason::PayAtCounter));
+    let reader = Store::open_reader(&hub.path).unwrap();
+    assert!(reader.live_sessions().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_account_frames_are_for_paired_sessions_and_a_follower_refuses_them() {
+    let hub = start("0.1.0", true).await;
+    let mut ws = hub.plain().await;
+    let hello = Frame::new(
+        "h",
+        FrameBody::Hello(hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0")),
+    );
+    send_frame(&mut ws, &hello).await;
+    assert!(matches!(
+        recv(&mut ws).await.unwrap().body,
+        FrameBody::HelloOk(_)
+    ));
+    for line in [
+        r#"{"v":1,"kind":"player.account","rid":"a"}"#,
+        r#"{"v":1,"kind":"player.end_session","rid":"b"}"#,
+        r#"{"v":1,"kind":"player.unlock","rid":"c","password":"x"}"#,
+    ] {
+        send(&mut ws, line).await;
+        let frame = recv(&mut ws).await.unwrap();
+        assert_eq!(error_of(&frame).1, ErrorCode::Forbidden, "{line}");
+    }
+
+    let follower = start("0.1.0", false).await;
+    let client = HubClient::connect(&follower.url(), &follower.fingerprint, follower.paired())
+        .await
+        .unwrap();
+    for (kind, body) in [
+        ("player.account", serde_json::Value::Null),
+        ("player.end_session", serde_json::Value::Null),
+        ("player.unlock", serde_json::json!({ "password": "x" })),
+    ] {
+        match client.request(kind, body).await {
+            Err(ClientError::Hub(e)) => assert_eq!(e.code, ErrorCode::NotPrimary, "{kind}"),
+            other => panic!("{kind}: {other:?}"),
+        }
+    }
+}

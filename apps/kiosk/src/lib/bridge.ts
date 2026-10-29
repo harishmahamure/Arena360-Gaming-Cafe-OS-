@@ -16,6 +16,14 @@ import type {
 } from "@arena/ui/generated";
 // The event and command names, shared with the Rust shell (its tests read the same file).
 import names from "../../src-tauri/ipc-names.json" with { type: "json" };
+import {
+  accountOf,
+  endOf,
+  unlockOf,
+  type AccountOutcome,
+  type LogoutOutcome,
+  type UnlockOutcome,
+} from "./account";
 import { LOGIN_TIMEOUT_MS, outcomeOf, type LoginOutcome } from "./login";
 import { PICKER_TIMEOUT_MS, plansOf, startOf, type PlansOutcome, type StartOutcome } from "./plans";
 import { SIGNUP_TIMEOUT_MS, signupOutcomeOf, type SignupOutcome } from "./signup";
@@ -528,6 +536,37 @@ export async function callStaff(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** What the player on this PC's session holds (Story 6.17); the Hub reads who it is. */
+export async function playerAccount(): Promise<AccountOutcome> {
+  if (!inTauri()) return { kind: "unreachable" };
+  return accountOf(await ask(CMD.playerAccount));
+}
+
+/**
+ * Log out from the account menu (Story 6.17): the Hub ends the player's own session, then locks
+ * the PC (the cleanup runs, then the screen follows).
+ */
+export async function playerEnd(): Promise<LogoutOutcome> {
+  if (!inTauri()) return { kind: "unreachable" };
+  return endOf(await ask(CMD.playerEnd));
+}
+
+/** Locks the screen for the player (Story 6.17); `true`: the service covered it. */
+export async function playerLock(): Promise<boolean> {
+  if (!inTauri()) return false;
+  const answer = await ask(CMD.playerLock);
+  return isAnswer(answer) && answer.ok;
+}
+
+/**
+ * The password typed on the player's own lock screen (Story 6.17). It goes to the Kiosk service
+ * through the shell and nowhere else; the caller drops its own copy.
+ */
+export async function playerUnlock(password: string): Promise<UnlockOutcome> {
+  if (!inTauri()) return { kind: "unreachable" };
+  return unlockOf(await ask(CMD.playerUnlock, { password }));
 }
 
 /** One staff message of the session on screen (Story 6.16). */

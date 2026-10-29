@@ -7,4 +7,6 @@ export type LockReason =
   | "times_up_see_counter"
   | "locked_by_staff"
   | "paused"
-  | "preparing_pc";
+  | "preparing_pc"
+  | "locked_by_player"
+  | "logged_out";

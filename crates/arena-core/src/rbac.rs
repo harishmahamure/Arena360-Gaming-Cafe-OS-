@@ -7,7 +7,7 @@
 //! message that never names anyone.
 
 use arena_proto::{ActorKind, AppError, ErrorCode, Intent, PermEffect, Permission, Requirement};
-use arena_store::{StoreTx, find_role, find_staff, role_perm_effect};
+use arena_store::{StoreTx, find_role, find_session, find_staff, role_perm_effect};
 
 /// The built-in role names. Built-in roles are seeded by `branch.bootstrap` and cannot be
 /// changed.
@@ -128,6 +128,24 @@ fn device_creates_player(p: Permission, intent: &Intent) -> bool {
         && matches!(&intent.payload, IntentPayload::PlayerCreate(c) if c.consent)
 }
 
+/// Whether a paired device may end the session on its own PC (Story 6.17): the player chose Log
+/// out at the kiosk. The Hub builds that `session.end` from the device's session; a kiosk cannot
+/// send it (it is outside the paired scope). Another PC's session stays denied.
+fn device_ends_own_session(
+    tx: &StoreTx<'_>,
+    p: Permission,
+    intent: &Intent,
+) -> Result<bool, AppError> {
+    use arena_proto::IntentPayload;
+    let IntentPayload::SessionEnd(end) = &intent.payload else {
+        return Ok(false);
+    };
+    if p != Permission::SessionEnd {
+        return Ok(false);
+    }
+    Ok(find_session(tx, &end.session_id)?.is_some_and(|s| s.device_id == intent.actor.id))
+}
+
 /// **permission.** Checks the intent's [`Requirement`] against its actor. The kind is taken
 /// from the payload, so a mislabelled envelope cannot borrow another kind's requirement.
 pub fn check(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
@@ -161,7 +179,9 @@ pub fn check(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
             ActorKind::System => is_pairing(intent),
             ActorKind::Admin => false,
             ActorKind::Device => {
-                device_starts_own_session(p, intent) || device_creates_player(p, intent)
+                device_starts_own_session(p, intent)
+                    || device_creates_player(p, intent)
+                    || device_ends_own_session(tx, p, intent)?
             }
         },
     };

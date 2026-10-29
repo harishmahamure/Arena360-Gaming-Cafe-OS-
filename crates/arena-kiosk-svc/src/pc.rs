@@ -164,14 +164,6 @@ pub(crate) fn show_cleanup_lock(ctx: &Ctx) {
 /// Sets the screen. `asked` is the reason the Hub or a timer gave (it decides what the lock
 /// ends: the session, the deadline); `shown` is the reason the screen carries.
 fn apply_lock(ctx: &Ctx, locked: bool, asked: Option<LockReason>, shown: Option<LockReason>) {
-    let saved = ctx.queue.lock().unwrap_or_else(|p| p.into_inner()).kv_set(
-        LOCKED_KEY,
-        if locked { "1" } else { "0" },
-        0,
-    );
-    if let Err(e) = saved {
-        tracing::error!(error = %e, "could not save the lock state");
-    }
     let ends = locked
         && matches!(
             asked,
@@ -180,8 +172,23 @@ fn apply_lock(ctx: &Ctx, locked: bool, asked: Option<LockReason>, shown: Option<
                     | LockReason::EndedByStaff
                     | LockReason::TimesUp
                     | LockReason::TimesUpSeeCounter
+                    | LockReason::LoggedOut
             )
         );
+    // A player who logged out shows no lock once the PC is clean: the attract screen.
+    let (locked, shown) = if shown == Some(LockReason::LoggedOut) {
+        (false, None)
+    } else {
+        (locked, shown)
+    };
+    let saved = ctx.queue.lock().unwrap_or_else(|p| p.into_inner()).kv_set(
+        LOCKED_KEY,
+        if locked { "1" } else { "0" },
+        0,
+    );
+    if let Err(e) = saved {
+        tracing::error!(error = %e, "could not save the lock state");
+    }
     if ends || (locked && asked == Some(LockReason::Paused)) {
         ctx.pc.deadline.send_replace(None);
     }

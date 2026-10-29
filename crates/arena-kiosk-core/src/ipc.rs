@@ -226,6 +226,14 @@ pub enum IpcMsg {
     PlayerLogout {
         rid: String,
     },
+    /// App -> service: the password typed on the player's own lock screen (Story 6.17). The
+    /// answer is `reply` `rid`: the Hub's `player.unlock_result` as the body (`{outcome, ...}`),
+    /// or an `error` when the Hub could not be asked. On `ok` the service lifts the lock. The
+    /// password is a [`SecretPin`]: never printed, cleared once sent.
+    PlayerUnlock {
+        rid: String,
+        password: SecretPin,
+    },
     /// App → service: a new player's sign-up (Story 6.10). The answer is `reply` `rid`: the Hub's
     /// `player.signup_result` as the body (`{outcome, ...}`), or an `error` when the Hub could not
     /// be asked or could not answer.
@@ -490,6 +498,18 @@ mod tests {
             "{\"type\":\"player_login\",\"rid\":\"l\",\"username\":\"asha\",\"password\":\"hunter2-secret\"}
 "
         );
+        assert_eq!(IpcMsg::parse(&msg.to_line()).unwrap(), msg);
+    }
+
+    #[test]
+    fn the_player_unlock_message_never_prints_the_password() {
+        let msg = IpcMsg::PlayerUnlock {
+            rid: "u".into(),
+            password: SecretPin::new("hunter2-secret"),
+        };
+        assert!(!format!("{msg:?}").contains("hunter2"));
+        let v: Value = serde_json::from_str(&msg.to_line()).unwrap();
+        assert_eq!(v["type"], "player_unlock");
         assert_eq!(IpcMsg::parse(&msg.to_line()).unwrap(), msg);
     }
 

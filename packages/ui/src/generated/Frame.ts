@@ -8,13 +8,17 @@ import type { HelloOk } from "./HelloOk";
 import type { IntentResult } from "./IntentResult";
 import type { IntentSubmit } from "./IntentSubmit";
 import type { PcAck } from "./PcAck";
+import type { PlayerAccountResult } from "./PlayerAccountResult";
 import type { PlayerAuthResult } from "./PlayerAuthResult";
 import type { PlayerAuthenticate } from "./PlayerAuthenticate";
+import type { PlayerEndResult } from "./PlayerEndResult";
 import type { PlayerPlansResult } from "./PlayerPlansResult";
 import type { PlayerSignup } from "./PlayerSignup";
 import type { PlayerSignupResult } from "./PlayerSignupResult";
 import type { PlayerStartResult } from "./PlayerStartResult";
 import type { PlayerStartSession } from "./PlayerStartSession";
+import type { PlayerUnlock } from "./PlayerUnlock";
+import type { PlayerUnlockResult } from "./PlayerUnlockResult";
 import type { SettingsGet } from "./SettingsGet";
 import type { SettingsValues } from "./SettingsValues";
 import type { VerifyAdminPin } from "./VerifyAdminPin";
@@ -56,5 +60,11 @@ export type Frame = {
   | ({ kind: "player.signup" } & PlayerSignup)
   | ({ kind: "player.signup_result" } & PlayerSignupResult)
   | { kind: "device.call_staff" }
+  | { kind: "player.account" }
+  | ({ kind: "player.account_result" } & PlayerAccountResult)
+  | { kind: "player.end_session" }
+  | ({ kind: "player.end_result" } & PlayerEndResult)
+  | ({ kind: "player.unlock" } & PlayerUnlock)
+  | ({ kind: "player.unlock_result" } & PlayerUnlockResult)
   | { kind: "ack" }
 );

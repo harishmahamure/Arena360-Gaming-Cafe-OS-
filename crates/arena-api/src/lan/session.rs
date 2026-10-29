@@ -633,6 +633,21 @@ impl Ctx<'_> {
                 };
                 self.reply(reply).await;
             }
+            "player.account" => match self.paired_device("player.account") {
+                Ok(device) => self.spawn_player_account(rid, device, permits, tasks).await,
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
+            "player.end_session" => match self.paired_device("player.end_session") {
+                Ok(device) => self.spawn_player_end(rid, device, permits, tasks).await,
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
+            "player.unlock" => match self.check_player_unlock(value) {
+                Ok((device, request)) => {
+                    self.spawn_player_unlock(rid, device, request, permits, tasks)
+                        .await
+                }
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
             "device.call_staff" => match self.paired_device("device.call_staff") {
                 Ok(device) => self.spawn_call_staff(rid, device, permits, tasks).await,
                 Err(e) => self.reply(Frame::error(rid, e)).await,
@@ -872,6 +887,86 @@ impl Ctx<'_> {
             let _permit = permit;
             let reply = match super::player_session::plans(&hub, &device, conn).await {
                 Ok(result) => Frame::new(rid, FrameBody::PlayerPlansResult(result)),
+                Err(e) => Frame::error(rid, e),
+            };
+            let _ = out.send(text(&reply)).await;
+        });
+    }
+
+    fn check_player_unlock(
+        &self,
+        value: Value,
+    ) -> Result<(String, arena_proto::PlayerUnlock), AppError> {
+        let device = self.paired_device("player.unlock")?;
+        let frame = parse_frame_value(value).map_err(|e| e.error)?;
+        let FrameBody::PlayerUnlock(request) = frame.body else {
+            return Err(app(ErrorCode::BadFrame, "malformed player.unlock"));
+        };
+        request.validate()?;
+        Ok((device, request))
+    }
+
+    async fn spawn_player_account(
+        &self,
+        rid: String,
+        device: String,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let (hub, out) = (Arc::clone(self.hub), self.out.clone());
+        tasks.spawn(async move {
+            let _permit = permit;
+            let reply = match super::player_account::account(&hub, &device).await {
+                Ok(result) => Frame::new(rid, FrameBody::PlayerAccountResult(result)),
+                Err(e) => Frame::error(rid, e),
+            };
+            let _ = out.send(text(&reply)).await;
+        });
+    }
+
+    async fn spawn_player_end(
+        &self,
+        rid: String,
+        device: String,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let (hub, out) = (Arc::clone(self.hub), self.out.clone());
+        tasks.spawn(async move {
+            let _permit = permit;
+            let reply = match super::player_account::end_session(&hub, &device).await {
+                Ok(result) => Frame::new(rid, FrameBody::PlayerEndResult(result)),
+                Err(e) => Frame::error(rid, e),
+            };
+            let _ = out.send(text(&reply)).await;
+        });
+    }
+
+    async fn spawn_player_unlock(
+        &self,
+        rid: String,
+        device: String,
+        request: arena_proto::PlayerUnlock,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let (hub, out) = (Arc::clone(self.hub), self.out.clone());
+        tasks.spawn(async move {
+            let _permit = permit;
+            let reply = match super::player_account::unlock(&hub, &device, request).await {
+                Ok(result) => Frame::new(rid, FrameBody::PlayerUnlockResult(result)),
                 Err(e) => Frame::error(rid, e),
             };
             let _ = out.send(text(&reply)).await;

@@ -1,6 +1,8 @@
 <script lang="ts">
   import { BrandMark, t } from "@arena/ui";
+  import type { SnapshotLocale } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
+  import AccountMenu from "./AccountMenu.svelte";
   import { callStaff } from "./bridge";
   import { INFO_TOAST_MS } from "./hud";
   import MessagesBell from "./MessagesBell.svelte";
@@ -21,6 +23,9 @@
     seconds,
     tab = $bindable("home"),
     status,
+    balance = null,
+    locale = null,
+    connected = false,
   }: {
     session: ShellSession;
     /** The branch logo (a `data:` URI), or `null` for the Arena 360 mark. */
@@ -31,6 +36,12 @@
     tab?: Tab;
     /** The grace or warning line, and the order count: shown under the heading on Home. */
     status?: import("svelte").Snippet;
+    /** The wallet balance in minor units (profiled players), for the account menu. */
+    balance?: number | null;
+    /** The branch's money format, once the attract view has told it. */
+    locale?: SnapshotLocale | null;
+    /** The Hub link is up (the account menu's Hub-dependent rows need it). */
+    connected?: boolean;
   } = $props();
 
   const LABELS: Record<Tab, MessageKey> = {
@@ -40,6 +51,11 @@
   };
 
   let brokenLogo: string | null = $state(null);
+  /** The account menu is open (the time chip or the account chip opens it). */
+  let menuOpen = $state(false);
+  /** The chip that opened it, so Esc can hand focus back. */
+  let opener: HTMLElement | null = null;
+  let bell: MessagesBell | undefined = $state();
   let items: HTMLButtonElement[] = $state([]);
   /** The item with the roving focus; Enter or a click makes it the active one. */
   let focused: Tab = $state("home");
@@ -66,6 +82,16 @@
     } finally {
       calling = false;
     }
+  }
+
+  function toggleMenu(event: MouseEvent) {
+    opener = event.currentTarget as HTMLElement;
+    menuOpen = !menuOpen;
+  }
+
+  function closeMenu(refocus: boolean) {
+    menuOpen = false;
+    if (refocus) opener?.focus();
   }
 
   function onkeydown(event: KeyboardEvent, index: number) {
@@ -124,7 +150,7 @@
 
     <div class="right">
       <VolumeControl />
-      <MessagesBell />
+      <MessagesBell bind:this={bell} />
       <button
         type="button"
         class="call-staff type-kiosk-label"
@@ -137,10 +163,14 @@
           {t(notified ? "player.call_staff.notified" : "player.call_staff.label")}
         </span>
       </button>
-      <p
+      <button
+        type="button"
         class="time-chip"
         class:low
-        role="timer"
+        aria-haspopup="dialog"
+        aria-expanded={menuOpen}
+        data-account-opener
+        onclick={toggleMenu}
         aria-label={t(
           low
             ? "player.shell.chip_low"
@@ -153,16 +183,33 @@
       >
         <span class="dot" aria-hidden="true" data-testid="time-chip-dot">{low ? "⚠" : ""}</span>
         <span class="num type-hud-numeric tabular-nums" data-testid="session-clock">{time}</span>
-      </p>
-      <p
+      </button>
+      <button
+        type="button"
         class="account type-kiosk-label"
-        aria-label={t("player.shell.account", { name })}
+        aria-haspopup="dialog"
+        aria-expanded={menuOpen}
+        data-account-opener
         data-testid="account-chip"
+        onclick={toggleMenu}
       >
         <span class="initial" aria-hidden="true">{initialOf(name)}</span>
         <span class="who" data-testid="account-name">{name}</span>
-      </p>
+      </button>
     </div>
+    {#if menuOpen}
+      <AccountMenu
+        {name}
+        profiled={session.username !== null}
+        prepaid={session.prepaid}
+        {seconds}
+        {balance}
+        {locale}
+        {connected}
+        onclose={closeMenu}
+        onmessages={() => void bell?.show()}
+      />
+    {/if}
   </header>
 
   <main class="content" aria-label={t(LABELS[tab])}>
@@ -182,6 +229,7 @@
   }
 
   .bar {
+    position: relative;
     display: grid;
     grid-template-columns: 1fr auto 1fr;
     align-items: center;
@@ -243,8 +291,19 @@
     min-width: 0;
   }
 
-  .right > p {
+  .time-chip,
+  .account {
     margin: 0;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .time-chip:focus-visible,
+  .time-chip:focus,
+  .account:focus-visible,
+  .account:focus {
+    outline: 3px solid var(--focus-ring);
+    outline-offset: 2px;
   }
 
   .call-staff {
@@ -316,6 +375,11 @@
     align-items: center;
     gap: var(--space-2);
     min-width: 0;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-full);
+    background: transparent;
+    color: inherit;
   }
 
   .initial {

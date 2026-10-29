@@ -137,7 +137,47 @@ async fn a_device_actor_may_not_start_postpaid_a_guest_or_another_pc() {
 }
 
 #[tokio::test]
-async fn a_device_actor_holds_no_other_session_right() {
+async fn a_device_actor_ends_only_the_session_on_its_own_pc_and_holds_no_other_session_right() {
+    let f = bootstrapped().await;
+    let d = pc(&f, DeviceKind::Pc, "pc", Some(6_000)).await;
+    let other = pc(&f, DeviceKind::Pc, "pc", Some(6_000)).await;
+    let p = player(&f, "asha", "+919876543210").await;
+    topped_up(&f, &p, 50_000).await;
+    as_device(
+        &f,
+        &d,
+        start(&d, Some(&p), SessionMode::Wallet, None, None, false),
+    )
+    .await
+    .unwrap();
+    let id = text(&sessions(&f)[0], "id");
+    let end_as = |actor: &str, rev: i64| {
+        let end = IntentPayload::SessionEnd(arena_proto::SessionEnd {
+            session_id: id.clone(),
+        });
+        let mut i = intent(device(actor), end);
+        i.base_rev = Some(rev);
+        i.issued_at = f.clock.now_ms();
+        i
+    };
+    let rev = super::session::rev_of(&f, Table::Sessions, &id);
+    // Another PC's device may not end it.
+    assert_eq!(
+        f.writer
+            .submit_intent(end_as(&other, rev))
+            .await
+            .unwrap_err()
+            .code,
+        ErrorCode::PermissionDenied
+    );
+    assert_ne!(text(&sessions(&f)[0], "state"), "ended");
+    // Its own PC may, with the session's own rev.
+    f.writer.submit_intent(end_as(&d, rev)).await.unwrap();
+    assert_eq!(text(&sessions(&f)[0], "state"), "ended");
+}
+
+#[tokio::test]
+async fn a_device_actor_may_not_force_end() {
     let f = bootstrapped().await;
     let d = pc(&f, DeviceKind::Pc, "pc", Some(6_000)).await;
     let p = player(&f, "asha", "+919876543210").await;
@@ -150,8 +190,11 @@ async fn a_device_actor_holds_no_other_session_right() {
     .await
     .unwrap();
     let id = text(&sessions(&f)[0], "id");
-    let end = IntentPayload::SessionEnd(arena_proto::SessionEnd { session_id: id });
-    let mut i = intent(device(&d), end);
+    let force = IntentPayload::SessionForceEnd(arena_proto::SessionForceEnd {
+        session_id: id,
+        note: None,
+    });
+    let mut i = intent(device(&d), force);
     i.base_rev = Some(0);
     i.issued_at = f.clock.now_ms();
     assert_eq!(

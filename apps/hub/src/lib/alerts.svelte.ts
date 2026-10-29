@@ -21,10 +21,11 @@ export const KIND_LABELS: Record<AlertKind, MessageKey> = {
   stock_expiring: "hub.alerts.kind.stock_expiring",
   stock_low: "hub.alerts.kind.stock_low",
   login_lockout: "hub.alerts.kind.login_lockout",
+  check_pc: "hub.alerts.kind.check_pc",
 };
 
 /** The tags a device alert puts on its tile (the tile badge's `AlertTag` subset). */
-type TileTag = "new" | "time-up" | "controllers" | "locked-out";
+type TileTag = "new" | "time-up" | "controllers" | "locked-out" | "check-pc";
 
 // A branch-level alert (no device) has no tile tag.
 export const KIND_TAGS: Record<AlertKind, TileTag | null> = {
@@ -35,6 +36,7 @@ export const KIND_TAGS: Record<AlertKind, TileTag | null> = {
   stock_expiring: null,
   stock_low: null,
   login_lockout: "locked-out",
+  check_pc: "check-pc",
 };
 
 /** Branch-level kinds that also sound, and the screen a pick on them opens. */
@@ -249,5 +251,24 @@ export async function ackAlerts(ids: string[]) {
   }
 }
 
-/** Acknowledges every open alert of a device (its sheet was opened). */
-export const ackDevice = (deviceId: string) => ackAlerts(openFor(deviceId).map((a) => a.id));
+/**
+ * Kinds that stay open when a sheet is opened: staff clear them with a sheet action (a CHECK PC
+ * alert goes with "Retry cleanup" or "Checked", Story 6.11).
+ */
+const STAYS_OPEN = new Set<AlertKind>(["check_pc"]);
+
+/** The open alerts of a device that opening its sheet acknowledges. */
+export const ackable = (deviceId: string) =>
+  openFor(deviceId).filter((a) => !STAYS_OPEN.has(a.kind));
+
+/** The device's open CHECK PC alert, if any (its sheet then offers the two cleanup actions). */
+export const checkPcOf = (deviceId: string) => openFor(deviceId).find((a) => a.kind === "check_pc");
+
+/** Acknowledges every open alert of a device that its sheet opening clears. */
+export const ackDevice = (deviceId: string) => ackAlerts(ackable(deviceId).map((a) => a.id));
+
+/** Whether the open alert `alertId` stays open when its row is picked (see `STAYS_OPEN`). */
+export const staysOpen = (alertId: string) => {
+  const a = alerts.open.find((x) => x.id === alertId);
+  return a !== undefined && STAYS_OPEN.has(a.kind);
+};

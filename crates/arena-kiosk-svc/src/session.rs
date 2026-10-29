@@ -19,6 +19,7 @@ pub fn sync(ctx: &Ctx, s: SessionScreen, started: bool) {
     if started {
         set_locked(ctx, false, None);
     }
+    crate::cleanup::mark_dirty(ctx);
     ctx.pc.screen.send_modify(|v| {
         let warning_min = v
             .session

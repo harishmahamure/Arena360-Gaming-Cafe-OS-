@@ -210,6 +210,15 @@ pub(super) fn mutate(
             ),
             _ => Err(mismatch()),
         },
+        IntentPayload::KioskCleanupFailed(p) => match target {
+            Target::Branch(b) => super::kiosk_log::mutate(
+                tx,
+                intent,
+                super::kiosk_log::Event::CleanupFailed(p),
+                b.as_ref(),
+            ),
+            _ => Err(mismatch()),
+        },
         IntentPayload::KioskScanReported(p) => match target {
             Target::KioskScan(t) => super::kiosk_scan::mutate(tx, intent, p, t),
             _ => Err(mismatch()),

@@ -42,6 +42,7 @@
   } from "../lib/auth";
   import {
     ackAlerts,
+    staysOpen,
     announcements,
     listRows,
     onAlertsChanged,
@@ -347,7 +348,7 @@
   /** A list row: acknowledges that alert and opens its tile's sheet. */
   async function pickAlert(row: AlertRow) {
     alertsOpen = false;
-    if (row.alertId) void ackAlerts([row.alertId]);
+    if (row.alertId && !staysOpen(row.alertId)) void ackAlerts([row.alertId]);
     if (!row.deviceId) {
       if (row.href) await goto(row.href);
       return;

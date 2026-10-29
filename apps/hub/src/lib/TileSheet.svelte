@@ -29,6 +29,7 @@
   import type { MessageKey } from "@arena/ui/messages";
   import { goto, invalidate } from "$app/navigation";
   import { onMount, tick } from "svelte";
+  import { ackAlerts, checkPcOf } from "./alerts.svelte";
   import { pushBack } from "./back";
   import {
     SESSION_DEPENDENCY,
@@ -194,6 +195,8 @@
     return () => clearInterval(timer);
   });
   const canLookup = $derived(hasPermission(staff, "player.view"));
+  /** The open CHECK PC alert: the kiosk could not finish cleaning the PC after a session. */
+  const checkPc = $derived(checkPcOf(device.device_id));
   const unassignedRefusal = $derived(
     cmd?.state === "refused" && cmd.refusal === "hub.session.unassigned",
   );
@@ -285,6 +288,20 @@
   const canOrder = $derived(
     hasPermission(staff, "pos.sell") && session !== undefined && takesOrder(session),
   );
+
+  /**
+   * "Retry cleanup" or "Checked" (Story 6.11): pushes the command to the PC and, once the PC
+   * has taken it, acknowledges the CHECK PC alert.
+   */
+  async function cleanup(action: "cleanup_retry" | "cleanup_checked") {
+    const alert = checkPc;
+    const sent = screenJob(device.device_id, action);
+    await go(sent);
+    const result = cmds[device.device_id];
+    if (alert && result?.job.key === sent.key && result.state === "done") {
+      await ackAlerts([alert.id]);
+    }
+  }
 
   function sendMessage(event: SubmitEvent) {
     event.preventDefault();
@@ -930,6 +947,29 @@
       </div>
     {/if}
     {#if isPc}
+      {#if checkPc}
+        <div
+          class="section"
+          role="group"
+          aria-label={t("hub.sheet.cleanup")}
+          data-testid="cleanup-actions"
+        >
+          <span class="note type-hub-label">{t("hub.sheet.cleanup_help")}</span>
+          <Button
+            label="hub.sheet.cleanup_retry"
+            disabled={busy}
+            disabledReason="hub.sheet.waiting"
+            onclick={() => void cleanup("cleanup_retry")}
+          />
+          <Button
+            label="hub.sheet.cleanup_checked"
+            variant="secondary"
+            disabled={busy}
+            disabledReason="hub.sheet.waiting"
+            onclick={() => void cleanup("cleanup_checked")}
+          />
+        </div>
+      {/if}
       <div class="section" role="group" aria-label={t("hub.sheet.screen")}>
         <Button
           label="hub.sheet.unlock"

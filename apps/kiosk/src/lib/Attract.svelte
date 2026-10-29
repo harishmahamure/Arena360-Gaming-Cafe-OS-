@@ -21,11 +21,14 @@
     view,
     logo,
     hub = null,
+    locked = false,
   }: {
     view: AttractView | null;
     logo: string | null;
     /** The Hub link as the Kiosk service reports it (`null` until it says). */
     hub?: KioskHubState | null;
+    /** The PC is covered by a lock (a session ended, or the cleanup runs): nobody stays logged in. */
+    locked?: boolean;
   } = $props();
 
   const MODIFIERS = ["Control", "Alt", "Shift", "Meta", "AltGraph"];
@@ -80,6 +83,12 @@
     player = null;
     signingUp = false;
   }
+
+  // A lock over the PC (the session-end cleanup, Story 6.11, shows one) forgets a logged-in player,
+  // here and at the Hub, so the next player never finds the last one still held.
+  $effect(() => {
+    if (locked && (panel || player !== null)) close();
+  });
 
   /** A correct login: the plan picker opens for this player, with its own 60 s without input. */
   function hold(who: PlayerContext) {

@@ -699,13 +699,13 @@ impl Ctx<'_> {
             return Err(app(ErrorCode::BadFrame, "malformed intent.submit"));
         };
         debug_assert_eq!(frame.rid, rid);
-        // A chatty kiosk cannot flood the change log: 60 events a minute per device, kiosk.log
-        // and kiosk.process_blocked together (a `kiosk.scan_reported` is one small event a day, so
-        // the limit does not apply to it). Over the limit is HUB_SLOW, which the kiosk treats
-        // as transient (it keeps the event queued).
+        // A chatty kiosk cannot flood the change log: 60 events a minute per device, kiosk.log,
+        // kiosk.process_blocked and kiosk.cleanup_failed together (a `kiosk.scan_reported` is one
+        // small event a day, so the limit does not apply to it). Over the limit is HUB_SLOW,
+        // which the kiosk treats as transient (it keeps the event queued).
         if matches!(
             submit.intent.payload.kind(),
-            IntentKind::KioskLog | IntentKind::KioskProcessBlocked
+            IntentKind::KioskLog | IntentKind::KioskProcessBlocked | IntentKind::KioskCleanupFailed
         ) && !self
             .hub
             .kiosk_log_rate

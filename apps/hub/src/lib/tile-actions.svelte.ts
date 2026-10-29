@@ -57,6 +57,8 @@ const DONE: Record<PcAction, MessageKey> = {
   message: "hub.sheet.done.message",
   restart: "hub.sheet.done.restart",
   shutdown: "hub.sheet.done.shutdown",
+  cleanup_retry: "hub.sheet.done.cleanup_retry",
+  cleanup_checked: "hub.sheet.done.cleanup_checked",
 };
 
 const REFUSALS: Record<string, MessageKey> = {

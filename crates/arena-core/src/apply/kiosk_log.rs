@@ -4,10 +4,17 @@
 //! one `device_events` row whose `at` is the intent's `issued_at` (when the kiosk recorded it).
 //! A blocked process is stored as `level = warn`, `code = process_blocked` and the detail
 //! `<exe> (<reason>): <path>`.
+//!
+//! `kiosk.cleanup_failed` (Story 6.11) writes an `error` row `cleanup_failed` with the detail
+//! `<step>: <detail>` and, in the same transaction, a `check_pc` alert for the device unless one
+//! is already open.
 
-use arena_proto::{AppError, ErrorCode, Intent, KioskLog, KioskProcessBlocked};
+use arena_proto::{
+    AlertKind, AppError, ErrorCode, Intent, KioskCleanupFailed, KioskLog, KioskProcessBlocked,
+};
 use arena_store::{
-    ChangeOp, NewDeviceEvent, RowKey, StoreTx, current_branch_id, insert_device_event,
+    ChangeOp, NewAlert, NewDeviceEvent, RowKey, StoreTx, current_branch_id, find_open_alert,
+    insert_alert, insert_device_event,
 };
 
 use super::Target;
@@ -25,11 +32,14 @@ pub(super) fn load(tx: &StoreTx<'_>) -> Result<Target, AppError> {
 
 /// The `device_events.code` of a `kiosk.process_blocked` row.
 pub const PROCESS_BLOCKED_CODE: &str = "process_blocked";
+/// The `device_events.code` of a `kiosk.cleanup_failed` row.
+pub const CLEANUP_FAILED_CODE: &str = "cleanup_failed";
 
 /// A kiosk event's fields, from either payload.
 pub(super) enum Event<'a> {
     Log(&'a KioskLog),
     ProcessBlocked(&'a KioskProcessBlocked),
+    CleanupFailed(&'a KioskCleanupFailed),
 }
 
 pub(super) fn validate(
@@ -46,6 +56,7 @@ pub(super) fn validate(
     match event {
         Event::Log(log) => log.validate()?,
         Event::ProcessBlocked(p) => p.validate()?,
+        Event::CleanupFailed(p) => p.validate()?,
     }
     if branch.is_none() {
         return Err(AppError::new(
@@ -75,6 +86,10 @@ pub(super) fn mutate(
             detail = p.detail();
             ("warn", PROCESS_BLOCKED_CODE, detail.as_str())
         }
+        Event::CleanupFailed(c) => {
+            detail = c.event_detail();
+            ("error", CLEANUP_FAILED_CODE, detail.as_str())
+        }
     };
     let event_id = ulid::Ulid::generate().to_string();
     insert_device_event(
@@ -90,9 +105,34 @@ pub(super) fn mutate(
             detail,
         },
     )?;
-    Ok(vec![Written {
+    let mut written = vec![Written {
         key: RowKey::DeviceEvents { event_id },
         op: ChangeOp::Insert,
         before: None,
-    }])
+    }];
+    if matches!(event, Event::CleanupFailed(_)) {
+        // In the same transaction: one open `check_pc` alert per device.
+        let kind = AlertKind::CheckPc.as_str();
+        if find_open_alert(tx, kind, Some(&intent.actor.id))?.is_none() {
+            let id = ulid::Ulid::generate().to_string();
+            insert_alert(
+                tx,
+                &NewAlert {
+                    id: &id,
+                    kind,
+                    device_id: Some(&intent.actor.id),
+                    raised_at: intent.issued_at,
+                    product_id: None,
+                    qty: None,
+                    threshold: None,
+                },
+            )?;
+            written.push(Written {
+                key: RowKey::Alerts { id },
+                op: ChangeOp::Insert,
+                before: None,
+            });
+        }
+    }
+    Ok(written)
 }

@@ -44,6 +44,7 @@ fn ctx_in(dir: &std::path::Path, lists: ProcessLists) -> Arc<Ctx> {
     let data = DataDir(dir.to_path_buf());
     let queue = QueueDb::open(&data.queue()).unwrap();
     let pc = crate::pc::PcState::load(&queue);
+    let cleanup = crate::cleanup::CleanupState::load(&queue);
     let (lists, _) = watch::channel(Arc::new(lists));
     let (toasts, _) = broadcast::channel(16);
     let (hub_state, _) = watch::channel(arena_proto::KioskHubState::Reconnecting);
@@ -67,6 +68,8 @@ fn ctx_in(dir: &std::path::Path, lists: ProcessLists) -> Arc<Ctx> {
         provisioned: Notify::new(),
         test_session: watch::channel(None).0,
         pc,
+        closer: Mutex::new(None),
+        cleanup,
     })
 }
 

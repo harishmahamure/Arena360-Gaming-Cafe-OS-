@@ -151,3 +151,26 @@ pub fn device_admin_relock(device_id: &str, now_ms: i64, exit_id: &str) -> Inten
         }),
     }
 }
+
+/// A `kiosk.cleanup_failed` intent from `device_id`, minted at `now_ms` (when the step failed
+/// its retry), so the offline replay delivers it exactly once.
+pub fn kiosk_cleanup_failed(
+    device_id: &str,
+    now_ms: i64,
+    failed: arena_proto::KioskCleanupFailed,
+) -> Intent {
+    Intent {
+        intent_id: ulid::Ulid::generate().to_string(),
+        kind: IntentKind::KioskCleanupFailed,
+        idempotency_key: ulid::Ulid::generate().to_string(),
+        issued_at: now_ms,
+        base_rev: None,
+        actor: Actor {
+            kind: ActorKind::Device,
+            id: device_id.to_owned(),
+        },
+        elevated_by: None,
+        reason: None,
+        payload: IntentPayload::KioskCleanupFailed(failed),
+    }
+}

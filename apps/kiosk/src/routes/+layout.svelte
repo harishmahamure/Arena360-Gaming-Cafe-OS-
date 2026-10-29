@@ -66,6 +66,7 @@
     times_up_see_counter: "player.lock.times_up_see_counter",
     locked_by_staff: "player.pc.locked",
     paused: "player.lock.paused",
+    preparing_pc: "player.lock.preparing_pc",
   };
   let adminPanel = $state(false);
   let exitUntil: number | null = $state(null);

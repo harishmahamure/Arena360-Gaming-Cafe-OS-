@@ -961,6 +961,84 @@ async fn kiosk_events_share_one_rate_limit() {
     }
 }
 
+// ---- Story 6.11: kiosk.cleanup_failed ----
+
+fn cleanup_failed_body(step: &str) -> serde_json::Value {
+    serde_json::to_value(IntentSubmit {
+        intent: intent(
+            owner(),
+            IntentPayload::KioskCleanupFailed(arena_proto::KioskCleanupFailed {
+                step: step.into(),
+                detail: "a program would not close".into(),
+            }),
+            None,
+        ),
+    })
+    .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_paired_session_reports_a_cleanup_failure_and_the_tile_gets_one_check_pc_alert() {
+    let hub = start("0.1.0", true).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    // A forged actor is replaced by the session's device.
+    let frame = client
+        .request("intent.submit", cleanup_failed_body("programs"))
+        .await
+        .unwrap();
+    let FrameBody::IntentResult(r) = frame.body else {
+        panic!("{frame:?}")
+    };
+    let tables: Vec<&str> = r.applied.changes.iter().map(|c| c.tbl.as_str()).collect();
+    assert_eq!(tables, ["device_events", "alerts"]);
+    client
+        .request("intent.submit", cleanup_failed_body("volume"))
+        .await
+        .unwrap();
+    let store = Store::open_reader(&hub.path).unwrap();
+    let events = store.rows(arena_store::Table::DeviceEvents).unwrap();
+    let cleanup: Vec<_> = events
+        .iter()
+        .filter(|e| e["code"] == arena_store::RowValue::Text("cleanup_failed".into()))
+        .collect();
+    assert_eq!(cleanup.len(), 2);
+    assert_eq!(
+        cleanup[0]["device_id"],
+        arena_store::RowValue::Text(hub.paired_id.clone())
+    );
+    let alerts = store.rows(arena_store::Table::Alerts).unwrap();
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(
+        alerts[0]["kind"],
+        arena_store::RowValue::Text("check_pc".into())
+    );
+    assert_eq!(
+        alerts[0]["device_id"],
+        arena_store::RowValue::Text(hub.paired_id.clone())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cleanup_failures_share_the_kiosk_event_rate_limit() {
+    let hub = start("0.1.0", true).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    for i in 0..60 {
+        client
+            .request("intent.submit", kiosk_log_body(owner()))
+            .await
+            .unwrap_or_else(|e| panic!("event {i}: {e}"));
+    }
+    let err = client
+        .request("intent.submit", cleanup_failed_body("programs"))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Some(ErrorCode::HubSlow));
+}
+
 // ---- Story 6.4: the kiosk scan report ----
 
 fn scan_body(n: i64) -> serde_json::Value {

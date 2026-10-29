@@ -4,7 +4,7 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use arena_kiosk_svc::cli::{self, Command, LockdownAction};
+use arena_kiosk_svc::cli::{self, Command, HelperTask, LockdownAction};
 use arena_kiosk_svc::launcher::{AppLauncher, CommandLauncher, NoopLauncher};
 use arena_kiosk_svc::paths::{DataDir, default_data_dir};
 
@@ -45,6 +45,7 @@ fn main() -> ExitCode {
             player_user,
             data_dir: d,
         } => lockdown(data_dir(d), action, player_user),
+        Command::CleanupHelper(task) => cleanup_helper(task),
         #[cfg(feature = "dev-fixtures")]
         Command::DevProvision {
             hub,
@@ -236,4 +237,23 @@ fn dev_provision(
             ExitCode::from(EXIT_FAILURE)
         }
     }
+}
+
+/// The session-end cleanup's player-session part (Story 6.11): the service starts this in the
+/// player's session, where the clipboard and the volume are.
+#[cfg(windows)]
+fn cleanup_helper(task: HelperTask) -> ExitCode {
+    match arena_kiosk_svc::cleanup_windows::run_helper(task) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("cleanup-helper: {e}");
+            ExitCode::from(EXIT_FAILURE)
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn cleanup_helper(_task: HelperTask) -> ExitCode {
+    eprintln!("arena-kiosk-svc: cleanup-helper is Windows only");
+    ExitCode::from(EXIT_NOT_WINDOWS)
 }

@@ -73,6 +73,25 @@ impl PcState {
 }
 
 pub(crate) fn set_locked(ctx: &Ctx, locked: bool, reason: Option<LockReason>) {
+    // While a session-end cleanup runs the screen shows its own lock (Story 6.11); the lock
+    // asked for is remembered and shown when it is done.
+    let shown = crate::cleanup::intercept(ctx, locked, reason);
+    apply_lock(ctx, locked, reason, shown);
+}
+
+/// Shows `reason` as the lock, as the cleanup's last act (no cleanup is asked again).
+pub(crate) fn show_lock(ctx: &Ctx, reason: Option<LockReason>) {
+    apply_lock(ctx, true, reason, reason);
+}
+
+/// Shows the cleanup's own lock (after a restart that found a cleanup under way).
+pub(crate) fn show_cleanup_lock(ctx: &Ctx) {
+    apply_lock(ctx, true, None, Some(LockReason::PreparingPc));
+}
+
+/// Sets the screen. `asked` is the reason the Hub or a timer gave (it decides what the lock
+/// ends: the session, the deadline); `shown` is the reason the screen carries.
+fn apply_lock(ctx: &Ctx, locked: bool, asked: Option<LockReason>, shown: Option<LockReason>) {
     let saved = ctx.queue.lock().unwrap_or_else(|p| p.into_inner()).kv_set(
         LOCKED_KEY,
         if locked { "1" } else { "0" },
@@ -83,7 +102,7 @@ pub(crate) fn set_locked(ctx: &Ctx, locked: bool, reason: Option<LockReason>) {
     }
     let ends = locked
         && matches!(
-            reason,
+            asked,
             Some(
                 LockReason::PayAtCounter
                     | LockReason::EndedByStaff
@@ -91,13 +110,13 @@ pub(crate) fn set_locked(ctx: &Ctx, locked: bool, reason: Option<LockReason>) {
                     | LockReason::TimesUpSeeCounter
             )
         );
-    if ends || (locked && reason == Some(LockReason::Paused)) {
+    if ends || (locked && asked == Some(LockReason::Paused)) {
         ctx.pc.deadline.send_replace(None);
     }
     ctx.pc.screen.send_if_modified(|s| {
-        let changed = s.locked != locked || s.reason != reason || (ends && s.session.is_some());
+        let changed = s.locked != locked || s.reason != shown || (ends && s.session.is_some());
         s.locked = locked;
-        s.reason = reason;
+        s.reason = shown;
         if ends {
             s.session = None;
         }
@@ -135,6 +154,8 @@ pub fn apply(
             let message = text.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
             ctx.pc.screen.send_modify(|s| s.message = message);
         }
+        PcAction::CleanupRetry => crate::cleanup::retry(ctx),
+        PcAction::CleanupChecked => crate::cleanup::checked(ctx),
         PcAction::Restart | PcAction::Shutdown => return Step::AckThenPower(action),
     }
     Step::Ack

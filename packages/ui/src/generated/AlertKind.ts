@@ -11,4 +11,5 @@ export type AlertKind =
   | "printer_offline"
   | "stock_expiring"
   | "stock_low"
-  | "login_lockout";
+  | "login_lockout"
+  | "check_pc";

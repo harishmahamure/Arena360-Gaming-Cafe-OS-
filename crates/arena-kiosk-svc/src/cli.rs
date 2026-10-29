@@ -8,6 +8,7 @@ pub const USAGE: &str = "usage:
   arena-kiosk-svc --console [--data-dir <path>] [--app <path>] [--dev-fake-procs]
   arena-kiosk-svc service install|uninstall|run          (Windows)
   arena-kiosk-svc lockdown apply|restore|reset-shell [--player-user <name>] [--data-dir <path>]   (Windows, elevated)
+  arena-kiosk-svc cleanup-helper --clipboard | --volume <0-100>   (Windows; started by the service in the player's session)
   arena-kiosk-svc dev provision --hub <host:7400> --fingerprint <hex> --token <token>
                   [--player-user <name>] [--data-dir <path>]   (dev-fixtures builds)
   arena-kiosk-svc --help | --version";
@@ -17,6 +18,7 @@ pub const USAGE: &str = "usage:
   arena-kiosk-svc --console [--data-dir <path>] [--app <path>]
   arena-kiosk-svc service install|uninstall|run          (Windows)
   arena-kiosk-svc lockdown apply|restore|reset-shell [--player-user <name>] [--data-dir <path>]   (Windows, elevated)
+  arena-kiosk-svc cleanup-helper --clipboard | --volume <0-100>   (Windows; started by the service in the player's session)
   arena-kiosk-svc --help | --version";
 
 /// A parsed command line.
@@ -40,6 +42,9 @@ pub enum Command {
         player_user: Option<String>,
         data_dir: Option<PathBuf>,
     },
+    /// `cleanup-helper`: the part of the session-end cleanup that must run in the player's
+    /// session (Story 6.11). The service starts it there; it exits 0 on success.
+    CleanupHelper(HelperTask),
     /// `dev provision`.
     #[cfg(feature = "dev-fixtures")]
     DevProvision {
@@ -51,6 +56,15 @@ pub enum Command {
     },
     Help,
     Version,
+}
+
+/// What `cleanup-helper` does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelperTask {
+    /// Empty the clipboard and its history.
+    Clipboard,
+    /// Set the system volume to this percent and unmute.
+    Volume(u8),
 }
 
 /// What `lockdown` does.
@@ -105,6 +119,17 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                 data_dir,
             })
         }
+        "cleanup-helper" => match (args.get(1).and_then(|a| a.to_str()), args.get(2)) {
+            (Some("--clipboard"), None) => Ok(Command::CleanupHelper(HelperTask::Clipboard)),
+            (Some("--volume"), Some(v)) if args.len() == 3 => v
+                .to_str()
+                .filter(|s| s.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|s| s.parse::<u8>().ok())
+                .filter(|p| *p <= 100)
+                .map(|p| Command::CleanupHelper(HelperTask::Volume(p)))
+                .ok_or_else(|| "--volume takes a whole number from 0 to 100".into()),
+            _ => Err("cleanup-helper takes --clipboard or --volume <0-100>".into()),
+        },
         #[cfg(feature = "dev-fixtures")]
         "dev" => {
             if args.get(1).and_then(|a| a.to_str()) != Some("provision") {
@@ -224,6 +249,14 @@ mod tests {
                 data_dir: None,
             }
         );
+        assert_eq!(
+            p(&["cleanup-helper", "--clipboard"]).unwrap(),
+            Command::CleanupHelper(HelperTask::Clipboard)
+        );
+        assert_eq!(
+            p(&["cleanup-helper", "--volume", "40"]).unwrap(),
+            Command::CleanupHelper(HelperTask::Volume(40))
+        );
         assert_eq!(p(&["--help"]).unwrap(), Command::Help);
         assert_eq!(p(&["--version"]).unwrap(), Command::Version);
         #[cfg(feature = "dev-fixtures")]
@@ -261,6 +294,12 @@ mod tests {
             &["lockdown", "undo"],
             &["lockdown", "apply", "--player-user"],
             &["lockdown", "apply", "--force", "x"],
+            &["cleanup-helper"],
+            &["cleanup-helper", "--volume"],
+            &["cleanup-helper", "--volume", "101"],
+            &["cleanup-helper", "--volume", "-1"],
+            &["cleanup-helper", "--volume", "5", "x"],
+            &["cleanup-helper", "--clipboard", "x"],
             &["bogus"],
         ] {
             assert!(p(bad).is_err(), "{bad:?}");

@@ -285,6 +285,7 @@ fn fast() -> Timings {
         restart_grace: Duration::from_millis(400),
         admin_tick: Duration::from_millis(20),
         scan_tick: Duration::from_millis(20),
+        cleanup_retry: Duration::from_millis(20),
     }
 }
 

@@ -118,6 +118,8 @@ pub fn default_app_path() -> PathBuf {
 
 #[cfg(windows)]
 pub use session::SessionLauncher;
+#[cfg(windows)]
+pub(crate) use session::{Owned, console_player_token};
 
 #[cfg(windows)]
 mod session {
@@ -142,7 +144,7 @@ mod session {
     const EXIT_WAIT_MS: u32 = 5_000;
 
     /// A handle closed on drop.
-    struct Owned(HANDLE);
+    pub(crate) struct Owned(pub(crate) HANDLE);
     // SAFETY: kernel handles may be used from any thread.
     unsafe impl Send for Owned {}
     impl Drop for Owned {
@@ -189,6 +191,14 @@ mod session {
 
         /// The console session's user token, when that user is the player.
         fn player_token(&self) -> Result<Owned, String> {
+            console_player_token(&self.player())
+        }
+    }
+
+    /// The console session's user token, when that user is the `player` account (shared with
+    /// the session-end cleanup, which starts its helper the same way).
+    pub(crate) fn console_player_token(player: &str) -> Result<Owned, String> {
+        {
             // SAFETY: plain Win32 calls; the token is owned by the returned guard.
             unsafe {
                 let session = WTSGetActiveConsoleSessionId();
@@ -211,15 +221,16 @@ mod session {
                 .map_err(|e| format!("GetTokenInformation: {e}"))?;
                 let user = &*(buf.as_ptr() as *const TOKEN_USER);
                 let session_sid = sid_string(user.User.Sid).map_err(|e| e.to_string())?;
-                let player = self.player();
-                let player_sid = user_sid(&player).map_err(|e| e.to_string())?;
+                let player_sid = user_sid(player).map_err(|e| e.to_string())?;
                 if session_sid != player_sid {
                     return Err(format!("the console session is not the player {player}"));
                 }
                 Ok(token)
             }
         }
+    }
 
+    impl SessionLauncher {
         /// Ends the previous launch: its whole job, then waits for the process.
         fn stop_previous(&self) {
             let previous = self

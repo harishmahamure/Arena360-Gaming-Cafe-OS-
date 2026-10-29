@@ -4431,6 +4431,88 @@ mod process_lists {
             "{detail}"
         );
     }
+
+    fn cleanup_failed(device_id: &str, step: &str, detail: &str) -> Intent {
+        let mut i = device_intent(
+            ActorKind::Device,
+            IntentPayload::KioskCleanupFailed(arena_proto::KioskCleanupFailed {
+                step: step.into(),
+                detail: detail.into(),
+            }),
+        );
+        i.actor.id = device_id.into();
+        i
+    }
+
+    #[tokio::test]
+    async fn cleanup_failed_writes_an_event_and_one_open_check_pc_alert() {
+        let mut f = primary();
+        let (id, _) = with_device(&mut f).await;
+        let first = cleanup_failed(&id, "programs", "a program would not close");
+        let applied = f.writer.submit_intent(first.clone()).await.unwrap();
+        let tables: Vec<&str> = applied.changes.iter().map(|c| c.tbl.as_str()).collect();
+        assert_eq!(tables, ["device_events", "alerts"]);
+        // Replayed after reconnect: the stored outcome, nothing new.
+        assert_eq!(f.writer.submit_intent(first).await.unwrap(), applied);
+        let store = reopen(&f);
+        let rows = store.rows(Table::DeviceEvents).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["code"], RowValue::Text("cleanup_failed".into()));
+        assert_eq!(rows[0]["level"], RowValue::Text("error".into()));
+        assert_eq!(
+            rows[0]["detail"],
+            RowValue::Text("programs: a program would not close".into())
+        );
+        let alerts = store.rows(Table::Alerts).unwrap();
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0]["kind"], RowValue::Text("check_pc".into()));
+        assert_eq!(alerts[0]["device_id"], RowValue::Text(id.clone()));
+        assert_eq!(alerts[0]["acked_at"], RowValue::Null);
+
+        // Another step failing while the alert is open: an event, no second alert.
+        let applied = f
+            .writer
+            .submit_intent(cleanup_failed(&id, "temp_files", ""))
+            .await
+            .unwrap();
+        assert_eq!(applied.changes.len(), 1);
+        let store = reopen(&f);
+        assert_eq!(store.rows(Table::DeviceEvents).unwrap().len(), 2);
+        assert_eq!(store.rows(Table::Alerts).unwrap().len(), 1);
+        let change = store.changes().unwrap().pop().unwrap();
+        assert_eq!(
+            (change.intent_kind.as_str(), change.actor_kind.as_str()),
+            ("kiosk.cleanup_failed", "device")
+        );
+
+        // Not a device, not a live device, a bad step, a base_rev: refused, nothing written.
+        for actor in [ActorKind::Owner, ActorKind::System, ActorKind::Staff] {
+            let mut i = cleanup_failed(&id, "volume", "");
+            i.actor.kind = actor;
+            assert_eq!(
+                expect_err(&f, i).await.code,
+                ErrorCode::PermissionDenied,
+                "{actor:?}"
+            );
+        }
+        let err = expect_err(
+            &f,
+            cleanup_failed("01JNOPEAAAAAAAAAAAAAAAAAAA", "volume", ""),
+        )
+        .await;
+        assert_eq!(err.code, ErrorCode::PermissionDenied);
+        let err = expect_err(&f, cleanup_failed(&id, "Not A Step", "")).await;
+        assert_eq!(err.field.as_deref(), Some("step"));
+        let mut edit = cleanup_failed(&id, "volume", "");
+        edit.base_rev = Some(1);
+        assert_eq!(
+            expect_err(&f, edit).await.field.as_deref(),
+            Some("base_rev")
+        );
+        let store = reopen(&f);
+        assert_eq!(store.rows(Table::DeviceEvents).unwrap().len(), 2);
+        assert_eq!(store.rows(Table::Alerts).unwrap().len(), 1);
+    }
 }
 
 // ---- Story 1.21: high contrast per device ----

@@ -8,6 +8,7 @@ use tokio::time::Instant;
 use crate::runtime::Ctx;
 
 pub fn begin(ctx: &Ctx, lock_after_ms: u64) {
+    crate::cleanup::mark_dirty(ctx);
     ctx.test_session.send_if_modified(|d| {
         if d.is_some() {
             return false;

@@ -21,6 +21,8 @@
   let attract: AttractShown = $state({ view: null, logo: null });
   /** The Hub link as the Kiosk service reports it (the login needs it connected). */
   let hub: KioskHubState | null = $state(null);
+  /** A lock covers the PC (the layout draws it); the idle screen forgets any held player. */
+  let locked = $state(false);
   let endsAt: number | null = $state(null);
   let now = $state(performance.now());
   const left = $derived(endsAt === null ? 0 : Math.max(0, Math.ceil((endsAt - now) / 1000)));
@@ -58,6 +60,7 @@
 
   const follow = (s: PcScreen) => {
     now = performance.now();
+    locked = s.locked;
     session = s.session
       ? {
           name: s.session.device_name,
@@ -147,7 +150,7 @@
   </main>
 {:else}
   <!-- No session yet: the attract screen (Story 6.7), painted from the cache at once. -->
-  <Attract view={attract.view} logo={attract.logo} {hub} />
+  <Attract view={attract.view} logo={attract.logo} {hub} {locked} />
 {/if}
 
 <style>

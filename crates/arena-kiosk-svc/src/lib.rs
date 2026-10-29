@@ -13,6 +13,9 @@
 pub mod admin_exit;
 pub mod app;
 pub mod attract;
+pub mod cleanup;
+#[cfg(windows)]
+pub mod cleanup_windows;
 pub mod cli;
 pub mod clock;
 pub mod config;

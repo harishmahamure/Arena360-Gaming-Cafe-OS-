@@ -427,7 +427,9 @@ web_port}`, or 503 `NO_HUB` before the branch is bootstrapped or on a Hub that i
   `at` is the intent's `issued_at`, when the kiosk recorded it). Opening or closing a paired
   session pushes `devices.changed` on `/ui/events`, and the Hub UI reloads the snapshot. It may
   also submit `kiosk.process_blocked{exe_name, path, reason, mode?}` (a `device_events` row with
-  `code=process_blocked`; both kinds share the 60/min per-device limit) and read branch settings
+  `code=process_blocked`; with `kiosk.cleanup_failed{step, detail}` they share the 60/min
+  per-device limit; `cleanup_failed` also raises a `check_pc` device alert in the same
+  transaction, Story 6.11) and read branch settings
   with `settings.get{keys}` — `kiosk.*` keys only, anything else refuses the whole request with
   `FORBIDDEN`. An intent that writes `kiosk.*` settings is pushed to paired sessions as
   `event{kind: "settings.changed", values}`; browser classes can neither read nor receive them.
@@ -977,6 +979,17 @@ anywhere under `{install}\**\`. The block-list names `cmd.exe`, `powershell.exe`
   characters like a `kiosk.log` detail; a longer path is shortened from the left (`…`). A
   failed kill is warned about once per pid and path and reported once as
   `kiosk.log{error, kill_failed}`.
+
+- **Session-end cleanup (Story 6.11).** When a lock with reason `pay_at_counter`, `ended_by_staff`
+  or `times_up` arrives (or the local timer fires) after a session started, the service covers
+  the screen with the opaque `preparing_pc` lock and runs the named steps `programs`,
+  `clipboard`, `temp_files`, `volume` (`cleanup::Pipeline::standard`; add a step there). Each
+  step retries once; a step that fails twice queues `kiosk.cleanup_failed{step, detail}`, the Hub
+  raises `check_pc` ("CHECK PC") on the tile, and the lock holds until the tile sheet sends
+  "Retry cleanup" (`cleanup_retry`) or "Checked" (`cleanup_checked`) through `device.screen`.
+  Success queues `kiosk.log{info, cleanup.done}`. `programs` ends every unprotected process of
+  the player session, in any process mode; `clipboard` and `volume` run in a short-lived
+  `arena-kiosk-svc cleanup-helper` started in the player session.
 
 There is no staff GUI for the lists yet; edit them with `settings.set`. The fake process table
 (`procs::fake`) drives the service tests; the Windows code is type-checked in CI and exercised by

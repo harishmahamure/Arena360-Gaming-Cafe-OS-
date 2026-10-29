@@ -41,6 +41,8 @@ pub struct Timings {
     /// How often the scan schedule checks whether a scan is due (and whether a session still
     /// blocks it).
     pub scan_tick: Duration,
+    /// How long a failed cleanup step waits before its one retry (Story 6.11).
+    pub cleanup_retry: Duration,
 }
 
 impl Default for Timings {
@@ -54,6 +56,7 @@ impl Default for Timings {
             restart_grace: RESTART_GRACE,
             admin_tick: Duration::from_secs(1),
             scan_tick: Duration::from_secs(60),
+            cleanup_retry: crate::cleanup::DEFAULT_RETRY,
         }
     }
 }
@@ -93,6 +96,11 @@ pub struct Ctx {
     pub provisioned: Notify,
     pub test_session: watch::Sender<Option<tokio::time::Instant>>,
     pub pc: crate::pc::PcState,
+    /// Ends the player's programs for the session-end cleanup; set by the process enforcer
+    /// while it runs (Story 6.11).
+    pub closer: Mutex<Option<crate::procs::Closer>>,
+    /// The session-end cleanup: dirty flag, cancel epoch, worker wake-up.
+    pub cleanup: crate::cleanup::CleanupState,
 }
 
 impl Ctx {
@@ -199,6 +207,7 @@ impl Runtime {
         let (theme, _) = watch::channel(crate::theme::load(&queue, device_id.as_deref()));
         let (attract, _) = watch::channel(crate::attract::load(&queue));
         let pc = crate::pc::PcState::load(&queue);
+        let cleanup = crate::cleanup::CleanupState::load(&queue);
         let (toasts, _) = broadcast::channel(16);
         let (hub_state, _) = watch::channel(KioskHubState::Reconnecting);
         let ctx = Arc::new(Ctx {
@@ -223,6 +232,8 @@ impl Runtime {
             provisioned: Notify::new(),
             test_session: watch::channel(None).0,
             pc,
+            closer: Mutex::new(None),
+            cleanup,
         });
         let (stop, stop_rx) = watch::channel(false);
         let tasks = vec![
@@ -252,6 +263,27 @@ impl Runtime {
         self.tasks.push(tokio::spawn(crate::scan::schedule::run(
             Arc::clone(&self.ctx),
             host,
+            self.stop.subscribe(),
+        )));
+    }
+
+    /// Starts the session-end cleanup (Story 6.11) on `host` (Windows: the real PC; tests:
+    /// fakes) with the standard steps. Without this call a session end only locks the screen.
+    pub fn cleanup(&mut self, host: Arc<dyn crate::cleanup::CleanupHost>) {
+        self.cleanup_with(host, crate::cleanup::Pipeline::standard());
+    }
+
+    /// [`cleanup`](Self::cleanup) with a chosen pipeline.
+    pub fn cleanup_with(
+        &mut self,
+        host: Arc<dyn crate::cleanup::CleanupHost>,
+        pipeline: crate::cleanup::Pipeline,
+    ) {
+        crate::cleanup::enable(&self.ctx);
+        self.tasks.push(tokio::spawn(crate::cleanup::run(
+            Arc::clone(&self.ctx),
+            host,
+            pipeline,
             self.stop.subscribe(),
         )));
     }

@@ -10,7 +10,7 @@
   import type { MessageKey } from "@arena/ui/messages";
   import { page } from "$app/state";
   import { tick, untrack } from "svelte";
-  import { ackDevice, openFor, sheetRequest, tagOf } from "../../lib/alerts.svelte";
+  import { ackDevice, ackable, openFor, sheetRequest, tagOf } from "../../lib/alerts.svelte";
   import { nextTile } from "../../lib/floor-nav";
   import { liveRate } from "../../lib/rules";
   import TileSheet from "../../lib/TileSheet.svelte";
@@ -270,7 +270,7 @@
   const activeDeviceId = $derived(active?.device_id);
   $effect(() => {
     const id = activeDeviceId;
-    if (id && openFor(id).length > 0) untrack(() => void ackDevice(id));
+    if (id && ackable(id).length > 0) untrack(() => void ackDevice(id));
   });
   const zoneAlerts = (members: SnapshotDevice[]) =>
     members.reduce((sum, d) => sum + openFor(d.device_id).length, 0);

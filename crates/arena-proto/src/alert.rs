@@ -27,11 +27,15 @@ pub enum AlertKind {
     /// A kiosk's player login was paused after five wrong tries in a row (raised by the Hub's
     /// LAN layer, once while open; Story 6.8). A device alert: the tile shows `locked-out`.
     LoginLockout,
+    /// A kiosk's session-end cleanup step failed twice (raised by `kiosk.cleanup_failed`; Story
+    /// 6.11). A device alert, one open per device: the tile shows `check-pc` and the kiosk holds a
+    /// locked screen until staff pick "Retry cleanup" or "Checked".
+    CheckPc,
 }
 
 impl AlertKind {
     /// Every kind.
-    pub const ALL: [AlertKind; 7] = [
+    pub const ALL: [AlertKind; 8] = [
         Self::Fixture,
         Self::TimeUp,
         Self::ControllerMissing,
@@ -39,6 +43,7 @@ impl AlertKind {
         Self::StockExpiring,
         Self::StockLow,
         Self::LoginLockout,
+        Self::CheckPc,
     ];
 
     /// The stored and wire form, e.g. `time_up`.
@@ -51,6 +56,7 @@ impl AlertKind {
             Self::StockExpiring => "stock_expiring",
             Self::StockLow => "stock_low",
             Self::LoginLockout => "login_lockout",
+            Self::CheckPc => "check_pc",
         }
     }
 
@@ -69,6 +75,7 @@ impl AlertKind {
             Self::StockExpiring => "expiring",
             Self::StockLow => "low-stock",
             Self::LoginLockout => "locked-out",
+            Self::CheckPc => "check-pc",
         }
     }
 }
@@ -175,5 +182,7 @@ mod tests {
         assert_eq!(AlertKind::TimeUp.tag(), "time-up");
         assert_eq!(AlertKind::LoginLockout.as_str(), "login_lockout");
         assert_eq!(AlertKind::LoginLockout.tag(), "locked-out");
+        assert_eq!(AlertKind::CheckPc.as_str(), "check_pc");
+        assert_eq!(AlertKind::CheckPc.tag(), "check-pc");
     }
 }

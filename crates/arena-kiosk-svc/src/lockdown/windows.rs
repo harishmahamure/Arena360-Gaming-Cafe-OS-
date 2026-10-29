@@ -515,7 +515,7 @@ fn ensure_profile(name: &str, sid: &str) -> io::Result<()> {
 }
 
 /// The profile folder of `sid` from the (read-only) ProfileList.
-fn profile_dir(sid: &str) -> io::Result<String> {
+pub(crate) fn profile_dir(sid: &str) -> io::Result<String> {
     let key = wide(&format!(
         r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{sid}"
     ));

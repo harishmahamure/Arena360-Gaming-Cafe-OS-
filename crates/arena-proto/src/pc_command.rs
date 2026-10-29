@@ -14,6 +14,11 @@ pub enum PcAction {
     Message,
     Restart,
     Shutdown,
+    /// Run the session-end cleanup again (Story 6.11); sent from the tile sheet while a
+    /// `check_pc` alert is open.
+    CleanupRetry,
+    /// Staff checked the PC by hand: the kiosk releases its "getting ready" hold (Story 6.11).
+    CleanupChecked,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -27,6 +32,9 @@ pub enum LockReason {
     TimesUpSeeCounter,
     LockedByStaff,
     Paused,
+    /// The kiosk is cleaning the PC after a session, or holds after a cleanup step failed.
+    /// Kiosk-local: the Hub never sends it (Story 6.11).
+    PreparingPc,
 }
 
 impl PcAction {
@@ -37,6 +45,8 @@ impl PcAction {
             Self::Message => "message",
             Self::Restart => "restart",
             Self::Shutdown => "shutdown",
+            Self::CleanupRetry => "cleanup_retry",
+            Self::CleanupChecked => "cleanup_checked",
         }
     }
 
@@ -141,6 +151,25 @@ mod tests {
                 .is_err()
         );
         assert!(screen(PcAction::Restart, None).validate().is_err());
+    }
+
+    #[test]
+    fn the_cleanup_commands_are_screen_commands_with_no_text() {
+        for action in [PcAction::CleanupRetry, PcAction::CleanupChecked] {
+            assert!(!action.is_power());
+            assert!(screen(action, None).validate().is_ok());
+            assert!(screen(action, Some("x")).validate().is_err());
+            assert_eq!(
+                serde_json::to_string(&action).unwrap(),
+                format!("\"{}\"", action.as_str())
+            );
+        }
+        assert_eq!(PcAction::CleanupRetry.as_str(), "cleanup_retry");
+        assert_eq!(PcAction::CleanupChecked.as_str(), "cleanup_checked");
+        assert_eq!(
+            serde_json::to_string(&LockReason::PreparingPc).unwrap(),
+            "\"preparing_pc\""
+        );
     }
 
     #[test]

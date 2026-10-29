@@ -10,7 +10,7 @@ use crate::operating::AdsConsentSet;
 use crate::pc_command::{DevicePower, DeviceScreen};
 use crate::permission::{Permission, Requirement};
 use crate::printer::PrinterStatusSet;
-use crate::process::KioskProcessBlocked;
+use crate::process::{KioskCleanupFailed, KioskProcessBlocked};
 use crate::scan::KioskScanReported;
 use crate::scope::ClientClass;
 use crate::test_session::{DeviceTestSessionCompleted, DeviceTestSessionStart};
@@ -78,6 +78,10 @@ pub enum IntentKind {
     /// offline and replayed in order like `kiosk.log`.
     #[serde(rename = "kiosk.process_blocked")]
     KioskProcessBlocked,
+    /// A session-end cleanup step still failed after its retry (device actor); the Hub records the
+    /// event and raises a `check_pc` alert on the tile. Queued offline like `kiosk.log`.
+    #[serde(rename = "kiosk.cleanup_failed")]
+    KioskCleanupFailed,
     /// The kiosk scanned its PC for installed games and launchers (device actor); the Hub keeps
     /// the latest report per device. Queued offline and replayed like `kiosk.log`.
     #[serde(rename = "kiosk.scan_reported")]
@@ -329,7 +333,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 105] = [
+    pub const ALL: [IntentKind; 106] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -342,6 +346,7 @@ impl IntentKind {
         Self::AuditReadGranted,
         Self::KioskLog,
         Self::KioskProcessBlocked,
+        Self::KioskCleanupFailed,
         Self::KioskScanReported,
         Self::DeviceAdminExit,
         Self::DeviceAdminRelock,
@@ -452,6 +457,7 @@ impl IntentKind {
             Self::AuditReadGranted => "audit.read_granted",
             Self::KioskLog => "kiosk.log",
             Self::KioskProcessBlocked => "kiosk.process_blocked",
+            Self::KioskCleanupFailed => "kiosk.cleanup_failed",
             Self::KioskScanReported => "kiosk.scan_reported",
             Self::DeviceAdminExit => "device.admin_exit",
             Self::DeviceAdminRelock => "device.admin_relock",
@@ -592,9 +598,10 @@ impl IntentKind {
             | Self::StaffSetCredentials
             | Self::StaffDeactivate => IntentCategory::Staff,
             Self::AuditReadGranted => IntentCategory::Audit,
-            Self::KioskLog | Self::KioskProcessBlocked | Self::KioskScanReported => {
-                IntentCategory::Kiosk
-            }
+            Self::KioskLog
+            | Self::KioskProcessBlocked
+            | Self::KioskCleanupFailed
+            | Self::KioskScanReported => IntentCategory::Kiosk,
             Self::ProductUpsert
             | Self::ProductDelete
             | Self::PlanUpsert
@@ -709,6 +716,7 @@ impl IntentKind {
             Self::AuditReadGranted => Requirement::System,
             Self::KioskLog
             | Self::KioskProcessBlocked
+            | Self::KioskCleanupFailed
             | Self::KioskScanReported
             | Self::DeviceTestSessionCompleted => Requirement::Device,
             // The kiosk itself acts; the approving manager must hold `device.remote`
@@ -815,6 +823,7 @@ impl IntentKind {
             | Self::AuditReadGranted
             | Self::KioskLog
             | Self::KioskProcessBlocked
+            | Self::KioskCleanupFailed
             | Self::KioskScanReported
             | Self::DeviceAdminExit
             | Self::DeviceAdminRelock
@@ -1351,6 +1360,8 @@ pub enum IntentPayload {
     KioskLog(KioskLog),
     #[serde(rename = "kiosk.process_blocked")]
     KioskProcessBlocked(KioskProcessBlocked),
+    #[serde(rename = "kiosk.cleanup_failed")]
+    KioskCleanupFailed(KioskCleanupFailed),
     #[serde(rename = "kiosk.scan_reported")]
     KioskScanReported(KioskScanReported),
     #[serde(rename = "device.admin_exit")]
@@ -1554,6 +1565,7 @@ impl IntentPayload {
             Self::AuditReadGranted(_) => IntentKind::AuditReadGranted,
             Self::KioskLog(_) => IntentKind::KioskLog,
             Self::KioskProcessBlocked(_) => IntentKind::KioskProcessBlocked,
+            Self::KioskCleanupFailed(_) => IntentKind::KioskCleanupFailed,
             Self::KioskScanReported(_) => IntentKind::KioskScanReported,
             Self::DeviceAdminExit(_) => IntentKind::DeviceAdminExit,
             Self::DeviceAdminRelock(_) => IntentKind::DeviceAdminRelock,
@@ -2040,6 +2052,7 @@ mod tests {
                 "console.plan_requested" => Requirement::Phone,
                 "kiosk.log"
                 | "kiosk.process_blocked"
+                | "kiosk.cleanup_failed"
                 | "kiosk.scan_reported"
                 | "device.test_session.completed" => Requirement::Device,
                 other => panic!("{other} has no pinned requirement"),

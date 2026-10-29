@@ -52,6 +52,7 @@ impl ClientClass {
 const PAIRED_SCOPE: &[IntentKind] = &[
     IntentKind::KioskLog,
     IntentKind::KioskProcessBlocked,
+    IntentKind::KioskCleanupFailed,
     IntentKind::KioskScanReported,
     IntentKind::DeviceAdminExit,
     IntentKind::DeviceAdminRelock,
@@ -141,6 +142,7 @@ mod tests {
             &[
                 IntentKind::KioskLog,
                 IntentKind::KioskProcessBlocked,
+                IntentKind::KioskCleanupFailed,
                 IntentKind::KioskScanReported,
                 IntentKind::DeviceAdminExit,
                 IntentKind::DeviceAdminRelock,

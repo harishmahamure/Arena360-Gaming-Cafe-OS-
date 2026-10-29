@@ -60,6 +60,8 @@ pub async fn run_until_with(
     let ipc = crate::ipc::UnixIpcServer::bind(&data.socket())?;
     #[cfg(windows)]
     let enforce = crate::procs::EnforceOptions::for_this_install(&data.config());
+    #[cfg(windows)]
+    let config_path = data.config();
     let mut runtime = Runtime::start(
         data,
         secrets,
@@ -79,6 +81,11 @@ pub async fn run_until_with(
     // The installed-software scan (Story 6.4) looks at a Windows PC only.
     #[cfg(windows)]
     runtime.scan(std::sync::Arc::new(crate::scan::windows::WinHost::new()));
+    // The session-end cleanup (Story 6.11) too: programs, clipboard, temp files and volume.
+    #[cfg(windows)]
+    runtime.cleanup(std::sync::Arc::new(
+        crate::cleanup_windows::WinCleanupHost::new(config_path),
+    ));
     setup(&mut runtime);
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "kiosk service started");
     shutdown.await;

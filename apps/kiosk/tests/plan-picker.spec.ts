@@ -582,3 +582,17 @@ test("a picker whose options cannot be read says the counter is reconnecting", a
   await expect(picker(page)).toBeVisible();
   await expect(errorLine(page)).toContainText(en["player.hub.reconnecting_retry"]);
 });
+
+test("a lock over the PC forgets the held player, here and at the Hub", async ({ page }) => {
+  await toPicker(page);
+  await expect(picker(page)).toBeVisible();
+  await emit(page, names.events.pcScreen, {
+    locked: true,
+    reason: "preparing_pc",
+    message: null,
+    session: null,
+  });
+  await expect(picker(page)).toHaveCount(0);
+  await expect(page.getByTestId("login-panel")).toHaveCount(0);
+  expect((await calls(page)).filter((c) => c.cmd === "logout")).toHaveLength(1);
+});

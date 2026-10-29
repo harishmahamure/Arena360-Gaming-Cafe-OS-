@@ -281,11 +281,12 @@ pub use printer::{
 pub use process::{
     ARENA_SIGNER_CN, BACKFILL_PROCESS_MODE, BOOTSTRAP_PROCESS_MODE, DEFAULT_PROCESS_ALLOW,
     DEFAULT_PROCESS_BLOCK, INSTALL_DIR_TOKEN, KEY_PROCESS_ALLOW, KEY_PROCESS_BLOCK,
-    KEY_PROCESS_MODE, KioskProcessBlocked, MAX_EXE_NAME_CHARS, MAX_PATH_GLOB_CHARS,
-    MAX_PROCESS_PATH_CHARS, MAX_PROCESS_RULES, MAX_PROCESS_RULES_CHARS, MAX_SIGNER_CHARS,
-    PATH_ELLIPSIS, PATH_TOKENS, ProcessBlockReason, ProcessList, ProcessMode, ProcessRule,
-    SYSTEM_DIR_TOKEN, is_catch_all_glob, is_file_name_glob, is_full_path_glob,
-    is_user_writable_glob, parse_process_mode, parse_process_rules, truncate_path_left,
+    KEY_PROCESS_MODE, KioskCleanupFailed, KioskProcessBlocked, MAX_CLEANUP_DETAIL_CHARS,
+    MAX_CLEANUP_STEP_LEN, MAX_EXE_NAME_CHARS, MAX_PATH_GLOB_CHARS, MAX_PROCESS_PATH_CHARS,
+    MAX_PROCESS_RULES, MAX_PROCESS_RULES_CHARS, MAX_SIGNER_CHARS, PATH_ELLIPSIS, PATH_TOKENS,
+    ProcessBlockReason, ProcessList, ProcessMode, ProcessRule, SYSTEM_DIR_TOKEN, is_catch_all_glob,
+    is_file_name_glob, is_full_path_glob, is_user_writable_glob, parse_process_mode,
+    parse_process_rules, truncate_path_left,
 };
 pub use receipt::{
     DEFAULT_NOTIFY, DEFAULT_RECEIPT_ADDRESS, DEFAULT_RECEIPT_DEFAULT, DEFAULT_RECEIPT_DRAWER,

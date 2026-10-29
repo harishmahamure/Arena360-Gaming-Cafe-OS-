@@ -366,6 +366,7 @@ fn fast() -> Timings {
         restart_grace: Duration::from_millis(400),
         admin_tick: Duration::from_millis(20),
         scan_tick: Duration::from_millis(20),
+        cleanup_retry: Duration::from_millis(20),
     }
 }
 
@@ -2732,4 +2733,236 @@ async fn a_damaged_attract_or_logo_cache_shows_nothing() {
             state: KioskHubState::Reconnecting
         }
     ));
+}
+
+// ---- Story 6.11: session-end cleanup ----
+
+use arena_kiosk_svc::cleanup::CleanupHost;
+use arena_kiosk_svc::cleanup::fake::FakeHost;
+use arena_proto::{LockReason, PcAction};
+
+impl Kiosk {
+    /// Starts the cleanup worker on the fake host.
+    fn cleanup(&mut self, host: &Arc<FakeHost>) {
+        self.runtime
+            .as_mut()
+            .unwrap()
+            .cleanup(Arc::clone(host) as Arc<dyn CleanupHost>);
+    }
+}
+
+fn session_screen(lock_after_ms: u64) -> arena_proto::SessionScreen {
+    arena_proto::SessionScreen {
+        session_id: "S1".into(),
+        device_name: "PC 1".into(),
+        elapsed_ms: 0,
+        lock_after_ms,
+        time_up_mode: "clean_up".into(),
+        grace_ms: 0,
+        ordered_items: 0,
+    }
+}
+
+fn screen_reason(m: &IpcMsg, want: LockReason) -> bool {
+    matches!(m, IpcMsg::PcScreen { locked: true, reason: Some(r), .. } if *r == want)
+}
+
+/// A connected kiosk with the cleanup on, a player program running and a session started.
+async fn cleanup_setup() -> (Hub, Kiosk, Arc<FakeHost>, Arc<FakeSystem>, App) {
+    let mut hub = Hub::seeded().await;
+    hub.up().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.start();
+    let sys = fake_system();
+    sys.add_running(30, player_proc(r"C:\Games\Game\game.exe"));
+    kiosk.enforce(&sys);
+    let host = Arc::new(FakeHost::default());
+    kiosk.cleanup(&host);
+    kiosk.wait_state(KioskHubState::Connected).await;
+    let mut app = kiosk.app().await;
+    app.until(|m| matches!(m, IpcMsg::HubStatus { .. })).await;
+    (hub, kiosk, host, sys, app)
+}
+
+fn start_session(hub: &Hub, lock_after_ms: u64) {
+    assert_eq!(
+        hub.presence.as_ref().unwrap().push_session_started(
+            &hub.device_id,
+            "S1",
+            session_screen(lock_after_ms)
+        ),
+        1
+    );
+}
+
+fn end_lock(hub: &Hub, cmd: &str, reason: LockReason) {
+    assert_eq!(
+        hub.presence.as_ref().unwrap().push_pc_command(
+            &hub.device_id,
+            cmd,
+            PcAction::Lock,
+            None,
+            Some(reason)
+        ),
+        1
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_staff_end_cleans_the_pc_before_the_bill_lock_shows_and_tells_the_hub() {
+    let (hub, _kiosk, host, sys, mut app) = cleanup_setup().await;
+    start_session(&hub, 3_600_000);
+    app.until(|m| {
+        matches!(
+            m,
+            IpcMsg::PcScreen {
+                session: Some(_),
+                ..
+            }
+        )
+    })
+    .await;
+    end_lock(&hub, "E1", LockReason::PayAtCounter);
+    // The opaque cleanup lock first, then the bill lock; never the bill lock with a program
+    // still running.
+    app.until(|m| screen_reason(m, LockReason::PreparingPc))
+        .await;
+    app.until(|m| screen_reason(m, LockReason::PayAtCounter))
+        .await;
+    assert!(!sys.alive(30), "the player's program is gone");
+    assert_eq!(host.calls(), ["clipboard", "temp_files", "volume=50"]);
+    eventually("cleanup.done at the hub", || {
+        hub.logged_of(&["cleanup.done"]) == ["cleanup.done"]
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_step_badges_the_tile_holds_the_lock_and_retry_cleanup_releases_it() {
+    let (hub, _kiosk, host, _sys, mut app) = cleanup_setup().await;
+    host.fail("clipboard", 2);
+    start_session(&hub, 3_600_000);
+    app.until(|m| {
+        matches!(
+            m,
+            IpcMsg::PcScreen {
+                session: Some(_),
+                ..
+            }
+        )
+    })
+    .await;
+    end_lock(&hub, "E1", LockReason::EndedByStaff);
+    app.until(|m| screen_reason(m, LockReason::PreparingPc))
+        .await;
+    // The Hub records the failing step and raises one check_pc alert for this PC.
+    eventually("the alert", || {
+        Store::open_reader(&hub.path)
+            .unwrap()
+            .rows(Table::Alerts)
+            .unwrap()
+            .iter()
+            .any(|a| text(a, "kind") == "check_pc" && text(a, "device_id") == hub.device_id)
+    })
+    .await;
+    assert!(hub.logged_of(&["cleanup_failed"]) == ["cleanup_failed"]);
+    let events = Store::open_reader(&hub.path)
+        .unwrap()
+        .rows(Table::DeviceEvents)
+        .unwrap();
+    let failed = events
+        .iter()
+        .find(|e| text(e, "code") == "cleanup_failed")
+        .unwrap();
+    assert_eq!(text(failed, "level"), "error");
+    assert!(text(failed, "detail").starts_with("clipboard: "));
+    // Held: the bill lock never shows until staff act.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        app.skipped
+            .iter()
+            .all(|m| !screen_reason(m, LockReason::EndedByStaff))
+    );
+    // Retry cleanup (through device.screen's push): the run passes and the lock shows.
+    assert_eq!(
+        hub.presence.as_ref().unwrap().push_pc_command(
+            &hub.device_id,
+            "R1",
+            PcAction::CleanupRetry,
+            None,
+            None
+        ),
+        1
+    );
+    app.until(|m| screen_reason(m, LockReason::EndedByStaff))
+        .await;
+    eventually("cleanup.done at the hub", || {
+        hub.logged_of(&["cleanup.done"]) == ["cleanup.done"]
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn checked_from_the_hub_releases_a_held_cleanup_without_running_it() {
+    let (hub, _kiosk, host, _sys, mut app) = cleanup_setup().await;
+    host.fail("volume", 9);
+    start_session(&hub, 3_600_000);
+    app.until(|m| {
+        matches!(
+            m,
+            IpcMsg::PcScreen {
+                session: Some(_),
+                ..
+            }
+        )
+    })
+    .await;
+    end_lock(&hub, "E1", LockReason::PayAtCounter);
+    eventually("the failure", || {
+        hub.logged_of(&["cleanup_failed"]) == ["cleanup_failed"]
+    })
+    .await;
+    let calls = host.calls().len();
+    assert_eq!(
+        hub.presence.as_ref().unwrap().push_pc_command(
+            &hub.device_id,
+            "C1",
+            PcAction::CleanupChecked,
+            None,
+            None
+        ),
+        1
+    );
+    app.until(|m| screen_reason(m, LockReason::PayAtCounter))
+        .await;
+    assert_eq!(host.calls().len(), calls);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn with_the_hub_down_the_same_steps_run_and_the_result_replays_once() {
+    let (mut hub, kiosk, host, sys, mut app) = cleanup_setup().await;
+    // A short session; the Hub then goes away and the timer locks the PC by itself.
+    start_session(&hub, 2_500);
+    app.until(|m| {
+        matches!(
+            m,
+            IpcMsg::PcScreen {
+                session: Some(_),
+                ..
+            }
+        )
+    })
+    .await;
+    hub.down().await;
+    kiosk.wait_state(KioskHubState::Reconnecting).await;
+    app.until(|m| screen_reason(m, LockReason::PreparingPc))
+        .await;
+    app.until(|m| screen_reason(m, LockReason::TimesUp)).await;
+    assert!(!sys.alive(30));
+    assert_eq!(host.calls().len(), 3);
+    eventually("the result queued", || kiosk.rt().ctx().queue_len() >= 1).await;
+    hub.up().await;
+    kiosk.wait_state(KioskHubState::Connected).await;
+    eventually("the result delivered", || kiosk.rt().ctx().queue_len() == 0).await;
+    assert_eq!(hub.logged_of(&["cleanup.done"]), ["cleanup.done"]);
 }

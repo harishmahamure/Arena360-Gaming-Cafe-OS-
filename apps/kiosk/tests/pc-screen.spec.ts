@@ -160,6 +160,7 @@ test("each lock reason covers the screen with its catalogue line", async ({ page
     locked_by_staff: en["player.pc.locked"],
     paused: en["player.lock.paused"],
     times_up_see_counter: en["player.lock.times_up_see_counter"],
+    preparing_pc: en["player.lock.preparing_pc"],
   };
   for (const [reason, line] of Object.entries(lines)) {
     await emit(page, shown({ locked: true, reason }));
@@ -194,4 +195,25 @@ test("the session screen shows how many items were ordered, and only when there 
   await emit(page, session(3));
   await expect(page.getByTestId("ordered")).toHaveText("Ordered: 3 items");
   expect(await serious(page)).toEqual([]);
+});
+
+test("the cleanup lock is a solid cover with the catalogue line and no blur", async ({ page }) => {
+  await openWithShell(page);
+  await emit(page, shown({ locked: true, reason: "preparing_pc" }));
+  const cover = page.getByTestId("pc-locked");
+  await expect(cover.getByRole("heading", { name: en["player.lock.preparing_pc"] })).toBeVisible();
+  await expect(cover).toContainText("Getting this PC ready — see the counter.");
+  const paint = await cover.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { background: s.backgroundColor, filter: s.backdropFilter };
+  });
+  expect(paint.background).not.toBe("rgba(0, 0, 0, 0)");
+  expect(paint.filter === "none" || paint.filter === "").toBe(true);
+  expect(await page.locator(".app").getAttribute("inert")).not.toBeNull();
+  expect(await serious(page)).toEqual([]);
+  // The held lock stays until the Hub or the cleanup moves the screen on.
+  await emit(page, shown({ locked: true, reason: "pay_at_counter" }));
+  await expect(
+    cover.getByRole("heading", { name: en["player.lock.pay_at_counter"] }),
+  ).toBeVisible();
 });

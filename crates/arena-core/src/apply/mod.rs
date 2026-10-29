@@ -105,7 +105,9 @@ pub use coupon::preview as coupon_preview;
 pub use devices::MAX_VERSION_LEN;
 pub use discount::preview as discount_preview;
 pub use frame::{is_ulid, validate_frame};
-pub use kiosk_log::{MAX_KIOSK_LOG_CODE_LEN, MAX_KIOSK_LOG_DETAIL_CHARS, PROCESS_BLOCKED_CODE};
+pub use kiosk_log::{
+    CLEANUP_FAILED_CODE, MAX_KIOSK_LOG_CODE_LEN, MAX_KIOSK_LOG_DETAIL_CHARS, PROCESS_BLOCKED_CODE,
+};
 pub(crate) use licence::pending as licence_pending;
 pub use mutate::Written;
 pub use refund::CreditNoteLine;
@@ -264,7 +266,9 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::AuditReadGranted(_) => read_grants::load(tx)?,
         P::LicenceApply(_) => kiosk_log::load(tx)?,
         P::AdImpressionRecorded(_) | P::AdRequestRecorded(_) => ad::load(tx)?,
-        P::KioskLog(_) | P::KioskProcessBlocked(_) => kiosk_log::load(tx)?,
+        P::KioskLog(_) | P::KioskProcessBlocked(_) | P::KioskCleanupFailed(_) => {
+            kiosk_log::load(tx)?
+        }
         P::KioskScanReported(_) => kiosk_scan::load(tx, intent)?,
         P::DeviceAdminExit(p) => admin_exit::load_exit(tx, p)?,
         P::DeviceAdminRelock(p) => admin_exit::load_relock(tx, p)?,

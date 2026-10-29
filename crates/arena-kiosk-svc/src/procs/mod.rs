@@ -113,6 +113,8 @@ pub const MAX_IN_FLIGHT: usize = 8;
 pub const WEBVIEW2_IMAGE: &str = "msedgewebview2.exe";
 /// The admin exit's desktop, closed in the player's session when the exit ends.
 pub const EXPLORER_IMAGE: &str = "explorer.exe";
+/// How long the cleanup waits between tries at ending the player's programs.
+const CLOSE_SETTLE: Duration = Duration::from_millis(150);
 /// How far up the parent chain the kiosk-app exemption looks.
 const MAX_ANCESTRY: usize = 32;
 /// Entries kept at most in each warn-once set (cleared when it fills).
@@ -306,6 +308,20 @@ impl ProcessApi {
         }
     }
 }
+
+/// What ending a player's programs did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CloseReport {
+    /// Processes ended.
+    pub closed: usize,
+    /// Processes still running after every try.
+    pub failed: usize,
+}
+
+/// Ends every unprotected program of the player's session (the session-end cleanup's
+/// `programs` step, Story 6.11). Registered on [`Ctx::closer`] by the enforcer once it runs;
+/// it reuses the enforcer's safety rules and kill path.
+pub type Closer = Arc<dyn Fn() -> io::Result<CloseReport> + Send + Sync>;
 
 // ---- the lists ----
 
@@ -955,6 +971,76 @@ impl Inner {
         closed
     }
 
+    /// One pass over the player's session for the session-end cleanup: every process that is
+    /// not the kiosk app, a WebView2 process descending from it, the service itself or a
+    /// protected System32 image. With `kill` set each is ended; returns how many were found,
+    /// ended and failed to end. The process mode (`report`) does not matter here.
+    fn unprotected_pass(&self, kill: bool) -> io::Result<(usize, usize, usize)> {
+        self.refresh_app();
+        let Some(player) = self.player() else {
+            return Ok((0, 0, 0));
+        };
+        let entries = self.api.watcher.running()?;
+        self.note_snapshot(&entries, Instant::now());
+        let app = lock(&self.app).clone();
+        let (mut found, mut killed, mut failed) = (0, 0, 0);
+        for e in entries {
+            if e.pid == 0 || e.pid == 4 || e.pid == std::process::id() {
+                continue;
+            }
+            let Some(facts) = self.player_facts(e.pid, &player) else {
+                continue;
+            };
+            let path = normalize_path(&facts.path);
+            if path.is_empty() {
+                continue;
+            }
+            let lower = path.to_lowercase();
+            if app.as_ref() == Some(&lower)
+                || self.own.contains(&lower)
+                || self.protected.contains(&lower)
+                || (file_name(&path).eq_ignore_ascii_case(WEBVIEW2_IMAGE)
+                    && self.is_app_descendant(e.pid, &player))
+            {
+                continue;
+            }
+            found += 1;
+            if !kill {
+                failed += 1;
+                continue;
+            }
+            match self.api.killer.kill(&facts) {
+                Ok(()) => killed += 1,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => found -= 1,
+                Err(err) => {
+                    failed += 1;
+                    tracing::warn!(pid = e.pid, error = %err, "cleanup could not end a program");
+                }
+            }
+        }
+        Ok((found, killed, failed))
+    }
+
+    /// Ends every unprotected program of the player's session (Story 6.11), trying again a
+    /// few times for ones that take a moment to go. `failed` counts what is still running.
+    fn close_all_unprotected(&self) -> io::Result<CloseReport> {
+        const PASSES: usize = 3;
+        let mut closed = 0;
+        for _ in 0..PASSES {
+            let (found, killed, _) = self.unprotected_pass(true)?;
+            closed += killed;
+            if found == 0 {
+                return Ok(CloseReport { closed, failed: 0 });
+            }
+            std::thread::sleep(CLOSE_SETTLE);
+        }
+        let (left, ..) = self.unprotected_pass(false)?;
+        Ok(CloseReport {
+            closed,
+            failed: left,
+        })
+    }
+
     fn player(&self) -> Option<PlayerSession> {
         self.api.watcher.player_session(&self.player_account())
     }
@@ -1192,6 +1278,15 @@ pub(crate) async fn run(
         return;
     }
     let inner = Arc::new(Inner::new(Arc::clone(&ctx), api, opts));
+    {
+        let weak = Arc::downgrade(&inner);
+        let closer: Closer = Arc::new(move || {
+            weak.upgrade()
+                .ok_or_else(|| io::Error::other("the process enforcer stopped"))?
+                .close_all_unprotected()
+        });
+        *lock(&ctx.closer) = Some(closer);
+    }
     let sweep_now = Arc::new(Notify::new());
     let checks = Arc::new(Semaphore::new(MAX_IN_FLIGHT));
     let (polling_tx, polling) = watch::channel(false);
@@ -1258,6 +1353,7 @@ pub(crate) async fn run(
         }
     }
     sweeps.abort();
+    *lock(&ctx.closer) = None;
 }
 
 #[cfg(test)]

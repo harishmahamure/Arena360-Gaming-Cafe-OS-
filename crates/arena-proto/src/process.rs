@@ -369,6 +369,61 @@ pub struct KioskProcessBlocked {
     pub mode: ProcessMode,
 }
 
+/// Longest `step` of a `kiosk.cleanup_failed`, in bytes.
+pub const MAX_CLEANUP_STEP_LEN: usize = 32;
+/// Longest `detail` of a `kiosk.cleanup_failed`, in characters.
+pub const MAX_CLEANUP_DETAIL_CHARS: usize = 200;
+
+/// The payload of `kiosk.cleanup_failed`: a session-end cleanup step (`programs`, `clipboard`,
+/// `temp_files`, `volume`, ...) still failed after its one retry (Story 6.11). `detail` is a
+/// short reason without personal data (no file names, no window titles).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KioskCleanupFailed {
+    pub step: String,
+    #[serde(default)]
+    pub detail: String,
+}
+
+impl KioskCleanupFailed {
+    /// The payload rules the Hub applies (and the kiosk checks before queueing): `step` is
+    /// 1-32 of `a-z 0-9 _`, `detail` at most 200 characters with no control characters. A
+    /// failure is `VALIDATION_FAILED` naming the field.
+    pub fn validate(&self) -> Result<(), AppError> {
+        let step_ok = (1..=MAX_CLEANUP_STEP_LEN).contains(&self.step.len())
+            && self
+                .step
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+        if !step_ok {
+            return Err(AppError::with_field(
+                ErrorCode::ValidationFailed,
+                "step",
+                "step must be 1-32 characters of a-z, 0-9 or '_'",
+            ));
+        }
+        if self.detail.chars().count() > MAX_CLEANUP_DETAIL_CHARS
+            || self.detail.chars().any(char::is_control)
+        {
+            return Err(AppError::with_field(
+                ErrorCode::ValidationFailed,
+                "detail",
+                "detail must be at most 200 characters with no control characters",
+            ));
+        }
+        Ok(())
+    }
+
+    /// The `device_events.detail` text: `<step>: <detail>` (or just the step with no detail).
+    pub fn event_detail(&self) -> String {
+        if self.detail.is_empty() {
+            self.step.clone()
+        } else {
+            format!("{}: {}", self.step, self.detail)
+        }
+    }
+}
+
 /// The ellipsis a path shortened from the left starts with.
 pub const PATH_ELLIPSIS: char = '…';
 
@@ -745,5 +800,39 @@ mod tests {
             ..p
         };
         assert_eq!(bad.validate().unwrap_err().field.as_deref(), Some("path"));
+    }
+
+    #[test]
+    fn cleanup_failed_checks_its_fields_and_words_the_event() {
+        let ok = KioskCleanupFailed {
+            step: "temp_files".into(),
+            detail: "a file is locked".into(),
+        };
+        assert!(ok.validate().is_ok());
+        assert_eq!(ok.event_detail(), "temp_files: a file is locked");
+        let bare = KioskCleanupFailed {
+            step: "volume".into(),
+            detail: String::new(),
+        };
+        assert!(bare.validate().is_ok());
+        assert_eq!(bare.event_detail(), "volume");
+        for step in ["", "Programs", "a b", &"x".repeat(33)] {
+            let bad = KioskCleanupFailed {
+                step: step.into(),
+                detail: String::new(),
+            };
+            assert_eq!(bad.validate().unwrap_err().field.as_deref(), Some("step"));
+        }
+        for detail in ["a\nb", &"x".repeat(201)] {
+            let bad = KioskCleanupFailed {
+                step: "programs".into(),
+                detail: detail.into(),
+            };
+            assert_eq!(bad.validate().unwrap_err().field.as_deref(), Some("detail"));
+        }
+        assert_eq!(
+            serde_json::to_value(&ok).unwrap(),
+            serde_json::json!({"step": "temp_files", "detail": "a file is locked"})
+        );
     }
 }

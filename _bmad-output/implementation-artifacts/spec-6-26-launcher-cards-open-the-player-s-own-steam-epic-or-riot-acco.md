@@ -2,7 +2,7 @@
 title: "Story 6.26: Launcher cards open the player's own Steam, Epic or Riot account"
 type: "feature"
 created: "2026-10-29"
-status: "review"
+status: "done"
 baseline_commit: "cc86d71"
 context:
   - "{project-root}/_bmad-output/planning-artifacts/epics.md"

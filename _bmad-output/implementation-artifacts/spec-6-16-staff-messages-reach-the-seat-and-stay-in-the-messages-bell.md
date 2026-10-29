@@ -62,12 +62,12 @@ deferred: []
 ## Tasks & Acceptance
 
 **Execution:**
-- `crates/arena-proto` -- add `device.message` intent, `MessageScope`, `DeviceMessage` validation, `delivered` on the intent result; remove Message from `DeviceScreen`; `pnpm gen:types`
-- `crates/arena-core` -- validate and audit `device.message` (seat device is a PC; no base_rev), add to the proptest generator, update pinned tests
-- `crates/arena-api` -- offline refusal for seat, push on fresh and replayed keys, `push_message_all` to online PCs with a live session, `delivered` in the result; tests
-- `crates/arena-kiosk-svc`, `arena-kiosk-core` -- keep the session's messages with a read flag, forward each as IPC `staff_message`, `messages_read` request, clear on session end/start, drop the banner field; tests
-- `apps/kiosk` (+ `src-tauri`) -- text toast on the HUD, `MessagesBell.svelte` in the bell slot, strings `player.messages.*`, remove the banner; Playwright
-- `apps/hub` -- sheet Message uses `device.message`; Floor "Message all PCs" form and "Sent to n PCs" result; strings, audit label; Playwright
+- [x] `crates/arena-proto` -- add `device.message` intent, `MessageScope`, `DeviceMessage` validation, `delivered` on the intent result; remove Message from `DeviceScreen`; `pnpm gen:types`
+- [x] `crates/arena-core` -- validate and audit `device.message` (seat device is a PC; no base_rev), add to the proptest generator, update pinned tests
+- [x] `crates/arena-api` -- offline refusal for seat, push on fresh and replayed keys, `push_message_all` to online PCs with a live session, `delivered` in the result; tests
+- [x] `crates/arena-kiosk-svc`, `arena-kiosk-core` -- keep the session's messages with a read flag, forward each as IPC `staff_message`, `messages_read` request, clear on session end/start, drop the banner field; tests
+- [x] `apps/kiosk` (+ `src-tauri`) -- text toast on the HUD, `MessagesBell.svelte` in the bell slot, strings `player.messages.*`, remove the banner; Playwright
+- [x] `apps/hub` -- sheet Message uses `device.message`; Floor "Message all PCs" form and "Sent to n PCs" result; strings, audit label; Playwright
 
 **Acceptance Criteria:**
 - Given an in-session PC, when staff send ≤140 chars from the tile sheet, then the kiosk shows an info HUD toast with the text and the bell counts it; no banner remains.
@@ -88,3 +88,11 @@ deferred: []
 - `cargo fmt --check`, `cargo clippy` -- expected: clean apart from known warnings
 - `pnpm gen:types && pnpm check:strings && pnpm check:hex && pnpm check:no-blur && pnpm check:protocol && pnpm format:check` -- expected: pass
 - `pnpm --filter @arena/kiosk check`, `pnpm --filter @arena/hub check`, Playwright kiosk and hub specs named above -- expected: pass
+
+## Auto Run Result
+
+Status: in-review
+
+Verified: cargo tests for arena-proto/core/kiosk-core/kiosk-ui/api pass (one log-capture test, `lock_and_unlock_log_the_staff_ids_and_never_the_pin`, failed once in a parallel run and passed alone and on re-run); `arena-kiosk-svc --lib` has the same 14 SYSTEM-ownership failures as before; fmt and clippy clean; gen:types, check:strings|hex|no-blur|protocol, format:check, kiosk and hub svelte-check pass; kiosk Playwright messages-bell, toast, hud, pc-screen, volume-staff pass (48); hub floor and tile-sheet specs pass.
+
+Not run: `arena-kiosk-svc/tests/runtime.rs` (`cfg(unix)`), real HUD window toast text and sound, 2 s delivery on a real LAN, the 4 `theme.spec.ts` tests (existing `C:\C:\` path bug).

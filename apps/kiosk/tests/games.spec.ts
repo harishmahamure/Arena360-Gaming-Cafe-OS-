@@ -259,7 +259,9 @@ test("the answers are read defensively", () => {
   expect(
     gamesOf({ games: [{ id: "a", name: "A", running: false, extra: 1 }], running: true }),
   ).toEqual({
-    games: [{ id: "a", name: "A", running: false, category: "", tags: [] }],
+    games: [
+      { id: "a", name: "A", running: false, category: "", tags: [], launcher: "", ageRating: "" },
+    ],
     running: true,
   });
   for (const bad of [

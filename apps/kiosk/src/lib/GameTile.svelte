@@ -7,6 +7,7 @@
     running = false,
     gameRunning = false,
     rank = null,
+    featured = false,
     onactivate,
   }: {
     name: string;
@@ -18,6 +19,11 @@
     gameRunning?: boolean;
     /** The tile's place in the "Most played here" carousel (1 is first); `null` elsewhere. */
     rank?: number | null;
+    /**
+     * The Home row's featured tile (Story 6.29): 190 × 260. Its magenta outline is drawn by the
+     * row, 3px offset 3px; the focus ring sits outside it so the two never read as one.
+     */
+    featured?: boolean;
     /** Enter, Space or a click. */
     onactivate: () => void;
   } = $props();
@@ -31,8 +37,15 @@
   type="button"
   class="game-tile"
   class:running
-  aria-label={rank !== null ? undefined : running ? t("player.games.tile_running", { name }) : name}
-  data-testid="game-tile"
+  class:featured
+  aria-label={rank !== null
+    ? undefined
+    : featured
+      ? t("player.home.featured_tile", { name })
+      : running
+        ? t("player.games.tile_running", { name })
+        : name}
+  data-testid={featured ? "game-tile-featured" : "game-tile"}
   data-running={running ? "true" : "false"}
   data-game-running={gameRunning ? "true" : "false"}
   onclick={onactivate}
@@ -125,6 +138,11 @@
     left: auto;
   }
 
+  .game-tile.featured {
+    width: 190px;
+    height: 260px;
+  }
+
   .game-tile:hover {
     border-color: var(--border-strong);
   }
@@ -133,5 +151,11 @@
   .game-tile:focus {
     outline: 3px solid var(--focus-ring);
     outline-offset: 3px;
+  }
+
+  /* Past the featured outline (3px line, 3px gap): the ring stays distinct from it. */
+  .game-tile.featured:focus-visible,
+  .game-tile.featured:focus {
+    outline-offset: 9px;
   }
 </style>

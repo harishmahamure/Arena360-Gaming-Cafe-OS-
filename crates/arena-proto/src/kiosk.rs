@@ -114,6 +114,9 @@ pub const MAX_PLAY_MINUTES: i64 = 7 * 24 * 60;
 /// How many games the most-played list holds (Story 6.27).
 pub const MOST_PLAYED_LIMIT: usize = 10;
 
+/// How many games' media `games.most_played_result` carries (Story 6.29).
+pub const MAX_GAME_MEDIA: usize = 64;
+
 /// The most-played window, in days (Story 6.27).
 pub const MOST_PLAYED_DAYS: i64 = 7;
 
@@ -218,6 +221,20 @@ pub struct MostPlayed {
     pub top: Vec<MostPlayedGame>,
     /// The live player's last play of each game, newest first; empty for a guest or no session.
     pub last_played: Vec<LastPlayed>,
+    /// The stored video and cover of the library games that have either (Story 6.29), for the
+    /// Home hero and featured row; at most [`MAX_GAME_MEDIA`]. Empty when the Hub holds none.
+    #[serde(default)]
+    pub media: Vec<GameMediaRef>,
+}
+
+/// The stored media of one library game (Story 6.29): content hashes the kiosk fetches from the
+/// Hub as `/media/<sha256>`. `game_id` is the library entry's id, as in [`MostPlayedGame`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct GameMediaRef {
+    pub game_id: String,
+    pub video: Option<String>,
+    pub cover: Option<String>,
 }
 
 /// The payload of `game.launched` (Story 6.23): a player started a library game at this PC. The
@@ -462,6 +479,11 @@ mod tests {
                     game_id: "G1".into(),
                     at: 5,
                 }],
+                media: vec![GameMediaRef {
+                    game_id: "G1".into(),
+                    video: None,
+                    cover: Some("ab".repeat(32)),
+                }],
             }),
         );
         let v: serde_json::Value = serde_json::from_str(&reply.to_text()).unwrap();
@@ -474,8 +496,18 @@ mod tests {
             v["last_played"][0],
             serde_json::json!({"game_id": "G1", "at": 5})
         );
+        assert_eq!(
+            v["media"][0],
+            serde_json::json!({"game_id": "G1", "video": null, "cover": "ab".repeat(32)})
+        );
         assert_eq!(parse_frame(&reply.to_text()).unwrap(), reply);
         let empty = serde_json::to_value(MostPlayed::default()).unwrap();
-        assert_eq!(empty, serde_json::json!({"top": [], "last_played": []}));
+        assert_eq!(
+            empty,
+            serde_json::json!({"top": [], "last_played": [], "media": []})
+        );
+        // A Hub that predates Story 6.29 sends no media.
+        let old: MostPlayed = serde_json::from_str(r#"{"top":[],"last_played":[]}"#).unwrap();
+        assert!(old.media.is_empty());
     }
 }

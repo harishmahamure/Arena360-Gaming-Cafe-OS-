@@ -235,7 +235,7 @@ test("until the service has answered the Apps tab shows neither tiles nor the em
 
 test("the answers are read defensively", () => {
   expect(appsOf({ apps: [{ id: "a", name: "A", running: false, extra: 1 }] })).toEqual([
-    { id: "a", name: "A", running: false, category: "", tags: [] },
+    { id: "a", name: "A", running: false, category: "", tags: [], launcher: "", ageRating: "" },
   ]);
   for (const bad of [
     null,

@@ -252,3 +252,82 @@ async fn a_play_that_starts_before_every_session_falls_back_to_the_live_one() {
     assert_eq!(text(&rows[0], "session_id"), session);
     assert_eq!(text(&rows[0], "player_id"), p);
 }
+
+// ---- Story 6.29: the stored media of the library games, for the Home hero ----
+
+async fn library_game(f: &Fixture, name: &str, kind: &str, catalog: Option<&str>, enabled: bool) {
+    f.writer
+        .submit_intent(intent(
+            super::stock::owner(),
+            IntentPayload::LibraryUpsert(arena_proto::LibraryUpsert {
+                id: None,
+                entry_kind: kind.into(),
+                name: name.into(),
+                launcher: "steam".into(),
+                executable_path: format!(r"C:\Games\{name}.exe"),
+                launch_uri: String::new(),
+                launch_args: String::new(),
+                category: String::new(),
+                tags: Vec::new(),
+                age_rating: String::new(),
+                enabled,
+                catalog_id: catalog.map(str::to_owned),
+                installs: Vec::new(),
+            }),
+        ))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn the_game_media_lists_enabled_catalogue_games_that_have_a_video_or_a_cover() {
+    use crate::attract::GameMediaHashes;
+    let f = bootstrapped().await;
+    library_game(&f, "Apex", "game", Some("C-APEX"), true).await;
+    library_game(&f, "Bare", "game", Some("C-BARE"), true).await;
+    library_game(&f, "Off", "game", Some("C-OFF"), false).await;
+    library_game(&f, "Custom", "game", None, true).await;
+    library_game(&f, "Discord", "app", Some("C-APEX"), true).await;
+    library_game(&f, "Cover", "game", Some("C-COVER"), true).await;
+    let dir = DeviceDirectory::open(&f.path).unwrap();
+    let hash = |c: char| c.to_string().repeat(64);
+    let lookup = |catalog: &str| match catalog {
+        "C-APEX" => GameMediaHashes {
+            video: Some(hash('a')),
+            cover: Some(hash('b')),
+        },
+        "C-COVER" => GameMediaHashes {
+            video: None,
+            cover: Some(hash('c')),
+        },
+        "C-OFF" => GameMediaHashes {
+            video: Some(hash('d')),
+            cover: None,
+        },
+        _ => GameMediaHashes::default(),
+    };
+    let media = dir.game_media(&lookup).unwrap();
+    // Library order (by name): the disabled, app, unlinked and media-less entries are left out.
+    assert_eq!(
+        media
+            .iter()
+            .map(|m| (m.video.clone(), m.cover.clone()))
+            .collect::<Vec<_>>(),
+        [(Some(hash('a')), Some(hash('b'))), (None, Some(hash('c')))]
+    );
+    // The game id is the library entry's id.
+    let id_of = |name: &str| {
+        table(&f, Table::LibraryEntries)
+            .iter()
+            .find(|r| text(r, "name") == name)
+            .map(|r| text(r, "id"))
+            .unwrap()
+    };
+    assert_eq!(media[0].game_id, id_of("Apex"));
+    assert_eq!(media[1].game_id, id_of("Cover"));
+    assert!(
+        dir.game_media(&|_: &str| GameMediaHashes::default())
+            .unwrap()
+            .is_empty()
+    );
+}

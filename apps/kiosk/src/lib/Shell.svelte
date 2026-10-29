@@ -5,7 +5,8 @@
   import AccountMenu from "./AccountMenu.svelte";
   import { callStaff } from "./bridge";
   import Games from "./Games.svelte";
-  import type { GameCard, LauncherCardData, RankedGame } from "./games";
+  import type { GameCard, LauncherCardData, MostPlayedView, RankedGame } from "./games";
+  import Home from "./Home.svelte";
   import { INFO_TOAST_MS } from "./hud";
   import MessagesBell from "./MessagesBell.svelte";
   import VolumeControl from "./VolumeControl.svelte";
@@ -33,6 +34,7 @@
     gameRunning = false,
     launchers = [],
     mostPlayed = [],
+    mostPlayedView = null,
     branch = "",
     onlaunch = () => {},
     onlaunchapp = () => {},
@@ -63,7 +65,9 @@
     launchers?: LauncherCardData[];
     /** The "Most played here" tiles for the Games tab (Story 6.27); none hides the carousel. */
     mostPlayed?: RankedGame[];
-    /** The branch's name, for the carousel's caption. */
+    /** The Hub's most-played answer: Home's featured game, its media and last-played times (Story 6.29). */
+    mostPlayedView?: MostPlayedView | null;
+    /** The branch's name, for the carousel's caption and Home's eyebrow. */
     branch?: string;
     /** A game tile was activated. */
     onlaunch?: (game: GameCard) => void;
@@ -88,6 +92,8 @@
   let items: HTMLButtonElement[] = $state([]);
   /** The item with the roving focus; Enter or a click makes it the active one. */
   let focused: Tab = $state("home");
+  /** The Home hero video was paused: it holds its frame for the rest of the session (Story 6.29). */
+  let heroPaused = $state(false);
 
   const name = $derived(playerName(session));
   const low = $derived(isLow(session, seconds));
@@ -241,7 +247,7 @@
     {/if}
   </header>
 
-  <main class="content" aria-label={t(LABELS[tab])}>
+  <main class="content" class:on-home={tab === "home"} aria-label={t(LABELS[tab])}>
     <h1 class="type-kiosk-headline" data-testid="session-device">{session.device}</h1>
     {@render status?.()}
     {#if tab === "games"}
@@ -249,15 +255,23 @@
     {:else if tab === "apps"}
       <Games kind="apps" games={apps} {gameRunning} onlaunch={onlaunchapp} />
     {:else}
-      <p class="empty type-kiosk-body" data-testid={"tab-empty-" + tab}>
-        {t("player.shell.empty")}
-      </p>
+      <Home
+        {games}
+        view={mostPlayedView}
+        {branch}
+        {gameRunning}
+        bind:paused={heroPaused}
+        {onlaunch}
+        onopengames={() => (tab = "games")}
+      />
     {/if}
   </main>
 </div>
 
 <style>
   .shell {
+    /* Its own stacking context: the Home hero sits behind everything in it, above the page. */
+    isolation: isolate;
     display: grid;
     grid-template-rows: auto 1fr;
     min-height: 100vh;
@@ -452,7 +466,13 @@
     margin: 0;
   }
 
-  .empty {
-    color: var(--text-muted);
+  /* Home: the hero is behind the content, so the empty content lets clicks through to it; the
+     content's own parts (the device name, the status lines, the featured row) still take them. */
+  .content.on-home {
+    pointer-events: none;
+  }
+
+  .content.on-home > :global(*) {
+    pointer-events: auto;
   }
 </style>

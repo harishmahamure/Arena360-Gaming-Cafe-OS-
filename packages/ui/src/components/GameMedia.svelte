@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Snippet } from "svelte";
+  import { untrack, type Snippet } from "svelte";
   import { t } from "../messages/index.js";
   import {
     claimVideo,
@@ -15,6 +15,7 @@
     cover = null,
     icon = null,
     gameRunning = false,
+    paused = $bindable(false),
     highContrast,
     scrim = "hero",
     class: className = "",
@@ -29,6 +30,12 @@
     icon?: string | null;
     /** A game is running: the video is unloaded and only the cover shows. */
     gameRunning?: boolean;
+    /**
+     * The player paused the video with the control. Bind it to keep the pause across a remount
+     * (Story 6.29: the Home hero holds its frame for the rest of the session). It clears when
+     * `video` changes to another file.
+     */
+    paused?: boolean;
     /** Defaults to the theme of the nearest `[data-theme]` ancestor. */
     highContrast?: boolean;
     /** `hero` for the full-width scrim, `tile` for the tile scrim. */
@@ -44,7 +51,6 @@
   let detectedHc = $state(false);
   let failed = $state<string[]>([]);
   let playing = $state(false);
-  let userPaused = $state(false);
   let active = $state(false);
   let el: HTMLVideoElement | null = $state(null);
 
@@ -91,11 +97,15 @@
     };
   });
 
-  // A new video URL starts playing again.
+  // A new video URL starts playing again (the first one keeps a pause the owner passed in).
+  let seen = untrack(() => video);
   $effect(() => {
-    void video;
+    const now = video;
     playing = false;
-    userPaused = false;
+    if (now !== seen) {
+      seen = now;
+      paused = false;
+    }
   });
 
   /** Mutes (the attribute alone is not reliable), plays, and frees the file on removal. */
@@ -104,7 +114,7 @@
     node.defaultMuted = true;
     node.volume = 0;
     const start = () => {
-      if (!userPaused) node.play().catch(() => fail(url));
+      if (!paused) node.play().catch(() => fail(url));
     };
     start();
     return {
@@ -119,8 +129,8 @@
 
   function toggle(node: HTMLVideoElement | null) {
     if (!node) return;
-    userPaused = !node.paused;
-    if (userPaused) node.pause();
+    paused = !node.paused;
+    if (paused) node.pause();
     else node.play().catch(() => fail(video));
   }
 </script>
@@ -174,8 +184,9 @@
     <button
       type="button"
       class="video-control"
+      class:hero={scrim === "hero"}
       data-testid="video-control"
-      aria-label={userPaused ? t("ui.game_media.play") : t("ui.game_media.pause")}
+      aria-label={paused ? t("ui.game_media.play") : t("ui.game_media.pause")}
       onclick={() => toggle(el)}
     >
       <svg
@@ -186,9 +197,7 @@
         focusable="false"
         fill="currentColor"
       >
-        {#if userPaused}<path d="M8 5v14l11-7z" />{:else}<path
-            d="M6 5h4v14H6zM14 5h4v14h-4z"
-          />{/if}
+        {#if paused}<path d="M8 5v14l11-7z" />{:else}<path d="M6 5h4v14H6zM14 5h4v14h-4z" />{/if}
       </svg>
     </button>
   {/if}
@@ -309,5 +318,12 @@
     background: var(--video-control-background);
     color: var(--video-control-foreground);
     cursor: pointer;
+  }
+
+  /* On a hero the control sits bottom-right, clear of the top bar (login and Home). */
+  .video-control.hero {
+    top: auto;
+    bottom: var(--space-3);
+    right: var(--space-kiosk-margin, var(--space-3));
   }
 </style>

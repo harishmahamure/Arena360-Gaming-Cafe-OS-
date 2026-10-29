@@ -1040,6 +1040,8 @@ async fn a_kiosk_gets_the_top_games_and_only_its_own_players_last_played_times()
         .map(|g| (g.game_id.as_str(), g.minutes))
         .collect();
     assert_eq!(top, [("G2", 70), ("G1", 50)]);
+    // No library game here is linked to stored media (Story 6.29): the list says so.
+    assert!(got.media.is_empty());
     let last: Vec<_> = got
         .last_played
         .iter()

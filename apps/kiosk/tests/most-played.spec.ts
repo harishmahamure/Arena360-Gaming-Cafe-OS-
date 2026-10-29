@@ -301,13 +301,21 @@ test("the carousel passes the accessibility check", async ({ page }) => {
 });
 
 test("the answer is read strictly and the ranks number the tiles shown", () => {
-  expect(mostPlayedOf({ top: [], last_played: [] })).toEqual({ top: [], last_played: [] });
+  expect(mostPlayedOf({ top: [], last_played: [] })).toEqual({
+    top: [],
+    last_played: [],
+    media: [],
+  });
   expect(
     mostPlayedOf({
       top: [{ game_id: "A", minutes: 5 }],
       last_played: [{ game_id: "A", at: 9 }, { nope: 1 }],
     }),
-  ).toEqual({ top: [{ game_id: "A", minutes: 5 }], last_played: [{ game_id: "A", at: 9 }] });
+  ).toEqual({
+    top: [{ game_id: "A", minutes: 5 }],
+    last_played: [{ game_id: "A", at: 9 }],
+    media: [],
+  });
   for (const bad of [null, "x", {}, { top: "A" }, { top: [{ game_id: "A" }] }]) {
     expect(mostPlayedOf(bad)).toBeNull();
   }
@@ -317,6 +325,8 @@ test("the answer is read strictly and the ranks number the tiles shown", () => {
     running: false,
     category: "",
     tags: [],
+    launcher: "",
+    ageRating: "",
   });
   const view: MostPlayedView = {
     top: [
@@ -326,6 +336,7 @@ test("the answer is read strictly and the ranks number the tiles shown", () => {
       { game_id: "A", minutes: 10 },
     ],
     last_played: [],
+    media: [],
   };
   expect(
     rankedGames(view, [card("A"), card("B"), card("Z")]).map((r) => [r.rank, r.game.id]),
@@ -335,5 +346,5 @@ test("the answer is read strictly and the ranks number the tiles shown", () => {
   ]);
   expect(rankedGames(null, [card("A")])).toEqual([]);
   expect(rankedGames(view, null)).toEqual([]);
-  expect(rankedGames({ top: [], last_played: [] }, [card("A")])).toEqual([]);
+  expect(rankedGames({ top: [], last_played: [], media: [] }, [card("A")])).toEqual([]);
 });

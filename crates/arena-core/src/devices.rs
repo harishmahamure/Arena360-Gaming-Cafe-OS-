@@ -291,6 +291,19 @@ impl DeviceDirectory {
         crate::game_plays::most_played(&store, &self.most_played, device_id, now_ms)
     }
 
+    /// The stored media of the library games (Story 6.29); `lookup` finds a catalogue game's
+    /// stored video and cover.
+    pub fn game_media(
+        &self,
+        lookup: crate::attract::MediaLookup<'_>,
+    ) -> Result<Vec<arena_proto::GameMediaRef>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?;
+        crate::game_plays::game_media(&store, lookup)
+    }
+
     /// The id of the session an extend on `device_id` applies to (Story 6.21).
     pub fn extend_target(&self, device_id: &str) -> Result<String, AppError> {
         let store = self

@@ -5,7 +5,8 @@
 use std::sync::Mutex;
 
 use arena_proto::{
-    AppError, LastPlayed, MOST_PLAYED_DAYS, MOST_PLAYED_LIMIT, MostPlayed, MostPlayedGame,
+    AppError, GameMediaRef, LastPlayed, MAX_GAME_MEDIA, MOST_PLAYED_DAYS, MOST_PLAYED_LIMIT,
+    MostPlayed, MostPlayedGame,
 };
 use arena_store::Store;
 
@@ -68,7 +69,43 @@ pub fn most_played(
             .collect(),
         None => Vec::new(),
     };
-    Ok(MostPlayed { top, last_played })
+    Ok(MostPlayed {
+        top,
+        last_played,
+        media: Vec::new(),
+    })
+}
+
+/// The stored media of the enabled library games linked to the catalogue (Story 6.29), in name
+/// order, at most [`MAX_GAME_MEDIA`]; a game with neither a video nor a cover is left out. The
+/// library entry's id is the game id, as in the most-played list.
+pub fn game_media(
+    store: &Store,
+    lookup: crate::attract::MediaLookup<'_>,
+) -> Result<Vec<GameMediaRef>, AppError> {
+    let mut out = Vec::new();
+    for entry in store.library_entries()? {
+        if out.len() == MAX_GAME_MEDIA {
+            break;
+        }
+        let (true, "game", Some(catalog)) = (
+            entry.enabled && entry.deleted_at.is_none(),
+            entry.kind.as_str(),
+            &entry.catalog_id,
+        ) else {
+            continue;
+        };
+        let found = lookup(catalog);
+        if found.video.is_none() && found.cover.is_none() {
+            continue;
+        }
+        out.push(GameMediaRef {
+            game_id: entry.id,
+            video: found.video,
+            cover: found.cover,
+        });
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

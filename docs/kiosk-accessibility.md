@@ -113,3 +113,24 @@ Borderless-fullscreen games are not affected: the HUD draws over them like any w
   the counter.").
 - With no apps on the PC the tab shows "No games here yet — ask at the counter." and no rail or
   search.
+
+## Home: the featured game and the featured row (Story 6.29)
+
+- Home is a labelled region ("Featured game"). The hero's game video (muted, never audio) or cover
+  sits behind the whole shell under the scrim; the copy block (eyebrow, the game's name as an `h2`,
+  the meta line, Play now, Game details) is in the scrim's zone, the left 45% × bottom 50%, at most
+  864px wide (720px at 1366). Every line of it is `text` ink, not `text-muted`. In the high-contrast
+  theme the hero is solid `bg` with no video.
+- Reading and Tab order: the top bar, the device name, the hero's Play now and Game details, the
+  video control (bottom-right of the hero), then the featured row. The row is a labelled `nav`;
+  Left and Right also move focus along it and skip tiles hidden at the current width.
+- Game details is a non-modal dialog ("About <game>") that lists Genre, Age rating and Launcher
+  ("Not listed" when the library has none). Focus moves to its Close button; Esc or Close closes it
+  and returns focus to Game details. `aria-expanded` on Game details tells the state.
+- The featured tile is named "<game>, featured". Its 3px magenta outline is drawn 3px out from the
+  tile; its focus ring is drawn 9px out, so the two are never mistaken for each other.
+- The video control is the shared 44px `video-control`. Pausing it holds the frame for the rest of
+  the session, across a trip to another tab and back. Play now stops the video entirely (cover shows)
+  from the click.
+- The eyebrow reads "Most played at <branch> this week" only when the hero is the branch's most played
+  game; with no plays it reads "Featured at <branch>".

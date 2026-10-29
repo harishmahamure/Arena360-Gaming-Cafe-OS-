@@ -234,7 +234,8 @@ impl GameState {
     }
 }
 
-/// One tile of the Games tab. The category and tags feed the tab's filter rail (Story 6.24).
+/// One tile of the Games tab. The category and tags feed the tab's filter rail (Story 6.24); the
+/// category (the genre), launcher and age rating are the Home hero's "Game details" (Story 6.29).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Card {
     pub id: String,
@@ -242,6 +243,8 @@ pub struct Card {
     pub running: bool,
     pub category: String,
     pub tags: Vec<String>,
+    pub launcher: String,
+    pub age_rating: String,
 }
 
 /// The entries of `kind` (`game` or `app`) this PC lists, sorted by name (case-insensitive, then
@@ -260,6 +263,8 @@ pub fn cards(
             name: e.name,
             category: e.category,
             tags: e.tags,
+            launcher: e.launcher,
+            age_rating: e.age_rating,
         })
         .collect();
     cards.sort_by(|a, b| {

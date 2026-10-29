@@ -1,4 +1,4 @@
-import type { LastPlayed, MostPlayed, MostPlayedGame } from "@arena/ui/generated";
+import type { GameMediaRef, LastPlayed, MostPlayed, MostPlayedGame } from "@arena/ui/generated";
 
 // The Games tab's rules (Story 6.23): what the service's `games` and `game_launch` answers hold.
 // Pure, so the page, the tab and their tests share them.
@@ -16,6 +16,10 @@ export type GameCard = {
   category: string;
   /** The library tags; filter-rail items (Story 6.24). */
   tags: string[];
+  /** The library launcher (`steam`, `epic`, `riot`, `battlenet` or `none`); empty when unknown. */
+  launcher: string;
+  /** The library age rating (empty when none): the Home hero's "Game details" (Story 6.29). */
+  ageRating: string;
 };
 
 /** The service's `games` answer: the tiles, and whether any game is running. */
@@ -28,13 +32,16 @@ const isCard = (v: unknown): v is GameCard => {
 };
 
 const cardOf = (c: GameCard): GameCard => {
-  const { id, name, running, category, tags } = c as Record<string, unknown> & GameCard;
+  const { id, name, running, category, tags, launcher, age_rating } = c as Record<string, unknown> &
+    GameCard & { age_rating: unknown };
   return {
     id,
     name,
     running,
     category: typeof category === "string" ? category : "",
     tags: Array.isArray(tags) ? tags.filter((x): x is string => typeof x === "string") : [],
+    launcher: typeof launcher === "string" ? launcher : "",
+    ageRating: typeof age_rating === "string" ? age_rating : "",
   };
 };
 
@@ -145,6 +152,13 @@ const isTop = (v: unknown): v is MostPlayedGame => {
   return typeof g.game_id === "string" && typeof g.minutes === "number";
 };
 
+const isMedia = (v: unknown): v is GameMediaRef => {
+  if (typeof v !== "object" || v === null) return false;
+  const g = v as Record<string, unknown>;
+  const hash = (x: unknown) => x === null || x === undefined || typeof x === "string";
+  return typeof g.game_id === "string" && hash(g.video) && hash(g.cover);
+};
+
 const isLast = (v: unknown): v is LastPlayed => {
   if (typeof v !== "object" || v === null) return false;
   const g = v as Record<string, unknown>;
@@ -157,7 +171,8 @@ export function mostPlayedOf(body: unknown): MostPlayedView | null {
   const b = body as Record<string, unknown>;
   if (!Array.isArray(b.top) || !b.top.every(isTop)) return null;
   const last = Array.isArray(b.last_played) ? b.last_played.filter(isLast) : [];
-  return { top: b.top.slice(0, MOST_PLAYED_LIMIT), last_played: last };
+  const media = Array.isArray(b.media) ? b.media.filter(isMedia) : [];
+  return { top: b.top.slice(0, MOST_PLAYED_LIMIT), last_played: last, media };
 }
 
 /** A carousel tile: a game of this PC's library and its place among the tiles shown. */
@@ -180,3 +195,64 @@ export function rankedGames(view: MostPlayedView | null, games: GameCard[] | nul
   }
   return ranked;
 }
+
+// Home (Story 6.29): the featured game, its hero media and the featured row.
+
+/** The games the featured row shows at most, the featured one first; CSS cuts it per width. */
+export const FEATURED_ROW_LIMIT = 8;
+
+const DAY_MS = 24 * 3_600_000;
+
+/** What Home features: a game, and whether it is the branch's most played of the week. */
+export type Featured = {
+  game: GameCard;
+  /** The game leads the branch's last 7 days (otherwise it is the first library game with media). */
+  mostPlayed: boolean;
+};
+
+/** The Hub's stored media of `game` (nothing when it has none or the Hub could not be asked). */
+export function mediaOf(
+  view: MostPlayedView | null,
+  game: GameCard,
+): { video: string | null; cover: string | null } {
+  const found = view?.media?.find((m) => m.game_id === game.id);
+  const url = (sha: string | null | undefined) => (sha ? `/media/${sha}` : null);
+  return { video: url(found?.video), cover: url(found?.cover) };
+}
+
+/**
+ * The game Home features: the branch's most-played game of the last 7 days that this PC has,
+ * else the first library game that has media, else the first game. `null` for an empty library.
+ */
+export function featuredOf(view: MostPlayedView | null, games: GameCard[]): Featured | null {
+  const [lead] = rankedGames(view, games);
+  if (lead !== undefined) return { game: lead.game, mostPlayed: true };
+  const withMedia = games.find((g) => {
+    const m = mediaOf(view, g);
+    return m.video !== null || m.cover !== null;
+  });
+  const game = withMedia ?? games[0];
+  return game === undefined ? null : { game, mostPlayed: false };
+}
+
+/**
+ * The featured row: the featured game, then the next most-played games this PC has, at most
+ * `FEATURED_ROW_LIMIT` in all. The "All games" tile that ends the row is the view's.
+ */
+export function featuredRow(view: MostPlayedView | null, games: GameCard[]): GameCard[] {
+  const featured = featuredOf(view, games);
+  if (featured === null) return [];
+  const rest = rankedGames(view, games)
+    .map((r) => r.game)
+    .filter((g) => g.id !== featured.game.id);
+  return [featured.game, ...rest].slice(0, FEATURED_ROW_LIMIT);
+}
+
+/** When the live player last played `game` (Unix ms), or `null` when never (or unknown). */
+export function lastPlayedAt(view: MostPlayedView | null, game: GameCard): number | null {
+  return view?.last_played.find((l) => l.game_id === game.id)?.at ?? null;
+}
+
+/** Whole days between `at` and `now` (a time in the future counts as today). */
+export const daysSince = (at: number, now: number): number =>
+  Math.max(0, Math.floor((now - at) / DAY_MS));

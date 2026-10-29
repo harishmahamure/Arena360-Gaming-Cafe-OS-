@@ -153,6 +153,7 @@ export type { FrameBody } from "./FrameBody";
 export type { GameLaunchMedian } from "./GameLaunchMedian";
 export type { GameMatch } from "./GameMatch";
 export type { GameMatched } from "./GameMatched";
+export type { GameMediaRef } from "./GameMediaRef";
 export type { GoLiveBlocker } from "./GoLiveBlocker";
 export type { GoLiveItem } from "./GoLiveItem";
 export type { GoLiveItemView } from "./GoLiveItemView";

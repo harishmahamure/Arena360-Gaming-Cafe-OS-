@@ -209,6 +209,16 @@ fn a_card_carries_the_category_and_tags_the_filter_rail_lists() {
 }
 
 #[test]
+fn a_card_carries_the_launcher_and_age_rating_the_game_details_show() {
+    let mut e = entry("A", "Apex", r"C:Ga.exe");
+    e.launcher = "epic".into();
+    e.age_rating = "16+".into();
+    let body = serde_json::to_value(&cards(vec![e], "game", |_| false)[0]).unwrap();
+    assert_eq!(body["launcher"], "epic");
+    assert_eq!(body["age_rating"], "16+");
+}
+
+#[test]
 fn a_game_starts_from_its_install_here_else_its_path_else_its_link() {
     let mut e = entry("G", "G", r"C:\Games\elsewhere.exe");
     e.installs = vec![

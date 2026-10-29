@@ -60,7 +60,7 @@
     until: number | null;
   } | null>(null);
   /** The shell's active item: it lasts for the session and is forgotten when the session ends. */
-  let tab: Tab = $state("home");
+  let tab = $state<Tab>("home");
   /** The Games tab's tiles and whether any game is running (Story 6.23); asked of the service. */
   let games: GameCard[] | null = $state(null);
   let gameRunning = $state(false);
@@ -139,14 +139,17 @@
     };
   });
 
-  // The carousel's list is asked of the Hub when the Games tab opens and every few minutes while
-  // it stays open (the Hub recomputes it at most every 15 minutes); no answer hides the carousel.
+  // The most-played list is asked of the Hub when Home or the Games tab opens and every few
+  // minutes while either stays open (the Hub recomputes it at most every 15 minutes): Home's
+  // featured game and the Games carousel read it. No answer hides the carousel and Home falls
+  // back to the first library game with media (Story 6.29).
+  const wantsMostPlayed = $derived(tab === "games" || tab === "home");
   $effect(() => {
     if (!inSession) {
       mostPlayed = null;
       return;
     }
-    if (tab !== "games") return;
+    if (!wantsMostPlayed) return;
     // An answer that arrives after this run is over (the session ended, the tab changed) is dropped,
     // so a slow reply never shows an old carousel to the next player.
     let live = true;
@@ -274,6 +277,7 @@
       {gameRunning}
       {launchers}
       mostPlayed={ranked}
+      mostPlayedView={mostPlayed}
       branch={attract.view?.branch_name ?? ""}
       onlaunch={launch}
       onlaunchapp={launchAppTile}

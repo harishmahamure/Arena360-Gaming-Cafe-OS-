@@ -54,6 +54,8 @@
   let logo: string | null = $state(null);
   let brokenLogo: string | null = $state(null);
   let reason: string | null = $state(null);
+  /** The player shell is on screen (a running, unlocked session): it carries its own indicator (Story 6.36). */
+  let shellShown = $state(false);
   const REASONS: Record<string, MessageKey> = {
     pay_at_counter: "player.lock.pay_at_counter",
     ended_by_staff: "player.lock.ended_by_staff",
@@ -130,6 +132,7 @@
           screened = true;
           locked = s.locked;
           reason = s.reason;
+          shellShown = s.session !== null && !s.locked;
         }),
       );
       add(await onAttract((s) => (logo = s.logo)));
@@ -155,6 +158,7 @@
       if (screen && !screened) {
         locked = screen.locked;
         reason = screen.reason;
+        shellShown = screen.session !== null && !screen.locked;
       }
       const hc = await currentTheme();
       if (hc !== null && !themed) applyTheme(hc);
@@ -222,7 +226,7 @@
 
 <!-- Non-blocking: a quiet pill while the Hub is unreachable, announced politely. -->
 <div class="link" role="status" aria-live="polite" data-testid="link-status">
-  {#if hub === "reconnecting"}
+  {#if hub === "reconnecting" && !shellShown}
     <span class="pill type-kiosk-label">{t("player.hub.reconnecting")}</span>
   {:else if hub === "token_rejected"}
     <span class="pill type-kiosk-label">{t("player.hub.token_rejected")}</span>

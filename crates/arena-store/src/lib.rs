@@ -190,8 +190,8 @@ pub use sessions::{
     find_settlement, forced_pack_minutes, forward_intent_id, forward_kind, grace_session,
     hold_session_expired, insert_effect, insert_extension_order, insert_order, insert_order_line,
     insert_payment, insert_pos_order, insert_product_line, insert_segment, insert_session,
-    last_session_player, list_live_sessions, list_open_order_lines, list_open_orders,
-    list_order_line_ids, list_payment_ids, list_pos_sales, list_segments,
+    last_session_end, last_session_player, list_live_sessions, list_open_order_lines,
+    list_open_orders, list_order_line_ids, list_payment_ids, list_pos_sales, list_segments,
     live_session_device_of_player, live_session_on_device, mark_forced, next_guest_no,
     reopen_order, reopen_segments, reopen_session, settle_order, sum_reserved_minor,
     unpaid_counter_minor,
@@ -931,6 +931,17 @@ impl Store {
             return Ok(None);
         }
         last_session_player(&self.conn, device_id)
+    }
+
+    /// How the latest session on `device_id` ended (Story 6.36): its state and end reason.
+    pub fn last_session_end(
+        &self,
+        device_id: &str,
+    ) -> Result<Option<(String, Option<String>)>, AppError> {
+        if !self.table_exists("sessions")? {
+            return Ok(None);
+        }
+        last_session_end(&self.conn, device_id)
     }
 
     /// Every open alert, oldest first.

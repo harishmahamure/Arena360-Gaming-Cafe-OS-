@@ -34,3 +34,21 @@ pub(super) async fn most_played(hub: &LanHub, device: &str) -> Result<MostPlayed
     .await
     .map_err(|e| AppError::new(ErrorCode::Internal, format!("most played read failed: {e}")))?
 }
+
+/// `session.sync` for the PC `device` (Story 6.36): the Hub's record of its session. A read, so
+/// a follower answers it from its replicated database as the primary does.
+pub(super) async fn session_sync(
+    hub: &LanHub,
+    device: &str,
+) -> Result<arena_proto::SessionSync, AppError> {
+    let dir = Arc::clone(&hub.devices);
+    let (device, now) = (device.to_owned(), hub.clock.now_ms());
+    tokio::task::spawn_blocking(move || dir.session_sync(&device, now))
+        .await
+        .map_err(|e| {
+            AppError::new(
+                ErrorCode::Internal,
+                format!("session sync read failed: {e}"),
+            )
+        })?
+}

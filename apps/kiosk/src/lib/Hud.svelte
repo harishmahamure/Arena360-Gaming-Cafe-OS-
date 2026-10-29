@@ -43,6 +43,7 @@
     type HudToast,
   } from "./hud";
   import ExtendOptions from "./ExtendOptions.svelte";
+  import ReconnectingIndicator from "./ReconnectingIndicator.svelte";
 
   // The overlay HUD (Story 6.14). It is its own always-on-top window: solid, never translucent,
   // and it never takes keyboard focus except while the player has expanded it with Ctrl+Shift+E.
@@ -538,6 +539,9 @@
       data-testid="hud-panel"
     >
       <p class="title type-kiosk-label">{t("player.hud.panel_title")}</p>
+      {#if hub === "reconnecting"}
+        <ReconnectingIndicator />
+      {/if}
       <dl>
         <div>
           <dt class="type-kiosk-body">

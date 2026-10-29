@@ -25,7 +25,7 @@ use crate::player_session::{
 };
 use crate::player_signup::{PlayerSignup, PlayerSignupResult};
 use crate::scope::ClientClass;
-use crate::session::SessionScreen;
+use crate::session::{SessionScreen, SessionSync};
 use crate::shop::{ShopImageRequest, ShopImageResult, ShopMenu, ShopPlace, ShopPlaceResult};
 use crate::ui_auth::SettingEntry;
 
@@ -199,13 +199,19 @@ pub enum FrameBody {
     /// Whether the Hub added the time, or why it refused.
     #[serde(rename = "player.extend_result")]
     PlayerExtendResult(PlayerExtendResult),
+    /// A paired kiosk that got the Hub back asks for the Hub's record of its session (Story 6.36).
+    #[serde(rename = "session.sync")]
+    SessionSyncRequest,
+    /// The session live on that PC and the lock it should show.
+    #[serde(rename = "session.sync_result")]
+    SessionSyncResult(SessionSync),
     /// The Hub's empty reply to a request that has nothing to return.
     #[serde(rename = "ack")]
     Ack,
 }
 
 /// Every known `kind`.
-pub const FRAME_KINDS: [&str; 51] = [
+pub const FRAME_KINDS: [&str; 53] = [
     "hello",
     "hello.ok",
     "intent.submit",
@@ -256,6 +262,8 @@ pub const FRAME_KINDS: [&str; 51] = [
     "shop.image_result",
     "shop.place",
     "shop.place_result",
+    "session.sync",
+    "session.sync_result",
     "ack",
 ];
 
@@ -313,6 +321,8 @@ impl FrameBody {
             Self::ShopImageResult(_) => "shop.image_result",
             Self::ShopPlace(_) => "shop.place",
             Self::ShopPlaceResult(_) => "shop.place_result",
+            Self::SessionSyncRequest => "session.sync",
+            Self::SessionSyncResult(_) => "session.sync_result",
             Self::Ack => "ack",
         }
     }

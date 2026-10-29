@@ -223,6 +223,19 @@ impl DeviceDirectory {
         crate::session_screen::session_screens(&store, now_ms)
     }
 
+    /// The Hub's record of `device_id`'s session for a kiosk that got the Hub back (Story 6.36).
+    pub fn session_sync(
+        &self,
+        device_id: &str,
+        now_ms: i64,
+    ) -> Result<arena_proto::SessionSync, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?;
+        crate::session_screen::session_sync(&store, device_id, now_ms)
+    }
+
     /// The attract view of each of `device_ids` (Story 6.7), read in one snapshot. `lookup`
     /// finds a catalogue game's stored video and cover.
     pub fn attract_views(

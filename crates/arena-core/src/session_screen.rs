@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use arena_proto::{
     AppError, DEFAULT_FULFILMENT, DEFAULT_OPENING_HOURS, KEY_FULFILMENT, KEY_OPENING_HOURS,
-    OpeningDay, OrderStatus, SessionScreen, parse_opening_hours,
+    LockReason, OpeningDay, OrderStatus, SessionScreen, SessionSync, parse_opening_hours,
 };
 use arena_store::Store;
 use chrono::{Datelike, Duration, NaiveDate, NaiveTime, TimeZone};
@@ -228,6 +228,36 @@ pub fn session_screens(
             (s.device_id, screen)
         })
         .collect())
+}
+
+/// The Hub's record of `device_id`'s session for a kiosk that got the Hub back (Story 6.36): the
+/// live session with its time left, or why the last one ended while the kiosk was away.
+pub fn session_sync(store: &Store, device_id: &str, now_ms: i64) -> Result<SessionSync, AppError> {
+    let live = store
+        .live_sessions()?
+        .into_iter()
+        .find(|s| s.device_id == device_id);
+    if let Some(live) = live {
+        let session = session_screens(store, now_ms)?
+            .into_iter()
+            .find_map(|(id, screen)| (id == device_id).then_some(screen));
+        let lock = (live.state == "paused").then_some(LockReason::Paused);
+        return Ok(SessionSync { session, lock });
+    }
+    let lock = store
+        .last_session_end(device_id)?
+        .and_then(
+            |(state, reason)| match (state.as_str(), reason.as_deref()) {
+                ("ended", Some("forced")) => Some(LockReason::EndedByStaff),
+                ("ended", _) => Some(LockReason::PayAtCounter),
+                ("expired", _) => Some(LockReason::TimesUp),
+                _ => None,
+            },
+        );
+    Ok(SessionSync {
+        session: None,
+        lock,
+    })
 }
 
 #[cfg(test)]

@@ -1469,3 +1469,115 @@ async fn a_pc_setting_that_will_not_go_back_holds_the_lock_and_reports_the_step(
     assert_eq!(pc.pc().mouse_speed, 10);
     t.stop();
 }
+
+fn queued(ctx: &Ctx) -> usize {
+    ctx.queue.lock().unwrap().entries().unwrap().len()
+}
+
+#[tokio::test(start_paused = true)]
+async fn thirty_minutes_without_the_hub_never_lock_early_and_the_lock_comes_at_zero() {
+    let (_dir, ctx) = bare_ctx();
+    let mut s = player_screen();
+    s.remaining_ms = Some(45 * 60_000);
+    s.lock_after_ms = 45 * 60_000;
+    crate::session::sync(&ctx, s, true);
+    let before = queued(&ctx);
+    let (stop, stop_rx) = watch::channel(false);
+    let worker = tokio::spawn(crate::session::run(Arc::clone(&ctx), stop_rx));
+    // The Hub is gone for 30 minutes: the session carries on, the warnings fire at their marks.
+    tokio::time::sleep(Duration::from_secs(30 * 60)).await;
+    {
+        let v = ctx.pc.screen.borrow();
+        assert!(!v.locked, "never locked out before lock_after_ms");
+        assert!(v.session.is_some());
+        assert_eq!(v.session.as_ref().unwrap().warning_min, None, "15 min left");
+    }
+    tokio::time::sleep(Duration::from_secs(6 * 60)).await;
+    let mark = || ctx.pc.screen.borrow().session.as_ref().unwrap().warning_min;
+    assert_eq!(mark(), Some(10), "the 10-minute mark fired with no Hub");
+    assert_eq!(queued(&ctx), before, "the kiosk wrote no session state");
+    // One second before zero it is still running, one second after it is locked.
+    tokio::time::sleep(Duration::from_secs(9 * 60 - 1)).await;
+    assert!(!ctx.pc.screen.borrow().locked);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let v = ctx.pc.screen.borrow();
+    assert!(v.locked);
+    assert_eq!(v.reason, Some(LockReason::TimesUp));
+    drop(v);
+    let _ = stop.send(true);
+    let _ = worker.await;
+}
+
+fn hub_record(
+    session: Option<SessionScreen>,
+    lock: Option<LockReason>,
+) -> arena_proto::SessionSync {
+    arena_proto::SessionSync { session, lock }
+}
+
+#[tokio::test]
+async fn the_hubs_time_wins_when_the_link_returns() {
+    let (_dir, ctx) = bare_ctx();
+    let mut s = player_screen();
+    s.remaining_ms = Some(20 * 60_000);
+    s.lock_after_ms = 20 * 60_000;
+    crate::session::sync(&ctx, s, true);
+    // Staff added 30 minutes while the link was down.
+    let mut hub = player_screen();
+    hub.remaining_ms = Some(50 * 60_000);
+    hub.lock_after_ms = 50 * 60_000;
+    crate::session::reconcile(&ctx, hub_record(Some(hub), None));
+    let v = ctx.pc.screen.borrow();
+    let ends = v.session.as_ref().unwrap().ends_at.unwrap();
+    let left = ends.saturating_duration_since(tokio::time::Instant::now());
+    assert!(
+        left > Duration::from_secs(49 * 60),
+        "snapped to the Hub's time"
+    );
+    assert!(!v.locked);
+}
+
+#[tokio::test]
+async fn a_session_the_hub_ended_meanwhile_locks_with_its_reason() {
+    let t = start().await;
+    t.start_session();
+    crate::session::reconcile(&t.ctx, hub_record(None, Some(LockReason::EndedByStaff)));
+    t.shows(LockReason::EndedByStaff).await;
+    assert!(t.ctx.pc.screen.borrow().session.is_none());
+    t.stop();
+}
+
+#[tokio::test]
+async fn a_session_the_hub_ended_with_no_reason_locks_as_ended_by_staff() {
+    let t = start().await;
+    t.start_session();
+    crate::session::reconcile(&t.ctx, hub_record(None, None));
+    t.shows(LockReason::EndedByStaff).await;
+    t.stop();
+}
+
+#[tokio::test]
+async fn a_pause_the_hub_made_locks_and_a_resume_it_made_unlocks() {
+    let (_dir, ctx) = bare_ctx();
+    crate::session::sync(&ctx, player_screen(), true);
+    crate::session::reconcile(
+        &ctx,
+        hub_record(Some(player_screen()), Some(LockReason::Paused)),
+    );
+    assert_eq!(ctx.pc.screen.borrow().reason, Some(LockReason::Paused));
+    assert!(ctx.pc.screen.borrow().locked);
+    crate::session::reconcile(&ctx, hub_record(Some(player_screen()), None));
+    assert!(
+        !ctx.pc.screen.borrow().locked,
+        "resumed while the link was down"
+    );
+}
+
+#[tokio::test]
+async fn the_hubs_word_changes_nothing_on_a_pc_with_no_session() {
+    let (_dir, ctx) = bare_ctx();
+    crate::session::reconcile(&ctx, hub_record(None, Some(LockReason::EndedByStaff)));
+    assert!(!ctx.pc.screen.borrow().locked);
+    crate::session::reconcile(&ctx, hub_record(Some(player_screen()), None));
+    assert!(ctx.pc.screen.borrow().session.is_none());
+}

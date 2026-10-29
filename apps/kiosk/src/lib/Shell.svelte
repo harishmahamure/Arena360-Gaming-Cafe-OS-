@@ -11,6 +11,7 @@
   import Home from "./Home.svelte";
   import { INFO_TOAST_MS } from "./hud";
   import MessagesBell from "./MessagesBell.svelte";
+  import ReconnectingIndicator from "./ReconnectingIndicator.svelte";
   import Shop from "./Shop.svelte";
   import { shopEnabled, type ShopView } from "./shop";
   import VolumeControl from "./VolumeControl.svelte";
@@ -33,6 +34,7 @@
     balance = null,
     locale = null,
     connected = false,
+    reconnecting = false,
     games = null,
     apps = null,
     gameRunning = false,
@@ -64,6 +66,8 @@
     locale?: SnapshotLocale | null;
     /** The Hub link is up (the account menu's Hub-dependent rows need it). */
     connected?: boolean;
+    /** The Hub is unreachable: the quiet "Reconnecting…" pill shows left of the volume control (Story 6.36). */
+    reconnecting?: boolean;
     /** The Games tab's tiles (Story 6.23); `null` until the service has answered. */
     games?: GameCard[] | null;
     /** The Apps tab's tiles (Story 6.28); `null` until the service has answered. */
@@ -219,6 +223,9 @@
     </nav>
 
     <div class="right">
+      {#if reconnecting}
+        <ReconnectingIndicator />
+      {/if}
       <VolumeControl />
       <MessagesBell bind:this={bell} />
       <button

@@ -446,6 +446,7 @@
       balance={session.balance}
       locale={attract.view?.locale ?? null}
       connected={hub === "connected"}
+      reconnecting={hub === "reconnecting"}
       {games}
       {apps}
       {gameRunning}

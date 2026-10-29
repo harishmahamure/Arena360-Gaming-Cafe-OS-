@@ -615,3 +615,27 @@ test("a postpaid session or a guest is not offered Extend", async ({ page }) => 
   await page.getByTestId("account-chip").click();
   await expect(row(page, "extend")).toHaveCount(0);
 });
+
+test("the shell shows the Reconnecting indicator left of the volume control only while the Hub is unreachable", async ({
+  page,
+}) => {
+  await open(page, "connected");
+  await session(page, PREPAID);
+  const indicator = page.getByTestId("reconnecting-indicator");
+  await expect(indicator).toHaveCount(0);
+
+  await emit(page, names.events.hubStatus, { state: "reconnecting" });
+  await expect(indicator).toHaveText("Reconnecting…");
+  // One indicator, in the top bar: the stage's own pill steps aside while the shell is up.
+  await expect(page.getByTestId("link-status")).toHaveText("");
+  const pill = await indicator.boundingBox();
+  const volume = await page.getByTestId("volume-control").boundingBox();
+  expect(pill && volume && pill.x + pill.width <= volume.x).toBe(true);
+  // The game and the clock are untouched: the shell is still up and the chip still counts.
+  await expect(page.getByTestId("shell")).toBeVisible();
+  await expect(page.getByTestId("session-clock")).toBeVisible();
+  expect(await serious(page)).toEqual([]);
+
+  await emit(page, names.events.hubStatus, { state: "connected" });
+  await expect(indicator).toHaveCount(0);
+});

@@ -966,3 +966,28 @@ test("a guest's pill carries the Ordered tag too, and a lock hides it", async ({
   );
   await expect(page.getByTestId("hud-ordered")).toHaveCount(0);
 });
+
+test("the expanded HUD shows the Reconnecting indicator while the Hub is unreachable and drops it on reconnect", async ({
+  page,
+}) => {
+  await openHud(page);
+  await attract(page);
+  await emit(
+    page,
+    names.events.pcScreen,
+    shown({ username: "asha", remaining_ms: 1_800_000, balance_minor: 10_000 }),
+  );
+  await emit(page, names.events.hudExpand);
+  await expect(page.getByTestId("hud-panel")).toBeVisible();
+  await expect(page.getByTestId("reconnecting-indicator")).toHaveCount(0);
+
+  await emit(page, names.events.hubStatus, { state: "reconnecting" });
+  const indicator = page.getByTestId("reconnecting-indicator");
+  await expect(indicator).toHaveText(en["player.hub.reconnecting"]);
+  // Nothing else locks: the panel is still there and the time keeps counting.
+  await expect(page.getByTestId("hud-panel")).toBeVisible();
+  expect(await serious(page)).toEqual([]);
+
+  await emit(page, names.events.hubStatus, { state: "connected" });
+  await expect(indicator).toHaveCount(0);
+});

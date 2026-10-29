@@ -29,6 +29,7 @@ import type { PlayerStartResult } from "./PlayerStartResult";
 import type { PlayerStartSession } from "./PlayerStartSession";
 import type { PlayerUnlock } from "./PlayerUnlock";
 import type { PlayerUnlockResult } from "./PlayerUnlockResult";
+import type { SessionSync } from "./SessionSync";
 import type { SettingsGet } from "./SettingsGet";
 import type { SettingsValues } from "./SettingsValues";
 import type { ShopImageRequest } from "./ShopImageRequest";
@@ -101,5 +102,7 @@ export type Frame = {
   | ({ kind: "shop.place" } & ShopPlace)
   | ({ kind: "shop.place_result" } & ShopPlaceResult)
   | ({ kind: "player.extend_result" } & PlayerExtendResult)
+  | { kind: "session.sync" }
+  | ({ kind: "session.sync_result" } & SessionSync)
   | { kind: "ack" }
 );

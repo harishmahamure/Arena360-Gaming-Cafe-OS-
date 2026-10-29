@@ -1603,6 +1603,22 @@ pub fn last_session_player(conn: &Connection, device_id: &str) -> Result<Option<
     .map_err(db_error)
 }
 
+/// How the latest session on `device_id` ended: its `state` and `end_reason` (Story 6.36), for a
+/// kiosk that was away when it ended. `None` when the PC never had a session.
+pub fn last_session_end(
+    conn: &Connection,
+    device_id: &str,
+) -> Result<Option<(String, Option<String>)>, AppError> {
+    conn.query_row(
+        "SELECT state, end_reason FROM sessions WHERE device_id = ?1
+         ORDER BY started_at DESC, id DESC LIMIT 1",
+        [device_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .optional()
+    .map_err(db_error)
+}
+
 /// One product line of a counter sale.
 pub struct NewProductLine<'a> {
     pub id: &'a str,

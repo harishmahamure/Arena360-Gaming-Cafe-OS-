@@ -58,6 +58,41 @@ pub fn sync(ctx: &Ctx, mut s: SessionScreen, started: bool) {
     ctx.pc.track_orders(&orders, ctx.clock.now_ms());
 }
 
+/// The Hub is back (Story 6.36) and has said what it holds for this PC: its record wins. A live
+/// session snaps the chip and HUD to the Hub's time, and a pause is followed either way; a
+/// session the Hub ended meanwhile locks with the reason the Hub gives, which also runs the
+/// session-end cleanup. A session the kiosk already ended on its own clock (time up) is gone
+/// from the screen, so the Hub's later word about it changes nothing.
+pub fn reconcile(ctx: &Ctx, hub: arena_proto::SessionSync) {
+    let (has_session, locked, shown) = {
+        let v = ctx.pc.screen.borrow();
+        (v.session.is_some(), v.locked, v.reason)
+    };
+    if !has_session {
+        return;
+    }
+    match hub.session {
+        Some(s) => {
+            if locked && shown == Some(LockReason::Paused) && hub.lock != Some(LockReason::Paused) {
+                set_locked(ctx, false, None);
+            }
+            sync(ctx, s, false);
+            if hub.lock == Some(LockReason::Paused) && !locked {
+                set_locked(ctx, true, Some(LockReason::Paused));
+            }
+            tracing::info!("the hub's record of the session replaced the kiosk's clock");
+        }
+        None => {
+            let reason = hub.lock.unwrap_or(LockReason::EndedByStaff);
+            tracing::info!(
+                ?reason,
+                "the hub ended the session while the link was down; locking"
+            );
+            set_locked(ctx, true, Some(reason));
+        }
+    }
+}
+
 pub fn warn(ctx: &Ctx, minutes_left: u8) {
     ctx.pc.screen.send_if_modified(|v| match &mut v.session {
         Some(s) if s.warning_min != Some(minutes_left) => {

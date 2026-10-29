@@ -66,7 +66,7 @@ pub use devices::{DeviceDirectory, LoginCandidate, VerifiedDevice};
 pub use game_plays::MostPlayedCache;
 pub use pairing::{HubPairer, PairFuture, PairGate};
 pub use pricing::{Resolved, conflicts as rule_conflicts, resolve as resolve_rate};
-pub use session_screen::session_screens;
+pub use session_screen::{session_screens, session_sync};
 pub use session_timer::{TimedSession, TimerAction, TimerEngine, TimerEvent};
 pub use settings_defaults::{
     DEFAULT_SETTINGS, DEFERRED_KEYS, KEY_CURRENCY, KEY_DAY_START_MIN, KEY_FY_START_MONTH,

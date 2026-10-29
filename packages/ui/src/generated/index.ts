@@ -406,6 +406,7 @@ export type { SessionSettleReverted } from "./SessionSettleReverted";
 export type { SessionStaff } from "./SessionStaff";
 export type { SessionStart } from "./SessionStart";
 export type { SessionStartedEvent } from "./SessionStartedEvent";
+export type { SessionSync } from "./SessionSync";
 export type { SessionTransfer } from "./SessionTransfer";
 export type { SessionsReport } from "./SessionsReport";
 export type { SetBranchCode } from "./SetBranchCode";

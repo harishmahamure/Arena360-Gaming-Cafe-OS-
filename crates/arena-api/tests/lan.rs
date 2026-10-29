@@ -4776,3 +4776,50 @@ async fn pay_at_counter_leaves_an_unpaid_order_on_the_pc_and_pay_now_needs_a_pro
     assert_eq!(store.unpaid_counter_minor(&hub.paired_id).unwrap(), 8_000);
     assert_eq!(kiosk_order_alerts(&hub).len(), 1);
 }
+
+// ---- Story 6.36: session.sync ----
+
+async fn session_sync_frame(client: &HubClient) -> Result<arena_proto::SessionSync, ClientError> {
+    match client
+        .request("session.sync", serde_json::Value::Null)
+        .await?
+        .body
+    {
+        FrameBody::SessionSyncResult(r) => Ok(r),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_kiosk_that_got_the_hub_back_reads_its_live_session_and_then_why_it_ended() {
+    use arena_proto::{LockReason, PlayerEndResult};
+    let hub = start("0.1.0", true).await;
+    let (client, _player) = playing(&hub).await;
+    let live = session_sync_frame(&client).await.unwrap();
+    let screen = live.session.expect("the session is live");
+    assert!(screen.lock_after_ms > 0);
+    assert_eq!(live.lock, None);
+
+    assert_eq!(end_frame(&client).await, PlayerEndResult::Ok);
+    let ended = session_sync_frame(&client).await.unwrap();
+    assert!(ended.session.is_none());
+    assert_eq!(ended.lock, Some(LockReason::PayAtCounter));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_sync_is_for_paired_sessions_only() {
+    let hub = start("0.1.0", true).await;
+    let mut ws = hub.plain().await;
+    let hello = Frame::new(
+        "h",
+        FrameBody::Hello(hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0")),
+    );
+    send_frame(&mut ws, &hello).await;
+    assert!(matches!(
+        recv(&mut ws).await.unwrap().body,
+        FrameBody::HelloOk(_)
+    ));
+    send(&mut ws, r#"{"v":1,"kind":"session.sync","rid":"s"}"#).await;
+    let frame = recv(&mut ws).await.unwrap();
+    assert_eq!(error_of(&frame).1, ErrorCode::Forbidden);
+}

@@ -180,7 +180,6 @@ async fn attempt(ctx: &Arc<Ctx>, backoff: &mut Backoff, stop: &mut watch::Receiv
         }
     };
     backoff.reset();
-    ctx.set_hub_state(KioskHubState::Connected);
     let client = Arc::new(client);
     *ctx.admin.hub.lock().unwrap_or_else(|p| p.into_inner()) = Some(Arc::clone(&client));
     let ended = serve(ctx, &client, stop).await;
@@ -192,6 +191,18 @@ async fn attempt(ctx: &Arc<Ctx>, backoff: &mut Backoff, stop: &mut watch::Receiv
 async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bool>) -> Ended {
     let mut events = client.events();
     let device_id = ctx.config().map(|c| c.device_id);
+    // Story 6.36: what happened while the Hub was away is replayed in creation order, then the
+    // Hub's record of the session wins; only after that is the link connected (the
+    // "Reconnecting…" indicator stays until then).
+    let mut skew_warned = false;
+    tokio::select! {
+        () = async {
+            replay(ctx, client, &mut skew_warned).await;
+            reconcile(ctx, client).await;
+        } => {}
+        _ = stop.changed() => return Ended::Shutdown,
+    }
+    ctx.set_hub_state(KioskHubState::Connected);
     let mut revs = {
         let q = ctx.queue.lock().unwrap_or_else(|p| p.into_inner());
         let mut revs = AppliedRevs::from_cache(&q);
@@ -233,7 +244,6 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
     // Set once when a replay stops; new events do not push it back.
     let mut retry_at: Option<tokio::time::Instant> = None;
     let mut hold = ctx.link_hold.subscribe();
-    let mut skew_warned = false;
     loop {
         if retry_at.is_none() && replay(ctx, client, &mut skew_warned).await == ReplayStep::Stop {
             retry_at = Some(tokio::time::Instant::now() + ctx.timings.replay_retry);
@@ -354,6 +364,28 @@ async fn pc_command(
         && let Err(e) = crate::power::run(action)
     {
         tracing::error!(error = %e, action = action.as_str(), "the power command failed");
+    }
+}
+
+/// Asks the Hub for its record of this PC's session and lets it win (Story 6.36). A failure, or
+/// no answer within [`SETTINGS_TIMEOUT`], keeps what the kiosk counted; the Hub's ticks then
+/// bring the same time a moment later.
+async fn reconcile(ctx: &Ctx, client: &HubClient) {
+    match tokio::time::timeout(
+        SETTINGS_TIMEOUT,
+        client.request("session.sync", serde_json::Value::Null),
+    )
+    .await
+    {
+        Ok(Ok(frame)) => match frame.body {
+            FrameBody::SessionSyncResult(hub) => crate::session::reconcile(ctx, hub),
+            other => tracing::warn!(kind = other.kind(), "unexpected reply to session.sync"),
+        },
+        Ok(Err(e)) => tracing::warn!(error = %e, "session.sync failed; keeping the kiosk's clock"),
+        Err(_) => tracing::warn!(
+            timeout_ms = SETTINGS_TIMEOUT.as_millis() as u64,
+            "session.sync timed out; keeping the kiosk's clock"
+        ),
     }
 }
 

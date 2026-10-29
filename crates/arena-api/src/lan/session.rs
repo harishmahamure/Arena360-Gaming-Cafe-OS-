@@ -683,6 +683,10 @@ impl Ctx<'_> {
                 }
                 Err(e) => self.reply(Frame::error(rid, e)).await,
             },
+            "session.sync" => match self.paired_device("session.sync") {
+                Ok(device) => self.spawn_session_sync(rid, device, permits, tasks).await,
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
             "games.most_played" => match self.paired_device("games.most_played") {
                 Ok(device) => {
                     self.spawn_games_most_played(rid, device, permits, tasks)
@@ -1140,6 +1144,28 @@ impl Ctx<'_> {
             let _permit = permit;
             let reply = match super::games::most_played(&hub, &device).await {
                 Ok(result) => Frame::new(rid, FrameBody::GamesMostPlayedResult(result)),
+                Err(e) => Frame::error(rid, e),
+            };
+            let _ = out.send(text(&reply)).await;
+        });
+    }
+
+    async fn spawn_session_sync(
+        &self,
+        rid: String,
+        device: String,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let (hub, out) = (Arc::clone(self.hub), self.out.clone());
+        tasks.spawn(async move {
+            let _permit = permit;
+            let reply = match super::games::session_sync(&hub, &device).await {
+                Ok(result) => Frame::new(rid, FrameBody::SessionSyncResult(result)),
                 Err(e) => Frame::error(rid, e),
             };
             let _ = out.send(text(&reply)).await;

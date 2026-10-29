@@ -860,6 +860,22 @@ pub struct SessionScreen {
     pub plan_name: Option<String>,
 }
 
+/// The Hub's record of one PC's session (Story 6.36): what a kiosk that lost the Hub reads once
+/// the link is back. The Hub's record wins over whatever the kiosk counted on its own.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SessionSync {
+    /// The session live on this PC now, with the time left; `None` when there is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub session: Option<SessionScreen>,
+    /// The lock the PC should show: the reason the Hub ended the session while the kiosk was
+    /// away, or `paused` while a live session is paused. `None` when the PC runs freely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub lock: Option<crate::LockReason>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

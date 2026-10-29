@@ -2,7 +2,7 @@
 title: 'Story 6.29: Home shows the featured game with a hero video and a featured row'
 type: 'feature'
 created: '2026-10-29'
-status: 'in-review'
+status: 'done'
 baseline_commit: '4440e9297333b79c9cc87372a23fb0550790ea6b'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -108,3 +108,15 @@ Status: in-review
 - **Summary:** Home now shows the hero (most-played game of the week, else first game with media) with video/cover/solid, eyebrow, title, meta line, Play now and a Game details card, plus the featured row ending in All games. The Hub's most-played answer carries the library games' media; game cards carry launcher and age rating.
 - **Verification:** arena-core 1158 lib tests pass; new core, proto and card tests pass; clippy and fmt clean; kiosk `check` 0 errors; full kiosk Playwright run: all pass except the 4 `theme.spec.ts` tests, which fail the same way without this story; gallery `game-media` 12 pass; strings, hex, blur, layers, pins, protocol and prettier pass. `check:generated` only reports the uncommitted regenerated types. `check:tokens-used` fails on the Hub's `--ad-reserved`, and the kiosk-svc lib tests for config, pipe DACL, lockdown and procs fail; both are unchanged from before this story.
 - **Residual risks:** the real Tauri shell and a real Hub media fetch were not exercised (see `deferred`); no review pass has run yet.
+
+## Review Result
+
+Code review (blind, edge-case, verification-gap, acceptance layers) ran. Fixed: the running featured tile now announces "running" (`player.home.featured_tile_running`), `aria-controls` only points at the details panel while it is open, and a second activation while a launch is in flight is ignored. Checked after the fixes: kiosk `check` 0 errors, strings and prettier pass, Playwright `home`, `games` and `most-played` specs pass (45).
+
+Deferred (not blocking):
+- `game_media` caps at 64 media-bearing games in name order; a very large library can drop the featured game's media (hero falls to solid).
+- `lan.rs` has no test with a populated media cache for `games.most_played` (the Hub wiring is a short closure; core is tested with a fake lookup).
+- A failed most-played poll replaces the last good view with `null`, so the hero can swap to the fallback until the next answer.
+- Launcher `none` shows "Installed on this PC" in details rather than "Not listed" (the spec's "if none" is read as no launcher listed).
+- `daysSince` counts elapsed 24-hour periods, not calendar days.
+- Focus drops to the page when the hero game changes under an open details panel; "All games" does not move the roving tab focus.

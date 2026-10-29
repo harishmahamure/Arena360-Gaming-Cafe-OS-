@@ -41,7 +41,9 @@
   aria-label={rank !== null
     ? undefined
     : featured
-      ? t("player.home.featured_tile", { name })
+      ? running
+        ? t("player.home.featured_tile_running", { name })
+        : t("player.home.featured_tile", { name })
       : running
         ? t("player.games.tile_running", { name })
         : name}

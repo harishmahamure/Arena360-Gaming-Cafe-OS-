@@ -86,6 +86,7 @@
   let starting = $state(false);
 
   async function play(game: GameCard) {
+    if (starting) return;
     starting = true;
     try {
       await onlaunch(game);
@@ -179,7 +180,7 @@
                 class="details type-kiosk-label"
                 aria-haspopup="dialog"
                 aria-expanded={open}
-                aria-controls="game-details"
+                aria-controls={open ? "game-details" : undefined}
                 data-testid="hero-details"
                 bind:this={opener}
                 onclick={() => void toggleDetails()}

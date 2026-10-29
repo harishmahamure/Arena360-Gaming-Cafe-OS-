@@ -1138,6 +1138,7 @@
   "player.home.launcher.none": "Installed on this PC",
   "player.home.featured_label": "Featured games",
   "player.home.featured_tile": "{name}, featured",
+  "player.home.featured_tile_running": "{name}, featured, running",
   "player.home.all_games": "All games",
   "player.shell.guest": "Guest {n}",
   "player.volume.label": "Volume",

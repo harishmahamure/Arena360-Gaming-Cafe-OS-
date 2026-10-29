@@ -13,9 +13,11 @@ import type {
   KioskHubState,
   KioskHubStatus,
   PlayerChoice,
+  PlayerExtend,
 } from "@arena/ui/generated";
 // The event and command names, shared with the Rust shell (its tests read the same file).
 import names from "../../src-tauri/ipc-names.json" with { type: "json" };
+import { extendOf, extendOptionsOf, type ExtendOptionsOutcome, type ExtendOutcome } from "./extend";
 import {
   accountOf,
   endOf,
@@ -573,6 +575,25 @@ export async function playerUnlock(password: string): Promise<UnlockOutcome> {
   return unlockOf(await ask(CMD.playerUnlock, { password }));
 }
 
+/**
+ * What the extend panel lists (Story 6.21): +30 min, +1 h and +2 h priced by the Hub at the live
+ * rate, and the sources the player has. The Hub finds the session on this PC; the kiosk names
+ * nobody. Outside Tauri or with no answer in time it is `unreachable`.
+ */
+export async function playerExtendOptions(): Promise<ExtendOptionsOutcome> {
+  if (!inTauri()) return { kind: "unreachable" };
+  return extendOptionsOf(await ask(CMD.playerExtendOptions));
+}
+
+/**
+ * Adds time to the player's session (Story 6.21). The Hub applies it by the Story 3.28 rules or
+ * refuses it with a typed code (`PAST_CLOSING`, `CREDIT_LIMIT`, `INSUFFICIENT_BALANCE`).
+ */
+export async function playerExtend(extend: PlayerExtend): Promise<ExtendOutcome> {
+  if (!inTauri()) return { kind: "unreachable" };
+  return extendOf(await ask(CMD.playerExtend, { extend }));
+}
+
 /** One staff message of the session on screen (Story 6.16). */
 export type StaffMessage = {
   /** The service's own counter: a message already held is never added twice. */
@@ -866,6 +887,16 @@ export async function onHudExpand(cb: () => void): Promise<() => void> {
 export function hudLayout(width: number, height: number): void {
   if (!inTauri()) return;
   void invoke(CMD.hudLayout, { width, height }).catch(() => {});
+}
+
+/**
+ * Asks the shell to expand the HUD into its panel, as Ctrl+Shift+E does (Story 6.21): Extend on a
+ * warning toast and in the account menu. The `hud-expand` event follows; with no session, or
+ * while a fullscreen-exclusive game hides the HUD, nothing happens.
+ */
+export function hudExpand(): void {
+  if (!inTauri()) return;
+  void invoke(CMD.hudExpand).catch(() => {});
 }
 
 /** Esc in the expanded panel: the shell makes the window non-focusable and returns the focus. */

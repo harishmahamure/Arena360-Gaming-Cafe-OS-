@@ -261,6 +261,28 @@ impl DeviceDirectory {
         crate::player_account::player_account(&store, player_id, device_id, now_ms)
     }
 
+    /// The extend panel's quotes and sources for the player on `device_id` (Story 6.21).
+    pub fn extend_options(
+        &self,
+        device_id: &str,
+        now_ms: i64,
+    ) -> Result<arena_proto::PlayerExtendOptions, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?;
+        crate::player_extend::extend_options(&store, device_id, now_ms)
+    }
+
+    /// The id of the session an extend on `device_id` applies to (Story 6.21).
+    pub fn extend_target(&self, device_id: &str) -> Result<String, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?;
+        crate::player_extend::extend_target(&store, device_id)
+    }
+
     /// The stored password hash of `player_id` (Story 6.17), for the player's own lock screen.
     pub fn player_password_hash(&self, player_id: &str) -> Result<Option<String>, AppError> {
         let store = self

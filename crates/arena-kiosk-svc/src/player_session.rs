@@ -8,6 +8,10 @@
 //! reason `LockedByPlayer`, the session and its clock go on, and only the Hub's `ok` for the
 //! player's password (or staff Unlock) lifts it.
 //!
+//! Extend (Story 6.21) adds `player_extend_options` and `player_extend`, forwarded as
+//! `player.extend_options` and `player.extend`. The service only checks that the extend is one of
+//! the offered steps before it leaves the PC; the Hub quotes, charges and refuses.
+//!
 //! The service decides nothing and keeps no player context: the Hub remembers who logged in on this
 //! PC and builds the session itself, so the app never names a player. Nothing is queued: with no
 //! live connection (or no answer in time) the app gets `HUB_SLOW` and shows "Counter is
@@ -18,7 +22,9 @@ use std::sync::Arc;
 
 use arena_kiosk_core::ipc::SecretPin;
 use arena_kiosk_core::{ClientError, HubClient};
-use arena_proto::{AppError, ErrorCode, FrameBody, LockReason, PlayerChoice, PlayerUnlockResult};
+use arena_proto::{
+    AppError, ErrorCode, FrameBody, LockReason, PlayerChoice, PlayerExtend, PlayerUnlockResult,
+};
 use serde_json::Value;
 
 use crate::runtime::Ctx;
@@ -121,6 +127,50 @@ pub async fn end(ctx: &Ctx) -> Result<Value, AppError> {
     }
 }
 
+/// Asks the Hub what the player on this PC can add and what it costs (Story 6.21): the
+/// `player.extend_options_result` as the reply body. Nothing is queued: with no live link the app
+/// gets `HUB_SLOW` and disables every option.
+pub async fn extend_options(ctx: &Ctx) -> Result<Value, AppError> {
+    let client = client(ctx)?;
+    match client.request("player.extend_options", Value::Null).await {
+        Ok(frame) => match frame.body {
+            FrameBody::PlayerExtendOptionsResult(r) => serde_json::to_value(r)
+                .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string())),
+            other => Err(unexpected("player.extend_options", other)),
+        },
+        Err(e) => Err(failed("player.extend_options", e)),
+    }
+}
+
+/// The extend the app asked for, as long as it is one the Hub offers (a step of 30 min, 1 h or
+/// 2 h, a pack named only for a pack source). Anything else never leaves the PC.
+fn extend_request(body: &Value) -> Result<PlayerExtend, AppError> {
+    let request: PlayerExtend = serde_json::from_value(body.clone())
+        .map_err(|_| AppError::new(ErrorCode::ValidationFailed, "malformed extend request"))?;
+    request
+        .validate()
+        .map_err(|e| AppError::new(ErrorCode::ValidationFailed, e.message))?;
+    Ok(request)
+}
+
+/// Asks the Hub to add time to the player's session (Story 6.21): the `player.extend_result` as
+/// the reply body. Nothing is queued and nothing is retried; the Hub decides, and a refusal comes
+/// back typed for the panel to show.
+pub async fn extend(ctx: &Ctx, body: &Value) -> Result<Value, AppError> {
+    let request = extend_request(body)?;
+    let client = client(ctx)?;
+    let body = serde_json::to_value(&request)
+        .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string()))?;
+    match client.request("player.extend", body).await {
+        Ok(frame) => match frame.body {
+            FrameBody::PlayerExtendResult(r) => serde_json::to_value(r)
+                .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string())),
+            other => Err(unexpected("player.extend", other)),
+        },
+        Err(e) => Err(failed("player.extend", e)),
+    }
+}
+
 /// Locks the screen for the player (Story 6.17). Only a profiled player's session on screen can
 /// be locked: a guest has no password to unlock with. Time keeps running; nothing is sent.
 pub fn lock(ctx: &Ctx) -> Result<Value, AppError> {
@@ -195,6 +245,32 @@ pub async fn call_staff(ctx: &Ctx) -> Result<Value, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_extend_that_is_not_an_offered_step_never_leaves_the_pc() {
+        use serde_json::json;
+        let ok = extend_request(&json!({"minutes": 60, "source": "wallet"})).unwrap();
+        assert_eq!(ok.minutes, 60);
+        let pack = json!({"minutes": 30, "source": "pack", "pack_id": "K1"});
+        assert_eq!(
+            extend_request(&pack).unwrap().pack_id.as_deref(),
+            Some("K1")
+        );
+        for bad in [
+            json!({"minutes": 45, "source": "wallet"}),
+            json!({"minutes": 30, "source": "pack"}),
+            json!({"minutes": 30, "source": "wallet", "pack_id": "K1"}),
+            json!({"minutes": 30, "source": "cash"}),
+            json!({"source": "wallet"}),
+            Value::Null,
+        ] {
+            assert_eq!(
+                extend_request(&bad).unwrap_err().code,
+                ErrorCode::ValidationFailed,
+                "{bad}"
+            );
+        }
+    }
 
     #[test]
     fn an_unreachable_hub_is_hub_slow() {

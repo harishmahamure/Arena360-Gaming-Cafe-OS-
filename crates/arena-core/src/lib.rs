@@ -25,6 +25,7 @@ pub mod media_cache;
 pub mod pairing;
 mod pdf;
 pub mod player_account;
+pub mod player_extend;
 pub mod player_plans;
 pub mod players;
 mod pricing;

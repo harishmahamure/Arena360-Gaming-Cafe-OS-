@@ -627,6 +627,22 @@ async fn serve(
                     let _ = out.send(reply).await;
                 });
             }
+            Ok(IpcMsg::Request { rid, kind, .. }) if kind == "player_extend_options" => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(rid, crate::player_session::extend_options(&ctx).await);
+                    let _ = out.send(reply).await;
+                });
+            }
+            Ok(IpcMsg::Request { rid, kind, body }) if kind == "player_extend" => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(rid, crate::player_session::extend(&ctx, &body).await);
+                    let _ = out.send(reply).await;
+                });
+            }
             Ok(IpcMsg::Request { rid, kind, .. }) if kind == "player_end" => {
                 let ctx = Arc::clone(&ctx);
                 let out = out_tx.clone();

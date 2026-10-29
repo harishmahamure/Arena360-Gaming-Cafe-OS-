@@ -648,6 +648,20 @@ impl Ctx<'_> {
                 }
                 Err(e) => self.reply(Frame::error(rid, e)).await,
             },
+            "player.extend_options" => match self.paired_device("player.extend_options") {
+                Ok(device) => {
+                    self.spawn_player_extend_options(rid, device, permits, tasks)
+                        .await
+                }
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
+            "player.extend" => match self.check_player_extend(value) {
+                Ok((device, request)) => {
+                    self.spawn_player_extend(rid, device, request, permits, tasks)
+                        .await
+                }
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
             "device.call_staff" => match self.paired_device("device.call_staff") {
                 Ok(device) => self.spawn_call_staff(rid, device, permits, tasks).await,
                 Err(e) => self.reply(Frame::error(rid, e)).await,
@@ -904,6 +918,64 @@ impl Ctx<'_> {
         };
         request.validate()?;
         Ok((device, request))
+    }
+
+    fn check_player_extend(
+        &self,
+        value: Value,
+    ) -> Result<(String, arena_proto::PlayerExtend), AppError> {
+        let device = self.paired_device("player.extend")?;
+        let frame = parse_frame_value(value).map_err(|e| e.error)?;
+        let FrameBody::PlayerExtend(request) = frame.body else {
+            return Err(app(ErrorCode::BadFrame, "malformed player.extend"));
+        };
+        request.validate()?;
+        Ok((device, request))
+    }
+
+    async fn spawn_player_extend_options(
+        &self,
+        rid: String,
+        device: String,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let (hub, out) = (Arc::clone(self.hub), self.out.clone());
+        tasks.spawn(async move {
+            let _permit = permit;
+            let reply = match super::player_extend::options(&hub, &device).await {
+                Ok(result) => Frame::new(rid, FrameBody::PlayerExtendOptionsResult(result)),
+                Err(e) => Frame::error(rid, e),
+            };
+            let _ = out.send(text(&reply)).await;
+        });
+    }
+
+    async fn spawn_player_extend(
+        &self,
+        rid: String,
+        device: String,
+        request: arena_proto::PlayerExtend,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let (hub, out) = (Arc::clone(self.hub), self.out.clone());
+        tasks.spawn(async move {
+            let _permit = permit;
+            let reply = match super::player_extend::extend(&hub, &device, request).await {
+                Ok(result) => Frame::new(rid, FrameBody::PlayerExtendResult(result)),
+                Err(e) => Frame::error(rid, e),
+            };
+            let _ = out.send(text(&reply)).await;
+        });
     }
 
     async fn spawn_player_account(

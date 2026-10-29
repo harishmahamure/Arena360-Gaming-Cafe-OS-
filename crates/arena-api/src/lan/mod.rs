@@ -15,6 +15,7 @@ pub mod listener;
 mod media;
 mod pair;
 mod player_account;
+mod player_extend;
 mod player_login;
 mod player_session;
 mod player_signup;

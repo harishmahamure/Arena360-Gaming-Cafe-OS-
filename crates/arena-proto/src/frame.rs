@@ -17,8 +17,8 @@ use crate::intent::Intent;
 use crate::pc_command::{LockReason, PcAck, PcAction};
 use crate::player_login::{PlayerAuthResult, PlayerAuthenticate};
 use crate::player_session::{
-    PlayerAccountResult, PlayerEndResult, PlayerPlansResult, PlayerStartResult, PlayerStartSession,
-    PlayerUnlock, PlayerUnlockResult,
+    PlayerAccountResult, PlayerEndResult, PlayerExtend, PlayerExtendOptions, PlayerExtendResult,
+    PlayerPlansResult, PlayerStartResult, PlayerStartSession, PlayerUnlock, PlayerUnlockResult,
 };
 use crate::player_signup::{PlayerSignup, PlayerSignupResult};
 use crate::scope::ClientClass;
@@ -129,13 +129,26 @@ pub enum FrameBody {
     /// The Hub's typed answer to `player.unlock`.
     #[serde(rename = "player.unlock_result")]
     PlayerUnlockResult(PlayerUnlockResult),
+    /// The player on a prepaid session asks what they can add and what it costs (paired sessions
+    /// only; Story 6.21).
+    #[serde(rename = "player.extend_options")]
+    PlayerExtendOptions,
+    /// The quotes at the live rate and the sources the player has.
+    #[serde(rename = "player.extend_options_result")]
+    PlayerExtendOptionsResult(PlayerExtendOptions),
+    /// The player confirmed an extend (paired sessions only).
+    #[serde(rename = "player.extend")]
+    PlayerExtend(PlayerExtend),
+    /// Whether the Hub added the time, or why it refused.
+    #[serde(rename = "player.extend_result")]
+    PlayerExtendResult(PlayerExtendResult),
     /// The Hub's empty reply to a request that has nothing to return.
     #[serde(rename = "ack")]
     Ack,
 }
 
 /// Every known `kind`.
-pub const FRAME_KINDS: [&str; 31] = [
+pub const FRAME_KINDS: [&str; 35] = [
     "hello",
     "hello.ok",
     "intent.submit",
@@ -166,6 +179,10 @@ pub const FRAME_KINDS: [&str; 31] = [
     "player.end_result",
     "player.unlock",
     "player.unlock_result",
+    "player.extend_options",
+    "player.extend_options_result",
+    "player.extend",
+    "player.extend_result",
     "ack",
 ];
 
@@ -203,6 +220,10 @@ impl FrameBody {
             Self::PlayerEndResult(_) => "player.end_result",
             Self::PlayerUnlock(_) => "player.unlock",
             Self::PlayerUnlockResult(_) => "player.unlock_result",
+            Self::PlayerExtendOptions => "player.extend_options",
+            Self::PlayerExtendOptionsResult(_) => "player.extend_options_result",
+            Self::PlayerExtend(_) => "player.extend",
+            Self::PlayerExtendResult(_) => "player.extend_result",
             Self::Ack => "ack",
         }
     }

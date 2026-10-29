@@ -44,6 +44,7 @@ mod order_place;
 mod order_void;
 mod people_reports;
 mod plans;
+mod player_extend;
 mod player_signup;
 mod player_start;
 mod players;

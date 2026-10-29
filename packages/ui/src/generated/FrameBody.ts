@@ -12,6 +12,9 @@ import type { PlayerAccountResult } from "./PlayerAccountResult";
 import type { PlayerAuthResult } from "./PlayerAuthResult";
 import type { PlayerAuthenticate } from "./PlayerAuthenticate";
 import type { PlayerEndResult } from "./PlayerEndResult";
+import type { PlayerExtend } from "./PlayerExtend";
+import type { PlayerExtendOptions } from "./PlayerExtendOptions";
+import type { PlayerExtendResult } from "./PlayerExtendResult";
 import type { PlayerPlansResult } from "./PlayerPlansResult";
 import type { PlayerSignup } from "./PlayerSignup";
 import type { PlayerSignupResult } from "./PlayerSignupResult";
@@ -57,4 +60,8 @@ export type FrameBody =
   | ({ kind: "player.end_result" } & PlayerEndResult)
   | ({ kind: "player.unlock" } & PlayerUnlock)
   | ({ kind: "player.unlock_result" } & PlayerUnlockResult)
+  | { kind: "player.extend_options" }
+  | ({ kind: "player.extend_options_result" } & PlayerExtendOptions)
+  | ({ kind: "player.extend" } & PlayerExtend)
+  | ({ kind: "player.extend_result" } & PlayerExtendResult)
   | { kind: "ack" };

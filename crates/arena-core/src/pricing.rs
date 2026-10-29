@@ -253,6 +253,14 @@ pub fn due_flip(
     (now.rule_id.as_deref() != open_rule_id || now.rate_minor != open_rate_minor).then_some(now)
 }
 
+/// The half-up price of `minutes` at `rate_minor_per_hour`, the way [`crate::billing::bill`]
+/// prices a line. An extend is charged at this price and the kiosk quotes it, so both come from
+/// here.
+pub(crate) fn price_of(rate_minor_per_hour: i64, minutes: i64) -> i64 {
+    let amount = (i128::from(rate_minor_per_hour) * i128::from(minutes) + 30) / 60;
+    i64::try_from(amount).unwrap_or(i64::MAX)
+}
+
 /// `rate` repriced at `now_ms` by the pricing rules in effect for its group, with the
 /// resolution (the rule that set the price, if any).
 pub(crate) fn priced(

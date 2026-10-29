@@ -241,6 +241,27 @@ async fn player_lock(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Ans
     Ok(service_request(&bridge, "player_lock", serde_json::Value::Null).await)
 }
 
+/// What the extend panel lists (Story 6.21): IPC `player_extend_options`, answered with the Hub's
+/// `player.extend_options_result` as the body (quotes at the live rate, wallet, packs, credit).
+#[tauri::command]
+async fn player_extend_options(
+    bridge: tauri::State<'_, Arc<Bridge>>,
+) -> Result<Option<Answer>, ()> {
+    Ok(service_request(&bridge, "player_extend_options", serde_json::Value::Null).await)
+}
+
+/// Adds time to the player's session (Story 6.21): IPC `player_extend`, answered with the Hub's
+/// `player.extend_result` (`{outcome, ...}`). The request is `{minutes, source, pack_id?}` and
+/// never names a session or a player; a step the Hub does not offer is refused by the service.
+#[tauri::command]
+async fn player_extend(
+    extend: arena_proto::PlayerExtend,
+    bridge: tauri::State<'_, Arc<Bridge>>,
+) -> Result<Option<Answer>, ()> {
+    let body = serde_json::to_value(&extend).unwrap_or(serde_json::Value::Null);
+    Ok(service_request(&bridge, "player_extend", body).await)
+}
+
 /// The password typed on the player's own lock screen (Story 6.17): sent to the service only, as
 /// IPC `player_unlock`, and dropped here. The answer is the Hub's outcome (`{outcome, ...}`).
 #[tauri::command]
@@ -266,6 +287,14 @@ fn hud_layout<R: Runtime>(
     state.set_content(width, height);
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || hud::refresh(&handle));
+}
+
+/// Extend on a warning toast or in the account menu (Story 6.21): the same as Ctrl+Shift+E. The
+/// page asks, the shell opens the panel for a running session and emits `hud-expand`.
+#[tauri::command]
+fn hud_expand<R: Runtime>(app: tauri::AppHandle<R>) {
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || hud::expand(&handle));
 }
 
 /// Esc in the expanded HUD panel: the pill again, focus back to the game.
@@ -430,13 +459,16 @@ fn main() {
             player_signup,
             hud_layout,
             hud_collapse,
+            hud_expand,
             volume_get,
             volume_set,
             call_staff,
             player_account,
             player_end,
             player_lock,
-            player_unlock
+            player_unlock,
+            player_extend_options,
+            player_extend
         ])
         .on_window_event(|_window, event| {
             // The kiosk is the shell: nothing closes it (admin exit comes in Story 1.20).

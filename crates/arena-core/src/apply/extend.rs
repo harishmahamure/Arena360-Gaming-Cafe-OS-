@@ -16,6 +16,8 @@ use arena_store::{
     find_session, find_setting, insert_extension_order, list_segments, pack_in_use,
 };
 
+use crate::pricing::price_of;
+
 use super::mutate::Written;
 use super::session::{
     SettleTarget, Stamp, insert_payments, invalid, load_payer, record_payer_txns, validate_payments,
@@ -37,13 +39,6 @@ pub(crate) struct ExtendTarget {
     payer: SettleTarget,
     closing_at: Option<i64>,
     now: i64,
-}
-
-/// The half-up price of `minutes` at `rate_minor_per_hour`, the way [`crate::billing::bill`]
-/// prices a line.
-fn price_of(rate_minor_per_hour: i64, minutes: i64) -> i64 {
-    let amount = (i128::from(rate_minor_per_hour) * i128::from(minutes) + 30) / 60;
-    i64::try_from(amount).unwrap_or(i64::MAX)
 }
 
 /// The next closing time after `now_ms` from the branch opening hours, if the branch keeps any.

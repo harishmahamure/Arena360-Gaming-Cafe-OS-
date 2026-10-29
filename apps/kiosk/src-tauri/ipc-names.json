@@ -41,12 +41,15 @@
     "playerSignup": "player_signup",
     "hudLayout": "hud_layout",
     "hudCollapse": "hud_collapse",
+    "hudExpand": "hud_expand",
     "volumeGet": "volume_get",
     "volumeSet": "volume_set",
     "callStaff": "call_staff",
     "playerAccount": "player_account",
     "playerEnd": "player_end",
     "playerLock": "player_lock",
-    "playerUnlock": "player_unlock"
+    "playerUnlock": "player_unlock",
+    "playerExtendOptions": "player_extend_options",
+    "playerExtend": "player_extend"
   }
 }

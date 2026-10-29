@@ -3632,6 +3632,29 @@ async fn playing(hub: &TestHub) -> (HubClient, String) {
     (client, player)
 }
 
+async fn extend_options_frame(
+    client: &HubClient,
+) -> Result<arena_proto::PlayerExtendOptions, ClientError> {
+    match client
+        .request("player.extend_options", serde_json::Value::Null)
+        .await?
+        .body
+    {
+        FrameBody::PlayerExtendOptionsResult(r) => Ok(r),
+        other => panic!("{other:?}"),
+    }
+}
+
+async fn extend_frame(
+    client: &HubClient,
+    body: serde_json::Value,
+) -> Result<arena_proto::PlayerExtendResult, ClientError> {
+    match client.request("player.extend", body).await?.body {
+        FrameBody::PlayerExtendResult(r) => Ok(r),
+        other => panic!("{other:?}"),
+    }
+}
+
 async fn start_postpaid(hub: &TestHub, player: Option<String>) {
     hub.writer
         .as_ref()
@@ -3777,6 +3800,8 @@ async fn the_account_frames_are_for_paired_sessions_and_a_follower_refuses_them(
         r#"{"v":1,"kind":"player.account","rid":"a"}"#,
         r#"{"v":1,"kind":"player.end_session","rid":"b"}"#,
         r#"{"v":1,"kind":"player.unlock","rid":"c","password":"x"}"#,
+        r#"{"v":1,"kind":"player.extend_options","rid":"d"}"#,
+        r#"{"v":1,"kind":"player.extend","rid":"e","minutes":30,"source":"wallet"}"#,
     ] {
         send(&mut ws, line).await;
         let frame = recv(&mut ws).await.unwrap();
@@ -3791,10 +3816,123 @@ async fn the_account_frames_are_for_paired_sessions_and_a_follower_refuses_them(
         ("player.account", serde_json::Value::Null),
         ("player.end_session", serde_json::Value::Null),
         ("player.unlock", serde_json::json!({ "password": "x" })),
+        ("player.extend_options", serde_json::Value::Null),
+        (
+            "player.extend",
+            serde_json::json!({ "minutes": 30, "source": "wallet" }),
+        ),
     ] {
         match client.request(kind, body).await {
             Err(ClientError::Hub(e)) => assert_eq!(e.code, ErrorCode::NotPrimary, "{kind}"),
             other => panic!("{kind}: {other:?}"),
         }
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn extending_from_the_kiosk_quotes_live_charges_the_wallet_and_pushes_the_new_end() {
+    use arena_proto::PlayerExtendResult as R;
+    let hub = start("0.1.0", true).await;
+    let (client, player) = playing(&hub).await;
+    let options = extend_options_frame(&client).await.unwrap();
+    let quoted: Vec<_> = options
+        .quotes
+        .iter()
+        .map(|q| (q.minutes, q.price_minor))
+        .collect();
+    assert_eq!(quoted, [(30, 3_000), (60, 6_000), (120, 12_000)]);
+    assert_eq!(options.wallet_minor, 4_000);
+    assert!(
+        options.packs.is_empty(),
+        "the session's own pack is not a source"
+    );
+    assert_eq!(options.credit_headroom_minor, None);
+    let reader = Store::open_reader(&hub.path).unwrap();
+    let before = reader.live_sessions().unwrap()[0].ends_at.unwrap();
+    let mut events = client.events().unwrap();
+    assert_eq!(
+        extend_frame(
+            &client,
+            serde_json::json!({"minutes": 30, "source": "wallet"})
+        )
+        .await
+        .unwrap(),
+        R::Ok
+    );
+    let after = reader.live_sessions().unwrap()[0].ends_at.unwrap();
+    assert_eq!(after - before, 30 * 60_000);
+    assert_eq!(reader.wallet_balance(&player).unwrap(), 1_000);
+    // The PC is told, like a staff extend: the session screen again, with the new end.
+    let screen = loop {
+        let ev = tokio::time::timeout(Duration::from_secs(3), events.next_event())
+            .await
+            .expect("a session screen within 3 s")
+            .unwrap();
+        if let HubEvent::SessionStarted { session, .. } = ev {
+            break session;
+        }
+    };
+    assert!(screen.remaining_ms.is_some());
+    let changes = reader.changes().unwrap();
+    let order = changes.iter().rev().find(|c| c.tbl == "orders").unwrap();
+    assert_eq!(
+        (order.actor_kind.as_str(), order.actor_id.as_str()),
+        ("device", hub.paired_id.as_str())
+    );
+    // Short of balance: a typed refusal that names the balance, and nothing is written.
+    let R::Refused { code, message } = extend_frame(
+        &client,
+        serde_json::json!({"minutes": 60, "source": "wallet"}),
+    )
+    .await
+    .unwrap() else {
+        panic!("a refusal")
+    };
+    assert_eq!(code, ErrorCode::InsufficientBalance);
+    assert_eq!(message, "Balance ₹10.00. Top up at counter.");
+    assert_eq!(reader.wallet_balance(&player).unwrap(), 1_000);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_guest_or_postpaid_session_or_an_empty_pc_cannot_extend() {
+    use arena_proto::PlayerExtendResult as R;
+    let hub = start("0.1.0", true).await;
+    rated_pc(&hub, 6_000).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let wallet = serde_json::json!({"minutes": 30, "source": "wallet"});
+    let ClientError::Hub(e) = extend_options_frame(&client).await.unwrap_err() else {
+        panic!("a hub refusal")
+    };
+    assert_eq!(e.code, ErrorCode::NotFound);
+    assert!(matches!(
+        extend_frame(&client, wallet.clone()).await.unwrap(),
+        R::Refused {
+            code: ErrorCode::NotFound,
+            ..
+        }
+    ));
+    start_postpaid(&hub, None).await;
+    let ClientError::Hub(e) = extend_options_frame(&client).await.unwrap_err() else {
+        panic!("a hub refusal")
+    };
+    assert_eq!(e.code, ErrorCode::ValidationFailed);
+    assert!(matches!(
+        extend_frame(&client, wallet).await.unwrap(),
+        R::Refused {
+            code: ErrorCode::ValidationFailed,
+            ..
+        }
+    ));
+    // A step that is not offered never reaches the Hub's rules.
+    let ClientError::Hub(e) = extend_frame(
+        &client,
+        serde_json::json!({"minutes": 45, "source": "wallet"}),
+    )
+    .await
+    .unwrap_err() else {
+        panic!("a hub refusal")
+    };
+    assert_eq!(e.code, ErrorCode::BadFrame);
 }

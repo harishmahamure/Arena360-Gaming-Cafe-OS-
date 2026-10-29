@@ -10,6 +10,7 @@
     currentPcScreen,
     currentTheme,
     hudCollapse,
+    hudExpand,
     hudLayout,
     onAttract,
     onHubStatus,
@@ -36,6 +37,7 @@
     staffToastKey,
     type HudToast,
   } from "./hud";
+  import ExtendOptions from "./ExtendOptions.svelte";
 
   // The overlay HUD (Story 6.14). It is its own always-on-top window: solid, never translucent,
   // and it never takes keyboard focus except while the player has expanded it with Ctrl+Shift+E.
@@ -73,6 +75,10 @@
 
   const shown = $derived(session !== null && !locked);
   const prepaid = $derived(session?.until != null);
+  /** Extend is for a profiled player on prepaid time (Story 6.21); postpaid and guests never see it. */
+  const canExtend = $derived(prepaid && session?.balance != null);
+  /** The Hub link is up, or not told yet: the extend panel disables itself on anything else. */
+  const linked = $derived(hub === null || hub === "connected");
   const seconds = $derived(
     session === null
       ? 0
@@ -211,7 +217,16 @@
     if (!shown) return;
     expanded = true;
     await tick();
+    // On prepaid time the extend options take the focus themselves once the Hub has quoted them.
     panel?.focus();
+  }
+
+  /** The Hub added the time (Story 6.21): any warning is moot, say so, and close the panel. */
+  function added() {
+    toasts = dropWarning(dropWarning(toasts), LOW_BALANCE_KEY);
+    toasts = raise(toasts, "player.extend.done", "info", performance.now(), nextId++);
+    chime("info");
+    collapse();
   }
 
   /** Asks "End your session?" in place, unless the counter cannot be reached. */
@@ -360,13 +375,25 @@
             </p>
           {/if}
         </div>
-        <button
-          type="button"
-          class="dismiss type-kiosk-label"
-          onclick={() => (toasts = toasts.filter((x) => x.id !== toast.id))}
-        >
-          {t("common.dismiss")}
-        </button>
+        <div class="buttons">
+          {#if toast.hotkey && canExtend}
+            <button
+              type="button"
+              class="extend type-kiosk-label"
+              data-testid="toast-extend"
+              onclick={hudExpand}
+            >
+              {t("player.extend.button")}
+            </button>
+          {/if}
+          <button
+            type="button"
+            class="dismiss type-kiosk-label"
+            onclick={() => (toasts = toasts.filter((x) => x.id !== toast.id))}
+          >
+            {t("common.dismiss")}
+          </button>
+        </div>
       </div>
     {/each}
   </div>
@@ -409,6 +436,9 @@
           <dd class="type-kiosk-body" data-testid="hud-panel-plan">{plan}</dd>
         </div>
       </dl>
+      {#if canExtend}
+        <ExtendOptions {locale} connected={linked} onadded={added} />
+      {/if}
       {#if !prepaid}
         {#if confirming}
           <div class="ask" role="alert" data-testid="hud-done-confirm">
@@ -610,7 +640,15 @@
     gap: var(--space-3);
   }
 
-  .dismiss {
+  .buttons {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .dismiss,
+  .extend {
     flex: none;
     min-height: 44px;
     padding: var(--space-2) var(--space-5);
@@ -621,18 +659,27 @@
     cursor: pointer;
   }
 
-  .dismiss:focus-visible {
+  /* Extend is the warning button: solid, the one filled control on a warning toast. */
+  .extend {
+    background-color: var(--button-warning-background);
+    color: var(--button-warning-foreground);
+  }
+
+  .dismiss:focus-visible,
+  .extend:focus-visible {
     outline: 3px solid var(--hud-toast-title);
     outline-offset: 2px;
   }
 
   /* HC: the shared 4px focus ring and 2px white outline, never the toast's own colours. */
-  :global([data-theme="hc"]) .dismiss {
+  :global([data-theme="hc"]) .dismiss,
+  :global([data-theme="hc"]) .extend {
     outline: 2px solid var(--text);
     outline-offset: 0;
   }
 
-  :global([data-theme="hc"]) .dismiss:focus-visible {
+  :global([data-theme="hc"]) .dismiss:focus-visible,
+  :global([data-theme="hc"]) .extend:focus-visible {
     outline: 4px solid var(--focus-ring);
     outline-offset: 2px;
   }

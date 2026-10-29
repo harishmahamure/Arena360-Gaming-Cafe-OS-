@@ -41,7 +41,7 @@ pub(crate) fn closes_in(week: &[OpeningDay; 7], tz: Tz, now_ms: i64) -> Option<u
         .min()
 }
 
-fn closing_in(
+pub(crate) fn closing_in(
     branch: Option<arena_store::BranchLocale>,
     settings: &[arena_store::SettingRow],
     now_ms: i64,

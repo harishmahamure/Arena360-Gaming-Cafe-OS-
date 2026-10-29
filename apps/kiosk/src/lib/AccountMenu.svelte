@@ -3,12 +3,14 @@
   import type { AccountPack, SnapshotLocale } from "@arena/ui/generated";
   import { onMount, tick } from "svelte";
   import { balanceText, packLine, timeLeftText } from "./account-text";
-  import { playerAccount, playerEnd, playerLock } from "./bridge";
+  import { hudExpand, playerAccount, playerEnd, playerLock } from "./bridge";
+  import { EXTEND_KEYS } from "./hud";
   import { chipText } from "./shell";
 
   // The account menu (Story 6.17): a `surface` panel under the top bar with the player's name,
-  // wallet and time left, and the rows Balance, Messages, Lock, I'm done (Story 6.18, postpaid
-  // only) and Log out. Esc closes it and
+  // wallet and time left, and the rows Balance, Messages, Extend (Story 6.21, prepaid only, shown
+  // with its Ctrl+Shift+E key caps), Lock, I'm done (Story 6.18, postpaid only) and Log out. Esc
+  // closes it and
   // focus goes back to the chip that opened it. Nothing here decides anything: Balance asks the
   // Hub, Log out asks the Hub to end the player's own session, and Lock is a screen the service
   // covers while the clock goes on.
@@ -126,6 +128,12 @@
     onmessages();
   }
 
+  /** "Extend": the HUD expands into its panel with the options, as Ctrl+Shift+E does. */
+  function extend() {
+    onclose(false);
+    hudExpand();
+  }
+
   async function lock() {
     if (busy) return;
     busy = true;
@@ -223,10 +231,34 @@
           onclick={messages}>{t("player.account.row.messages")}</button
         >
       </li>
-      {#if profiled}
+      {#if profiled && prepaid}
         <li>
           <button
             bind:this={rows[2]}
+            type="button"
+            class="row extend type-kiosk-label"
+            data-testid="account-row-extend"
+            onclick={extend}
+          >
+            <span>{t("player.account.row.extend")}</span>
+            <span
+              class="keys"
+              role="img"
+              aria-label={t("player.warning.hotkey")}
+              data-testid="account-row-extend-keys"
+            >
+              {#each EXTEND_KEYS as key, i (key)}
+                {#if i > 0}<span aria-hidden="true">+</span>{/if}
+                <kbd class="cap type-kiosk-label" aria-hidden="true">{key}</kbd>
+              {/each}
+            </span>
+          </button>
+        </li>
+      {/if}
+      {#if profiled}
+        <li>
+          <button
+            bind:this={rows[3]}
             type="button"
             class="row type-kiosk-label"
             data-testid="account-row-lock"
@@ -238,7 +270,7 @@
       {#if !prepaid}
         <li>
           <button
-            bind:this={rows[3]}
+            bind:this={rows[4]}
             type="button"
             class="row type-kiosk-label"
             data-testid="account-row-done"
@@ -249,7 +281,7 @@
       {/if}
       <li>
         <button
-          bind:this={rows[4]}
+          bind:this={rows[5]}
           type="button"
           class="row type-kiosk-label"
           data-testid="account-row-logout"
@@ -407,6 +439,24 @@
 
   .row:hover {
     background-color: var(--surface-2);
+  }
+
+  /* Extend names the key that does the same: Ctrl+Shift+E, as caps at the row's end. */
+  .row.extend {
+    justify-content: space-between;
+    gap: var(--space-4);
+  }
+
+  .keys {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .cap {
+    padding: 0 var(--space-2);
+    border: 2px solid var(--border-strong);
+    border-radius: var(--radius-md);
   }
 
   .row:focus-visible,

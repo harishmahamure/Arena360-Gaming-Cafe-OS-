@@ -15,6 +15,12 @@
 //! - `player.account{}` -> `player.account_result{balance_minor, packs[]}`.
 //! - `player.end_session{}` -> `player.end_result{outcome}` (Log out).
 //! - `player.unlock{password}` -> `player.unlock_result{outcome}` (the player's own lock screen).
+//!
+//! Extend (Story 6.21) adds two for a prepaid player on a live session, again naming no player and
+//! no session:
+//!
+//! - `player.extend_options{}` -> `player.extend_options_result{quotes, wallet_minor, packs, ..}`.
+//! - `player.extend{minutes, source, pack_id?}` -> `player.extend_result{outcome}`.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -216,11 +222,193 @@ pub enum PlayerUnlockResult {
     Locked { retry_s: u32 },
 }
 
+/// One priced step of `extend-options`: `minutes` more, quoted by the Hub at the rate that
+/// applies now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ExtendQuote {
+    #[ts(type = "number")]
+    pub minutes: i64,
+    /// What `minutes` cost at the live rate (wallet and credit), in minor units.
+    #[ts(type = "number")]
+    pub price_minor: i64,
+}
+
+/// A pack the player can pay an extend from: valid for this PC's group, unexpired, with time left.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ExtendPackSource {
+    pub pack_id: String,
+    pub name: String,
+    #[ts(type = "number")]
+    pub minutes_left: i64,
+}
+
+/// `player.extend_options_result` (Hub -> kiosk): what the player on this PC can add and pay with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PlayerExtendOptions {
+    /// +30 min, +1 h and +2 h, priced at the group's live rate.
+    pub quotes: Vec<ExtendQuote>,
+    /// The wallet balance less what running wallet sessions have set aside.
+    #[ts(type = "number")]
+    pub wallet_minor: i64,
+    /// Packs valid for this PC's group, soonest expiry first.
+    pub packs: Vec<ExtendPackSource>,
+    /// What credit still allows (limit less what is owed); `None` when credit is not enabled for
+    /// this player.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub credit_headroom_minor: Option<i64>,
+    /// When the branch next closes, as the branch writes the time (`11:00 pm`); `None` when it
+    /// keeps no opening hours.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub closing_label: Option<String>,
+}
+
+/// `player.extend` (paired kiosk -> Hub): add `minutes` to the session on this PC, paid from
+/// `source`. It names no session and no player; a pack source names the pack.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PlayerExtend {
+    #[ts(type = "number")]
+    pub minutes: i64,
+    pub source: crate::ExtendSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pack_id: Option<String>,
+}
+
+impl PlayerExtend {
+    /// The frame rules: one of the offered steps, and a pack id exactly when the source is a
+    /// pack. A failure is `BAD_FRAME` naming the field.
+    pub fn validate(&self) -> Result<(), AppError> {
+        if !crate::EXTEND_OPTIONS_MIN.contains(&self.minutes) {
+            return Err(AppError::with_field(
+                ErrorCode::BadFrame,
+                "minutes",
+                "extend by 30 min, 1 h or 2 h",
+            ));
+        }
+        let pack = self.source == crate::ExtendSource::Pack;
+        let named = self
+            .pack_id
+            .as_deref()
+            .is_some_and(|p| !p.is_empty() && p.len() <= 64);
+        if pack != named {
+            return Err(AppError::with_field(
+                ErrorCode::BadFrame,
+                "pack_id",
+                "only a pack source names a pack",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// `player.extend_result` (Hub -> kiosk): whether the Hub added the time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum PlayerExtendResult {
+    /// The time was added; the new end reaches the kiosk as the next session tick.
+    Ok,
+    /// `apply()` refused (`PAST_CLOSING`, `CREDIT_LIMIT`, `INSUFFICIENT_BALANCE`, ...): its code
+    /// and message.
+    Refused { code: ErrorCode, message: String },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::frame::{Frame, FrameBody, parse_frame};
     use serde_json::json;
+
+    #[test]
+    fn the_extend_frames_round_trip_and_name_no_session() {
+        for (text, body) in [
+            (
+                r#"{"v":1,"kind":"player.extend_options","rid":"a"}"#,
+                FrameBody::PlayerExtendOptions,
+            ),
+            (
+                r#"{"v":1,"kind":"player.extend","rid":"b","minutes":60,"source":"wallet"}"#,
+                FrameBody::PlayerExtend(PlayerExtend {
+                    minutes: 60,
+                    source: crate::ExtendSource::Wallet,
+                    pack_id: None,
+                }),
+            ),
+            (
+                r#"{"v":1,"kind":"player.extend","rid":"c","minutes":30,"source":"pack","pack_id":"K1"}"#,
+                FrameBody::PlayerExtend(PlayerExtend {
+                    minutes: 30,
+                    source: crate::ExtendSource::Pack,
+                    pack_id: Some("K1".into()),
+                }),
+            ),
+        ] {
+            let f = parse_frame(text).unwrap();
+            assert_eq!(f.body, body);
+            assert_eq!(parse_frame(&f.to_text()).unwrap(), f);
+        }
+        let options = Frame::new(
+            "a",
+            FrameBody::PlayerExtendOptionsResult(PlayerExtendOptions {
+                quotes: vec![ExtendQuote {
+                    minutes: 30,
+                    price_minor: 5_000,
+                }],
+                wallet_minor: 4_000,
+                packs: vec![ExtendPackSource {
+                    pack_id: "K1".into(),
+                    name: "10 hours".into(),
+                    minutes_left: 90,
+                }],
+                credit_headroom_minor: Some(20_000),
+                closing_label: Some("11:00 pm".into()),
+            }),
+        );
+        let v = serde_json::to_value(&options).unwrap();
+        assert_eq!(v["kind"], "player.extend_options_result");
+        assert_eq!(v["quotes"][0]["price_minor"], 5_000);
+        assert_eq!(parse_frame(&options.to_text()).unwrap(), options);
+        let refused = Frame::new(
+            "b",
+            FrameBody::PlayerExtendResult(PlayerExtendResult::Refused {
+                code: ErrorCode::PastClosing,
+                message: "x".into(),
+            }),
+        );
+        assert_eq!(
+            serde_json::to_value(&refused).unwrap()["kind"],
+            "player.extend_result"
+        );
+        assert_eq!(parse_frame(&refused.to_text()).unwrap(), refused);
+    }
+
+    #[test]
+    fn an_extend_names_a_step_and_a_pack_only_for_a_pack_source() {
+        let extend = |minutes, source, pack: Option<&str>| PlayerExtend {
+            minutes,
+            source,
+            pack_id: pack.map(str::to_owned),
+        };
+        use crate::ExtendSource::{Credit, Pack, Wallet};
+        assert!(extend(30, Wallet, None).validate().is_ok());
+        assert!(extend(120, Credit, None).validate().is_ok());
+        assert!(extend(60, Pack, Some("K")).validate().is_ok());
+        for bad in [
+            extend(45, Wallet, None),
+            extend(60, Pack, None),
+            extend(60, Pack, Some("")),
+            extend(60, Wallet, Some("K")),
+            extend(60, Pack, Some(&"x".repeat(65))),
+        ] {
+            assert_eq!(bad.validate().unwrap_err().code, ErrorCode::BadFrame);
+        }
+    }
 
     #[test]
     fn the_account_frames_round_trip() {

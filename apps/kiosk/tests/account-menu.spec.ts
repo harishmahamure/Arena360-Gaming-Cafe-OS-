@@ -67,6 +67,7 @@ async function open(page: Page, hub: "connected" | "reconnecting" = "connected")
             case commands.playerEnd:
             case commands.playerLock:
             case commands.playerUnlock:
+            case commands.hudExpand:
               (w.__calls as unknown[]).push([cmd, args ?? null]);
               return queued(cmd);
             case commands.pcScreen:
@@ -171,6 +172,7 @@ test("the account chip and the time chip each open the menu with name, balance a
   await expect(menu(page).getByRole("button")).toHaveText([
     "Balance",
     "Messages",
+    /^Extend/,
     "Lock",
     "Log out",
   ]);
@@ -553,4 +555,50 @@ test("the fifth wrong password pauses for 60 s and the Hub's locked sets its own
   expect(unlockLeftS(t0)).toBe(30);
   recordUnlock({ kind: "ok" }, t0);
   expect(unlockLeftS(t0)).toBe(0);
+});
+
+test("prepaid sessions get an Extend row above Lock with the Ctrl+Shift+E key caps", async ({
+  page,
+}) => {
+  await open(page);
+  await session(page, PREPAID);
+  await page.getByTestId("account-chip").click();
+  const extend = row(page, "extend");
+  await expect(extend).toBeVisible();
+  await expect(page.getByTestId("account-row-extend-keys")).toHaveAttribute(
+    "aria-label",
+    "Extend with Ctrl+Shift+E",
+  );
+  await expect(extend.locator("kbd")).toHaveText(["Ctrl", "Shift", "E"]);
+  const order = await menu(page)
+    .locator("[data-testid^=account-row-]:not([data-testid$=keys])")
+    .evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
+  expect(order.indexOf("account-row-extend")).toBe(order.indexOf("account-row-lock") - 1);
+  // Arrow keys reach it between Messages and Lock.
+  await row(page, "messages").focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(extend).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(row(page, "lock")).toBeFocused();
+  expect(await serious(page)).toEqual([]);
+});
+
+test("Extend opens the HUD panel as Ctrl+Shift+E does, and the menu closes", async ({ page }) => {
+  await open(page);
+  await session(page, PREPAID);
+  await page.getByTestId("account-chip").click();
+  await row(page, "extend").click();
+  await expect(menu(page)).toHaveCount(0);
+  expect(await asked(page)).toEqual([names.commands.hudExpand]);
+});
+
+test("a postpaid session or a guest is not offered Extend", async ({ page }) => {
+  await open(page);
+  await session(page, POSTPAID);
+  await page.getByTestId("account-chip").click();
+  await expect(row(page, "extend")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await emit(page, names.events.pcScreen, shown(GUEST));
+  await page.getByTestId("account-chip").click();
+  await expect(row(page, "extend")).toHaveCount(0);
 });

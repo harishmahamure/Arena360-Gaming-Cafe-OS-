@@ -33,6 +33,7 @@ function view(over: Partial<AttractView> = {}): AttractView {
     state: "ready",
     rate_minor: 12000,
     group_name: "Gaming PCs",
+    unpaid_minor: 0,
     locale: { ...INR },
     media: [],
     ...over,
@@ -445,4 +446,27 @@ test("the screen uses no backdrop filter and no remote fonts or media", async ({
   );
   expect(filters).toEqual([]);
   expect(remote).toEqual([]);
+});
+
+test("a PC that owes the counter shows Pay at the counter with the amount and takes no login", async ({
+  page,
+}) => {
+  await open(page, { view: view({ unpaid_minor: 8000 }), logo: null });
+  await expect(page.getByTestId("attract-pay-at-counter")).toHaveText(
+    en["player.attract.pay_at_counter"],
+  );
+  await expect(page.getByTestId("attract-unpaid")).toHaveText("Unpaid ₹80.00");
+  await expect(page.getByTestId("attract-rate")).toHaveCount(0);
+  // Any key or tap would open the login panel on a PC that is free; this one stays held.
+  await page.keyboard.press("a");
+  await page.mouse.click(200, 200);
+  await expect(page.getByTestId("login-panel")).toHaveCount(0);
+  expect(await serious(page)).toEqual([]);
+
+  // The counter settles it: the next attract view lifts the hold on its own.
+  await emit(page, { view: view({ unpaid_minor: 0 }), logo: null });
+  await expect(page.getByTestId("attract-rate")).toBeVisible();
+  await expect(page.getByTestId("attract-pay-at-counter")).toHaveCount(0);
+  await page.keyboard.press("a");
+  await expect(page.getByTestId("login-panel")).toBeVisible();
 });

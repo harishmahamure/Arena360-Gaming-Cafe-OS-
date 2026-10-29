@@ -41,6 +41,7 @@ fn device() -> Actor {
 
 fn place() -> IntentPayload {
     IntentPayload::OrderPlace(OrderPlace {
+        counter: None,
         session_id: "S1".into(),
         lines: vec![PosSaleLine {
             product_id: "P1".into(),
@@ -63,6 +64,7 @@ async fn sell(f: &Fixture, id: &str, qty: i64) {
         f,
         owner(),
         IntentPayload::PosSale(PosSale {
+            kiosk: None,
             business: None,
             coupon: None,
             discount: None,
@@ -111,7 +113,7 @@ async fn a_free_branch_gets_no_menu_and_no_photos() {
     photo.image = jpeg();
     let id = make(&f, photo).await;
     let dir = DeviceDirectory::open(&f.path).unwrap();
-    let menu = dir.shop_menu(f.clock.now_ms()).unwrap();
+    let menu = dir.shop_menu(f.clock.now_ms(), "PC1").unwrap();
     assert!(!menu.enabled);
     assert!(menu.items.is_empty());
     assert_eq!(dir.shop_image(&id).unwrap().image, None);
@@ -156,7 +158,7 @@ async fn the_menu_lists_active_products_and_bundles_with_live_availability() {
     let dir = DeviceDirectory::open(&f.path).unwrap();
     let now = f.clock.now_ms();
 
-    let menu = dir.shop_menu(now).unwrap();
+    let menu = dir.shop_menu(now, "PC1").unwrap();
     assert!(menu.enabled);
     let names: Vec<_> = menu.items.iter().map(|i| i.name.as_str()).collect();
     // By category then name; the inactive product is not listed.
@@ -177,7 +179,7 @@ async fn the_menu_lists_active_products_and_bundles_with_live_availability() {
 
     // A Hub stock change shows on the next read.
     stock_in(&f, &chips, 3, 500).await;
-    let menu = dir.shop_menu(now).unwrap();
+    let menu = dir.shop_menu(now, "PC1").unwrap();
     assert!(menu.items.iter().all(|i| i.available));
 
     // The photo comes from the Hub, only for a listed product that has one.
@@ -220,7 +222,7 @@ async fn the_three_top_sellers_of_the_week_are_popular_and_void_orders_do_not_co
     let dir = DeviceDirectory::open(&f.path).unwrap();
     let now = f.clock.now_ms();
     let popular = |now: i64| -> Vec<String> {
-        dir.shop_menu(now)
+        dir.shop_menu(now, "PC1")
             .unwrap()
             .items
             .into_iter()

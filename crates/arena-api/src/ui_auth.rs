@@ -4431,6 +4431,7 @@ pub(crate) mod tests {
         assert_eq!(status, StatusCode::OK);
 
         let place = IntentPayload::OrderPlace(OrderPlace {
+            counter: None,
             session_id: session_id.clone(),
             lines: vec![PosSaleLine {
                 product_id: chips.clone(),
@@ -4573,6 +4574,7 @@ pub(crate) mod tests {
         assert_eq!(status, StatusCode::OK);
         let place = |qty: i64| {
             IntentPayload::OrderPlace(OrderPlace {
+                counter: None,
                 session_id: session_id.clone(),
                 lines: vec![PosSaleLine {
                     product_id: burger.clone(),
@@ -6044,6 +6046,7 @@ pub(crate) mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST);
 
         let sale = IntentPayload::PosSale(arena_proto::PosSale {
+            kiosk: None,
             business: None,
             coupon: None,
             discount: serde_json::from_value(discount).ok(),
@@ -8607,6 +8610,7 @@ pub(crate) mod tests {
             .to_owned();
         let sale = |lines: &[(&str, i64)], total: i64, over: bool| {
             IntentPayload::PosSale(PosSale {
+                kiosk: None,
                 business: None,
                 coupon: None,
                 discount: None,

@@ -950,6 +950,7 @@ mod tests {
             let pos = || {
                 submit(
                     IntentPayload::PosSale(arena_proto::PosSale {
+                        kiosk: None,
                         business: None,
                         coupon: None,
                         discount: None,
@@ -1187,6 +1188,7 @@ mod tests {
             let place = |qty: i64| {
                 submit(
                     IntentPayload::OrderPlace(arena_proto::OrderPlace {
+                        counter: None,
                         session_id: third.clone(),
                         lines: vec![arena_proto::PosSaleLine {
                             product_id: cola.clone(),
@@ -1260,6 +1262,7 @@ mod tests {
                 let placed = writer
                     .submit_intent(submit(
                         IntentPayload::OrderPlace(arena_proto::OrderPlace {
+                            counter: None,
                             session_id: third.clone(),
                             lines: vec![arena_proto::PosSaleLine {
                                 product_id: burger.clone(),

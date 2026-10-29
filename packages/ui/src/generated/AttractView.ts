@@ -37,4 +37,9 @@ export type AttractView = {
    * order.
    */
   media: Array<AttractMedia>;
+  /**
+   * What this PC owes the counter in minor units: its open unpaid counter orders (Story 6.32).
+   * When above zero the kiosk shows "Pay at counter" and takes no login.
+   */
+  unpaid_minor: number;
 };

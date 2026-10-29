@@ -48,6 +48,7 @@ async fn sell(f: &Fixture, id: &str, qty: i64, payments: Vec<PaymentRow>) -> Str
         f,
         owner(),
         IntentPayload::PosSale(PosSale {
+            kiosk: None,
             business: None,
             coupon: None,
             discount: None,
@@ -245,6 +246,7 @@ async fn fixture_shift(f: &Fixture) -> Fixture28 {
         f,
         owner(),
         IntentPayload::OrderPlace(OrderPlace {
+            counter: None,
             session_id: session.clone(),
             lines: vec![PosSaleLine {
                 product_id: cola,

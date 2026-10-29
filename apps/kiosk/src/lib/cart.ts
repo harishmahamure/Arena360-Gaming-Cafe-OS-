@@ -6,7 +6,7 @@
 // possible (it carries `max_qty` on every menu item) and whether the order may be placed. There is
 // no override on the kiosk and nothing is kept on disk.
 
-import type { ShopItem } from "@arena/ui/generated";
+import type { ShopItem, ShopPayOptions } from "@arena/ui/generated";
 
 /** The most of one product a line may hold (the same bound the Hub accepts). */
 export const MAX_LINE_QTY = 99;
@@ -24,11 +24,53 @@ export type StockProblem =
 /** What a stepper change came to: the cart after it, and the reason it was refused (if it was). */
 export type StepResult = { lines: CartLine[]; problem: StockProblem | null };
 
+/** How a cart is paid (Story 6.32): the session bill, the wallet now, or the counter. */
+export type PayChoice = "bill" | "wallet" | "counter";
+
+/** The choices a PC offers, from the Hub's menu answer (an older Hub offers the bill only). */
+export type PayOffer = { bill: boolean; walletMinor: number | null; counter: boolean };
+
+export function payOffer(options: ShopPayOptions | undefined): PayOffer {
+  if (options === undefined) return { bill: true, walletMinor: null, counter: false };
+  return {
+    bill: options.bill,
+    walletMinor: options.wallet_minor ?? null,
+    counter: options.counter,
+  };
+}
+
+/** Whether Pay now from wallet cannot cover `total`: it is shown disabled with the reason. */
+export const walletShort = (offer: PayOffer, total: number): boolean =>
+  offer.walletMinor !== null && offer.walletMinor < total;
+
+/**
+ * The choice to show selected: the player's own pick while the Hub still offers it, else the
+ * session bill, then the wallet when it covers the cart, then the counter.
+ */
+export function chosenPay(offer: PayOffer, picked: PayChoice | null, total: number): PayChoice {
+  const open = (c: PayChoice) =>
+    c === "bill"
+      ? offer.bill
+      : c === "wallet"
+        ? offer.walletMinor !== null && !walletShort(offer, total)
+        : offer.counter;
+  if (picked !== null && open(picked)) return picked;
+  if (offer.bill) return "bill";
+  if (open("wallet")) return "wallet";
+  return "counter";
+}
+
 /** What Place order came to. */
 export type OrderOutcome =
   | { kind: "ok" }
   /** The Hub refused: its code, its own words and the short product when it names one. */
-  | { kind: "refused"; code: string; message: string; productId: string | null }
+  | {
+      kind: "refused";
+      code: string;
+      message: string;
+      productId: string | null;
+      balanceMinor: number | null;
+    }
   /** The Hub did not answer: the cart stays and Place order says the counter is reconnecting. */
   | { kind: "unreachable" };
 
@@ -116,6 +158,7 @@ export function placeOf(answer: unknown): OrderOutcome {
       code: typeof body.code === "string" ? body.code : "",
       message: typeof body.message === "string" ? body.message : "",
       productId: typeof body.product_id === "string" ? body.product_id : null,
+      balanceMinor: typeof body.balance_minor === "number" ? body.balance_minor : null,
     };
   }
   return { kind: "unreachable" };

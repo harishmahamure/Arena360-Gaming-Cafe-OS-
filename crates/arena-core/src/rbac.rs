@@ -168,20 +168,41 @@ fn device_extends_own_session(
 /// Whether a paired device may place an order on the session on its own PC (Story 6.31): the
 /// player confirmed their cart at the kiosk. The Hub builds that `order.place` from the device's
 /// session; a kiosk cannot send it (it is outside the paired scope). Another PC's session stays
-/// denied, and so does a stock override: the kiosk has no manager override.
+/// denied, and so does a stock override: the kiosk has no manager override. Story 6.32 adds the
+/// unpaid counter order (tied to this PC and the player who last had its session) and the
+/// wallet sale (`pos.sale` with `kiosk`, for the player running on this PC).
 fn device_places_own_order(
     tx: &StoreTx<'_>,
     p: Permission,
     intent: &Intent,
 ) -> Result<bool, AppError> {
     use arena_proto::IntentPayload;
-    let IntentPayload::OrderPlace(place) = &intent.payload else {
-        return Ok(false);
-    };
-    if p != Permission::PosSell || place.stock_override == Some(true) {
+    if p != Permission::PosSell {
         return Ok(false);
     }
-    Ok(find_session(tx, &place.session_id)?.is_some_and(|s| s.device_id == intent.actor.id))
+    match &intent.payload {
+        IntentPayload::OrderPlace(place) if place.stock_override != Some(true) => {
+            match &place.counter {
+                Some(c) => Ok(place.session_id.is_empty()
+                    && c.device_id == intent.actor.id
+                    && arena_store::last_session_player(tx, &intent.actor.id)? == c.player_id),
+                None => Ok(find_session(tx, &place.session_id)?
+                    .is_some_and(|s| s.device_id == intent.actor.id)),
+            }
+        }
+        IntentPayload::PosSale(sale) => {
+            let Some(k) = &sale.kiosk else {
+                return Ok(false);
+            };
+            let live = arena_store::list_live_sessions(tx)?
+                .into_iter()
+                .find(|s| s.device_id == intent.actor.id);
+            Ok(k.device_id == intent.actor.id
+                && sale.player_id.is_some()
+                && live.is_some_and(|s| s.player_id == sale.player_id))
+        }
+        _ => Ok(false),
+    }
 }
 
 /// **permission.** Checks the intent's [`Requirement`] against its actor. The kind is taken

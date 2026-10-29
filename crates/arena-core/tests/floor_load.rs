@@ -567,6 +567,7 @@ impl Picker {
         }
         intent(
             IntentPayload::PosSale(arena_proto::PosSale {
+                kiosk: None,
                 lines,
                 payments: vec![PaymentRow {
                     method: if upi {

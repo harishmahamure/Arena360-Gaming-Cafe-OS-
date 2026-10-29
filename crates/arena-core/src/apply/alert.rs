@@ -141,17 +141,14 @@ pub(super) fn close_kiosk_order(
     by: &str,
     now_ms: i64,
 ) -> Result<Vec<Written>, AppError> {
-    let Some(session) = order
-        .session_id
-        .as_deref()
-        .map(|id| arena_store::find_session(tx, id))
-        .transpose()?
-        .flatten()
-    else {
+    let device_id = match order.session_id.as_deref() {
+        Some(id) => arena_store::find_session(tx, id)?.map(|s| s.device_id),
+        None => order.device_id.clone(),
+    };
+    let Some(device_id) = device_id else {
         return Ok(Vec::new());
     };
-    let Some(open) = find_open_alert(tx, AlertKind::KioskOrder.as_str(), Some(&session.device_id))?
-    else {
+    let Some(open) = find_open_alert(tx, AlertKind::KioskOrder.as_str(), Some(&device_id))? else {
         return Ok(Vec::new());
     };
     if arena_store::count_unserved_lines(tx, &order.id)? > 0 {

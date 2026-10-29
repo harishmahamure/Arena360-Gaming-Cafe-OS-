@@ -82,6 +82,11 @@ pub struct AttractView {
     /// Up to [`MAX_ATTRACT_MEDIA`] videos of enabled, catalogue-linked library entries, in name
     /// order.
     pub media: Vec<AttractMedia>,
+    /// What this PC owes the counter in minor units: its open unpaid counter orders (Story 6.32).
+    /// When above zero the kiosk shows "Pay at counter" and takes no login.
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub unpaid_minor: i64,
 }
 
 fn is_sha256(s: &str) -> bool {
@@ -458,6 +463,7 @@ mod tests {
             rate_minor: Some(12_000),
             group_name: Some("PC".into()),
             rule: None,
+            unpaid_minor: 0,
             locale: SnapshotLocale {
                 currency: "INR".into(),
                 exponent: 2,

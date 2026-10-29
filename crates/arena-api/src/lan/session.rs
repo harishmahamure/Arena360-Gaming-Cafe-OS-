@@ -663,7 +663,7 @@ impl Ctx<'_> {
                 Err(e) => self.reply(Frame::error(rid, e)).await,
             },
             "shop.menu" => match self.paired_device("shop.menu") {
-                Ok(_) => self.spawn_shop_menu(rid, permits, tasks).await,
+                Ok(device) => self.spawn_shop_menu(rid, device, permits, tasks).await,
                 Err(e) => self.reply(Frame::error(rid, e)).await,
             },
             "shop.image" => match self.check_shop_image(value) {
@@ -1029,6 +1029,7 @@ impl Ctx<'_> {
     async fn spawn_shop_menu(
         &self,
         rid: String,
+        device: String,
         permits: &Arc<Semaphore>,
         tasks: &mut JoinSet<()>,
     ) {
@@ -1039,7 +1040,7 @@ impl Ctx<'_> {
         let (hub, out) = (Arc::clone(self.hub), self.out.clone());
         tasks.spawn(async move {
             let _permit = permit;
-            let reply = match super::shop::menu(&hub).await {
+            let reply = match super::shop::menu(&hub, &device).await {
                 Ok(result) => Frame::new(rid, FrameBody::ShopMenuResult(result)),
                 Err(e) => Frame::error(rid, e),
             };

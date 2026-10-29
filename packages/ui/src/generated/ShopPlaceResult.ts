@@ -5,4 +5,14 @@ import type { ErrorCode } from "./ErrorCode";
  * `shop.place_result`: the order joined the session's bill, or the Hub refused it.
  */
 export type ShopPlaceResult =
-  { outcome: "ok" } | { outcome: "refused"; code: ErrorCode; message: string; product_id?: string };
+  | { outcome: "ok" }
+  | {
+      outcome: "refused";
+      code: ErrorCode;
+      message: string;
+      /**
+       * The wallet balance a refused wallet payment found (`INSUFFICIENT_BALANCE`).
+       */
+      balance_minor?: number;
+      product_id?: string;
+    };

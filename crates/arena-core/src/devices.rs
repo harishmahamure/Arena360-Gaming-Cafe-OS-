@@ -305,12 +305,16 @@ impl DeviceDirectory {
     }
 
     /// The kiosk Shop's menu with live availability and the popular items (Story 6.30).
-    pub fn shop_menu(&self, now_ms: i64) -> Result<arena_proto::ShopMenu, AppError> {
+    pub fn shop_menu(
+        &self,
+        now_ms: i64,
+        device_id: &str,
+    ) -> Result<arena_proto::ShopMenu, AppError> {
         let store = self
             .reader
             .lock()
             .map_err(|_| internal("device directory lock poisoned"))?;
-        crate::shop::menu(&store, now_ms)
+        crate::shop::menu(&store, now_ms, device_id)
     }
 
     /// One product's photo for the kiosk Shop (Story 6.30).
@@ -329,6 +333,15 @@ impl DeviceDirectory {
             .lock()
             .map_err(|_| internal("device directory lock poisoned"))?;
         crate::shop::order_target(&store, device_id)
+    }
+
+    /// Who a cart from `device_id` is for (Story 6.32).
+    pub fn pay_target(&self, device_id: &str) -> Result<crate::shop::PayTarget, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?;
+        crate::shop::pay_target(&store, device_id)
     }
 
     /// The id of the session an extend on `device_id` applies to (Story 6.21).

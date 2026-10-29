@@ -502,6 +502,7 @@ async fn run_epic_5_flow(state: ConnectivityState) -> Outcome5 {
     };
     let sale = |lines, payments, receipt, coupon: Option<&str>, discount| {
         IntentPayload::PosSale(arena_proto::PosSale {
+            kiosk: None,
             lines,
             payments,
             player_id: None,
@@ -574,6 +575,7 @@ async fn run_epic_5_flow(state: ConnectivityState) -> Outcome5 {
     send(
         &w,
         IntentPayload::OrderPlace(arena_proto::OrderPlace {
+            counter: None,
             session_id: session.clone(),
             lines: lines(&[(&cola, 1)]),
             stock_override: None,

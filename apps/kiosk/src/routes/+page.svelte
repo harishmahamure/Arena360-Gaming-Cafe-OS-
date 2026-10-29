@@ -28,7 +28,15 @@
   import Attract from "../lib/Attract.svelte";
   import Cart, { type LineProblem } from "../lib/Cart.svelte";
   import Shell from "../lib/Shell.svelte";
-  import { cartCount, refreshLines, stepCart, type CartLine } from "../lib/cart";
+  import {
+    cartCount,
+    chosenPay,
+    payOffer,
+    refreshLines,
+    stepCart,
+    type CartLine,
+    type PayChoice,
+  } from "../lib/cart";
   import {
     GAMES_POLL_MS,
     MOST_PLAYED_POLL_MS,
@@ -91,8 +99,12 @@
   let cartOpen = $state(false);
   let cartBusy = $state(false);
   /** The last order went through (the empty cart says so until the player adds something). */
-  let cartPlaced = $state(false);
-  let cartError: "reconnecting" | "refused" | null = $state(null);
+  let cartPlaced: PayChoice | null = $state(null);
+  let cartError: "reconnecting" | "refused" | "balance" | null = $state(null);
+  /** How the player chose to pay (Story 6.32); the Hub's offer decides what is usable. */
+  let cartPick: PayChoice | null = $state(null);
+  /** The wallet balance the Hub found when it refused a wallet payment. */
+  let cartBalance: number | null = $state(null);
   /** The reason a step or a placement was refused, by product id. */
   let cartProblems: Record<string, LineProblem> = $state({});
 
@@ -100,8 +112,10 @@
     cart = [];
     cartOpen = false;
     cartBusy = false;
-    cartPlaced = false;
+    cartPlaced = null;
     cartError = null;
+    cartPick = null;
+    cartBalance = null;
     cartProblems = {};
   }
 
@@ -118,7 +132,7 @@
   async function stepLine(id: string, delta: 1 | -1) {
     // A placement in flight owns the cart: a step now would be cleared with the placed lines.
     if (cartBusy) return;
-    cartPlaced = false;
+    cartPlaced = null;
     const rest = { ...cartProblems };
     delete rest[id];
     cartProblems = rest;
@@ -143,17 +157,18 @@
     cartOpen = true;
   }
 
-  async function place() {
+  async function place(pay: PayChoice) {
     if (cartBusy || cart.length === 0) return;
     cartBusy = true;
     cartError = null;
+    cartBalance = null;
     const sent = cart;
-    const outcome = await placeOrder(sent);
+    const outcome = await placeOrder(sent, pay);
     cartBusy = false;
     if (outcome.kind === "ok") {
       cart = [];
       cartProblems = {};
-      cartPlaced = true;
+      cartPlaced = pay;
     } else if (outcome.kind === "unreachable") {
       cartError = "reconnecting";
     } else if (
@@ -165,6 +180,10 @@
         [outcome.productId]:
           outcome.code === "BUNDLE_SHORT" ? { kind: "bundle_short" } : { kind: "out_of_stock" },
       };
+    } else if (outcome.code === "INSUFFICIENT_BALANCE" && outcome.balanceMinor !== null) {
+      // A concurrent spend left too little: the cart stays and shows the real balance.
+      cartBalance = outcome.balanceMinor;
+      cartError = "balance";
     } else {
       cartError = "refused";
     }
@@ -476,8 +495,12 @@
         busy={cartBusy}
         placed={cartPlaced}
         error={cartError}
+        offer={payOffer(shop.pay)}
+        picked={cartPick}
+        balance={cartBalance}
+        onpick={(pay) => (cartPick = pay)}
         onstep={(id, delta) => void stepLine(id, delta)}
-        onplace={() => void place()}
+        onplace={(pay) => void place(pay)}
         onclose={closeCart}
       />
     {/if}

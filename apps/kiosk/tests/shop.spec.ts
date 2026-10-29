@@ -438,9 +438,22 @@ test("arrow keys step through the rail", async ({ page }) => {
 
 test("the answers are read defensively", () => {
   const good = { enabled: true, items: [item("P1", "Cola", "Drinks")] };
-  expect(shopMenuOf(good)).toEqual(good);
+  // An older Hub says nothing about payment: the session bill is the one choice (Story 6.32).
+  const billOnly = { bill: true, counter: false };
+  expect(shopMenuOf(good)).toEqual({ ...good, pay: billOnly });
+  expect(
+    shopMenuOf({ ...good, pay: { bill: false, wallet_minor: 500, counter: true } })?.pay,
+  ).toEqual({
+    bill: false,
+    wallet_minor: 500,
+    counter: true,
+  });
   // A branch without the feature has no menu, whatever the answer carries.
-  expect(shopMenuOf({ enabled: false, items: good.items })).toEqual({ enabled: false, items: [] });
+  expect(shopMenuOf({ enabled: false, items: good.items })).toEqual({
+    enabled: false,
+    items: [],
+    pay: billOnly,
+  });
   for (const bad of [
     null,
     "x",

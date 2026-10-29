@@ -39,7 +39,7 @@ import {
   type MostPlayedView,
 } from "./games";
 import { LOGIN_TIMEOUT_MS, outcomeOf, type LoginOutcome } from "./login";
-import { placeLines, placeOf, type CartLine, type OrderOutcome } from "./cart";
+import { placeLines, placeOf, type CartLine, type OrderOutcome, type PayChoice } from "./cart";
 import { shopImageOf, shopMenuOf, type ShopView } from "./shop";
 import { PICKER_TIMEOUT_MS, plansOf, startOf, type PlansOutcome, type StartOutcome } from "./plans";
 import { SIGNUP_TIMEOUT_MS, signupOutcomeOf, type SignupOutcome } from "./signup";
@@ -1030,7 +1030,10 @@ export function hudCollapse(): void {
  * this PC, applies the order by the Epic 5 rules and answers typed: `ok`, or `refused` with its
  * words and the short product. `unreachable` when the Hub cannot be asked: the cart stays.
  */
-export async function placeOrder(lines: CartLine[]): Promise<OrderOutcome> {
+export async function placeOrder(
+  lines: CartLine[],
+  pay: PayChoice = "bill",
+): Promise<OrderOutcome> {
   if (!inTauri()) return { kind: "unreachable" };
-  return placeOf(await ask(CMD.shopPlace, { lines: placeLines(lines) }));
+  return placeOf(await ask(CMD.shopPlace, { lines: placeLines(lines), pay }));
 }

@@ -34,6 +34,7 @@ fn system() -> Actor {
 
 fn order(session: &str, product: &str, qty: i64, over: Option<bool>) -> IntentPayload {
     IntentPayload::OrderPlace(OrderPlace {
+        counter: None,
         session_id: session.into(),
         lines: vec![PosSaleLine {
             product_id: product.into(),
@@ -185,7 +186,7 @@ async fn the_menu_says_how_many_can_be_sold_now() {
 
     let menu = crate::DeviceDirectory::open(&f.path)
         .unwrap()
-        .shop_menu(f.clock.now_ms())
+        .shop_menu(f.clock.now_ms(), "PC1")
         .unwrap();
     let max = |id: &str| menu.items.iter().find(|i| i.id == id).unwrap().max_qty;
     assert_eq!(max(&cola), Some(4));

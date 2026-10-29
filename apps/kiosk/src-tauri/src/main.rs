@@ -367,15 +367,20 @@ async fn shop_image(
     Ok(service_request(&bridge, "shop_image", serde_json::json!({ "id": id })).await)
 }
 
-/// The player's cart (Story 6.31): IPC `shop_place{lines}`, answered with the Hub's
+/// The player's cart (Story 6.31): IPC `shop_place{lines, pay?}` (Story 6.32: `bill`, `wallet` or `counter`), answered with the Hub's
 /// `shop.place_result` (`{outcome: "ok"}` or `{outcome: "refused", code, message, product_id?}`). An
 /// error answer (the Hub is unreachable, `HUB_SLOW`) leaves the cart where it is.
 #[tauri::command]
 async fn shop_place(
     lines: serde_json::Value,
+    pay: Option<String>,
     bridge: tauri::State<'_, Arc<Bridge>>,
 ) -> Result<Option<Answer>, ()> {
-    Ok(service_request(&bridge, "shop_place", serde_json::json!({ "lines": lines })).await)
+    let mut body = serde_json::json!({ "lines": lines });
+    if let Some(pay) = pay {
+        body["pay"] = serde_json::Value::String(pay);
+    }
+    Ok(service_request(&bridge, "shop_place", body).await)
 }
 
 /// Opens Steam, Epic or Riot from its card (Story 6.26): IPC `launcher_open{id}`, answered like

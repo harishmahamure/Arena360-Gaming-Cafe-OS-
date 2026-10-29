@@ -13,6 +13,7 @@ use arena_proto::{
 
 fn place_of(session: &str, lines: &[(&str, i64)]) -> OrderPlace {
     OrderPlace {
+        counter: None,
         session_id: session.into(),
         lines: lines
             .iter()
@@ -651,6 +652,7 @@ async fn available_stock_is_on_hand_less_open_holds_for_sales_and_the_catalogue(
     assert!(available(&f, &id), "one is still free");
     // A counter sale of 2 is refused, a sale of 1 goes through.
     let sale = |qty: i64| PosSale {
+        kiosk: None,
         business: None,
         coupon: None,
         discount: None,
@@ -694,6 +696,7 @@ async fn counter_sale_lines_are_served_in_both_modes() {
             &f,
             owner(),
             IntentPayload::PosSale(PosSale {
+                kiosk: None,
                 business: None,
                 coupon: None,
                 discount: None,

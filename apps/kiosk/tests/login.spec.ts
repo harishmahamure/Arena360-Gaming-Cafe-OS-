@@ -27,6 +27,7 @@ const view = (over: Partial<AttractView> = {}): AttractView => ({
   state: "ready",
   rate_minor: 12000,
   group_name: "Gaming PCs",
+  unpaid_minor: 0,
   locale: { ...INR },
   media: [],
   ...over,

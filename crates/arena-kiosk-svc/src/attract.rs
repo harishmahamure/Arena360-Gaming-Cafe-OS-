@@ -162,6 +162,7 @@ pub(crate) mod tests {
             rate_minor: Some(rate),
             group_name: Some("PC".into()),
             rule: None,
+            unpaid_minor: 0,
             locale: SnapshotLocale {
                 currency: "INR".into(),
                 exponent: 2,

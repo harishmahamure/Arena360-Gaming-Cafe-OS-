@@ -104,10 +104,12 @@ pub(super) fn validate_void(
             ));
         }
     }
-    if order.kind != "session" || order.session_id.is_none() {
+    if !super::order_line::is_open_bill(order)
+        || (order.kind == "session" && order.session_id.is_none())
+    {
         return Err(invalid(
             "order_id",
-            "only an order on a session bill can be voided",
+            "only an order on a session bill or an unpaid counter order can be voided",
         ));
     }
     if t.time_lines > 0 {

@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { BrandMark, GameMedia, t } from "@arena/ui";
+  import { BrandMark, GameMedia, formatMoney, t } from "@arena/ui";
   import type { AttractView, KioskHubState, PlayerContext } from "@arena/ui/generated";
   import { onMount, tick } from "svelte";
   import {
     ATTRACT_VIDEO_MS,
     LOGIN_IDLE_MS,
     canLogIn,
+    isHeldForCounter,
     mediaAt,
     mediaUrl,
     nextMedia,
@@ -55,6 +56,7 @@
   const current = $derived(view ? mediaAt(view.media, index) : null);
   const offered = $derived(canLogIn(view));
   const rate = $derived(rateText(view));
+  const held = $derived(isHeldForCounter(view));
   const chip = $derived(
     view?.state === "ready" && view.rule ? ruleChipText(view.rule, view.locale) : null,
   );
@@ -194,7 +196,14 @@
         <h1 class="branch type-kiosk-headline" data-testid="attract-branch">
           {view?.branch_name ?? t("app.name")}
         </h1>
-        {#if rate}
+        {#if held && view}
+          <p class="rate type-kiosk-title" data-testid="attract-pay-at-counter">
+            {t("player.attract.pay_at_counter")}
+          </p>
+          <p class="hint type-kiosk-body tabular-nums" data-testid="attract-unpaid">
+            {t("player.attract.unpaid", { amount: formatMoney(view.unpaid_minor, view.locale) })}
+          </p>
+        {:else if rate}
           <p class="rate type-kiosk-title tabular-nums" data-testid="attract-rate">{rate}</p>
           {#if chip}
             <p

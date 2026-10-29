@@ -94,6 +94,20 @@ pub(super) async fn start_session(
         .writer
         .clone()
         .ok_or_else(|| app(ErrorCode::NotPrimary, "this hub is not the primary writer"))?;
+    let owed = {
+        let (dir, device) = (Arc::clone(&hub.devices), device.to_owned());
+        tokio::task::spawn_blocking(move || dir.pay_target(&device))
+            .await
+            .map_err(|e| app(ErrorCode::Internal, format!("pay read failed: {e}")))??
+            .unpaid_minor
+    };
+    if owed > 0 {
+        // The PC is held for the counter until its unpaid order is settled (Story 6.32).
+        return Ok(PlayerStartResult::Refused {
+            code: ErrorCode::ValidationFailed,
+            message: "Pay at the counter first.".to_owned(),
+        });
+    }
     let start = intent(
         hub.clock.now_ms(),
         Actor {

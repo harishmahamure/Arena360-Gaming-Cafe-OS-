@@ -276,11 +276,11 @@ pub use players::{
     valid_policy_version, valid_tags, valid_username,
 };
 pub use pos::{
-    InvoiceIssue, MAX_SALE_LINES, MAX_SALE_QTY, MOVE_COUNT_ADJUST, MOVE_RETURN, MOVE_SALE,
-    MOVE_SALE_REVERTED, NOTE_SALE_OVERRIDE, OrderLineCancel, OrderLineEvent, OrderLineServed,
-    OrderPlace, OrderPlaceReverted, OrderPlacedEvent, OrderVoid, OrderVoidEvent, PlaceOutcome,
-    PosSale, PosSaleLine, PosSaleLineView, PosSalePaymentView, PosSaleReverted, PosSaleView,
-    PosSalesView, VOID_NOTE_MAX_CHARS,
+    CounterOrder, InvoiceIssue, KioskSale, MAX_SALE_LINES, MAX_SALE_QTY, MOVE_COUNT_ADJUST,
+    MOVE_RETURN, MOVE_SALE, MOVE_SALE_REVERTED, NOTE_SALE_OVERRIDE, OrderLineCancel,
+    OrderLineEvent, OrderLineServed, OrderPlace, OrderPlaceReverted, OrderPlacedEvent, OrderVoid,
+    OrderVoidEvent, PlaceOutcome, PosSale, PosSaleLine, PosSaleLineView, PosSalePaymentView,
+    PosSaleReverted, PosSaleView, PosSalesView, VOID_NOTE_MAX_CHARS,
 };
 pub use pricing::{
     RULE_ADJUST_KINDS, RULE_ALL_DAYS, RULE_KINDS, RULE_MAX_DATE_SPAN_DAYS, RULE_MAX_PERCENT_BP,
@@ -374,8 +374,8 @@ pub use shift::{
 };
 pub use shop::{
     FLAG_KIOSK_ORDERS, MAX_CART_LINES, MAX_CART_QTY, MAX_SHOP_ID_LEN, POPULAR_DAYS, POPULAR_LIMIT,
-    ShopComponent, ShopImageRequest, ShopImageResult, ShopItem, ShopMenu, ShopPlace,
-    ShopPlaceResult, kiosk_order_gate,
+    ShopComponent, ShopImageRequest, ShopImageResult, ShopItem, ShopMenu, ShopPay, ShopPayOptions,
+    ShopPlace, ShopPlaceResult, kiosk_order_gate,
 };
 pub use signin::{
     BACKUP_CODES_LOW, DEVICE_LABEL_MAX_CHARS, SIGNIN_CHALLENGE_TTL_S, SIGNIN_LOCK_S,

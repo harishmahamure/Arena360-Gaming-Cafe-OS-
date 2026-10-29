@@ -24,6 +24,7 @@ mod attract;
 mod cash_moves;
 mod commands;
 mod console;
+mod counter_order;
 mod coupon;
 mod discount;
 mod extend;

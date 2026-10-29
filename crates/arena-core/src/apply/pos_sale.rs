@@ -7,8 +7,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arena_proto::{
-    AppError, ErrorCode, Intent, KEY_TAX, MAX_SALE_LINES, MAX_SALE_QTY, MOVE_SALE, PosSale,
-    PosSaleLine, PosSaleReverted, TaxMode, TaxSettings, lot_expired,
+    AppError, ErrorCode, Intent, KEY_TAX, MAX_SALE_LINES, MAX_SALE_QTY, MOVE_SALE, PaymentMethod,
+    PaymentRow, PosSale, PosSaleLine, PosSaleReverted, TaxMode, TaxSettings, lot_expired,
 };
 use arena_store::{
     ChangeOp, LotRow, MoveRow, NewPosOrder, NewProductLine, OrderRow, OrderTxn, ProductRow, RowKey,
@@ -59,6 +59,11 @@ pub(crate) struct SaleTarget {
     player: bool,
     payer: SettleTarget,
     coupon: Option<super::coupon::CouponCtx>,
+    /// The payments the sale settles with: the request's, or for a kiosk wallet sale the one
+    /// wallet payment of the whole total the Hub works out (Story 6.32).
+    payments: Vec<PaymentRow>,
+    /// For a kiosk wallet sale: whether its PC exists.
+    kiosk_device: bool,
 }
 
 pub(super) fn internal(message: &str) -> AppError {
@@ -134,11 +139,26 @@ pub(super) fn load_sale(
 ) -> Result<SaleTarget, AppError> {
     let basket = load_basket(tx, &s.lines, now_ms)?;
     let player_id = s.player_id.as_deref();
+    let payments = match &s.kiosk {
+        Some(_) if s.payments.is_empty() => match price(&s.lines, &basket) {
+            Ok(p) if p.bill.total_minor > 0 => vec![PaymentRow {
+                method: PaymentMethod::Wallet,
+                amount_minor: p.bill.total_minor,
+                reference: None,
+            }],
+            _ => Vec::new(),
+        },
+        _ => s.payments.clone(),
+    };
+    let kiosk_device = match &s.kiosk {
+        Some(k) => arena_store::find_device(tx, &k.device_id)?.is_some(),
+        None => false,
+    };
     let player = match player_id {
         Some(id) => find_player(tx, id)?.is_some(),
         None => false,
     };
-    let payer = load_payer(tx, player_id.filter(|_| player), &s.payments, now_ms)?;
+    let payer = load_payer(tx, player_id.filter(|_| player), &payments, now_ms)?;
     let coupon = s
         .coupon
         .as_deref()
@@ -149,6 +169,8 @@ pub(super) fn load_sale(
         player,
         payer,
         coupon,
+        payments,
+        kiosk_device,
     })
 }
 
@@ -370,9 +392,44 @@ pub(super) fn plan_stock(
     })
 }
 
+/// A kiosk wallet sale (Story 6.32) is one wallet payment of the whole total for the profile running
+/// on the PC: nothing else rides on it, the request carries no payments of its own, and the stock
+/// is never overridden.
+fn check_kiosk(s: &PosSale, t: &SaleTarget) -> Result<(), AppError> {
+    if !s.payments.is_empty() {
+        return Err(invalid("payments", "a kiosk sale names no payments"));
+    }
+    if s.coupon.is_some()
+        || s.discount.is_some()
+        || s.credit_override.is_some()
+        || s.stock_override.is_some()
+        || s.receipt.is_some()
+        || s.business.is_some()
+    {
+        return Err(invalid(
+            "kiosk",
+            "a kiosk sale takes no coupon, discount or override",
+        ));
+    }
+    if s.player_id.is_none() {
+        return Err(invalid("player_id", "a kiosk wallet sale needs a profile"));
+    }
+    if !t.kiosk_device {
+        return Err(AppError::with_field(
+            ErrorCode::NotFound,
+            "kiosk.device_id",
+            "no such PC",
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn validate_sale(intent: &Intent, s: &PosSale, t: &SaleTarget) -> Result<(), AppError> {
     if intent.base_rev.is_some() {
         return Err(invalid("base_rev", "pos.sale takes no base_rev"));
+    }
+    if s.kiosk.is_some() {
+        check_kiosk(s, t)?;
     }
     check_lines(&s.lines, &t.basket)?;
     if s.player_id.is_some() && !t.player {
@@ -384,7 +441,7 @@ pub(super) fn validate_sale(intent: &Intent, s: &PosSale, t: &SaleTarget) -> Res
     }
     let (priced, _) = price_adjusted(&s.lines, &t.basket, t.coupon.as_ref(), s.discount.as_ref())?;
     validate_payments(
-        &s.payments,
+        &t.payments,
         s.credit_override,
         &t.payer,
         s.player_id.is_some(),
@@ -414,6 +471,8 @@ pub(super) fn mutate_sale(
         &NewPosOrder {
             id: &order_id,
             player_id: s.player_id.as_deref(),
+            device_id: s.kiosk.as_ref().map(|k| k.device_id.as_str()),
+            open: false,
             subtotal_minor: priced.bill.subtotal_minor,
             tax_minor: priced.bill.tax_minor,
             total_minor: priced.bill.total_minor,
@@ -482,11 +541,11 @@ pub(super) fn mutate_sale(
         business_day: &business_day,
         fy: &fy,
     };
-    insert_payments(tx, &stamp, &s.payments, &mut written)?;
+    insert_payments(tx, &stamp, &t.payments, &mut written)?;
     record_payer_txns(
         tx,
         &stamp,
-        &s.payments,
+        &t.payments,
         s.player_id.as_deref(),
         t.payer.credit.as_ref(),
         &mut written,

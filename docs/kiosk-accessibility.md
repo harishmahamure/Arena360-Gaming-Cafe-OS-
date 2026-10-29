@@ -176,3 +176,21 @@ Borderless-fullscreen games are not affected: the HUD draws over them like any w
 - With the Hub link down (or an answer that never came) Place order is disabled and a status line
   reads "Counter is reconnecting — try again shortly."; the cart is kept. A confirmation after a
   placed order is a `status` ("Order placed. It's on your session bill.").
+
+## Paying for the cart (Story 6.32)
+
+- The payment choices are a radio group ("How to pay"). Which radios exist is the Hub's answer for
+  this PC: "Add to session bill" on a running postpaid or block session; "Pay now from wallet" with
+  the balance for a signed-in player; "Pay at counter" always. A guest never sees the wallet. With
+  the session ended the group holds "Pay at counter" alone.
+- A wallet that cannot cover the total is a disabled radio. The reason is text beside it ("Balance
+  ₹10.00. Top up at counter."), a `status`, so it is not colour alone. The default choice moves to
+  the first one that works (bill, wallet, counter) and keeps the player's own pick while it is
+  offered.
+- If a concurrent spend leaves too little, Place order is refused and the cart stays with an `alert`
+  that carries the real balance ("Balance ₹40.00. Top up at counter.").
+- The confirmation after each choice is a `status` that says what happened ("Paid from your wallet.
+  Your order is on its way." / "Order placed. Pay at the counter.").
+- A PC that owes the counter for an order shows "Pay at the counter" and "Unpaid ₹80.00" on the
+  attract screen in place of the rate. Keys and taps open nothing until the counter settles it; the
+  next attract view lifts the hold on its own, with no player action.

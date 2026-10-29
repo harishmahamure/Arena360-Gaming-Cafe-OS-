@@ -87,6 +87,12 @@ pub(super) fn load_line(
     })
 }
 
+/// Whether an order is a bill that can still change: a session's, or an unpaid counter order
+/// (Story 6.32: `pos_sale` and open, which only a counter order is).
+pub(super) fn is_open_bill(o: &arena_store::OrderRow) -> bool {
+    o.kind == "session" || (o.kind == "pos_sale" && o.session_id.is_none())
+}
+
 /// The line, when it is a product line on an open session bill.
 fn open_line<'a>(intent: &Intent, t: &'a LineTarget, what: &str) -> Result<&'a LineRow, AppError> {
     if intent.base_rev.is_some() {
@@ -105,7 +111,7 @@ fn open_line<'a>(intent: &Intent, t: &'a LineTarget, what: &str) -> Result<&'a L
     let open = t
         .order
         .as_ref()
-        .is_some_and(|o| o.status == "open" && o.kind == "session");
+        .is_some_and(|o| o.status == "open" && is_open_bill(o));
     if !open {
         return Err(invalid("line_id", "this bill is no longer open"));
     }

@@ -641,6 +641,8 @@ pub struct OrderRow {
     pub player_id: Option<String>,
     pub kind: String,
     pub group_bill_id: Option<String>,
+    /// The PC an order is tied to (a counter order from a kiosk, Story 6.32).
+    pub device_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -686,7 +688,7 @@ pub fn find_order(conn: &Connection, id: &str) -> Result<Option<OrderRow>, AppEr
     .map_err(db_error)
 }
 
-pub(crate) const ORDER_COLUMNS: &str = "id, status, total_minor, rev, session_id, settled_at, settled_by, player_id, kind, group_bill_id";
+pub(crate) const ORDER_COLUMNS: &str = "id, status, total_minor, rev, session_id, settled_at, settled_by, player_id, kind, group_bill_id, device_id";
 
 pub(crate) fn order_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<OrderRow> {
     Ok(OrderRow {
@@ -700,6 +702,7 @@ pub(crate) fn order_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<OrderRow> {
         player_id: r.get(7)?,
         kind: r.get(8)?,
         group_bill_id: r.get(9)?,
+        device_id: r.get(10)?,
     })
 }
 
@@ -1409,6 +1412,10 @@ pub fn move_open_orders(
 pub struct NewPosOrder<'a> {
     pub id: &'a str,
     pub player_id: Option<&'a str>,
+    /// The PC the order is tied to (a kiosk order, Story 6.32).
+    pub device_id: Option<&'a str>,
+    /// Written `open` and unpaid (an unpaid counter order) instead of settled.
+    pub open: bool,
     pub subtotal_minor: i64,
     pub tax_minor: i64,
     pub total_minor: i64,
@@ -1425,7 +1432,7 @@ pub fn insert_pos_order(conn: &Connection, o: &NewPosOrder<'_>) -> Result<(), Ap
         "INSERT INTO orders (id, session_id, player_id, guest_no, device_id, status, subtotal_minor,
                              total_minor, business_day, fy, kind, settled_at, settled_by,
                              tax_minor, tax_breakup, rev, created_at, updated_at)
-         VALUES (?1, NULL, ?2, NULL, NULL, 'settled', ?3, ?4, ?5, ?6, 'pos_sale', ?7, ?8, ?9, ?10,
+         VALUES (?1, NULL, ?2, NULL, ?11, ?12, ?3, ?4, ?5, ?6, 'pos_sale', ?7, ?8, ?9, ?10,
                  0, 0, 0)",
         params![
             o.id,
@@ -1434,14 +1441,41 @@ pub fn insert_pos_order(conn: &Connection, o: &NewPosOrder<'_>) -> Result<(), Ap
             o.total_minor,
             o.business_day,
             o.fy,
-            o.settled_at,
-            o.settled_by,
+            (!o.open).then_some(o.settled_at),
+            (!o.open).then_some(o.settled_by),
             o.tax_minor,
-            o.tax_breakup
+            o.tax_breakup,
+            o.device_id,
+            if o.open { "open" } else { "settled" },
         ],
     )
     .map_err(db_error)?;
     Ok(())
+}
+
+/// What a PC owes the counter (Story 6.32): the totals of its open counter orders, which have
+/// no session. A running session's own bill is not counted.
+pub fn unpaid_counter_minor(conn: &Connection, device_id: &str) -> Result<i64, AppError> {
+    conn.query_row(
+        "SELECT COALESCE(SUM(total_minor), 0) FROM orders
+         WHERE device_id = ?1 AND status = 'open' AND kind = 'pos_sale' AND session_id IS NULL",
+        [device_id],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}
+
+/// The player of the latest session that ran on `device_id`, for a counter order placed after it
+/// ended (Story 6.32).
+pub fn last_session_player(conn: &Connection, device_id: &str) -> Result<Option<String>, AppError> {
+    conn.query_row(
+        "SELECT player_id FROM sessions WHERE device_id = ?1 ORDER BY started_at DESC, id DESC LIMIT 1",
+        [device_id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map(Option::flatten)
+    .map_err(db_error)
 }
 
 /// One product line of a counter sale.

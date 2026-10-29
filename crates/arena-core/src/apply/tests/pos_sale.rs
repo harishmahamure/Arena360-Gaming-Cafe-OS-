@@ -16,6 +16,7 @@ use arena_proto::{
 
 fn sale_of(lines: &[(&str, i64)], payments: Vec<PaymentRow>) -> PosSale {
     PosSale {
+        kiosk: None,
         business: None,
         coupon: None,
         discount: None,

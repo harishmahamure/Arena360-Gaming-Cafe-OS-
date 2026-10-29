@@ -84,6 +84,7 @@ fn code_of(r: Result<Applied, AppError>) -> (ErrorCode, Option<String>) {
 
 fn sale(lines: &[(&str, i64)], payments: Vec<PaymentRow>, code: Option<&str>) -> PosSale {
     PosSale {
+        kiosk: None,
         business: None,
         coupon: code.map(Into::into),
         discount: None,

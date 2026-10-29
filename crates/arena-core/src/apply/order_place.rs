@@ -15,12 +15,12 @@ use arena_proto::{
     MOVE_SALE_REVERTED, OrderPlace, OrderPlaceReverted, SessionMode, TAKE_STOCK_AT_ORDER,
 };
 use arena_store::{
-    ChangeOp, HoldRow, LiveSession, LotRow, MoveRow, NewHold, NewOrder, NewProductLine, OrderRow,
-    PRODUCT_LINE_BASE, PlacedLine, RowKey, StockRow, StoreTx, Table, add_order_amount, delete_row,
-    effect_recorded, find_order, find_order_for_session, find_session, find_setting, find_stock,
-    insert_hold, insert_order, insert_product_line, list_lots, list_order_line_ids,
-    list_placement_holds, list_placement_lines, list_placement_moves, next_product_position,
-    read_row,
+    ChangeOp, HoldRow, LiveSession, LotRow, MoveRow, NewHold, NewOrder, NewPosOrder,
+    NewProductLine, OrderRow, PRODUCT_LINE_BASE, PlacedLine, RowKey, StockRow, StoreTx, Table,
+    add_order_amount, delete_row, effect_recorded, find_order, find_order_for_session,
+    find_session, find_setting, find_stock, insert_hold, insert_order, insert_pos_order,
+    insert_product_line, list_lots, list_order_line_ids, list_placement_holds,
+    list_placement_lines, list_placement_moves, next_product_position, read_row,
 };
 
 use super::mutate::Written;
@@ -37,6 +37,8 @@ pub(crate) struct PlaceTarget {
     next_position: i64,
     /// Whether the branch takes stock when a line is served (`inventory.take_stock_at`).
     at_served: bool,
+    /// For a counter order (Story 6.32): whether its PC exists, and whether its player does.
+    counter_ok: (bool, bool),
 }
 
 /// Whether the branch takes stock at "served" (the default) rather than at placement.
@@ -69,12 +71,23 @@ pub(super) fn load_place(
         Some(o) => next_product_position(tx, &o.id)?,
         None => PRODUCT_LINE_BASE,
     };
+    let counter_ok = match &p.counter {
+        Some(c) => (
+            arena_store::find_device(tx, &c.device_id)?.is_some(),
+            match &c.player_id {
+                Some(id) => arena_store::find_player(tx, id)?.is_some(),
+                None => true,
+            },
+        ),
+        None => (false, false),
+    };
     Ok(PlaceTarget {
         session,
         order,
         basket: load_basket(tx, &p.lines, now_ms)?,
         next_position,
         at_served: take_at_served(tx)?,
+        counter_ok,
     })
 }
 
@@ -94,6 +107,9 @@ pub(super) fn validate_place(
 ) -> Result<(), AppError> {
     if intent.base_rev.is_some() {
         return Err(invalid("base_rev", "order.place takes no base_rev"));
+    }
+    if p.counter.is_some() {
+        return validate_counter(p, t);
     }
     let Some(s) = &t.session else {
         return Err(AppError::with_field(
@@ -127,6 +143,39 @@ pub(super) fn validate_place(
     Ok(())
 }
 
+/// An unpaid counter order (Story 6.32): the lines are tied to a PC, not a session, and nothing is
+/// paid yet. The PC and the player (when named) must exist, no stock override applies, and the
+/// lines follow the same rules as any order.
+fn validate_counter(p: &OrderPlace, t: &PlaceTarget) -> Result<(), AppError> {
+    if !p.session_id.is_empty() {
+        return Err(invalid("session_id", "a counter order names no session"));
+    }
+    if p.stock_override == Some(true) {
+        return Err(invalid(
+            "stock_override",
+            "a counter order takes no stock override",
+        ));
+    }
+    if !t.counter_ok.0 {
+        return Err(AppError::with_field(
+            ErrorCode::NotFound,
+            "device_id",
+            "no such PC",
+        ));
+    }
+    if !t.counter_ok.1 {
+        return Err(AppError::with_field(
+            ErrorCode::NotFound,
+            "player_id",
+            "no such player",
+        ));
+    }
+    check_lines(&p.lines, &t.basket)?;
+    price(&p.lines, &t.basket)?;
+    plan_stock(&p.lines, &t.basket, false, &deferred(t))?;
+    Ok(())
+}
+
 pub(super) fn mutate_place(
     tx: &StoreTx<'_>,
     intent: &Intent,
@@ -134,10 +183,7 @@ pub(super) fn mutate_place(
     t: &PlaceTarget,
     now_ms: i64,
 ) -> Result<Vec<Written>, AppError> {
-    let Some(s) = &t.session else {
-        return Err(internal("a placement validated without its session"));
-    };
-    let (business_day, _) = crate::locale::stamp(tx, now_ms)?
+    let (business_day, fy) = crate::locale::stamp(tx, now_ms)?
         .ok_or_else(|| internal("the branch has not been bootstrapped"))?;
     let priced = price(&p.lines, &t.basket)?;
     let plan = plan_stock(
@@ -148,8 +194,36 @@ pub(super) fn mutate_place(
     )?;
     let amount: i64 = priced.lines.iter().map(|(_, a)| a).sum();
     let mut written = Vec::new();
-    let order_id = match &t.order {
-        Some(o) => {
+    let order_id = match (&p.counter, &t.order) {
+        (Some(c), _) => {
+            let breakup = serde_json::to_string(&priced.bill.breakup)
+                .map_err(|_| internal("the tax breakup cannot be written"))?;
+            let id = ulid::Ulid::generate().to_string();
+            insert_pos_order(
+                tx,
+                &NewPosOrder {
+                    id: &id,
+                    player_id: c.player_id.as_deref(),
+                    device_id: Some(&c.device_id),
+                    open: true,
+                    subtotal_minor: priced.bill.subtotal_minor,
+                    tax_minor: priced.bill.tax_minor,
+                    total_minor: priced.bill.total_minor,
+                    tax_breakup: &breakup,
+                    settled_at: now_ms,
+                    settled_by: &intent.actor.id,
+                    business_day: &business_day,
+                    fy: &fy,
+                },
+            )?;
+            written.push(Written {
+                key: RowKey::Orders { id: id.clone() },
+                op: ChangeOp::Insert,
+                before: None,
+            });
+            id
+        }
+        (None, Some(o)) => {
             add_order_amount(tx, &o.id, amount)?;
             written.push(Written {
                 key: RowKey::Orders { id: o.id.clone() },
@@ -158,7 +232,11 @@ pub(super) fn mutate_place(
             });
             o.id.clone()
         }
-        None => {
+        (None, None) => {
+            let s = t
+                .session
+                .as_ref()
+                .ok_or_else(|| internal("a placement validated without its session"))?;
             let id = ulid::Ulid::generate().to_string();
             insert_order(
                 tx,

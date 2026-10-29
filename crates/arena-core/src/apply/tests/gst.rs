@@ -38,6 +38,7 @@ async fn sell(
         f,
         owner(),
         IntentPayload::PosSale(PosSale {
+            kiosk: None,
             business,
             coupon: None,
             discount: None,

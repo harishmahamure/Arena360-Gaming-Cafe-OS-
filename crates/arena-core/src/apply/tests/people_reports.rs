@@ -17,6 +17,7 @@ async fn sell(f: &Fixture, actor: Actor, product: &str, qty: i64, player: Option
         f,
         actor,
         IntentPayload::PosSale(PosSale {
+            kiosk: None,
             business: None,
             coupon: None,
             discount: None,

@@ -9,7 +9,7 @@ use ts_rs::TS;
 
 use crate::error::{AppError, ErrorCode};
 use crate::intent::IntentPayload;
-use crate::pos::PosSaleLine;
+use crate::pos::{PosSale, PosSaleLine};
 
 /// The licence flag that lets a kiosk show the Shop and place orders (Basic and above).
 pub const FLAG_KIOSK_ORDERS: &str = "kiosk_orders";
@@ -27,7 +27,10 @@ pub const MAX_SHOP_ID_LEN: usize = 64;
 /// intent from a device on a branch without the flag is refused `FEATURE_NOT_IN_TIER` before the
 /// permission check.
 pub fn kiosk_order_gate(p: &IntentPayload) -> bool {
-    matches!(p, IntentPayload::OrderPlace(_))
+    matches!(
+        p,
+        IntentPayload::OrderPlace(_) | IntentPayload::PosSale(PosSale { kiosk: Some(_), .. })
+    )
 }
 
 /// One part of a bundle ("2 x Cola").
@@ -75,6 +78,9 @@ pub struct ShopMenu {
     pub enabled: bool,
     /// Active, non-deleted products and bundles by category then name.
     pub items: Vec<ShopItem>,
+    /// How the signed-in player can pay for a cart on this PC (Story 6.32).
+    #[serde(default)]
+    pub pay: ShopPayOptions,
 }
 
 /// `shop.image` (kiosk -> Hub): the photo of one product.
@@ -115,6 +121,9 @@ pub const MAX_CART_QTY: i64 = 99;
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct ShopPlace {
     pub lines: Vec<PosSaleLine>,
+    /// How the cart is paid; the Hub decides whether this PC can take it.
+    #[serde(default)]
+    pub pay: ShopPay,
 }
 
 impl ShopPlace {
@@ -138,6 +147,35 @@ impl ShopPlace {
     }
 }
 
+/// How a cart is paid (Story 6.32). `Bill` adds it to the running session's bill, `Wallet` settles it
+/// now from the player's wallet, `Counter` leaves an unpaid order for the counter to settle.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum ShopPay {
+    #[default]
+    Bill,
+    Wallet,
+    Counter,
+}
+
+/// The payment choices a PC offers a cart right now (Story 6.32), as the Hub works them out from
+/// the PC's session. The kiosk only renders them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ShopPayOptions {
+    /// "Add to session bill": a running postpaid or block session takes the order.
+    pub bill: bool,
+    /// The wallet balance when "Pay now from wallet" is offered (a profiled player's running
+    /// session), else `null`. The button is disabled with the reason when it is below the total.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub wallet_minor: Option<i64>,
+    /// "Pay at counter": always offered when the Shop is on; the only choice once the session
+    /// has ended.
+    pub counter: bool,
+}
+
 /// `shop.place_result`: the order joined the session's bill, or the Hub refused it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
@@ -150,6 +188,10 @@ pub enum ShopPlaceResult {
     Refused {
         code: ErrorCode,
         message: String,
+        /// The wallet balance a refused wallet payment found (`INSUFFICIENT_BALANCE`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, type = "number")]
+        balance_minor: Option<i64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         product_id: Option<String>,
@@ -167,6 +209,7 @@ mod tests {
         assert_eq!(ask.body, FrameBody::ShopMenu);
         let menu = ShopMenu {
             enabled: true,
+            pay: ShopPayOptions::default(),
             items: vec![ShopItem {
                 id: "P1".into(),
                 name: "Combo".into(),
@@ -214,6 +257,7 @@ mod tests {
         assert_eq!(
             ask.body,
             FrameBody::ShopPlace(ShopPlace {
+                pay: ShopPay::Bill,
                 lines: vec![PosSaleLine {
                     product_id: "P1".into(),
                     qty: 2
@@ -226,6 +270,7 @@ mod tests {
                 code: ErrorCode::OutOfStock,
                 message: "Only 1 Cola left.".into(),
                 product_id: Some("P1".into()),
+                balance_minor: None,
             },
         ] {
             let reply = Frame::new("p", FrameBody::ShopPlaceResult(body));
@@ -241,7 +286,10 @@ mod tests {
             product_id: id.into(),
             qty,
         };
-        let cart = |lines| ShopPlace { lines };
+        let cart = |lines| ShopPlace {
+            lines,
+            pay: ShopPay::Bill,
+        };
         assert!(
             cart(vec![line("P1", 1), line("P2", MAX_CART_QTY)])
                 .validate()
@@ -278,6 +326,7 @@ mod tests {
     fn only_an_order_is_gated_on_the_kiosk_orders_flag() {
         use crate::{OrderPlace, PosSaleLine};
         let order = IntentPayload::OrderPlace(OrderPlace {
+            counter: None,
             session_id: "S".into(),
             lines: Vec::<PosSaleLine>::new(),
             stock_override: None,

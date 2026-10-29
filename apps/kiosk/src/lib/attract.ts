@@ -30,7 +30,11 @@ export function mediaAt(media: readonly AttractMedia[], index: number): AttractM
 
 /** Whether the screen offers the login panel: the PC is ready, with a rate to show. */
 export const canLogIn = (view: AttractView | null): boolean =>
-  view !== null && view.state === "ready" && view.rate_minor != null;
+  view !== null && view.state === "ready" && view.rate_minor != null && !isHeldForCounter(view);
+
+/** Whether the PC owes the counter for an order (Story 6.32): it shows "Pay at the counter" and takes no login. */
+export const isHeldForCounter = (view: AttractView | null): boolean =>
+  (view?.unpaid_minor ?? 0) > 0;
 
 /** "₹120.00 an hour" in the branch locale, or `null` when the PC shows no rate. */
 export function rateText(view: AttractView | null): string | null {

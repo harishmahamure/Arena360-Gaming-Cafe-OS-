@@ -33,6 +33,8 @@
   import { isTextEntry } from "../../lib/nav";
   import { sessionStaff, snapshotOf } from "../../lib/operating";
   import PlayerLookup from "../../lib/players/PlayerLookup.svelte";
+  import OpenOrders from "../../lib/OpenOrders.svelte";
+  import { openCounterOrders } from "../../lib/open-orders";
   import RefundPanel from "../../lib/RefundPanel.svelte";
   import {
     ALL,
@@ -90,7 +92,7 @@
   let attempt: { key: string; body: string } | null = null;
 
   // Recent sales.
-  let view: "grid" | "recent" | "refund" = $state("grid");
+  let view: "grid" | "recent" | "refund" | "open" = $state("grid");
   let sales: PosSaleView[] = $state([]);
   let salesState: "loading" | "ok" | "failed" = $state("loading");
   let openSale: string | null = $state(null);
@@ -138,6 +140,10 @@
     player_id: attached?.player_id,
   });
   const snapshot = $derived(snapshotOf(page.data));
+  const openCount = $derived(openCounterOrders(snapshot?.bills ?? []).length);
+  const deviceNames = $derived(
+    Object.fromEntries((snapshot?.devices ?? []).map((d) => [d.device_id, d.label])),
+  );
   const running = $derived(orderSessions(snapshot?.sessions ?? [], snapshot?.devices ?? []));
   const attachedSession = $derived(running.find((s) => s.session.id === attachedId) ?? null);
   // What an order adds to the session bill: the lines at their prices, no tax.
@@ -951,6 +957,18 @@
         <button
           type="button"
           class="ui-interactive link type-hub-label"
+          data-testid="open-toggle"
+          aria-pressed={view === "open"}
+          onclick={() => (view = view === "open" ? "grid" : "open")}
+          >{view === "open"
+            ? t("hub.pos.recent.back")
+            : openCount > 0
+              ? t("hub.pos.open.toggle_count", { count: openCount })
+              : t("hub.pos.open.toggle")}</button
+        >
+        <button
+          type="button"
+          class="ui-interactive link type-hub-label"
           data-testid="refund-toggle"
           aria-pressed={view === "refund"}
           onclick={() => (view = view === "refund" ? "grid" : "refund")}
@@ -960,6 +978,16 @@
 
       {#if view === "recent"}
         <div class="results">{@render recentSales()}</div>
+      {:else if view === "open" && locale}
+        <div class="results">
+          <OpenOrders
+            bills={snapshot?.bills ?? []}
+            names={deviceNames}
+            {locale}
+            {staff}
+            ondone={() => void invalidate(SESSION_DEPENDENCY)}
+          />
+        </div>
       {:else if view === "refund"}
         <div class="results">
           <RefundPanel {staff} {money} ontimeout={() => void invalidate(SESSION_DEPENDENCY)} />

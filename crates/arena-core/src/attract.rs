@@ -105,7 +105,7 @@ pub fn attract_views(
     let locale = snapshot_locale(&locale_rows(&locale_branch, &settings), now_ms);
     let tz = locale.tz.parse::<chrono_tz::Tz>().ok();
     let media = media_of(store, lookup)?;
-    Ok(device_ids
+    device_ids
         .iter()
         .map(|id| {
             let device = meta
@@ -145,8 +145,9 @@ pub fn attract_views(
                 rule,
                 locale: locale.clone(),
                 media: media.clone(),
+                unpaid_minor: store.unpaid_counter_minor(id)?,
             };
-            (id.clone(), view)
+            Ok((id.clone(), view))
         })
-        .collect())
+        .collect()
 }

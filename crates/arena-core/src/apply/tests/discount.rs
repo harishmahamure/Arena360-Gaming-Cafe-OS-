@@ -47,6 +47,7 @@ fn sale(
     discount: Option<ManualDiscount>,
 ) -> PosSale {
     PosSale {
+        kiosk: None,
         business: None,
         coupon: coupon.map(Into::into),
         discount,

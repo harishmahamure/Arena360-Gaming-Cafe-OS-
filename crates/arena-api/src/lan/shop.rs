@@ -9,8 +9,9 @@
 use std::sync::Arc;
 
 use arena_proto::{
-    Actor, ActorKind, AlertKind, AlertRaise, AppError, ErrorCode, IntentKind, IntentPayload,
-    OrderPlace, PosSaleLine, ShopImageResult, ShopMenu, ShopPlace, ShopPlaceResult,
+    Actor, ActorKind, AlertKind, AlertRaise, AppError, CounterOrder, ErrorCode, IntentKind,
+    IntentPayload, KioskSale, OrderPlace, PosSale, PosSaleLine, ShopImageResult, ShopMenu, ShopPay,
+    ShopPlace, ShopPlaceResult,
 };
 
 use super::LanHub;
@@ -22,10 +23,11 @@ fn failed(what: &str, e: tokio::task::JoinError) -> AppError {
 }
 
 /// `shop.menu`.
-pub(super) async fn menu(hub: &LanHub) -> Result<ShopMenu, AppError> {
+pub(super) async fn menu(hub: &LanHub, device: &str) -> Result<ShopMenu, AppError> {
     let dir = Arc::clone(&hub.devices);
     let now = hub.clock.now_ms();
-    tokio::task::spawn_blocking(move || dir.shop_menu(now))
+    let device = device.to_owned();
+    tokio::task::spawn_blocking(move || dir.shop_menu(now, &device))
         .await
         .map_err(|e| failed("shop menu", e))?
 }
@@ -53,13 +55,19 @@ fn refused_product(field: Option<&str>, lines: &[PosSaleLine]) -> Option<String>
     lines.get(at).map(|l| l.product_id.clone())
 }
 
-/// `shop.place` (Story 6.31): the player's cart goes on the session running on `device`.
+/// `shop.place` (Stories 6.31 and 6.32): the player's cart, paid the way they chose.
 ///
-/// The Hub builds the `order.place` itself (device actor, never a stock override), so the Epic 5
-/// rules apply as they do at the counter and a kiosk without the `kiosk_orders` flag is refused
-/// `FEATURE_NOT_IN_TIER`. On success the Hub raises the PC's `kiosk_order` alert (the new-order
-/// sound, the badge and the tile's ORDER tag); one already open is as good as a new one. A refusal
-/// comes back typed, naming the short product, and the cart stays on the kiosk.
+/// The Hub builds the intent itself (device actor, never a stock override), so the Epic 5 rules
+/// apply as they do at the counter and a kiosk without the `kiosk_orders` flag is refused
+/// `FEATURE_NOT_IN_TIER`:
+/// - `bill`: an `order.place` on the session running on `device`;
+/// - `wallet`: a `pos.sale` settled by one wallet payment of the whole total, for the profile
+///   running on `device`, tied to the PC for delivery;
+/// - `counter`: an `order.place` with `counter`, an unpaid order tied to the PC and the player.
+///
+/// On success the Hub raises the PC's `kiosk_order` alert (the new-order sound, the badge and the
+/// tile's ORDER tag); one already open is as good as a new one. A refusal comes back typed, naming
+/// the short product, and the cart stays on the kiosk.
 pub(super) async fn place(
     hub: &LanHub,
     device: &str,
@@ -69,16 +77,75 @@ pub(super) async fn place(
         return Err(not_primary());
     }
     let writer = hub.writer.clone().ok_or_else(not_primary)?;
-    let session_id = {
+    let target = {
         let (dir, device) = (Arc::clone(&hub.devices), device.to_owned());
-        tokio::task::spawn_blocking(move || dir.order_target(&device))
+        tokio::task::spawn_blocking(move || dir.pay_target(&device))
             .await
-            .map_err(|e| failed("session", e))?
+            .map_err(|e| failed("session", e))??
     };
-    let session_id = match session_id {
-        Ok(id) => id,
-        Err(e) if e.code == ErrorCode::NotPrimary => return Err(e),
-        Err(e) => return Ok(refusal(e, None)),
+    let (kind, payload) = match request.pay {
+        ShopPay::Bill => {
+            let session_id = {
+                let (dir, device) = (Arc::clone(&hub.devices), device.to_owned());
+                tokio::task::spawn_blocking(move || dir.order_target(&device))
+                    .await
+                    .map_err(|e| failed("session", e))?
+            };
+            match session_id {
+                Ok(session_id) => (
+                    IntentKind::OrderPlace,
+                    IntentPayload::OrderPlace(OrderPlace {
+                        counter: None,
+                        session_id,
+                        lines: request.lines.clone(),
+                        stock_override: None,
+                    }),
+                ),
+                Err(e) if e.code == ErrorCode::NotPrimary => return Err(e),
+                Err(e) => return Ok(refusal(e, None, None)),
+            }
+        }
+        ShopPay::Wallet => {
+            let Some(Some(player_id)) = target.running.clone() else {
+                return Ok(refusal(
+                    AppError::new(
+                        ErrorCode::ValidationFailed,
+                        "Pay now needs a signed-in player on a running session.",
+                    ),
+                    None,
+                    None,
+                ));
+            };
+            (
+                IntentKind::PosSale,
+                IntentPayload::PosSale(PosSale {
+                    kiosk: Some(KioskSale {
+                        device_id: device.to_owned(),
+                    }),
+                    lines: request.lines.clone(),
+                    payments: Vec::new(),
+                    player_id: Some(player_id),
+                    credit_override: None,
+                    stock_override: None,
+                    receipt: None,
+                    business: None,
+                    coupon: None,
+                    discount: None,
+                }),
+            )
+        }
+        ShopPay::Counter => (
+            IntentKind::OrderPlace,
+            IntentPayload::OrderPlace(OrderPlace {
+                counter: Some(CounterOrder {
+                    device_id: device.to_owned(),
+                    player_id: target.last_player.clone(),
+                }),
+                session_id: String::new(),
+                lines: request.lines.clone(),
+                stock_override: None,
+            }),
+        ),
     };
     let order = intent(
         hub.clock.now_ms(),
@@ -86,33 +153,33 @@ pub(super) async fn place(
             kind: ActorKind::Device,
             id: device.to_owned(),
         },
-        IntentKind::OrderPlace,
-        IntentPayload::OrderPlace(OrderPlace {
-            session_id,
-            lines: request.lines.clone(),
-            stock_override: None,
-        }),
+        kind,
+        payload,
     );
     match writer.submit_intent(order).await {
         Ok(_) => {
             raise_order_alert(hub, &writer, device).await;
-            tracing::info!(device_id = %device, lines = request.lines.len(), "a player ordered from the kiosk");
+            tracing::info!(device_id = %device, lines = request.lines.len(), pay = ?request.pay, "a player ordered from the kiosk");
             Ok(ShopPlaceResult::Ok)
         }
         Err(e) if e.code == ErrorCode::NotPrimary => Err(e),
         Err(e) => {
             tracing::info!(device_id = %device, code = e.code.as_str(), "kiosk order refused");
             let product = refused_product(e.field.as_deref(), &request.lines);
-            Ok(refusal(e, product))
+            let balance = (e.code == ErrorCode::InsufficientBalance)
+                .then_some(target.wallet_minor)
+                .flatten();
+            Ok(refusal(e, product, balance))
         }
     }
 }
 
-fn refusal(e: AppError, product_id: Option<String>) -> ShopPlaceResult {
+fn refusal(e: AppError, product_id: Option<String>, balance_minor: Option<i64>) -> ShopPlaceResult {
     ShopPlaceResult::Refused {
         code: e.code,
         message: e.message,
         product_id,
+        balance_minor,
     }
 }
 

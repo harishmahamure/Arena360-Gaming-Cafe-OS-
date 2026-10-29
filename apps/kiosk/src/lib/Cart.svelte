@@ -1,7 +1,16 @@
 <script lang="ts">
   import { formatMoney, t } from "@arena/ui";
   import type { SnapshotLocale } from "@arena/ui/generated";
-  import { cartTotal, stockProblem, type CartLine } from "./cart";
+  import {
+    cartTotal,
+    chosenPay,
+    payOffer,
+    stockProblem,
+    walletShort,
+    type CartLine,
+    type PayChoice,
+    type PayOffer,
+  } from "./cart";
 
   /** Why a line is marked: a stock shortage the Hub reported, or a bundle short a component. */
   export type LineProblem =
@@ -18,8 +27,12 @@
     zone = "",
     connected = false,
     busy = false,
-    placed = false,
+    placed = null,
     error = null,
+    offer = payOffer(undefined),
+    picked = null,
+    balance = null,
+    onpick = () => {},
     onstep = () => {},
     onplace = () => {},
     onclose = () => {},
@@ -37,16 +50,25 @@
     /** An order is being placed. */
     busy?: boolean;
     /** The last order went through (the cart is empty and says so). */
-    placed?: boolean;
+    placed?: PayChoice | null;
     /** A whole-cart message: the counter is unreachable, or the Hub refused for another reason. */
-    error?: "reconnecting" | "refused" | null;
+    error?: "reconnecting" | "refused" | "balance" | null;
+    /** The payment choices the Hub offers this PC now (Story 6.32). */
+    offer?: PayOffer;
+    /** The choice the player made, if any; the shown one follows what the Hub still offers. */
+    picked?: PayChoice | null;
+    /** The wallet balance a refused wallet payment found (INSUFFICIENT_BALANCE). */
+    balance?: number | null;
+    onpick?: (pay: PayChoice) => void;
     onstep?: (id: string, delta: 1 | -1) => void;
-    onplace?: () => void;
+    onplace?: (pay: PayChoice) => void;
     onclose?: () => void;
   } = $props();
 
   const money = (minor: number) => (locale ? formatMoney(minor, locale) : "");
   const total = $derived(cartTotal(lines));
+  const pay = $derived(chosenPay(offer, picked, total));
+  const short = $derived(walletShort(offer, total));
 
   const words = (p: LineProblem): string => {
     switch (p.kind) {
@@ -103,9 +125,13 @@
     </button>
   </header>
 
-  {#if placed && lines.length === 0}
+  {#if placed !== null && lines.length === 0}
     <p class="placed type-kiosk-body" role="status" data-testid="cart-placed">
-      {t("player.cart.placed")}
+      {placed === "wallet"
+        ? t("player.cart.placed_wallet")
+        : placed === "counter"
+          ? t("player.cart.placed_counter")
+          : t("player.cart.placed")}
     </p>
   {:else if lines.length === 0}
     <p class="empty type-kiosk-body" data-testid="cart-empty">{t("player.cart.empty")}</p>
@@ -184,20 +210,73 @@
 
     <fieldset class="pay">
       <legend class="visually-hidden">{t("player.cart.pay_label")}</legend>
-      <label class="choice">
-        <input type="radio" name="cart-pay" checked data-testid="cart-pay-bill" />
-        <span>
-          <span class="type-kiosk-body">{t("player.cart.pay_bill")}</span>
-          <span class="type-kiosk-label sub" data-testid="cart-pay-note">
-            {t("player.cart.pay_bill_note")}
+      {#if offer.bill}
+        <label class="choice">
+          <input
+            type="radio"
+            name="cart-pay"
+            checked={pay === "bill"}
+            data-testid="cart-pay-bill"
+            onchange={() => onpick("bill")}
+          />
+          <span>
+            <span class="type-kiosk-body">{t("player.cart.pay_bill")}</span>
+            <span class="type-kiosk-label sub" data-testid="cart-pay-note">
+              {t("player.cart.pay_bill_note")}
+            </span>
           </span>
-        </span>
-      </label>
+        </label>
+      {/if}
+      {#if offer.walletMinor !== null}
+        <label class="choice">
+          <input
+            type="radio"
+            name="cart-pay"
+            checked={pay === "wallet"}
+            disabled={short}
+            data-testid="cart-pay-wallet"
+            onchange={() => onpick("wallet")}
+          />
+          <span>
+            <span class="type-kiosk-body">{t("player.cart.pay_wallet")}</span>
+            <span class="type-kiosk-label sub tabular-nums" data-testid="cart-wallet-balance">
+              {t("player.cart.wallet_balance", { amount: money(offer.walletMinor) })}
+            </span>
+            {#if short}
+              <span class="type-kiosk-label sub" role="status" data-testid="cart-wallet-short">
+                {t("player.cart.wallet_short", { amount: money(offer.walletMinor) })}
+              </span>
+            {/if}
+          </span>
+        </label>
+      {/if}
+      {#if offer.counter}
+        <label class="choice">
+          <input
+            type="radio"
+            name="cart-pay"
+            checked={pay === "counter"}
+            data-testid="cart-pay-counter"
+            onchange={() => onpick("counter")}
+          />
+          <span>
+            <span class="type-kiosk-body">{t("player.cart.pay_counter")}</span>
+            <span class="type-kiosk-label sub" data-testid="cart-counter-note">
+              {t("player.cart.pay_counter_note")}
+            </span>
+          </span>
+        </label>
+      {/if}
     </fieldset>
 
     {#if reconnecting}
       <p class="status type-kiosk-label" role="status" data-testid="cart-reconnecting">
         {t("player.cart.reconnecting")}
+      </p>
+    {:else if error === "balance" && balance !== null}
+      <p class="status type-kiosk-label" role="alert" data-testid="cart-balance">
+        <span aria-hidden="true">⚠</span>
+        {t("player.cart.wallet_short", { amount: money(balance) })}
       </p>
     {:else if error === "refused"}
       <p class="status type-kiosk-label" role="alert" data-testid="cart-refused">
@@ -211,7 +290,7 @@
       class="place type-kiosk-title"
       disabled={reconnecting || busy}
       data-testid="cart-place"
-      onclick={onplace}
+      onclick={() => onplace(pay)}
     >
       {busy ? t("player.cart.placing") : t("player.cart.place")}
     </button>

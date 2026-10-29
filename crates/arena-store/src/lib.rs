@@ -188,10 +188,11 @@ pub use sessions::{
     find_settlement, forced_pack_minutes, forward_intent_id, forward_kind, grace_session,
     hold_session_expired, insert_effect, insert_extension_order, insert_order, insert_order_line,
     insert_payment, insert_pos_order, insert_product_line, insert_segment, insert_session,
-    list_live_sessions, list_open_order_lines, list_open_orders, list_order_line_ids,
-    list_payment_ids, list_pos_sales, list_segments, live_session_device_of_player,
-    live_session_on_device, mark_forced, next_guest_no, reopen_order, reopen_segments,
-    reopen_session, settle_order, sum_reserved_minor,
+    last_session_player, list_live_sessions, list_open_order_lines, list_open_orders,
+    list_order_line_ids, list_payment_ids, list_pos_sales, list_segments,
+    live_session_device_of_player, live_session_on_device, mark_forced, next_guest_no,
+    reopen_order, reopen_segments, reopen_session, settle_order, sum_reserved_minor,
+    unpaid_counter_minor,
 };
 pub use sessions::{
     LineRow, OrderVoid, PRODUCT_LINE_BASE, PlacedLine, add_order_amount, count_product_lines,
@@ -911,6 +912,22 @@ impl Store {
             return Ok(Vec::new());
         }
         list_live_sessions(&self.conn)
+    }
+
+    /// What `device_id` owes the counter: its open counter orders (Story 6.32).
+    pub fn unpaid_counter_minor(&self, device_id: &str) -> Result<i64, AppError> {
+        if !self.table_exists("orders")? {
+            return Ok(0);
+        }
+        unpaid_counter_minor(&self.conn, device_id)
+    }
+
+    /// The player of the latest session on `device_id` (Story 6.32).
+    pub fn last_session_player(&self, device_id: &str) -> Result<Option<String>, AppError> {
+        if !self.table_exists("sessions")? {
+            return Ok(None);
+        }
+        last_session_player(&self.conn, device_id)
     }
 
     /// Every open alert, oldest first.

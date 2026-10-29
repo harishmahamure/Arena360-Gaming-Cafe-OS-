@@ -1,4 +1,4 @@
-import type { ShopItem, ShopMenu } from "@arena/ui/generated";
+import type { ShopItem, ShopMenu, ShopPayOptions } from "@arena/ui/generated";
 
 // The Shop tab's rules (Story 6.30): what the service's `shop_menu` and `shop_image` answers
 // hold, the filter rail and the search. The Hub decides what the menu says (whether orders are
@@ -19,6 +19,17 @@ const isComponent = (v: unknown): boolean => {
   const c = v as Record<string, unknown>;
   return typeof c.name === "string" && typeof c.qty === "number";
 };
+
+/** How this PC can take a cart (Story 6.32); an older Hub says nothing, which offers the bill only. */
+function payOptionsOf(v: unknown): ShopPayOptions {
+  if (typeof v !== "object" || v === null) return { bill: true, counter: false };
+  const p = v as Record<string, unknown>;
+  return {
+    bill: p.bill === true,
+    counter: p.counter === true,
+    wallet_minor: typeof p.wallet_minor === "number" ? p.wallet_minor : undefined,
+  };
+}
 
 const isItem = (v: unknown): v is ShopItem => {
   if (typeof v !== "object" || v === null) return false;
@@ -46,7 +57,11 @@ export function shopMenuOf(body: unknown): ShopView | null {
     return null;
   }
   // A branch without the feature has no menu, whatever the answer says.
-  return { enabled: b.enabled, items: b.enabled ? (b.items as ShopItem[]) : [] };
+  return {
+    enabled: b.enabled,
+    items: b.enabled ? (b.items as ShopItem[]) : [],
+    pay: payOptionsOf(b.pay),
+  };
 }
 
 /**

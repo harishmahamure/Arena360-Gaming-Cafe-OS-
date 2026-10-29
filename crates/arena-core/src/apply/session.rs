@@ -1319,6 +1319,9 @@ pub(crate) struct SettleRevertTarget {
     pub(super) txns: Vec<OrderTxn>,
     credit_blocked: bool,
     effect: bool,
+    /// The bill is an unpaid counter order (Story 6.32) that was settled: its undo reopens it as
+    /// unpaid.
+    counter: bool,
     now: i64,
 }
 
@@ -1356,10 +1359,13 @@ pub(super) fn load_settle_reverted(
         let owed = find_credit(tx, &txn.player_id)?.map_or(0, |c| c.outstanding_minor);
         credit_blocked |= owed < txn.delta_minor;
     }
+    let counter = order.kind == "pos_sale"
+        && forward_intent_id(tx, "orders", &order.id, "order.place")?.is_some();
     Ok(SettleRevertTarget {
         payments: list_payment_ids(tx, &order.id)?,
         txns,
         credit_blocked,
+        counter,
         effect: effect_recorded(tx, forward.as_deref(), &order.id)?,
         order: Some(order),
         now,
@@ -1387,7 +1393,7 @@ pub(super) fn validate_settle_reverted(
     let Some(o) = &t.order else {
         return Err(invalid("order_id", "no such bill"));
     };
-    if o.kind != "session" || o.session_id.is_none() {
+    if !t.counter && (o.kind != "session" || o.session_id.is_none()) {
         return Err(invalid("order_id", "this is not a session bill"));
     }
     if o.status != "settled" {

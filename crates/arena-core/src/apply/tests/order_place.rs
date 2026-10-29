@@ -14,6 +14,7 @@ use arena_proto::{
 
 fn place_of(session: &str, lines: &[(&str, i64)]) -> OrderPlace {
     OrderPlace {
+        counter: None,
         session_id: session.into(),
         lines: lines
             .iter()

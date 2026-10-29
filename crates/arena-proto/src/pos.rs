@@ -63,6 +63,10 @@ pub struct PosSale {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub discount: Option<crate::ManualDiscount>,
+    /// Story 6.32: a kiosk's "Pay now from wallet" (see [`KioskSale`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub kiosk: Option<KioskSale>,
 }
 
 /// The payload of `pos.sale.reverted`: Undo of a counter sale within its window.
@@ -147,11 +151,37 @@ pub struct PosSalesView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct OrderPlace {
+    /// The session whose bill takes the lines; empty for a counter order (`counter` set).
     pub session_id: String,
     pub lines: Vec<PosSaleLine>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub stock_override: Option<bool>,
+    /// Story 6.32, `settle: counter`: the lines open an unpaid counter order tied to a PC instead
+    /// of joining a session's bill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub counter: Option<CounterOrder>,
+}
+
+/// Where an unpaid counter order is tied (Story 6.32): the PC it was ordered from, for delivery
+/// and the UNPAID tag, and the profile that ordered, when there is one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct CounterOrder {
+    pub device_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub player_id: Option<String>,
+}
+
+/// A kiosk wallet sale (Story 6.32): the sale is tied to the PC it was ordered from and settles
+/// by one wallet payment of the whole total, which the Hub works out (`payments` stays empty).
+/// Only the device the order came from may send it, for the player running on that PC.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KioskSale {
+    pub device_id: String,
 }
 
 /// The payload of `order.place.reverted`: Undo of one placement within its window.

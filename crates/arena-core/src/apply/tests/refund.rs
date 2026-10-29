@@ -38,6 +38,7 @@ async fn sell(
         f,
         owner(),
         IntentPayload::PosSale(PosSale {
+            kiosk: None,
             business: None,
             coupon: None,
             discount: None,
@@ -738,6 +739,7 @@ async fn a_manual_discount_is_refunded_pro_rata_and_every_line_back_is_exactly_w
         &f,
         owner(),
         IntentPayload::PosSale(PosSale {
+            kiosk: None,
             business: None,
             coupon: None,
             discount: Some(arena_proto::ManualDiscount {

@@ -1289,6 +1289,7 @@ mod tests {
             device_name: "PC 1".into(),
             zone: String::new(),
             state: arena_proto::AttractState::Ready,
+            unpaid_minor: 0,
             rate_minor: Some(12_000),
             group_name: Some("PC".into()),
             rule: None,

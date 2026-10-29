@@ -393,8 +393,18 @@ mod tests {
         use serde_json::json;
         let ok = shop_place_request(&json!({"lines": [{"product_id": "P1", "qty": 2}]})).unwrap();
         assert_eq!(ok.lines.len(), 1);
+        assert_eq!(ok.pay, arena_proto::ShopPay::Bill);
+        for (word, pay) in [
+            ("bill", arena_proto::ShopPay::Bill),
+            ("wallet", arena_proto::ShopPay::Wallet),
+            ("counter", arena_proto::ShopPay::Counter),
+        ] {
+            let body = json!({"lines": [{"product_id": "P1", "qty": 1}], "pay": word});
+            assert_eq!(shop_place_request(&body).unwrap().pay, pay);
+        }
         for bad in [
             json!({"lines": []}),
+            json!({"lines": [{"product_id": "P1", "qty": 1}], "pay": "cash"}),
             json!({"lines": [{"product_id": "P1", "qty": 0}]}),
             json!({"lines": [{"product_id": "P1", "qty": 100}]}),
             json!({"lines": [{"product_id": "P1", "qty": 1}, {"product_id": "P1", "qty": 1}]}),

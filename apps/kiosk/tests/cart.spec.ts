@@ -5,10 +5,13 @@ import names from "../src-tauri/ipc-names.json" with { type: "json" };
 import {
   cartCount,
   cartTotal,
+  chosenPay,
+  payOffer,
   placeOf,
   refreshLines,
   stockProblem,
   stepCart,
+  walletShort,
   type CartLine,
 } from "../src/lib/cart";
 
@@ -28,7 +31,11 @@ type Item = {
   popular: boolean;
   components: { name: string; qty: number }[];
 };
-type Menu = { enabled: boolean; items: Item[] };
+type Menu = {
+  enabled: boolean;
+  items: Item[];
+  pay?: { bill: boolean; wallet_minor?: number; counter: boolean };
+};
 
 const INR = {
   currency: "INR",
@@ -106,6 +113,7 @@ async function openShop(page: Page, menu: Menu | null = MENU, hub = "connected")
                 : { ok: true, body: service.menu };
             case commands.shopPlace:
               (w.__calls as unknown[][]).push(["shop_place", args.lines]);
+              ((w.__pays ??= []) as unknown[]).push(args.pay);
               return service.place;
             case commands.shopImage:
               return { ok: true, body: { id: args.id, image: null } };
@@ -190,6 +198,9 @@ const service = (page: Page, patch: { menu?: Menu | null; place?: unknown }) =>
 
 const calls = (page: Page) =>
   page.evaluate(() => (window as unknown as { __calls: unknown[][] }).__calls);
+
+const pays = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __pays?: unknown[] }).__pays ?? []);
 
 const add = (page: Page, name: string) =>
   page
@@ -450,12 +461,19 @@ test("placeOf reads the Hub's typed answer and treats anything else as unreachab
       ok: true,
       body: { outcome: "refused", code: "OUT_OF_STOCK", message: "m", product_id: "P1" },
     }),
-  ).toEqual({ kind: "refused", code: "OUT_OF_STOCK", message: "m", productId: "P1" });
+  ).toEqual({
+    kind: "refused",
+    code: "OUT_OF_STOCK",
+    message: "m",
+    productId: "P1",
+    balanceMinor: null,
+  });
   expect(placeOf({ ok: true, body: { outcome: "refused", code: "X", message: "m" } })).toEqual({
     kind: "refused",
     code: "X",
     message: "m",
     productId: null,
+    balanceMinor: null,
   });
   for (const bad of [
     null,
@@ -466,4 +484,98 @@ test("placeOf reads the Hub's typed answer and treats anything else as unreachab
   ]) {
     expect(placeOf(bad)).toEqual({ kind: "unreachable" });
   }
+});
+
+// ---- Story 6.32: pay now from the wallet, pay at counter ----
+
+const WALLET_MENU = (wallet: number): Menu => ({
+  ...MENU,
+  pay: { bill: false, wallet_minor: wallet, counter: true },
+});
+
+test("a profiled player on a prepaid session sees the wallet and the counter beside no bill", async ({
+  page,
+}) => {
+  await openShop(page, WALLET_MENU(10_000));
+  await add(page, "Chips");
+  await expect(page.getByTestId("cart-pay-bill")).toHaveCount(0);
+  await expect(page.getByTestId("cart-pay-wallet")).toBeChecked();
+  await expect(page.getByTestId("cart-pay-wallet")).toBeEnabled();
+  await expect(page.getByTestId("cart-wallet-balance")).toHaveText("Wallet balance ₹100.00");
+  await expect(page.getByTestId("cart-pay-counter")).not.toBeChecked();
+  await page.getByTestId("cart-place").click();
+  await expect(page.getByTestId("cart-placed")).toHaveText(en["player.cart.placed_wallet"]);
+  expect(await pays(page)).toEqual(["wallet"]);
+});
+
+test("a wallet below the total is disabled with the reason and the counter is chosen", async ({
+  page,
+}) => {
+  await openShop(page, WALLET_MENU(1_000));
+  await add(page, "Chips");
+  await expect(page.getByTestId("cart-pay-wallet")).toBeDisabled();
+  await expect(page.getByTestId("cart-wallet-short")).toHaveText(
+    "Balance ₹10.00. Top up at counter.",
+  );
+  await expect(page.getByTestId("cart-pay-counter")).toBeChecked();
+  await page.getByTestId("cart-place").click();
+  await expect(page.getByTestId("cart-placed")).toHaveText(en["player.cart.placed_counter"]);
+  expect(await pays(page)).toEqual(["counter"]);
+});
+
+test("a concurrent spend refuses the wallet order, keeps the cart and shows the real balance", async ({
+  page,
+}) => {
+  await openShop(page, WALLET_MENU(10_000));
+  await add(page, "Chips");
+  await service(page, {
+    place: {
+      ok: true,
+      body: {
+        outcome: "refused",
+        code: "INSUFFICIENT_BALANCE",
+        message: "The wallet balance is too low.",
+        balance_minor: 4_000,
+      },
+    },
+  });
+  await page.getByTestId("cart-place").click();
+  await expect(page.getByTestId("cart-balance")).toHaveText(/Balance ₹40.00. Top up at counter./);
+  await expect(page.getByTestId("cart-lines")).toBeVisible();
+  await expect(page.getByTestId("cart-placed")).toHaveCount(0);
+});
+
+test("when the session has ended with the cart open, Pay at counter is the only choice", async ({
+  page,
+}) => {
+  await openShop(page, { ...MENU, pay: { bill: false, counter: true } });
+  await add(page, "Chips");
+  await expect(page.getByTestId("cart-pay-bill")).toHaveCount(0);
+  await expect(page.getByTestId("cart-pay-wallet")).toHaveCount(0);
+  await expect(page.getByTestId("cart-pay-counter")).toBeChecked();
+  await expect(page.getByTestId("cart-counter-note")).toHaveText(
+    en["player.cart.pay_counter_note"],
+  );
+});
+
+test("a guest sees the session bill and the counter, never the wallet", async ({ page }) => {
+  await openShop(page, { ...MENU, pay: { bill: true, counter: true } });
+  await add(page, "Chips");
+  await expect(page.getByTestId("cart-pay-bill")).toBeChecked();
+  await expect(page.getByTestId("cart-pay-wallet")).toHaveCount(0);
+  await page.getByTestId("cart-pay-counter").check();
+  await page.getByTestId("cart-place").click();
+  expect(await pays(page)).toEqual(["counter"]);
+});
+
+test("payOffer and chosenPay follow what the Hub offers", () => {
+  expect(payOffer(undefined)).toEqual({ bill: true, walletMinor: null, counter: false });
+  const offer = payOffer({ bill: false, wallet_minor: 5_000, counter: true });
+  expect(walletShort(offer, 4_000)).toBe(false);
+  expect(walletShort(offer, 6_000)).toBe(true);
+  expect(chosenPay(offer, null, 4_000)).toBe("wallet");
+  expect(chosenPay(offer, null, 6_000)).toBe("counter");
+  expect(chosenPay(offer, "counter", 4_000)).toBe("counter");
+  // A pick the Hub no longer offers falls back.
+  expect(chosenPay(offer, "bill", 4_000)).toBe("wallet");
 });

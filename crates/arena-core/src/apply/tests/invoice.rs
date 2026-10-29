@@ -34,6 +34,7 @@ async fn sale(f: &Fixture, by: &Actor, product: &str) -> String {
         f,
         by.clone(),
         IntentPayload::PosSale(PosSale {
+            kiosk: None,
             business: None,
             coupon: None,
             discount: None,

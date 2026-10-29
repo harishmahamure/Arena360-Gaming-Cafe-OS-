@@ -372,6 +372,14 @@ enum Op {
         undo: bool,
         late: bool,
     },
+    /// An unpaid counter order tied to a PC (Story 6.32, `order.place{settle: counter}`), then left
+    /// open, settled by UPI (`then` 1) or voided (`then` 2).
+    CounterOrder {
+        slot: u8,
+        pick: u8,
+        qty: u8,
+        then: u8,
+    },
     /// An unserved placed line is marked served or cancelled (made or not), when one exists.
     OrderLine {
         pick: u8,
@@ -783,6 +791,9 @@ fn op() -> impl Strategy<Value = Op> {
         ),
         3 => (0..3u8, any::<u8>(), 1..=6u8, any::<bool>(), prop::bool::weighted(0.3)).prop_map(
             |(slot, pick, qty, undo, late)| Op::OrderPlace { slot, pick, qty, undo, late }
+        ),
+        2 => (any::<u8>(), any::<u8>(), 1..=4u8, 0..3u8).prop_map(
+            |(slot, pick, qty, then)| Op::CounterOrder { slot, pick, qty, then }
         ),
         2 => (any::<u8>(), any::<bool>(), any::<bool>()).prop_map(
             |(pick, cancel, made)| Op::OrderLine { pick, cancel, made }
@@ -2076,6 +2087,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let out = hub.submit_new(
                 hub.intent(
                     IntentPayload::PosSale(arena_proto::PosSale {
+                        kiosk: None,
                         business: None,
                         coupon: None,
                         discount: None,
@@ -2805,6 +2817,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 .read_with(|conn| arena_core::coupon_preview(conn, &request, now));
             let sale = |payments: Vec<arena_proto::PaymentRow>| {
                 IntentPayload::PosSale(arena_proto::PosSale {
+                    kiosk: None,
                     business: None,
                     coupon: Some(applied.to_owned()),
                     discount: None,
@@ -2965,6 +2978,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             };
             let mut intent = hub.intent(
                 IntentPayload::PosSale(arena_proto::PosSale {
+                    kiosk: None,
                     business: None,
                     coupon: None,
                     discount: Some(discount.clone()),
@@ -3079,6 +3093,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let before = hub.change_count();
             let out = hub.submit_new(hub.intent(
                 IntentPayload::OrderPlace(arena_proto::OrderPlace {
+                    counter: None,
                     session_id: text(session, "id"),
                     lines: vec![arena_proto::PosSaleLine {
                         product_id: product.product_id.clone(),
@@ -3136,6 +3151,114 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     prop_assert!(out.is_ok(), "{:?}", out);
                     prop_assert_eq!(stock_image(hub), stock_before);
                 }
+            }
+        }
+        Op::CounterOrder {
+            slot,
+            pick,
+            qty,
+            then,
+        } => {
+            let devices = hub.reader.rows(Table::Devices).unwrap();
+            let products: Vec<_> = hub
+                .reader
+                .products()
+                .unwrap()
+                .into_iter()
+                .filter(|p| p.active)
+                .collect();
+            let (Some(device), false) = (
+                devices.get(usize::from(*slot) % devices.len().max(1)),
+                products.is_empty(),
+            ) else {
+                return Ok(());
+            };
+            let product = &products[usize::from(*pick) % products.len()];
+            let stock_before = stock_image(hub);
+            let before = hub.change_count();
+            let out = hub.submit_new(hub.intent(
+                IntentPayload::OrderPlace(arena_proto::OrderPlace {
+                    counter: Some(arena_proto::CounterOrder {
+                        device_id: text(device, "device_id"),
+                        player_id: None,
+                    }),
+                    session_id: String::new(),
+                    lines: vec![arena_proto::PosSaleLine {
+                        product_id: product.product_id.clone(),
+                        qty: i64::from(*qty),
+                    }],
+                    stock_override: None,
+                }),
+                None,
+            ));
+            let applied = match out {
+                Ok(applied) => applied,
+                Err(e) => {
+                    // A refusal (short stock, a bundle part switched off) writes nothing.
+                    prop_assert!(
+                        matches!(
+                            e.code,
+                            ErrorCode::OutOfStock
+                                | ErrorCode::BundleShort
+                                | ErrorCode::ValidationFailed
+                        ),
+                        "{:?}",
+                        e
+                    );
+                    prop_assert_eq!(hub.change_count(), before);
+                    prop_assert_eq!(stock_image(hub), stock_before);
+                    return Ok(());
+                }
+            };
+            let order = hub
+                .reader
+                .rows(Table::Orders)
+                .unwrap()
+                .into_iter()
+                .find(|o| o["id"] == RowValue::Text(applied.changes[0].row_id.clone()))
+                .unwrap();
+            prop_assert_eq!(text(&order, "status"), "open");
+            prop_assert_eq!(&order["session_id"], &RowValue::Null);
+            prop_assert_eq!(text(&order, "device_id"), text(device, "device_id"));
+            match *then {
+                1 => {
+                    let out = hub.submit_new(hub.intent(
+                        IntentPayload::SessionSettle(arena_proto::SessionSettle {
+                            order_id: text(&order, "id"),
+                            payments: vec![arena_proto::PaymentRow {
+                                method: arena_proto::PaymentMethod::Upi,
+                                amount_minor: int(&order, "total_minor"),
+                                reference: Some("1234".to_owned()),
+                            }],
+                            credit_override: None,
+                            receipt: None,
+                            business: None,
+                            coupon: None,
+                            discount: None,
+                        }),
+                        Some(int(&order, "rev")),
+                    ));
+                    // Unserved kitchen lines hold the settle back; nothing else may.
+                    prop_assert!(
+                        out.is_ok()
+                            || code(&out) == Some((ErrorCode::ValidationFailed, Some("order_id"))),
+                        "{:?}",
+                        out
+                    );
+                }
+                2 => {
+                    let mut void = hub.intent(
+                        IntentPayload::OrderVoid(arena_proto::OrderVoid {
+                            order_id: text(&order, "id"),
+                            note: None,
+                        }),
+                        None,
+                    );
+                    void.reason = Some(arena_proto::ReasonCode::Mistake);
+                    let out = hub.submit_new(void);
+                    prop_assert!(out.is_ok(), "{:?}", out);
+                }
+                _ => {}
             }
         }
         Op::OrderLine { pick, cancel, made } => {
@@ -6402,6 +6525,7 @@ fn apply_invariants_hold_over_random_intent_sequences() {
                 assert_matches_hold(&hub)?;
                 assert_discounts_hold(&hub)?;
                 assert_voids_hold(&hub)?;
+                assert_counter_orders_hold(&hub)?;
                 assert_refunds_hold(&hub)?;
                 assert_prints_hold(&hub)?;
                 assert_drawers_hold(&hub)?;
@@ -6667,6 +6791,12 @@ fn assert_voids_hold(hub: &Hub) -> Result<(), TestCaseError> {
             matches!(o["void_session_id"], RowValue::Text(_)),
         ];
         let void = text(o, "status") == "void";
+        // An unpaid counter order has no session to remember (Story 6.32).
+        let set = if text(o, "kind") == "pos_sale" {
+            &set[..3]
+        } else {
+            &set[..]
+        };
         prop_assert!(set.iter().all(|s| *s == void), "void columns of {:?}", o);
         if void {
             prop_assert_eq!(&o["session_id"], &RowValue::Null);
@@ -6679,6 +6809,29 @@ fn assert_voids_hold(hub: &Hub) -> Result<(), TestCaseError> {
                 payments.iter().all(|p| p["order_id"] != o["id"]),
                 "a voided order was never paid"
             );
+        }
+    }
+    Ok(())
+}
+
+/// The unpaid counter order invariants (Story 6.32): an open `pos_sale` is tied to a PC with no
+/// session, holds no payments and has no invoice number; a settled one has paid.
+fn assert_counter_orders_hold(hub: &Hub) -> Result<(), TestCaseError> {
+    let payments = hub.reader.rows(Table::Payments).unwrap();
+    for o in hub.reader.rows(Table::Orders).unwrap() {
+        if text(&o, "kind") != "pos_sale" {
+            continue;
+        }
+        let paid = payments.iter().filter(|p| p["order_id"] == o["id"]).count();
+        match text(&o, "status").as_str() {
+            "open" => {
+                prop_assert_eq!(&o["session_id"], &RowValue::Null);
+                prop_assert!(matches!(o["device_id"], RowValue::Text(_)), "{:?}", o);
+                prop_assert_eq!(paid, 0);
+                prop_assert_eq!(&o["invoice_no"], &RowValue::Null);
+            }
+            "settled" => prop_assert!(paid >= 1, "a settled sale with no payment: {:?}", o),
+            _ => {}
         }
     }
     Ok(())

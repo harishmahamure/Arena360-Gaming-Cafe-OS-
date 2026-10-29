@@ -4409,3 +4409,114 @@ async fn shop_place_is_for_paired_sessions() {
     let frame = recv(&mut ws).await.unwrap();
     assert_eq!(error_of(&frame).1, ErrorCode::Forbidden);
 }
+
+// ---- Story 6.32: pay now from the wallet, pay at counter ----
+
+async fn place_pay_frame(
+    client: &HubClient,
+    lines: &[(&str, i64)],
+    pay: &str,
+) -> Result<arena_proto::ShopPlaceResult, ClientError> {
+    let lines: Vec<_> = lines
+        .iter()
+        .map(|(id, qty)| serde_json::json!({"product_id": id, "qty": qty}))
+        .collect();
+    match client
+        .request(
+            "shop.place",
+            serde_json::json!({ "lines": lines, "pay": pay }),
+        )
+        .await?
+        .body
+    {
+        FrameBody::ShopPlaceResult(r) => Ok(r),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pay_now_settles_a_prepaid_players_cart_from_the_wallet_and_a_short_wallet_is_refused() {
+    use arena_proto::ShopPlaceResult as R;
+    let hub = start("0.1.0", true).await;
+    basic_branch(&hub).await;
+    let cola = tracked_cola(&hub, 5).await;
+    let (client, _player) = playing(&hub).await;
+
+    // The pack session takes no bill order, but offers the wallet and the counter.
+    let pay = shop_menu_frame(&client).await.unwrap().pay;
+    assert!(!pay.bill && pay.counter);
+    assert_eq!(pay.wallet_minor, Some(4_000));
+    assert!(matches!(
+        place_pay_frame(&client, &[(&cola, 1)], "bill")
+            .await
+            .unwrap(),
+        R::Refused { .. }
+    ));
+
+    assert_eq!(
+        place_pay_frame(&client, &[(&cola, 1)], "wallet")
+            .await
+            .unwrap(),
+        R::Ok
+    );
+    assert_eq!(account_frame(&client).await.unwrap().balance_minor, 0);
+    assert_eq!(kiosk_order_alerts(&hub).len(), 1);
+    // The wallet is empty now: the next one is refused with the real balance, nothing written.
+    match place_pay_frame(&client, &[(&cola, 1)], "wallet")
+        .await
+        .unwrap()
+    {
+        R::Refused {
+            code,
+            balance_minor,
+            ..
+        } => {
+            assert_eq!(code, ErrorCode::InsufficientBalance);
+            assert_eq!(balance_minor, Some(0));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        Store::open_reader(&hub.path)
+            .unwrap()
+            .unpaid_counter_minor(&hub.paired_id)
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pay_at_counter_leaves_an_unpaid_order_on_the_pc_and_pay_now_needs_a_profile() {
+    use arena_proto::ShopPlaceResult as R;
+    let hub = start("0.1.0", true).await;
+    basic_branch(&hub).await;
+    rated_pc(&hub, 6_000).await;
+    let cola = tracked_cola(&hub, 5).await;
+    start_postpaid(&hub, None).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+
+    // A guest has no wallet: Pay now is refused, the bill and the counter are offered.
+    let pay = shop_menu_frame(&client).await.unwrap().pay;
+    assert!(pay.bill && pay.counter && pay.wallet_minor.is_none());
+    assert!(matches!(
+        place_pay_frame(&client, &[(&cola, 1)], "wallet")
+            .await
+            .unwrap(),
+        R::Refused {
+            code: ErrorCode::ValidationFailed,
+            ..
+        }
+    ));
+
+    assert_eq!(
+        place_pay_frame(&client, &[(&cola, 2)], "counter")
+            .await
+            .unwrap(),
+        R::Ok
+    );
+    let store = Store::open_reader(&hub.path).unwrap();
+    assert_eq!(store.unpaid_counter_minor(&hub.paired_id).unwrap(), 8_000);
+    assert_eq!(kiosk_order_alerts(&hub).len(), 1);
+}

@@ -7,6 +7,7 @@ import type {
   PrinterReady,
   Product,
   ShiftState,
+  SnapshotBill,
   SnapshotSession,
   WalletView,
 } from "@arena/ui/generated";
@@ -390,6 +391,8 @@ type Hub = {
   wallet: WalletView;
   /** The running sessions the snapshot lists (Story 5.12). */
   sessions?: SnapshotSession[];
+  /** The open bills the snapshot lists, e.g. unpaid kiosk orders (Story 6.32). */
+  bills?: SnapshotBill[];
   /** What `/ui/printer/ready` answers (Story 5.17); absent means the Hub does not answer. */
   printer?: PrinterReady;
 };
@@ -440,6 +443,7 @@ async function openHub(page: Page, hub: Hub, products: Product[] = PRODUCTS, pat
         const snap = snapshot(hub.sessions ? [1, 2, 3].map((n) => device(n, {})) : [device(1, {})]);
         snap.shift = hub.shift;
         snap.sessions = hub.sessions ?? [];
+        snap.bills = hub.bills ?? [];
         return ok(route, snap);
       }
       case "/ui/me":
@@ -1182,4 +1186,63 @@ test("Recent sales offers Reprint for a numbered sale only, and sends receipt.re
   await expect(page.getByTestId("reprint-note")).toHaveText(en["hub.pos.recent.reprint_queued"]);
   expect(hub.sent).toHaveLength(1);
   expect(hub.sent[0].payload).toEqual({ kind: "receipt.reprint", order_id: "O2" });
+});
+
+// ---- Story 6.32: Open orders ----
+
+const counterOrder = (id: string, extra: Partial<SnapshotBill> = {}): SnapshotBill => ({
+  session_id: "",
+  device_id: "D1",
+  order_id: id,
+  order_rev: 3,
+  lines: [],
+  items: [{ line_id: "L1", served: true, label: "Cola", qty: 2, amount_minor: 12000 }],
+  subtotal_minor: 12000,
+  paid_minor: 0,
+  remaining_minor: 12000,
+  ...extra,
+});
+
+test("Open orders lists the kiosk orders left unpaid and settles one with any payment mix", async ({
+  page,
+}) => {
+  const hub = newHub({ bills: [counterOrder("OU1")] });
+  await openHub(page, hub);
+  await expect(page.getByTestId("open-toggle")).toHaveText(
+    en["hub.pos.open.toggle_count"].replace("{count}", "1"),
+  );
+  await page.getByTestId("open-toggle").click();
+  const row = page.getByTestId("open-order");
+  await expect(row).toHaveCount(1);
+  await expect(page.getByTestId("open-order-items")).toContainText("2 × Cola");
+  await expect(page.getByTestId("open-order-total")).toContainText("120.00");
+
+  await row.getByRole("button", { name: en["hub.pos.open.load"] }).click();
+  await expect(page.getByTestId("settle-total")).toContainText("120.00");
+  await expect(cashInput(page)).toHaveValue("120.00");
+  await cashInput(page).fill("70");
+  await page.locator('[data-method="upi"]').click();
+  await expect(page.locator('[data-row="upi"] input').first()).toHaveValue("50.00");
+  await page.locator('[data-row="upi"] [data-reference] input').fill("1234");
+  await page
+    .getByTestId("open-orders")
+    .getByRole("button", { name: en["hub.settle.submit"], exact: true })
+    .click();
+  await expect.poll(() => hub.sent.length).toBe(1);
+  expect(hub.sent[0].payload).toMatchObject({
+    kind: "session.settle",
+    order_id: "OU1",
+    payments: [
+      { method: "cash", amount_minor: 7000 },
+      { method: "upi", amount_minor: 5000, reference: "1234" },
+    ],
+  });
+  expect(hub.sent[0].rev).toBe(3);
+});
+
+test("Open orders says so when no kiosk order waits", async ({ page }) => {
+  await openHub(page, newHub());
+  await expect(page.getByTestId("open-toggle")).toHaveText(en["hub.pos.open.toggle"]);
+  await page.getByTestId("open-toggle").click();
+  await expect(page.getByTestId("open-orders-empty")).toHaveText(en["hub.pos.open.empty"]);
 });

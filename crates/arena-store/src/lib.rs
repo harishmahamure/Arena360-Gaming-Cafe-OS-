@@ -150,9 +150,10 @@ pub use notify::{
     queued_notify_ids, skip_notify,
 };
 pub use outbox::{
-    KIND_DRAWER, KIND_PRINT, OutboxRow, ReceiptHead, ReceiptLineRow, ReceiptPaymentRow,
-    ReceiptSource, STATE_DONE, STATE_FAILED, STATE_QUEUED, find_outbox, finish_outbox,
-    insert_outbox, latest_print_state, list_queued_outbox, load_receipt_source,
+    KIND_DRAWER, KIND_KOT, KIND_PRINT, OutboxRow, ReceiptHead, ReceiptLineRow, ReceiptPaymentRow,
+    ReceiptSource, STATE_DONE, STATE_FAILED, STATE_QUEUED, STATE_SENDING, dismiss_queued_kots,
+    find_outbox, finish_outbox, insert_outbox, latest_kot_states, latest_print_state,
+    list_queued_outbox, list_sending_outbox, load_receipt_source, mark_outbox_sending,
 };
 pub use pc_settings::{find_pc_settings, insert_pc_settings, update_pc_settings};
 pub use plans::{
@@ -1096,6 +1097,29 @@ impl Store {
             .collect()
     }
 
+    /// A ticket with its lines, for its KOT (empty before migration 69).
+    pub fn ticket_with_lines(
+        &self,
+        id: &str,
+    ) -> Result<Option<(TicketRow, Vec<TicketLineRow>)>, AppError> {
+        if !self.table_exists("kitchen_tickets")? {
+            return Ok(None);
+        }
+        let Some(ticket) = find_ticket(&self.conn, id)? else {
+            return Ok(None);
+        };
+        let lines = list_ticket_lines(&self.conn, id)?;
+        Ok(Some((ticket, lines)))
+    }
+
+    /// What the latest KOT of each ticket came to (empty before migration 71).
+    pub fn kot_states(&self) -> Result<Vec<(String, String)>, AppError> {
+        if !self.table_exists("side_effect_outbox")? {
+            return Ok(Vec::new());
+        }
+        latest_kot_states(&self.conn)
+    }
+
     pub fn wallet_txns(&self, player_id: &str) -> Result<Vec<WalletTxnRow>, AppError> {
         if !self.table_exists("wallet_txns")? {
             return Ok(Vec::new());
@@ -1292,6 +1316,22 @@ impl Store {
             return Ok(Vec::new());
         }
         list_queued_outbox(&self.conn, KIND_PRINT, limit)
+    }
+
+    /// KOTs waiting on the side-effect outbox, oldest first (Story 7.5).
+    pub fn queued_kots(&self, limit: i64) -> Result<Vec<OutboxRow>, AppError> {
+        if !self.table_exists("side_effect_outbox")? {
+            return Ok(Vec::new());
+        }
+        list_queued_outbox(&self.conn, KIND_KOT, limit)
+    }
+
+    /// KOTs a restart found half-sent, oldest first (Story 7.5).
+    pub fn sending_kots(&self, limit: i64) -> Result<Vec<OutboxRow>, AppError> {
+        if !self.table_exists("side_effect_outbox")? {
+            return Ok(Vec::new());
+        }
+        list_sending_outbox(&self.conn, KIND_KOT, limit)
     }
 
     /// Drawer kicks waiting on the side-effect outbox, oldest first (Story 5.18).

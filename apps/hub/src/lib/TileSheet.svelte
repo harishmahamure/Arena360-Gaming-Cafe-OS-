@@ -74,6 +74,7 @@
     powerJob,
     readyJob,
     advanceJob,
+    reprintKotJob,
     resumeJob,
     messageJob,
     messageValid,
@@ -466,6 +467,11 @@
     await go(advanceJob(ticket.id, "ready", rev));
   }
 
+  /** Prints a ticket's KOT again (Story 7.5). */
+  function reprintKot(ticket: KitchenTicketView) {
+    if (!busy) void go(reprintKotJob(ticket.id));
+  }
+
   function cancelLine(lineId: string, made: boolean, reason: ReasonCode) {
     if (!busy) void go(cancelLineJob(lineId, made, reason));
   }
@@ -698,6 +704,7 @@
         {busy}
         onserve={serveLine}
         onadvance={advanceTicket}
+        onreprint={reprintKot}
         oncancel={cancelLine}
       />
     {/if}
@@ -882,6 +889,7 @@
               ready={bill.ready === true}
               tickets={bill.tickets ?? []}
               onadvance={advanceTicket}
+              onreprint={reprintKot}
               onserve={serveLine}
               onready={bill.items_order_id || bill.order_id ? markReady : undefined}
               oncancel={cancelLine}

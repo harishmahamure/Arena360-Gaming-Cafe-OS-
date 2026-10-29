@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::{IntentPayload, PRINTER_PAPER_WIDTHS_MM};
+use crate::{IntentPayload, PRINTER_PAPER_WIDTHS_MM, PrinterErrorKind};
 
 pub const KEY_LICENCE_FLAGS: &str = "licence.flags";
 pub const KEY_DEVICE_CAP: &str = "licence.device_cap";
@@ -72,6 +72,31 @@ pub struct KitchenAdvanceReverted {
     pub ticket_id: String,
 }
 
+/// The payload of `kot.reprint` (Story 7.5): print the ticket's KOT again, marked "REPRINT". The
+/// audit log records who asked. A cancelled ticket, or a branch whose KOT printer is None, is refused.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KotReprint {
+    pub ticket_id: String,
+}
+
+/// The payload of `kot.printed` (system): the print task sent the KOT row to the printer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KotPrinted {
+    pub outbox_id: String,
+}
+
+/// The payload of `kot.print_failed` (system): the printer did not take the KOT. The ticket and
+/// order are unaffected; a "Printer offline" alert is raised and the ticket row offers Reprint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KotPrintFailed {
+    pub outbox_id: String,
+    pub error_kind: PrinterErrorKind,
+    pub error: String,
+}
+
 /// One line of a kitchen ticket.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
@@ -100,6 +125,11 @@ pub struct KitchenTicketView {
     pub placed_at: i64,
     #[ts(type = "number")]
     pub rev: i64,
+    /// What the latest KOT of this ticket came to: `queued`, `done` or `failed` (Story 7.5). Absent
+    /// when no KOT was ever queued (the KOT printer is None).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub kot: Option<String>,
     pub lines: Vec<KitchenTicketLineView>,
 }
 
@@ -129,9 +159,9 @@ pub fn kitchen_gate(p: &IntentPayload) -> Option<TierGate> {
         }
         // Story 7.3: a ticket opened before a lapse still finishes; the apply step refuses a
         // ticket that does not exist on a branch without the flag.
-        IntentPayload::KitchenAdvance(_) | IntentPayload::KitchenAdvanceReverted(_) => {
-            Some(TierGate::ExistingWork)
-        }
+        IntentPayload::KitchenAdvance(_)
+        | IntentPayload::KitchenAdvanceReverted(_)
+        | IntentPayload::KotReprint(_) => Some(TierGate::ExistingWork),
         IntentPayload::PosSale(s) if s.lines.iter().any(|l| !l.kitchen_notes.is_empty()) => {
             Some(TierGate::New)
         }

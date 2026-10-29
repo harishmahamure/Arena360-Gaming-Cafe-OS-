@@ -16,5 +16,10 @@ export type KitchenTicketView = {
   stage: string;
   placed_at: number;
   rev: number;
+  /**
+   * What the latest KOT of this ticket came to: `queued`, `done` or `failed` (Story 7.5). Absent
+   * when no KOT was ever queued (the KOT printer is None).
+   */
+  kot?: string;
   lines: Array<KitchenTicketLineView>;
 };

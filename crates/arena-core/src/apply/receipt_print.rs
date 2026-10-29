@@ -131,7 +131,7 @@ fn queued_row<'a>(
     Ok(row)
 }
 
-fn valid_error(error: &str, what: &str) -> Result<(), AppError> {
+pub(super) fn valid_error(error: &str, what: &str) -> Result<(), AppError> {
     let error = error.trim();
     if error.is_empty() || error.chars().count() > RECEIPT_ERROR_MAX_CHARS {
         return Err(invalid(

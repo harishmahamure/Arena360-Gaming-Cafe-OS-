@@ -248,7 +248,8 @@ pub fn set_ticket_cancelled(
         params![id, reason, at, by],
     )
     .map_err(db_error)?;
-    Ok(())
+    // A cancelled ticket prints nothing (Story 7.5).
+    crate::dismiss_queued_kots(conn, id, at)
 }
 
 /// Reopens a hold a serve closed (the Undo of a Served advance).

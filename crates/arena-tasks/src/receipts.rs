@@ -8,6 +8,11 @@
 //! result intent: `receipt.printed`, or `receipt.print_failed` with the error. A failure never
 //! touches the sale; it raises the "Printer offline" alert and the order shows Reprint.
 //!
+//! A KOT (Story 7.5) is the same kind of job for a kitchen ticket: a `kot` row is marked
+//! `sending` before its bytes go out, so a restart that finds one half-sent records
+//! `kot.print_failed` for Reprint and never sends it twice, and the result is `kot.printed` or
+//! `kot.print_failed`. The slip goes to the printer the KOT mode names.
+//!
 //! The cash drawer kick (Story 5.18) is the same kind of job: a cash settle queues a `drawer` row,
 //! the task sends the pulse through the same printer and applies `drawer.kicked` or
 //! `drawer.kick_failed`. Kicks go first: the cash is already in the customer's hand.
@@ -20,10 +25,10 @@ use arena_core::printer::{Printer, PrinterJobs, PrinterTarget, drawer_kick};
 use arena_core::{Clock, SnapshotReader, WriterHandle};
 use arena_proto::{
     Actor, ActorKind, DrawerKickFailed, DrawerKicked, ErrorCode, Intent, IntentKind, IntentPayload,
-    KEY_PRINTER_SELECTED, PrinterErrorKind, PrinterJobFailure, PrinterSelected, ReceiptPrintFailed,
-    ReceiptPrinted, printer_error_text,
+    KEY_PRINTER_SELECTED, KotPrintFailed, KotPrinted, PrinterErrorKind, PrinterJobFailure,
+    PrinterSelected, ReceiptPrintFailed, ReceiptPrinted, printer_error_text,
 };
-use arena_store::{KIND_DRAWER, OutboxRow};
+use arena_store::{KIND_DRAWER, KIND_KOT, OutboxRow, STATE_SENDING};
 use tokio::sync::broadcast::error::RecvError;
 
 pub const PRINT_TICK: Duration = Duration::from_millis(500);
@@ -51,6 +56,18 @@ fn result_intent(row: &OutboxRow, outcome: &Outcome, now: i64) -> Intent {
     let drawer = row.kind == KIND_DRAWER;
     let outbox_id = row.id.clone();
     let (kind, payload) = match (outcome, drawer) {
+        (Outcome::Printed, _) if row.kind == KIND_KOT => (
+            IntentKind::KotPrinted,
+            IntentPayload::KotPrinted(KotPrinted { outbox_id }),
+        ),
+        (Outcome::Failed(error_kind, error), _) if row.kind == KIND_KOT => (
+            IntentKind::KotPrintFailed,
+            IntentPayload::KotPrintFailed(KotPrintFailed {
+                outbox_id,
+                error_kind: *error_kind,
+                error: error.clone(),
+            }),
+        ),
         (Outcome::Printed, false) => (
             IntentKind::ReceiptPrinted,
             IntentPayload::ReceiptPrinted(ReceiptPrinted { outbox_id }),
@@ -159,8 +176,27 @@ impl ReceiptPrintTask {
         Outcome::Failed(kind, printer_error_text(message))
     }
 
+    /// Builds the KOT of a ticket and sends it to the printer the KOT mode names.
+    async fn send_kot(&self, row: &OutboxRow) -> Outcome {
+        let (ticket_id, reprint) = (row.ref_id.clone(), reprint(row));
+        let now = self.clock.now_ms();
+        let job = self
+            .blocking("kot", move |r| r.kot_job(&ticket_id, reprint, now))
+            .await;
+        let Some(job) = job else {
+            return Self::fail(PrinterErrorKind::Other, "the KOT could not be built");
+        };
+        let Some(job) = job else {
+            return Self::fail(PrinterErrorKind::Other, "the ticket of this KOT is gone");
+        };
+        self.transmit(&job.selected, &job.bytes).await
+    }
+
     /// Builds the receipt and sends it; the outcome is what the result intent records.
     async fn send(&self, row: &OutboxRow) -> Outcome {
+        if row.kind == KIND_KOT {
+            return self.send_kot(row).await;
+        }
         let reprint = reprint(row);
         let credit_note = credit_note(row);
         let z = z_report(row);
@@ -196,7 +232,12 @@ impl ReceiptPrintTask {
                 "the order or shift of this receipt is gone",
             );
         };
-        let selected = match PrinterSelected::parse(&selected) {
+        self.transmit(&selected, &bytes).await
+    }
+
+    /// Sends `bytes` to the printer saved as `selected`, one job at a time.
+    async fn transmit(&self, selected: &str, bytes: &[u8]) -> Outcome {
+        let selected = match PrinterSelected::parse(selected) {
             Ok(Some(s)) => s,
             Ok(None) => {
                 return Self::fail(PrinterErrorKind::Other, "no printer is set up");
@@ -210,7 +251,7 @@ impl ReceiptPrintTask {
             Err(e) => return Self::fail(e.kind(), &e.to_string()),
         };
         let _single = self.jobs.lock().lock().await;
-        match self.printer.send(&target, &bytes).await {
+        match self.printer.send(&target, bytes).await {
             Ok(()) => {
                 self.jobs.record(None);
                 Outcome::Printed
@@ -246,6 +287,8 @@ impl ReceiptPrintTask {
         let Some(rows) = self
             .blocking("queue", |r| {
                 let mut rows = r.queued_drawers(PRINT_BATCH)?;
+                rows.extend(r.queued_kots(PRINT_BATCH)?);
+                rows.extend(r.sending_kots(PRINT_BATCH)?);
                 rows.extend(r.queued_prints(PRINT_BATCH)?);
                 Ok(rows)
             })
@@ -262,7 +305,30 @@ impl ReceiptPrintTask {
                 .cloned();
             let outcome = match held {
                 Some(o) => o,
+                None if row.kind == KIND_KOT && row.state == STATE_SENDING => {
+                    // A send a restart cut short: the slip may or may not have come out, so it is
+                    // never sent again; the ticket offers Reprint.
+                    let o = Self::fail(
+                        PrinterErrorKind::Other,
+                        "the Hub restarted while this KOT was printing; reprint it if it did not come out",
+                    );
+                    self.unrecorded
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(row.id.clone(), o.clone());
+                    o
+                }
                 None => {
+                    if row.kind == KIND_KOT {
+                        match self.writer.mark_outbox_sending(row.id.clone()).await {
+                            Ok(true) => {}
+                            Ok(false) => continue,
+                            Err(e) => {
+                                tracing::warn!(code = e.code.as_str(), "KOT not marked sending");
+                                return true;
+                            }
+                        }
+                    }
                     let o = self.send(row).await;
                     self.unrecorded
                         .lock()
@@ -300,7 +366,11 @@ impl ReceiptPrintTask {
                         if a
                             .changes
                             .iter()
-                            .any(|c| c.tbl == "orders" || c.tbl == "shifts")
+                            .any(|c| {
+                                c.tbl == "orders"
+                                    || c.tbl == "shifts"
+                                    || c.tbl == "kitchen_tickets"
+                            })
                         {
                             due = true;
                         }
@@ -567,6 +637,139 @@ mod tests {
         t.drain().await;
         t.drain().await;
         assert_eq!(f.fake.sent().len(), 1);
+    }
+
+    /// A ticket with one line, and a KOT row on the outbox in `state`.
+    async fn kot_queued(f: &Fixture, row: &str, state: &str, payload: &str) {
+        let sql = format!(
+            "INSERT OR IGNORE INTO kitchen_tickets (id, order_id, device_id, seat, number, stage,
+                 placed_at, rev, created_at, updated_at)
+             VALUES ('T1', '01K8Z3Y7QXW2R5T9V1B4N9MZD4Q', NULL, 'PC 07', 3, 'new', {T0}, 1, 0, 0);
+             INSERT OR IGNORE INTO kitchen_ticket_lines (id, ticket_id, order_line_id, label, qty,
+                 notes, rev, created_at, updated_at)
+             VALUES ('TL1', 'T1', 'L1', 'Tea', 2, '[\"No sugar\"]', 1, 0, 0);
+             INSERT INTO side_effect_outbox (id, kind, ref_id, payload, state, at)
+             VALUES ('{row}', 'kot', 'T1', '{payload}', '{state}', {T0});"
+        );
+        f.writer
+            .submit(move |tx| {
+                tx.execute_batch(&sql).unwrap();
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_queued_kot_prints_the_slip_and_is_recorded_without_touching_the_ticket() {
+        let f = fixture(Some(LAN)).await;
+        kot_queued(
+            &f,
+            "01J000000000000000000000K1",
+            "queued",
+            r#"{"reprint":false,"by":""}"#,
+        )
+        .await;
+        assert!(!task(&f).drain().await);
+
+        let sent = f.fake.sent();
+        assert_eq!(sent.len(), 1);
+        let text = String::from_utf8_lossy(&sent[0].bytes).to_string();
+        assert!(text.contains("KOT") && text.contains("PC 07") && text.contains("K-3"));
+        assert!(text.contains("2 x Tea") && text.contains("No sugar"));
+        assert!(text.contains("Order 9MZD4Q") && !text.contains("REPRINT"));
+        assert_eq!(
+            state(&f, "01J000000000000000000000K1"),
+            ("done".to_owned(), None)
+        );
+        assert!(alert_kinds(&f).is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_kot_reprint_is_marked_and_a_second_drain_sends_nothing_more() {
+        let f = fixture(Some(LAN)).await;
+        kot_queued(
+            &f,
+            "01J000000000000000000000K1",
+            "queued",
+            r#"{"reprint":true,"by":"s"}"#,
+        )
+        .await;
+        let t = task(&f);
+        t.drain().await;
+        t.drain().await;
+        assert_eq!(f.fake.sent().len(), 1);
+        assert!(String::from_utf8_lossy(&f.fake.sent()[0].bytes).contains("REPRINT"));
+    }
+
+    #[tokio::test]
+    async fn a_refused_kot_is_recorded_failed_with_the_offline_alert() {
+        let f = fixture(Some(LAN)).await;
+        let addr = "192.168.1.50:9100".parse().unwrap();
+        f.fake.fail_with(Some(PrinterError::Refused(addr)));
+        kot_queued(
+            &f,
+            "01J000000000000000000000K1",
+            "queued",
+            r#"{"reprint":false,"by":""}"#,
+        )
+        .await;
+        task(&f).drain().await;
+        let (s, error) = state(&f, "01J000000000000000000000K1");
+        assert_eq!(s, "failed");
+        assert!(error.unwrap().contains("refused the connection"));
+        assert_eq!(alert_kinds(&f), ["printer_offline"]);
+    }
+
+    #[tokio::test]
+    async fn a_kot_a_restart_found_half_sent_is_marked_failed_and_never_sent_again() {
+        let f = fixture(Some(LAN)).await;
+        kot_queued(
+            &f,
+            "01J000000000000000000000K1",
+            "sending",
+            r#"{"reprint":false,"by":""}"#,
+        )
+        .await;
+        task(&f).drain().await;
+        assert!(f.fake.sent().is_empty());
+        let (s, error) = state(&f, "01J000000000000000000000K1");
+        assert_eq!(s, "failed");
+        assert!(error.unwrap().contains("restarted"));
+        assert_eq!(alert_kinds(&f), ["printer_offline"]);
+    }
+
+    #[tokio::test]
+    async fn another_kot_printer_takes_the_slip_at_its_own_paper_width() {
+        let f = fixture(Some(LAN)).await;
+        let other = r#"{"kind":"lan","id_or_addr":"192.168.1.60:9100","name":"Kitchen"}"#;
+        let sql = format!(
+            "UPDATE settings SET value = 'another' WHERE key = 'kitchen.kot_mode';
+             UPDATE settings SET value = '{other}' WHERE key = 'kitchen.kot_printer';
+             UPDATE settings SET value = '58' WHERE key = 'kitchen.kot_paper_mm';"
+        );
+        f.writer
+            .submit(move |tx| {
+                tx.execute_batch(&sql).unwrap();
+                Ok(())
+            })
+            .await
+            .unwrap();
+        kot_queued(
+            &f,
+            "01J000000000000000000000K1",
+            "queued",
+            r#"{"reprint":false,"by":""}"#,
+        )
+        .await;
+        task(&f).drain().await;
+        let sent = f.fake.sent();
+        assert_eq!(
+            sent[0].target,
+            PrinterTarget::Lan("192.168.1.60:9100".parse().unwrap())
+        );
+        let text = String::from_utf8_lossy(&sent[0].bytes).to_string();
+        assert!(text.contains(&"-".repeat(32)) && !text.contains(&"-".repeat(33)));
     }
 
     /// A closed shift `SH1` with a settled cash sale in its window and a queued Z-report row.

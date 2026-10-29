@@ -29,6 +29,7 @@
     onserve,
     onready,
     onadvance,
+    onreprint,
     oncancel,
     onvoid,
   }: {
@@ -42,6 +43,8 @@
     onserve: (lineId: string) => void;
     /** Moves a ticket to its next stage (Mark ready, or Mark served once it is ready). */
     onadvance?: (ticket: KitchenTicketView) => void;
+    /** Prints a ticket's KOT again (Story 7.5); absent when the viewer may not use the kitchen. */
+    onreprint?: (ticket: KitchenTicketView) => void;
     /** Tells the player their order is ready; absent when the bill has no order to mark. */
     onready?: () => void;
     oncancel: (lineId: string, made: boolean, reason: ReasonCode) => void;
@@ -168,6 +171,11 @@
               </li>
             {/each}
           </ul>
+          {#if tk.kot === "failed"}
+            <p class="type-hub-label kot-failed" role="status" data-testid="ticket-kot-failed">
+              {t("hub.order.kot_failed")}
+            </p>
+          {/if}
           {#if onadvance && (tk.stage === "new" || tk.stage === "preparing" || tk.stage === "ready")}
             <div class="actions">
               <Button
@@ -177,6 +185,15 @@
                 disabledReason="hub.sheet.waiting"
                 onclick={() => onadvance(tk)}
               />
+              {#if onreprint}
+                <Button
+                  label="hub.order.kot_reprint"
+                  variant="secondary"
+                  disabled={busy}
+                  disabledReason="hub.sheet.waiting"
+                  onclick={() => onreprint(tk)}
+                />
+              {/if}
             </div>
           {/if}
         </li>
@@ -340,6 +357,11 @@
   .state,
   .muted {
     color: var(--text-muted);
+  }
+
+  .kot-failed {
+    margin: 0;
+    color: var(--danger);
   }
 
   .actions {

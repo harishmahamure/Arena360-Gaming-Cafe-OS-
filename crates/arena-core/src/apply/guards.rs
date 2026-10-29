@@ -356,6 +356,7 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::SessionRateFlip(_)
             | Target::InvoiceIssue(_)
             | Target::Receipt(_)
+            | Target::Kot(_)
             | Target::Alert(_)
             | Target::ControllerCheck(_)
             | Target::Shift(_),
@@ -452,7 +453,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::CreditAutoPause(_) => Ok(()),
         Target::SessionExpire(_) => Ok(()),
         Target::SessionRateFlip(_) => Ok(()),
-        Target::InvoiceIssue(_) | Target::Receipt(_) => Ok(()),
+        Target::InvoiceIssue(_) | Target::Receipt(_) | Target::Kot(_) => Ok(()),
         Target::Alert(_) | Target::ControllerCheck(_) => Ok(()),
         Target::CreditCollectReverted(t) => {
             super::credit_collect::base_rev_collect_reverted(intent, t)

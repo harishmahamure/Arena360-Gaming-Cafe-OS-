@@ -431,6 +431,12 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Receipt(t) => super::receipt_print::validate(intent, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::KotReprint(_)
+        | IntentPayload::KotPrinted(_)
+        | IntentPayload::KotPrintFailed(_) => match target {
+            Target::Kot(t) => super::kot::validate(intent, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::InvoiceIssue(_) => match target {
             Target::InvoiceIssue(t) => super::invoice_issue::validate(intent, t),
             _ => Err(internal_target()),

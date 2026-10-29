@@ -577,3 +577,9 @@
 
 - Undo of a Served advance back to Ready leaves the ticket Ready with no `order_ready` alert (re-raising would chime on undo, which 7.4 forbids); decide the desired behaviour.
 - The order-ready chime replays after a Hub reload for alerts already open.
+
+## Deferred from: Story 7.5 (KOT printing)
+
+- The 3 s commit-to-printer bound is by design (500 ms tick plus an event wake-up) but is not measured on reference hardware; Story 7.11 owns that proof.
+- A kitchen display (Story 7.6 onwards) does not read `KitchenTicketView.kot`; only the Hub shows "KOT not printed".
+- Reprint KOT is offered on every open ticket even when KOT mode is None; the Hub shows the refusal ("No KOT printer is set up") rather than hiding the button.

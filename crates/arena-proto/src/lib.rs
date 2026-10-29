@@ -207,9 +207,10 @@ pub use kitchen::{
     KEY_KITCHEN_KOT_PAPER_MM, KEY_KITCHEN_KOT_PRINTER, KEY_LICENCE_CLOCK, KEY_LICENCE_FLAGS,
     KEY_LICENCE_STATUS, KEY_LICENCE_TIER, KEY_USER_CAP, KITCHEN_GATED_KEYS, KITCHEN_KOT_MODES,
     KITCHEN_STAGES, KITCHEN_UNDO_WINDOW_MS, KitchenAdvance, KitchenAdvanceReverted,
-    KitchenTicketLineView, KitchenTicketView, MAX_KITCHEN_PRESETS, MAX_LINE_NOTE_CHARS,
-    MAX_LINE_NOTES, MAX_PRESET_NOTE_CHARS, STAGE_CANCELLED, STAGE_NEW, STAGE_PREPARING,
-    STAGE_READY, STAGE_SERVED, TierGate, has_flag, kitchen_gate, next_stage, previous_stage,
+    KitchenTicketLineView, KitchenTicketView, KotPrintFailed, KotPrinted, KotReprint,
+    MAX_KITCHEN_PRESETS, MAX_LINE_NOTE_CHARS, MAX_LINE_NOTES, MAX_PRESET_NOTE_CHARS,
+    STAGE_CANCELLED, STAGE_NEW, STAGE_PREPARING, STAGE_READY, STAGE_SERVED, TierGate, has_flag,
+    kitchen_gate, next_stage, previous_stage,
 };
 pub use library::{
     DEFAULT_KIOSK_LIBRARY, KEY_KIOSK_LIBRARY, KioskInstall, KioskLibraryEntry,

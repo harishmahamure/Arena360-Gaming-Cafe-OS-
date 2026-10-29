@@ -95,6 +95,7 @@ pub(super) fn open(
             placed_at: now_ms,
         },
     )?;
+    super::kot::queue_on_open(tx, &id, now_ms)?;
     let mut out = vec![written(
         RowKey::KitchenTickets { id: id.clone() },
         ChangeOp::Insert,
@@ -205,9 +206,12 @@ fn delete_lines(tx: &StoreTx<'_>, ticket_id: &str, out: &mut Vec<Written>) -> Re
 pub(super) fn delete_order_tickets(
     tx: &StoreTx<'_>,
     tickets: &[TicketRow],
+    now_ms: i64,
     out: &mut Vec<Written>,
 ) -> Result<(), AppError> {
     for t in tickets {
+        // The slip of a placement that was undone never prints (Story 7.5).
+        arena_store::dismiss_queued_kots(tx, &t.id, now_ms)?;
         delete_lines(tx, &t.id, out)?;
         let key = RowKey::KitchenTickets { id: t.id.clone() };
         let before = read_row(tx, &key)?;
@@ -304,7 +308,7 @@ pub(super) fn base_rev_advance(intent: &Intent, t: &AdvanceTarget) -> Result<(),
 
 /// A ticket that does not exist is `NOT_FOUND`, and `TIER_LOCKED` on a branch without the kitchen
 /// flag (only a ticket created before a lapse can still be moved).
-fn missing(kitchen: bool) -> AppError {
+pub(super) fn missing(kitchen: bool) -> AppError {
     if kitchen {
         AppError::with_field(ErrorCode::NotFound, "ticket_id", "no such ticket")
     } else {

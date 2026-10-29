@@ -179,6 +179,17 @@ pub enum IntentKind {
     /// A kitchen ticket's advance taken back within its window (Story 7.3).
     #[serde(rename = "kitchen.advance.reverted")]
     KitchenAdvanceReverted,
+    /// Prints a kitchen ticket's KOT again, marked "REPRINT" (Story 7.5). The audit log records
+    /// who asked.
+    #[serde(rename = "kot.reprint")]
+    KotReprint,
+    /// The print task sent a queued KOT to the printer (system only; Story 7.5).
+    #[serde(rename = "kot.printed")]
+    KotPrinted,
+    /// The printer did not take a queued KOT (system only). The ticket and order are unaffected and
+    /// a "Printer offline" alert is raised.
+    #[serde(rename = "kot.print_failed")]
+    KotPrintFailed,
     /// An unserved placed line cancelled, with a reason.
     #[serde(rename = "order.line_cancel")]
     OrderLineCancel,
@@ -365,7 +376,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 115] = [
+    pub const ALL: [IntentKind; 118] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -415,6 +426,9 @@ impl IntentKind {
         Self::OrderReady,
         Self::KitchenAdvance,
         Self::KitchenAdvanceReverted,
+        Self::KotReprint,
+        Self::KotPrinted,
+        Self::KotPrintFailed,
         Self::OrderLineCancel,
         Self::OrderVoid,
         Self::RefundCreate,
@@ -535,6 +549,9 @@ impl IntentKind {
             Self::OrderReady => "order.ready",
             Self::KitchenAdvance => "kitchen.advance",
             Self::KitchenAdvanceReverted => "kitchen.advance.reverted",
+            Self::KotReprint => "kot.reprint",
+            Self::KotPrinted => "kot.printed",
+            Self::KotPrintFailed => "kot.print_failed",
             Self::OrderLineCancel => "order.line_cancel",
             Self::OrderVoid => "order.void",
             Self::RefundCreate => "refund.create",
@@ -644,7 +661,11 @@ impl IntentKind {
             | Self::DevicePower
             | Self::RateUpsert => IntentCategory::Device,
             Self::ConsolePlanRequested => IntentCategory::Console,
-            Self::KitchenAdvance | Self::KitchenAdvanceReverted => IntentCategory::Kitchen,
+            Self::KitchenAdvance
+            | Self::KitchenAdvanceReverted
+            | Self::KotReprint
+            | Self::KotPrinted
+            | Self::KotPrintFailed => IntentCategory::Kitchen,
             Self::StaffUpsert
             | Self::RoleUpsert
             | Self::StaffSetCredentials
@@ -763,6 +784,8 @@ impl IntentKind {
             | Self::InvoiceIssue
             | Self::ReceiptPrinted
             | Self::ReceiptPrintFailed
+            | Self::KotPrinted
+            | Self::KotPrintFailed
             | Self::DrawerKicked
             | Self::DrawerKickFailed
             | Self::GameMatched
@@ -830,7 +853,7 @@ impl IntentKind {
             | Self::ReceiptReprint
             | Self::OrderLineCancel => Requirement::Perm(Permission::PosSell),
             Self::OrderVoid => Requirement::Perm(Permission::PosVoid),
-            Self::KitchenAdvance | Self::KitchenAdvanceReverted => {
+            Self::KitchenAdvance | Self::KitchenAdvanceReverted | Self::KotReprint => {
                 Requirement::Perm(Permission::KitchenUse)
             }
             Self::RefundCreate => Requirement::Perm(Permission::RefundIssue),
@@ -929,6 +952,9 @@ impl IntentKind {
             | Self::OrderReady
             | Self::KitchenAdvance
             | Self::KitchenAdvanceReverted
+            | Self::KotReprint
+            | Self::KotPrinted
+            | Self::KotPrintFailed
             | Self::StaffSetCredentials
             | Self::StaffDeactivate
             | Self::StockIn
@@ -1510,6 +1536,12 @@ pub enum IntentPayload {
     KitchenAdvance(crate::KitchenAdvance),
     #[serde(rename = "kitchen.advance.reverted")]
     KitchenAdvanceReverted(crate::KitchenAdvanceReverted),
+    #[serde(rename = "kot.reprint")]
+    KotReprint(crate::KotReprint),
+    #[serde(rename = "kot.printed")]
+    KotPrinted(crate::KotPrinted),
+    #[serde(rename = "kot.print_failed")]
+    KotPrintFailed(crate::KotPrintFailed),
     #[serde(rename = "order.line_cancel")]
     OrderLineCancel(crate::OrderLineCancel),
     #[serde(rename = "order.void")]
@@ -1696,6 +1728,9 @@ impl IntentPayload {
             Self::OrderReady(_) => IntentKind::OrderReady,
             Self::KitchenAdvance(_) => IntentKind::KitchenAdvance,
             Self::KitchenAdvanceReverted(_) => IntentKind::KitchenAdvanceReverted,
+            Self::KotReprint(_) => IntentKind::KotReprint,
+            Self::KotPrinted(_) => IntentKind::KotPrinted,
+            Self::KotPrintFailed(_) => IntentKind::KotPrintFailed,
             Self::OrderLineCancel(_) => IntentKind::OrderLineCancel,
             Self::OrderVoid(_) => IntentKind::OrderVoid,
             Self::RefundCreate(_) => IntentKind::RefundCreate,
@@ -2077,6 +2112,8 @@ mod tests {
                 | "invoice.issue"
                 | "receipt.printed"
                 | "receipt.print_failed"
+                | "kot.printed"
+                | "kot.print_failed"
                 | "drawer.kicked"
                 | "drawer.kick_failed"
                 | "stock.expiry_check" => Requirement::System,
@@ -2144,7 +2181,7 @@ mod tests {
                 | "receipt.reprint"
                 | "order.line_cancel" => Requirement::Perm(Permission::PosSell),
                 "order.void" => Requirement::Perm(Permission::PosVoid),
-                "kitchen.advance" | "kitchen.advance.reverted" => {
+                "kitchen.advance" | "kitchen.advance.reverted" | "kot.reprint" => {
                     Requirement::Perm(Permission::KitchenUse)
                 }
                 "refund.create" => Requirement::Perm(Permission::RefundIssue),

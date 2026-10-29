@@ -7,6 +7,10 @@
 //! money therefore uses an ASCII symbol (`Rs` for the rupee, the ISO code where the symbol has no
 //! ASCII form).
 
+mod kot;
+
+pub use kot::{KotLine, KotTicket, render_kot, short_order_id};
+
 use arena_proto::currency::currency;
 use arena_proto::{NumberFormat, PaymentMethod, PaymentRow, SymbolPosition, ZReport};
 use chrono::{DateTime, Utc};

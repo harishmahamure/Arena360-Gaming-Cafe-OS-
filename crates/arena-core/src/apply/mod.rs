@@ -52,6 +52,7 @@ mod kiosk_log;
 mod kiosk_scan;
 mod kitchen_notes;
 mod kitchen_ticket;
+mod kot;
 mod library;
 mod library_dismiss;
 mod licence;
@@ -255,6 +256,7 @@ pub(crate) enum Target {
     SessionRateFlip(Box<rate_flip::FlipTarget>),
     InvoiceIssue(Box<invoice_issue::IssueTarget>),
     Receipt(Box<receipt_print::ReceiptTarget>),
+    Kot(Box<kot::KotTarget>),
     Alert(Box<alert::AlertTarget>),
     ControllerCheck(Box<controller_check::CheckTarget>),
     Shift(Box<shift::ShiftTarget>),
@@ -396,6 +398,9 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         | P::DrawerKicked(_)
         | P::DrawerKickFailed(_) => {
             Target::Receipt(Box::new(receipt_print::load(tx, &intent.payload)?))
+        }
+        P::KotReprint(_) | P::KotPrinted(_) | P::KotPrintFailed(_) => {
+            Target::Kot(Box::new(kot::load(tx, &intent.payload)?))
         }
         P::AlertRaise(_) | P::AlertAck(_) => {
             Target::Alert(Box::new(alert::load(tx, &intent.payload)?))

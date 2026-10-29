@@ -274,6 +274,36 @@ pub fn render_credit_note_order(
     )
 }
 
+/// The ESC/POS bytes of a kitchen ticket's KOT (Story 7.5) at the paper width of the printer that
+/// takes it, marked "REPRINT" with `reprint_at` when it is a reprint.
+pub fn kot_bytes(
+    paper_mm: &str,
+    tz: &str,
+    ticket: &arena_store::TicketRow,
+    lines: &[arena_store::TicketLineRow],
+    reprint_at: Option<i64>,
+) -> Vec<u8> {
+    super::receipt::render_kot(
+        PaperWidth::from_setting(paper_mm),
+        tz,
+        &super::receipt::KotTicket {
+            seat: ticket.seat.clone(),
+            number: ticket.number,
+            order_id: ticket.order_id.clone(),
+            placed_at_ms: ticket.placed_at,
+            lines: lines
+                .iter()
+                .map(|l| super::receipt::KotLine {
+                    qty: l.qty,
+                    name: l.label.clone(),
+                    notes: l.notes.clone(),
+                })
+                .collect(),
+        },
+        reprint_at,
+    )
+}
+
 /// The ESC/POS bytes of a shift's Z-report (Story 5.28), marked "Reprint" when `reprint` is set.
 pub fn z_report_bytes(
     settings: &[SettingEntry],

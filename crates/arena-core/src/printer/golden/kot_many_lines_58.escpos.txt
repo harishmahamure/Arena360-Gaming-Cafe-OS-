@@ -1,0 +1,17 @@
+{ESC}@{ESC}t{00}{ESC}M{00}{ESC}E{01}{GS}!{00}              KOT
+{ESC}E{00}{GS}!{00}{ESC}E{01}{GS}!{11}     PC 12
+{ESC}E{00}{GS}!{00}{ESC}E{01}{GS}!{00}              K-17
+{ESC}E{00}{GS}!{00}Order 9MZD4Q
+28 Oct 2026 14:05
+--------------------------------
+1 x Item number 1
+2 x Item number 2
+3 x Item number 3
+4 x Item number 4
+5 x Item number 5
+6 x Item number 6
+7 x Item number 7
+8 x Item number 8
+9 x Item number 9
+--------------------------------
+{ESC}d{04}{GS}VB{00}

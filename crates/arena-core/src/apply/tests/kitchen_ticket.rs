@@ -14,7 +14,7 @@ use arena_proto::{
     PosSaleLine, PosSaleReverted,
 };
 
-async fn flags(f: &Fixture, value: &str) {
+pub(super) async fn flags(f: &Fixture, value: &str) {
     sql(
         f,
         format!("UPDATE settings SET value = '{value}' WHERE key = 'licence.flags'"),
@@ -23,14 +23,14 @@ async fn flags(f: &Fixture, value: &str) {
 }
 
 /// A Basic branch with a running session and kitchen stock.
-async fn basic(f: &Fixture) -> (String, String) {
+pub(super) async fn basic(f: &Fixture) -> (String, String) {
     flags(f, "kitchen").await;
     let b = burger(f, 10).await;
     let session = running(f).await;
     (b, session)
 }
 
-fn tickets(f: &Fixture) -> Vec<Row> {
+pub(super) fn tickets(f: &Fixture) -> Vec<Row> {
     let mut t = table(f, Table::KitchenTickets);
     t.sort_by_key(|r| int(r, "number"));
     t
@@ -69,7 +69,7 @@ async fn advance_with(
     f.writer.submit_intent(i).await
 }
 
-async fn advance(f: &Fixture, ticket: &str, to: &str) -> Result<Applied, AppError> {
+pub(super) async fn advance(f: &Fixture, ticket: &str, to: &str) -> Result<Applied, AppError> {
     let rev = rev_of(f, Table::KitchenTickets, ticket);
     advance_with(f, owner(), ticket, to, Some(rev)).await
 }

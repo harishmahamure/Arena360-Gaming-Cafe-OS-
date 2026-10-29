@@ -49,6 +49,9 @@ import type { KioskProcessBlocked } from "./KioskProcessBlocked";
 import type { KioskScanReported } from "./KioskScanReported";
 import type { KitchenAdvance } from "./KitchenAdvance";
 import type { KitchenAdvanceReverted } from "./KitchenAdvanceReverted";
+import type { KotPrintFailed } from "./KotPrintFailed";
+import type { KotPrinted } from "./KotPrinted";
+import type { KotReprint } from "./KotReprint";
 import type { LibraryDelete } from "./LibraryDelete";
 import type { LibraryDismiss } from "./LibraryDismiss";
 import type { LibraryDismissClear } from "./LibraryDismissClear";
@@ -166,6 +169,9 @@ export type IntentPayload =
   | ({ kind: "order.ready" } & OrderReady)
   | ({ kind: "kitchen.advance" } & KitchenAdvance)
   | ({ kind: "kitchen.advance.reverted" } & KitchenAdvanceReverted)
+  | ({ kind: "kot.reprint" } & KotReprint)
+  | ({ kind: "kot.printed" } & KotPrinted)
+  | ({ kind: "kot.print_failed" } & KotPrintFailed)
   | ({ kind: "order.line_cancel" } & OrderLineCancel)
   | ({ kind: "order.void" } & OrderVoid)
   | ({ kind: "refund.create" } & RefundCreate)

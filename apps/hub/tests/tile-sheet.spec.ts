@@ -904,6 +904,35 @@ test("Mark ready moves a preparing ticket to ready and Mark served serves a read
     .toContainEqual([{ kind: "kitchen.advance", ticket_id: "T-7", to: "served" }, 6]);
 });
 
+test("a ticket whose KOT failed reads KOT not printed and Reprint KOT sends kot.reprint", async ({
+  page,
+}) => {
+  const bill = ticketedBill("preparing", 5);
+  bill.tickets![0].kot = "failed";
+  const hub = await open(page, "cook-token", { bills: [bill] });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  const ticket = page.getByTestId("kitchen-ticket");
+  await expect(ticket.getByTestId("ticket-kot-failed")).toHaveText(en["hub.order.kot_failed"]);
+  await ticket.getByRole("button", { name: en["hub.order.kot_reprint"] }).click();
+  await expect
+    .poll(() => hub.sent.map((s) => s.payload))
+    .toContainEqual({ kind: "kot.reprint", ticket_id: "T-7" });
+});
+
+test("a ticket whose KOT printed shows no failure line but still offers Reprint KOT", async ({
+  page,
+}) => {
+  const bill = ticketedBill("new", 2);
+  bill.tickets![0].kot = "done";
+  await open(page, "cook-token", { bills: [bill] });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  const ticket = page.getByTestId("kitchen-ticket");
+  await expect(ticket.getByTestId("ticket-kot-failed")).toHaveCount(0);
+  await expect(ticket.getByRole("button", { name: en["hub.order.kot_reprint"] })).toBeVisible();
+});
+
 test("a New ticket marked ready takes its two steps, Preparing first", async ({ page }) => {
   const hub = await open(page, "cook-token", { bills: [ticketedBill("new", 3)] });
   await face(page, "PC 2").focus();

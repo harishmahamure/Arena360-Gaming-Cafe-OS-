@@ -767,7 +767,7 @@ pub(super) fn mutate_sale_reverted(
         )?);
     }
     super::coupon::release_on_revert(tx, &o.id, false, &mut written)?;
-    super::kitchen_ticket::delete_order_tickets(tx, &t.tickets, &mut written)?;
+    super::kitchen_ticket::delete_order_tickets(tx, &t.tickets, now_ms, &mut written)?;
     super::plan_sales::delete_sale_rows(tx, &o.id, &t.payments, &t.txns, &t.lines, &mut written)?;
     Ok(written)
 }

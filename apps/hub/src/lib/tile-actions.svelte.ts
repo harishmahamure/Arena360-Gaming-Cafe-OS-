@@ -122,6 +122,9 @@ const REFUSALS: Record<string, MessageKey> = {
   "STALE:kitchen.advance": "hub.order.ticket_stale",
   "NOT_FOUND:kitchen.advance": "hub.order.ticket_stale",
   "OUT_OF_STOCK:kitchen.advance": "hub.order.serve_short",
+  "VALIDATION_FAILED:kot.reprint": "hub.order.kot_no_printer",
+  "STALE:kot.reprint": "hub.order.ticket_stale",
+  "NOT_FOUND:kot.reprint": "hub.order.ticket_stale",
   "VALIDATION_FAILED:order.ready": "hub.order.ready_refused",
   "NOT_FOUND:order.ready": "hub.order.ready_refused",
   "VALIDATION_FAILED:order.line_cancel": "hub.order.line_refused",
@@ -279,6 +282,10 @@ export const advanceJob = (ticket_id: string, to: string, rev: number) =>
     },
   );
 
+/** Prints a kitchen ticket's KOT again, marked REPRINT (Story 7.5). */
+export const reprintKotJob = (ticket_id: string) =>
+  job({ kind: "kot.reprint", ticket_id }, { track: "none", done: "hub.sheet.done.kot_reprint" });
+
 /** The reasons a placed line is cancelled for, in the order the sheet offers them. */
 export const CANCEL_REASONS: ReasonCode[] = ["changed_mind", "mistake", "other"];
 
@@ -376,7 +383,9 @@ export const permissionFor = (kind: IntentPayload["kind"]): Permission =>
                         kind === "order.ready" ||
                         kind === "order.line_cancel"
                       ? "pos.sell"
-                      : kind === "kitchen.advance" || kind === "kitchen.advance.reverted"
+                      : kind === "kitchen.advance" ||
+                          kind === "kitchen.advance.reverted" ||
+                          kind === "kot.reprint"
                         ? "kitchen.use"
                         : kind === "order.void"
                           ? "pos.void"

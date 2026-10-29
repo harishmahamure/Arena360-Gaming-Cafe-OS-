@@ -45,6 +45,23 @@
     if (alert && openId === tk.id) void ackAlerts([alert.id]);
   }
 
+  async function reprint(tk: KitchenTicketView) {
+    if (busy) return;
+    busy = true;
+    error = null;
+    const out = await submitIntent(
+      { kind: "kot.reprint", ticket_id: tk.id },
+      newIdempotencyKey(),
+    ).finally(() => (busy = false));
+    if (out.kind === "applied") return void onchanged();
+    error = t(
+      out.kind === "error" && out.error.code === "VALIDATION_FAILED"
+        ? "hub.order.kot_no_printer"
+        : "hub.order.ticket_stale",
+    );
+    onchanged();
+  }
+
   async function advance(tk: KitchenTicketView) {
     const next = NEXT[tk.stage];
     if (busy || !next) return;
@@ -92,6 +109,11 @@
             </li>
           {/each}
         </ul>
+        {#if open.kot === "failed"}
+          <p class="type-hub-label error" role="status" data-testid="open-ticket-kot-failed">
+            {t("hub.order.kot_failed")}
+          </p>
+        {/if}
         {#if canAdvance && NEXT[open.stage]}
           <Button
             label={NEXT[open.stage].label}
@@ -99,6 +121,15 @@
             disabled={busy}
             disabledReason="hub.sheet.waiting"
             onclick={() => advance(open)}
+          />
+        {/if}
+        {#if canAdvance}
+          <Button
+            label="hub.order.kot_reprint"
+            variant="secondary"
+            disabled={busy}
+            disabledReason="hub.sheet.waiting"
+            onclick={() => reprint(open)}
           />
         {/if}
         {#if error}<p class="type-hub-label error" role="alert">{error}</p>{/if}

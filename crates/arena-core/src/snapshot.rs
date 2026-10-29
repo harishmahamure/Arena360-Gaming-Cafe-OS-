@@ -292,6 +292,14 @@ fn bills(
     live.chain(open).collect()
 }
 
+/// What the latest KOT of a ticket came to, when it ever had one (Story 7.5).
+fn kot_of(states: &[(String, String)], ticket_id: &str) -> Option<String> {
+    states
+        .iter()
+        .find(|(id, _)| id == ticket_id)
+        .map(|(_, state)| state.clone())
+}
+
 /// A kitchen ticket as the Hub shows it.
 pub(crate) fn ticket_view(
     t: &arena_store::TicketRow,
@@ -305,6 +313,7 @@ pub(crate) fn ticket_view(
         stage: t.stage.clone(),
         placed_at: t.placed_at,
         rev: t.rev,
+        kot: None,
         lines: lines
             .iter()
             .map(|l| arena_proto::KitchenTicketLineView {
@@ -388,6 +397,7 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
         unchecked,
         shift,
         tickets,
+        kot_states,
     ) = store.read_consistent(|s| {
         Ok((
             s.branch_summary()?,
@@ -409,6 +419,7 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
             s.unchecked_consoles()?,
             s.shift_state()?,
             s.open_tickets()?,
+            s.kot_states()?,
         ))
     })?;
     let mut snapshot = build_snapshot(branch, devices, meta, groups, zones, locale, ui);
@@ -424,11 +435,18 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
         }
     }
     snapshot.bills = bills(&sessions, &segments, orders, &tickets, &rules, now_ms);
+    for ticket in snapshot.bills.iter_mut().flat_map(|b| b.tickets.iter_mut()) {
+        ticket.kot = kot_of(&kot_states, &ticket.id);
+    }
     snapshot.group_bills = group_bills(group_rows, &sessions, ended_group, &rules, now_ms);
     snapshot.counter_tickets = tickets
         .iter()
         .filter(|(t, _)| t.device_id.is_none())
-        .map(|(t, lines)| ticket_view(t, lines))
+        .map(|(t, lines)| {
+            let mut view = ticket_view(t, lines);
+            view.kot = kot_of(&kot_states, &t.id);
+            view
+        })
         .collect();
     snapshot.alerts = alerts
         .into_iter()
@@ -658,6 +676,13 @@ fn rate_flips_in(store: &Store, now_ms: i64) -> Result<RateFlips, AppError> {
     Ok(out)
 }
 
+/// A KOT ready to send (Story 7.5): its ESC/POS bytes and the saved value of the printer that takes
+/// it (empty when none is set up).
+pub struct KotJob {
+    pub bytes: Vec<u8>,
+    pub selected: String,
+}
+
 /// A read-only connection that serves [`HubSnapshot`]s on a primary or a follower.
 pub struct SnapshotReader {
     reader: Mutex<Store>,
@@ -772,6 +797,76 @@ impl SnapshotReader {
             .lock()
             .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
         store.queued_prints(limit)
+    }
+
+    /// KOTs waiting on the side-effect outbox, oldest first (Story 7.5).
+    pub fn queued_kots(&self, limit: i64) -> Result<Vec<arena_store::OutboxRow>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.queued_kots(limit)
+    }
+
+    /// KOTs a restart found half-sent (Story 7.5): they are never sent a second time.
+    pub fn sending_kots(&self, limit: i64) -> Result<Vec<arena_store::OutboxRow>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.sending_kots(limit)
+    }
+
+    /// The KOT of a ticket as bytes for the printer the KOT mode names, marked "REPRINT" when
+    /// `reprint` is set; `None` when the ticket is gone. `selected` is that printer's saved value,
+    /// empty when the mode is None or no printer is chosen.
+    pub fn kot_job(
+        &self,
+        ticket_id: &str,
+        reprint: bool,
+        now_ms: i64,
+    ) -> Result<Option<KotJob>, AppError> {
+        let found = {
+            let store = self
+                .reader
+                .lock()
+                .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+            store.ticket_with_lines(ticket_id)?
+        };
+        let Some((ticket, lines)) = found else {
+            return Ok(None);
+        };
+        let settings = self.settings()?;
+        let value = |key: &str| {
+            settings
+                .iter()
+                .find(|s| s.key == key)
+                .map(|s| s.value.clone())
+                .unwrap_or_default()
+        };
+        let (selected, paper) = match value(arena_proto::KEY_KITCHEN_KOT_MODE).as_str() {
+            "none" => (String::new(), value(arena_proto::KEY_PRINTER_PAPER_MM)),
+            "another" => (
+                value(arena_proto::KEY_KITCHEN_KOT_PRINTER),
+                value(arena_proto::KEY_KITCHEN_KOT_PAPER_MM),
+            ),
+            _ => (
+                value(arena_proto::KEY_PRINTER_SELECTED),
+                value(arena_proto::KEY_PRINTER_PAPER_MM),
+            ),
+        };
+        let snapshot = self.snapshot(now_ms)?;
+        let tz = snapshot.locale.as_ref().map_or("", |l| l.tz.as_str());
+        Ok(Some(KotJob {
+            bytes: crate::printer::job::kot_bytes(
+                &paper,
+                tz,
+                &ticket,
+                &lines,
+                reprint.then_some(now_ms),
+            ),
+            selected,
+        }))
     }
 
     /// Drawer kicks waiting on the side-effect outbox, oldest first (Story 5.18).

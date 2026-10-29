@@ -11,7 +11,11 @@ use crate::db_error;
 
 pub const KIND_PRINT: &str = "print";
 pub const KIND_DRAWER: &str = "drawer";
+/// A kitchen ticket's KOT (Story 7.5); the row's `ref_id` is the ticket id.
+pub const KIND_KOT: &str = "kot";
 pub const STATE_QUEUED: &str = "queued";
+/// A KOT the print task has started sending; a restart that finds one never sends it again.
+pub const STATE_SENDING: &str = "sending";
 pub const STATE_DONE: &str = "done";
 pub const STATE_FAILED: &str = "failed";
 
@@ -88,6 +92,66 @@ pub fn list_queued_outbox(
         .map_err(db_error)
 }
 
+/// Marks a queued row `sending` before its bytes go out; false when it was not queued.
+pub fn mark_outbox_sending(conn: &Connection, id: &str) -> Result<bool, AppError> {
+    let n = conn
+        .execute(
+            "UPDATE side_effect_outbox SET state = 'sending' WHERE id = ?1 AND state = 'queued'",
+            [id],
+        )
+        .map_err(db_error)?;
+    Ok(n == 1)
+}
+
+/// Rows of `kind` left `sending`, oldest first (a crash or restart cut the send short).
+pub fn list_sending_outbox(
+    conn: &Connection,
+    kind: &str,
+    limit: i64,
+) -> Result<Vec<OutboxRow>, AppError> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {COLUMNS} FROM side_effect_outbox
+             WHERE kind = ?1 AND state = 'sending' ORDER BY at, id LIMIT ?2"
+        ))
+        .map_err(db_error)?;
+    stmt.query_map(params![kind, limit], row)
+        .map_err(db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)
+}
+
+/// Closes the KOT rows of a ticket that are still waiting, so a ticket that was cancelled or
+/// removed before its KOT printed never prints one (Story 7.5).
+pub fn dismiss_queued_kots(conn: &Connection, ticket_id: &str, at: i64) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE side_effect_outbox SET state = 'done', finished_at = ?2,
+                error = 'the ticket ended before its KOT printed'
+         WHERE kind = 'kot' AND ref_id = ?1 AND state = 'queued'",
+        params![ticket_id, at],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// What the latest KOT of each ticket came to (`queued`, `sending` as `queued`, `done` or
+/// `failed`), for the tickets that ever had one.
+pub fn latest_kot_states(conn: &Connection) -> Result<Vec<(String, String)>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT o.ref_id, CASE o.state WHEN 'sending' THEN 'queued' ELSE o.state END
+             FROM side_effect_outbox o
+             WHERE o.kind = 'kot' AND NOT EXISTS (
+                 SELECT 1 FROM side_effect_outbox n
+                 WHERE n.kind = 'kot' AND n.ref_id = o.ref_id AND (n.at, n.id) > (o.at, o.id))",
+        )
+        .map_err(db_error)?;
+    stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)
+}
+
 /// Closes a queued row as `done` or `failed`; false when it was not queued.
 pub fn finish_outbox(
     conn: &Connection,
@@ -99,7 +163,7 @@ pub fn finish_outbox(
     let n = conn
         .execute(
             "UPDATE side_effect_outbox SET state = ?2, finished_at = ?3, error = ?4
-             WHERE id = ?1 AND state = 'queued'",
+             WHERE id = ?1 AND state IN ('queued', 'sending')",
             params![id, state, at, error],
         )
         .map_err(db_error)?;

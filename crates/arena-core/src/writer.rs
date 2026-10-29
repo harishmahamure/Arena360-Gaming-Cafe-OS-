@@ -760,6 +760,14 @@ impl WriterHandle {
         .await
     }
 
+    /// Marks a queued outbox row `sending` before its bytes go out (Story 7.5), so a restart that
+    /// finds it half-sent never sends it a second time. False when the row was not queued. The
+    /// outbox is local to the Hub and outside the change log.
+    pub async fn mark_outbox_sending(&self, id: String) -> Result<bool, AppError> {
+        self.run(move |store| store.write_tx(|tx| arena_store::mark_outbox_sending(tx, &id)))
+            .await
+    }
+
     /// Runs `job` in one `BEGIN IMMEDIATE` transaction (committed on `Ok`, rolled back on
     /// `Err` or panic). Test-only: production writes go through `submit_intent`.
     #[cfg(any(test, feature = "test-jobs"))]

@@ -1298,3 +1298,23 @@ test("the open-tickets strip is absent when no walk-up ticket is open (a Free br
   await expect(page.getByTestId("pos")).toBeVisible();
   await expect(page.getByTestId("open-tickets")).toHaveCount(0);
 });
+
+test("the open-tickets strip shows KOT not printed and Reprint KOT sends kot.reprint", async ({
+  page,
+}) => {
+  const failed = { ...counterTicket(2042, "preparing"), kot: "failed" };
+  const hub = newHub({
+    permissions: ["pos.sell", "kitchen.use"],
+    counterTickets: [failed],
+  });
+  await openHub(page, hub);
+  const strip = page.getByTestId("open-tickets");
+  await strip.getByTestId("open-ticket").click();
+  await expect(strip.getByTestId("open-ticket-kot-failed")).toHaveText(en["hub.order.kot_failed"]);
+  await strip
+    .getByTestId("open-ticket-detail")
+    .getByRole("button", { name: en["hub.order.kot_reprint"] })
+    .click();
+  await expect.poll(() => hub.sent.length).toBe(1);
+  expect(hub.sent[0].payload).toEqual({ kind: "kot.reprint", ticket_id: "T-2042" });
+});

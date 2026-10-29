@@ -420,6 +420,11 @@ enum Op {
         skip: bool,
         undo: bool,
     },
+    /// `kot.reprint` of a ticket (Story 7.5): it never moves the ticket, and a refusal (a cancelled
+    /// ticket, no KOT printer, a branch without the kitchen flag) writes nothing.
+    KotReprint {
+        pick: u8,
+    },
     /// `order.void` of an open session order by the owner or a staff member of a built-in role,
     /// with a good, missing or wrong reason and note. Only the owner and managers may void; a
     /// voided order is detached from its session, keeps its lines and holds no stock.
@@ -840,6 +845,7 @@ fn op() -> impl Strategy<Value = Op> {
         ),
         2 => (any::<u8>(), any::<bool>()).prop_map(|(pick, again)| Op::OrderReady { pick, again }),
         2 => prop::bool::weighted(0.7).prop_map(|on| Op::KitchenLicence { on }),
+        2 => any::<u8>().prop_map(|pick| Op::KotReprint { pick }),
         4 => (any::<u8>(), prop::bool::weighted(0.15), prop::bool::weighted(0.25))
             .prop_map(|(pick, skip, undo)| Op::KitchenAdvance { pick, skip, undo }),
         2 => (any::<u8>(), any::<u8>(), any::<u8>(), 0..7u8, 0..5u8, any::<Index>()).prop_map(
@@ -3480,6 +3486,46 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     );
                     prop_assert_eq!(now, before);
                     prop_assert_eq!(stock_image(hub), stock_before);
+                }
+            }
+        }
+        Op::KotReprint { pick } => {
+            let tickets = hub.reader.rows(Table::KitchenTickets).unwrap();
+            let Some(t) = tickets.get(usize::from(*pick) % tickets.len().max(1)) else {
+                return Ok(());
+            };
+            let id = text(t, "id");
+            let before = hub.reader.rows(Table::KitchenTickets).unwrap();
+            let out = hub.submit_new(hub.intent(
+                IntentPayload::KotReprint(arena_proto::KotReprint {
+                    ticket_id: id.clone(),
+                }),
+                None,
+            ));
+            let now = hub.reader.rows(Table::KitchenTickets).unwrap();
+            match out {
+                Ok(_) => {
+                    // Only the audit touch: the stage never moves.
+                    let stage_of = |rows: &[Row]| {
+                        rows.iter()
+                            .find(|r| text(r, "id") == id)
+                            .map(|r| text(r, "stage"))
+                    };
+                    prop_assert_eq!(stage_of(&now), stage_of(&before));
+                }
+                Err(e) => {
+                    prop_assert!(
+                        matches!(
+                            e.code,
+                            ErrorCode::ValidationFailed
+                                | ErrorCode::Stale
+                                | ErrorCode::TierLocked
+                                | ErrorCode::NotFound
+                        ),
+                        "{:?}",
+                        e
+                    );
+                    prop_assert_eq!(now, before);
                 }
             }
         }

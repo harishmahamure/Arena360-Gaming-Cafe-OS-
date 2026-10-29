@@ -504,7 +504,7 @@ pub(super) fn mutate_place_reverted(
         });
         written.extend(super::stock::touch(tx, &h.item_id)?);
     }
-    super::kitchen_ticket::delete_order_tickets(tx, &t.tickets, &mut written)?;
+    super::kitchen_ticket::delete_order_tickets(tx, &t.tickets, now_ms, &mut written)?;
     let mut amount = 0;
     for line in &t.placed {
         amount += line.amount_minor;

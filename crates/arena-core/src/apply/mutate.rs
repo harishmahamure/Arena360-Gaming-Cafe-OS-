@@ -585,6 +585,12 @@ pub(super) fn mutate(
             Target::Receipt(t) => super::receipt_print::mutate(tx, intent, t, now_ms),
             _ => Err(mismatch()),
         },
+        IntentPayload::KotReprint(_)
+        | IntentPayload::KotPrinted(_)
+        | IntentPayload::KotPrintFailed(_) => match target {
+            Target::Kot(t) => super::kot::mutate(tx, intent, t, now_ms),
+            _ => Err(mismatch()),
+        },
         IntentPayload::CreditCollectReverted(_) => match target {
             Target::CreditCollectReverted(t) => {
                 super::credit_collect::mutate_collect_reverted(tx, t)

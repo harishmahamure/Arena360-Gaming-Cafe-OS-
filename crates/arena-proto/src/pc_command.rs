@@ -73,11 +73,17 @@ fn invalid(field: &str, message: &str) -> AppError {
     AppError::with_field(ErrorCode::ValidationFailed, field, message)
 }
 
+/// Zero-width and bidirectional-override characters, which hide or reverse the text on screen.
+fn is_invisible_format(c: char) -> bool {
+    matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+}
+
 /// Whether `text`, trimmed, is a staff message: 1 to [`PC_MESSAGE_MAX`] characters, none a
-/// control character.
+/// control or invisible formatting character.
 pub fn valid_message_text(text: &str) -> bool {
     let t = text.trim();
-    (1..=PC_MESSAGE_MAX).contains(&t.chars().count()) && !t.chars().any(char::is_control)
+    (1..=PC_MESSAGE_MAX).contains(&t.chars().count())
+        && !t.chars().any(|c| c.is_control() || is_invisible_format(c))
 }
 
 impl DeviceScreen {
@@ -166,6 +172,14 @@ mod tests {
             device_id: "D".into(),
             action,
         }
+    }
+
+    #[test]
+    fn a_message_text_refuses_hidden_and_reversing_characters() {
+        assert!(valid_message_text("Closing at 11"));
+        assert!(!valid_message_text("Closing\u{202E}11"));
+        assert!(!valid_message_text("Clo\u{200B}sing"));
+        assert!(!valid_message_text("\u{FEFF}"));
     }
 
     #[test]

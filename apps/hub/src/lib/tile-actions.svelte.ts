@@ -323,7 +323,7 @@ export const MESSAGE_MAX = 140;
 export const messageValid = (text: string): boolean => {
   const body = text.trim();
   const length = [...body].length;
-  return length >= 1 && length <= MESSAGE_MAX && !/\p{Cc}/u.test(body);
+  return length >= 1 && length <= MESSAGE_MAX && !/[\p{Cc}​-‏‪-‮⁦-⁩﻿]/u.test(body);
 };
 
 export const permissionFor = (kind: IntentPayload["kind"]): Permission =>

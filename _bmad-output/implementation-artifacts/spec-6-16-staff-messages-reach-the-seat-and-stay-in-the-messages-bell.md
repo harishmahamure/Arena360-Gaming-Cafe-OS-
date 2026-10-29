@@ -2,7 +2,7 @@
 title: 'Story 6.16: Staff messages reach the seat and stay in the messages bell'
 type: 'feature'
 created: '2026-10-29'
-status: 'in-review'
+status: 'done'
 baseline_commit: '08417799cd74a01deba8913658f66ce5e5136090'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -91,8 +91,14 @@ deferred: []
 
 ## Auto Run Result
 
-Status: in-review
+Status: done
 
 Verified: cargo tests for arena-proto/core/kiosk-core/kiosk-ui/api pass (one log-capture test, `lock_and_unlock_log_the_staff_ids_and_never_the_pin`, failed once in a parallel run and passed alone and on re-run); `arena-kiosk-svc --lib` has the same 14 SYSTEM-ownership failures as before; fmt and clippy clean; gen:types, check:strings|hex|no-blur|protocol, format:check, kiosk and hub svelte-check pass; kiosk Playwright messages-bell, toast, hud, pc-screen, volume-staff pass (48); hub floor and tile-sheet specs pass.
 
 Not run: `arena-kiosk-svc/tests/runtime.rs` (`cfg(unix)`), real HUD window toast text and sound, 2 s delivery on a real LAN, the 4 `theme.spec.ts` tests (existing `C:\C:\` path bug).
+
+## Code Review (2026-10-29)
+
+Fixed: "Message all PCs" now mints a fresh idempotency key when the text changes after a failed send; message text refuses zero-width and bidi-override characters (Rust `valid_message_text` and the Hub `messageValid`, with a test).
+
+Deferred (not blocking): a PC locked by a session transfer keeps its on-screen session, so the next player there still sees the earlier messages (the kiosk has no session id to tell sessions apart; `volume` reset has the same limit); a seat message to an online PC with no session is acked and dropped, and the Hub reports it delivered; `all` push set and audit set come from separate reads; the bridge does not emit a clear event for a session-less `pc_screen`; broadcast lag and a full 64-slot channel drop notes until reconnect; messages are not kept across a service restart.

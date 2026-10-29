@@ -16,6 +16,7 @@
   let sending = $state(false);
   let result: { text: string; failed: boolean } | null = $state(null);
   let key = newIdempotencyKey();
+  let keyedText = "";
   let field: HTMLElement | undefined = $state();
 
   const allowed = $derived(hasPermission(staff, "device.screen"));
@@ -37,6 +38,8 @@
     error = null;
     sending = true;
     result = null;
+    if (text.trim() !== keyedText) key = newIdempotencyKey();
+    keyedText = text.trim();
     const outcome = await submitIntent(
       { kind: "device.message", scope: "all", text: text.trim() },
       key,

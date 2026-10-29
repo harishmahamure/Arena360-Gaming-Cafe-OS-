@@ -2,7 +2,7 @@
 title: 'Story 6.37: Kiosk screens reflow at every supported width, by keyboard and in high contrast'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '73c23e53c62ed5d894b2e22b2952bec9c8ab253e'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'

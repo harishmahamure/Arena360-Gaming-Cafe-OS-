@@ -2,7 +2,7 @@
 title: 'Story 8.4: The Hub publishes a branch summary every cadence'
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 baseline_commit: 'dc67fa6'
 review_loop_iteration: 0
 followup_review_recommended: false

@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-29-2026 23:59
+last_updated: 10-30-2026 00:30
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -223,7 +223,7 @@ development_status:
 
   epic-8: in-progress
   8-1-presign-issues-batch-and-summary-upload-urls-under-the-branc: done
-  8-2-the-hub-uploads-gap-free-change-log-batches-at-its-tier-cade: backlog
+  8-2-the-hub-uploads-gap-free-change-log-batches-at-its-tier-cade: review
   8-3-the-heartbeat-detects-upload-gaps-and-the-hub-resends-them: backlog
   8-4-the-hub-publishes-a-branch-summary-every-cadence: backlog
   8-5-rollup-schema-v1-and-the-daily-rollup-at-close: backlog

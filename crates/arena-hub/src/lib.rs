@@ -483,7 +483,7 @@ async fn run(
             writer.clone(),
             pair_gate.clone(),
             status_tx.clone(),
-            verify_keys,
+            verify_keys.clone(),
             env!("CARGO_PKG_VERSION").to_owned(),
         )
         .with_poke(Arc::clone(&command_poke))
@@ -492,6 +492,19 @@ async fn run(
             let presence = lan_hub.presence();
             Arc::new(move |id| presence.status(id))
         })
+        .run(),
+    );
+    // The change-log upload (Story 8.2): primary and paid only, reads through the snapshot reader.
+    let upload_job = tokio::spawn(
+        arena_tasks::UploadTask::new(
+            cloud.clone(),
+            Arc::clone(&keystore),
+            writer.clone(),
+            Arc::clone(&snapshots),
+            pair_gate.clone(),
+            status_tx.clone(),
+            verify_keys,
+        )
         .run(),
     );
     let command_job = tokio::spawn(
@@ -741,6 +754,8 @@ async fn run(
     let _ = heartbeat_job.await;
     command_job.abort();
     let _ = command_job.await;
+    upload_job.abort();
+    let _ = upload_job.await;
     template_job.abort();
     let _ = template_job.await;
     template_apply_job.abort();

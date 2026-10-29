@@ -7,7 +7,8 @@
 //!
 //! Branch writes go through [`WriterHandle::submit_intent`], which checks the frame, runs
 //! `apply()`, commits and then emits. The only other writes are maintenance: the lease renewal
-//! ([`WriterHandle::renew_lease`]) and the dedupe prune ([`WriterHandle::prune_applied_intents`]),
+//! ([`WriterHandle::renew_lease`]), the dedupe prune ([`WriterHandle::prune_applied_intents`]) and
+//! the upload cursor ([`WriterHandle::record_upload`]),
 //! neither of which writes change rows. The closure API (`submit`) exists for tests only
 //! (`cfg(test)` or the `test-jobs` feature).
 
@@ -19,9 +20,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use arena_proto::{AppError, CommandWire, ErrorCode, Intent};
 use arena_store::{
-    AppliedCommand, LeaseRow, Store, find_applied_command, insert_applied_command,
+    AppliedCommand, LeaseRow, Store, UploadCursor, find_applied_command, insert_applied_command,
     mark_command_reported, max_applied_command_id, prune_applied_intents, read_lease,
-    unreported_commands, write_lease,
+    read_upload_cursor, unreported_commands, write_lease, write_upload_cursor,
 };
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
@@ -233,6 +234,45 @@ impl WriterHandle {
             store.write_tx(|tx| {
                 crate::apply::check_epoch(tx, &ctx)?;
                 prune_applied_intents(tx, cutoff_ms, limit)
+            })
+        })
+        .await
+    }
+
+    /// Moves the change-log upload cursor to `epoch`/`last_seq` once the cloud has stored the
+    /// batch ending there (Story 8.2). A maintenance write outside `apply()`: it writes no change
+    /// rows, and only while this writer is primary and still holds its epoch (`NOT_PRIMARY`
+    /// otherwise). The cursor never moves backwards: an older position is left as it is.
+    pub async fn record_upload(&self, epoch: String, last_seq: i64) -> Result<(), AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        self.run(move |store| {
+            let ctx = ctx_from(clock.as_ref(), &status);
+            store.write_tx(|tx| {
+                crate::apply::check_epoch(tx, &ctx)?;
+                let counter = |e: &str| e.split_once(':').and_then(|(c, _)| c.parse::<i64>().ok());
+                let Some(new_counter) = counter(&epoch).filter(|_| last_seq >= 0) else {
+                    return Err(AppError::new(
+                        ErrorCode::Internal,
+                        format!("cannot record an upload at {epoch:?} seq {last_seq}"),
+                    ));
+                };
+                if let Some(c) = read_upload_cursor(tx)?
+                    && counter(&c.epoch).is_some_and(|old| {
+                        (old, c.epoch.as_str(), c.last_seq_uploaded)
+                            >= (new_counter, epoch.as_str(), last_seq)
+                    })
+                {
+                    return Ok(());
+                }
+                write_upload_cursor(
+                    tx,
+                    &UploadCursor {
+                        epoch,
+                        last_seq_uploaded: last_seq,
+                        uploaded_at: clock.now_ms(),
+                    },
+                )
             })
         })
         .await

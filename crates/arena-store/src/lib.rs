@@ -42,6 +42,7 @@ mod shifts;
 mod staff;
 mod stock;
 mod stock_reports;
+mod upload;
 mod wallet;
 mod zreport;
 
@@ -247,6 +248,11 @@ pub use stock::{
     update_stock,
 };
 pub use stock_reports::{StockLevelRow, StockMoveReportRow, StockMovesRows};
+pub use upload::{
+    BATCH_MAX_ROWS, BatchFork, BatchHeader, DecodedBatch, PendingBatch, UploadCursor,
+    count_pending_rows, decode_batch, encode_batch, read_lease_fork, read_pending_batch,
+    read_upload_cursor, write_lease_fork, write_upload_cursor,
+};
 pub use wallet::{
     NewTopupOrder, NewWalletTxn, OrderTxn, WalletRow, WalletTxnRow, adjust_wallet, find_wallet,
     insert_import_wallet_txn, insert_topup_order, insert_wallet, insert_wallet_txn,

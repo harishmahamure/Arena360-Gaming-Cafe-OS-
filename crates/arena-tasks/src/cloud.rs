@@ -6,8 +6,8 @@ use arena_core::{Clock, HubPairer, PairFuture, PairGate, WriterHandle};
 use arena_proto::{
     AppError, CATALOG_MANIFEST_PATH, CatalogManifest, CommandResult, CommandResultAck,
     CommandsPage, ErrorCode, HeartbeatRequest, HeartbeatResponse, HubPairRequest, HubPairResponse,
-    HubPlatform, SETUP_MAX_BYTES, SetupTemplateOutcome, SetupTemplateStored, UiError,
-    normalize_pairing_code, valid_pairing_code,
+    HubPlatform, PresignRequest, PresignResponse, SETUP_MAX_BYTES, SetupTemplateOutcome,
+    SetupTemplateStored, UiError, normalize_pairing_code, valid_pairing_code,
 };
 use arena_store::HubIdentity;
 use sha2::{Digest, Sha256};
@@ -18,6 +18,8 @@ use crate::keystore::{Keystore, mint_kek};
 pub const CLOUD_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long a media download may go without receiving a byte.
 pub const MEDIA_READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long one presigned PUT of a change-log batch may take in all.
+pub const UPLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 const DEFAULT_RETRY_AFTER_S: u32 = 60;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,6 +105,8 @@ pub struct CloudClient {
     http: reqwest::Client,
     /// For media downloads: no total timeout (a video is large), a read timeout instead.
     media: reqwest::Client,
+    /// For presigned PUTs of upload files: a total timeout long enough for a slow WAN.
+    upload: reqwest::Client,
     base: String,
 }
 
@@ -129,6 +133,11 @@ impl CloudClient {
             .timeout(CLOUD_TIMEOUT)
             .build()
             .map_err(|e| e.without_url().to_string())?;
+        let upload = builder(tls.clone())
+            .connect_timeout(CLOUD_TIMEOUT)
+            .timeout(UPLOAD_TIMEOUT)
+            .build()
+            .map_err(|e| e.without_url().to_string())?;
         let media = builder(tls)
             .connect_timeout(CLOUD_TIMEOUT)
             .read_timeout(MEDIA_READ_TIMEOUT)
@@ -137,6 +146,7 @@ impl CloudClient {
         Ok(Self {
             http,
             media,
+            upload,
             base: endpoint.base_url(),
         })
     }
@@ -201,6 +211,44 @@ impl CloudClient {
             .bearer_auth(token)
             .body(file);
         self.send(call).await
+    }
+
+    /// Asks for short-lived upload links under the branch's prefix of the data bucket (Story 8.1).
+    pub async fn presign(
+        &self,
+        token: &str,
+        req: &PresignRequest,
+    ) -> Result<PresignResponse, CloudFailure> {
+        self.post("/v1/presign", Some(token), req).await
+    }
+
+    /// PUTs `body` to a presigned `url` (Story 8.2). The link is the proof, so no token is sent
+    /// and redirects are refused. Anything but a 2xx answer is a failure.
+    pub async fn put_object(&self, url: &str, body: Vec<u8>) -> Result<(), CloudFailure> {
+        let res = self
+            .upload
+            .put(url)
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| CloudFailure::Unreachable(e.without_url().to_string()))?;
+        let status = res.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        let retry_after_s = res
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse::<u32>().ok());
+        Err(match status.as_u16() {
+            429 => CloudFailure::Refused {
+                status: 429,
+                error: AppError::new(ErrorCode::RateLimited, "Too many requests."),
+                retry_after_s,
+            },
+            code => CloudFailure::Unreachable(format!("the bucket answered {code}")),
+        })
     }
 
     /// Downloads the setup file a signed link leads to (Story 5.38). The link is the proof, so

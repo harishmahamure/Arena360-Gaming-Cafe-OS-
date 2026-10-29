@@ -16,6 +16,7 @@ pub mod session_timer;
 pub mod template;
 pub mod template_apply;
 pub mod test_session;
+pub mod upload;
 
 pub use catalog::{CATALOG_INTERVAL, CatalogPullTask};
 pub use cloud::{CloudClient, CloudEndpoint, CloudFailure, CloudPairer, MediaFailure};
@@ -45,3 +46,4 @@ pub use session_timer::{SessionTimerTask, TIMER_EVENTS_DEPTH, TIMER_TICK};
 pub use template::{NOT_ENTITLED_RETRY, SetupTemplateTask, TIER_RECHECK, UPLOAD_DEBOUNCE};
 pub use template_apply::{SetupApplyTask, SetupTemplateInbox};
 pub use test_session::TestSessionTask;
+pub use upload::{BACKLOG_TRIGGER_ROWS, MIN_UPLOAD_INTERVAL, UploadTask};

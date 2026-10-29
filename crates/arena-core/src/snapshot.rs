@@ -1734,6 +1734,34 @@ impl SnapshotReader {
         })
     }
 
+    /// The next change-log batch to upload (Story 8.2): up to `limit` rows of one epoch after the
+    /// upload cursor, `None` when everything is uploaded. Blocking (SQLite).
+    pub fn pending_batch(
+        &self,
+        limit: usize,
+    ) -> Result<Option<arena_store::PendingBatch>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_with(|conn| arena_store::read_pending_batch(conn, limit))
+    }
+
+    /// How many change rows are not yet in an accepted batch, and when the cloud last accepted
+    /// one (Story 8.2). Blocking (SQLite).
+    pub fn upload_progress(&self) -> Result<crate::UploadStatus, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_with(|conn| {
+            Ok(crate::UploadStatus {
+                last_upload_at: arena_store::read_upload_cursor(conn)?.map(|c| c.uploaded_at),
+                pending_rows: arena_store::count_pending_rows(conn)?,
+            })
+        })
+    }
+
     /// The branch's setup file (Story 5.36): groups with rates, products, bundles, plans, pricing
     /// rules and coupons, as the text an export saves. Blocking (SQLite).
     pub fn setup_export(&self, now_ms: i64) -> Result<String, AppError> {

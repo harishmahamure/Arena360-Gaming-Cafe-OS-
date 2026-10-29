@@ -105,6 +105,18 @@ pub struct HubStatus {
     pub licence: Option<arena_proto::LicenceStanding>,
     pub clock_wrong: bool,
     pub platform: arena_proto::HubPlatform,
+    /// The change-log upload (Story 8.2), as the upload task last saw it.
+    pub upload: UploadStatus,
+}
+
+/// How far the change-log upload has got. A Hub that does not upload (Free, follower) keeps the
+/// default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct UploadStatus {
+    /// When the cloud last accepted a batch (Hub clock, ms); `None` before the first.
+    pub last_upload_at: Option<i64>,
+    /// Change rows not yet in an accepted batch.
+    pub pending_rows: i64,
 }
 
 impl HubStatus {
@@ -135,6 +147,7 @@ impl HubStatus {
             licence: None,
             clock_wrong: false,
             platform: arena_proto::HubPlatform::Windows,
+            upload: UploadStatus::default(),
         }
     }
 }

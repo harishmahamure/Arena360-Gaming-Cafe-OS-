@@ -77,7 +77,9 @@ pub use snapshot::{
     KotJob, RateFlips, SnapshotReader, branch_setup, build_snapshot, read_snapshot,
 };
 pub use staff::StaffDirectory;
-pub use status::{CloudTime, Epoch, HubStatus, LeaseInfo, PairingState, Role, status_channel};
+pub use status::{
+    CloudTime, Epoch, HubStatus, LeaseInfo, PairingState, Role, UploadStatus, status_channel,
+};
 pub use writer::{LeaseRenewal, LicenceState, Writer, WriterHandle};
 
 /// Returns this Hub's instance id, minting and persisting a ULID on first start.

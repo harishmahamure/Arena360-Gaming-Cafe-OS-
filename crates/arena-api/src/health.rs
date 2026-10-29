@@ -38,7 +38,16 @@ struct HealthBody {
     setup: Option<arena_proto::SetupStatus>,
     tier: Option<&'static str>,
     platform: &'static str,
+    upload: UploadBody,
     now: i64,
+}
+
+/// The change-log upload (Story 8.2): when the cloud last accepted a batch and how many change
+/// rows are still to go.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct UploadBody {
+    last_upload_at: Option<i64>,
+    pending_rows: i64,
 }
 
 impl HealthBody {
@@ -60,6 +69,10 @@ impl HealthBody {
             setup,
             tier: s.tier.map(arena_proto::Tier::as_str),
             platform: s.platform.as_str(),
+            upload: UploadBody {
+                last_upload_at: s.upload.last_upload_at,
+                pending_rows: s.upload.pending_rows,
+            },
             now,
         }
     }
@@ -457,6 +470,7 @@ mod tests {
                 "setup": null,
                 "tier": null,
                 "platform": "windows",
+                "upload": {"last_upload_at": null, "pending_rows": 0},
                 "now": 1000
             })
         );
@@ -498,11 +512,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reports_the_change_log_upload() {
+        let (tx, rx) = status_channel(HubStatus::opened(1, "01JSELF"));
+        tx.send_modify(|s| {
+            s.upload = arena_core::UploadStatus {
+                last_upload_at: Some(777),
+                pending_rows: 12,
+            }
+        });
+        assert_eq!(
+            get_json(rx).await["upload"],
+            json!({"last_upload_at": 777, "pending_rows": 12})
+        );
+    }
+
+    #[tokio::test]
     async fn reports_follower_without_lease_as_null() {
         let (_tx, rx) = status_channel(HubStatus::opened(1, "01JSELF"));
         assert_eq!(
             get_json(rx).await,
-            json!({"db_open": true, "role": "follower", "lease": null, "epoch": null, "schema_version": 1, "self_instance_id": "01JSELF", "tls_fingerprint": null, "connectivity": {"state": "online", "checked_at": null}, "setup": null, "tier": null, "platform": "windows", "now": 1000})
+            json!({"db_open": true, "role": "follower", "lease": null, "epoch": null, "schema_version": 1, "self_instance_id": "01JSELF", "tls_fingerprint": null, "connectivity": {"state": "online", "checked_at": null}, "setup": null, "tier": null, "platform": "windows", "upload": {"last_upload_at": null, "pending_rows": 0}, "now": 1000})
         );
     }
 

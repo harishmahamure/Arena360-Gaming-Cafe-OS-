@@ -37,6 +37,9 @@ rmp-serde = "=1.3.1"
 chrono-tz = "=0.10.4"
 chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
 sha2 = "=0.10.9"
+# arena-store (Story 8.2): change-log upload batches are zstd-compressed (libzstd compiled in, like
+# the bundled SQLite; no legacy or zdict features).
+zstd = { version = "=0.13.1", default-features = false }
 tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = { version = "=0.26.6", default-features = false, features = ["ring", "tls12"] }

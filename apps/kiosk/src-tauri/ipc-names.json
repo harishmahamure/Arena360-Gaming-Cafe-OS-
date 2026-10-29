@@ -47,6 +47,8 @@
     "volumeSet": "volume_set",
     "callStaff": "call_staff",
     "playerAccount": "player_account",
+    "playerAccountPage": "player_account_page",
+    "playerPasswordChange": "player_password_change",
     "playerEnd": "player_end",
     "playerLock": "player_lock",
     "playerUnlock": "player_unlock",

@@ -172,6 +172,7 @@ test("the account chip and the time chip each open the menu with name, balance a
   await expect(menu(page).getByRole("button")).toHaveText([
     "Balance",
     "Messages",
+    "Account",
     /^Extend/,
     "Lock",
     "Log out",
@@ -451,6 +452,7 @@ test("a postpaid menu lists I'm done above Log out; prepaid has none", async ({ 
   await expect(menu(page).getByRole("button")).toHaveText([
     "Balance",
     "Messages",
+    "Account",
     "Lock",
     "I'm done",
     "Log out",
@@ -574,8 +576,8 @@ test("prepaid sessions get an Extend row above Lock with the Ctrl+Shift+E key ca
     .locator("[data-testid^=account-row-]:not([data-testid$=keys])")
     .evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
   expect(order.indexOf("account-row-extend")).toBe(order.indexOf("account-row-lock") - 1);
-  // Arrow keys reach it between Messages and Lock.
-  await row(page, "messages").focus();
+  // Arrow keys reach it between Account and Lock.
+  await row(page, "account").focus();
   await page.keyboard.press("ArrowDown");
   await expect(extend).toBeFocused();
   await page.keyboard.press("ArrowDown");

@@ -18,8 +18,9 @@ use crate::kiosk::MostPlayed;
 use crate::pc_command::{LockReason, PcAck, PcAction};
 use crate::player_login::{PlayerAuthResult, PlayerAuthenticate};
 use crate::player_session::{
-    PlayerAccountResult, PlayerEndResult, PlayerExtend, PlayerExtendOptions, PlayerExtendResult,
-    PlayerPlansResult, PlayerStartResult, PlayerStartSession, PlayerUnlock, PlayerUnlockResult,
+    PlayerAccountPage, PlayerAccountResult, PlayerChangePassword, PlayerEndResult, PlayerExtend,
+    PlayerExtendOptions, PlayerExtendResult, PlayerPasswordChangeResult, PlayerPlansResult,
+    PlayerStartResult, PlayerStartSession, PlayerUnlock, PlayerUnlockResult,
 };
 use crate::player_signup::{PlayerSignup, PlayerSignupResult};
 use crate::scope::ClientClass;
@@ -119,6 +120,20 @@ pub enum FrameBody {
     /// The wallet balance and the packs and passes valid for this PC.
     #[serde(rename = "player.account_result")]
     PlayerAccountResult(PlayerAccountResult),
+    /// The player on a live session opens the Account page: their details, wallet and packs and
+    /// order history (paired sessions only; Story 6.34).
+    #[serde(rename = "player.account_page")]
+    PlayerAccountPageRequest,
+    /// The Account page's content.
+    #[serde(rename = "player.account_page_result")]
+    PlayerAccountPageResult(PlayerAccountPage),
+    /// The player changes their own password: the current one and the new one (paired sessions
+    /// only; Story 6.34).
+    #[serde(rename = "player.password_change")]
+    PlayerPasswordChange(PlayerChangePassword),
+    /// The Hub's typed answer to `player.password_change`.
+    #[serde(rename = "player.password_change_result")]
+    PlayerPasswordChangeResult(PlayerPasswordChangeResult),
     /// The player chose Log out: end their own session (paired sessions only).
     #[serde(rename = "player.end_session")]
     PlayerEndSession,
@@ -175,7 +190,7 @@ pub enum FrameBody {
 }
 
 /// Every known `kind`.
-pub const FRAME_KINDS: [&str; 43] = [
+pub const FRAME_KINDS: [&str; 47] = [
     "hello",
     "hello.ok",
     "intent.submit",
@@ -202,6 +217,10 @@ pub const FRAME_KINDS: [&str; 43] = [
     "device.call_staff",
     "player.account",
     "player.account_result",
+    "player.account_page",
+    "player.account_page_result",
+    "player.password_change",
+    "player.password_change_result",
     "player.end_session",
     "player.end_result",
     "player.unlock",
@@ -251,6 +270,10 @@ impl FrameBody {
             Self::CallStaff => "device.call_staff",
             Self::PlayerAccount => "player.account",
             Self::PlayerAccountResult(_) => "player.account_result",
+            Self::PlayerAccountPageRequest => "player.account_page",
+            Self::PlayerAccountPageResult(_) => "player.account_page_result",
+            Self::PlayerPasswordChange(_) => "player.password_change",
+            Self::PlayerPasswordChangeResult(_) => "player.password_change_result",
             Self::PlayerEndSession => "player.end_session",
             Self::PlayerEndResult(_) => "player.end_result",
             Self::PlayerUnlock(_) => "player.unlock",

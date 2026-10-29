@@ -128,6 +128,27 @@ fn device_creates_player(p: Permission, intent: &Intent) -> bool {
         && matches!(&intent.payload, IntentPayload::PlayerCreate(c) if c.consent)
 }
 
+/// Whether a paired device may change a password for the player on its own PC (Story 6.34): the
+/// player typed the current password and a new one at the kiosk's Account page. The Hub checked
+/// the current password and hashed the new one before building this `player.password_change`; a
+/// kiosk cannot send it (it is outside the paired scope). Another player's password stays denied,
+/// and so does a reset: only the change, for the player running on this PC.
+fn device_changes_own_password(
+    tx: &StoreTx<'_>,
+    p: Permission,
+    intent: &Intent,
+) -> Result<bool, AppError> {
+    use arena_proto::IntentPayload;
+    let IntentPayload::PlayerPasswordChange(change) = &intent.payload else {
+        return Ok(false);
+    };
+    if p != Permission::PlayerManage {
+        return Ok(false);
+    }
+    Ok(arena_store::live_session_on_device(tx, &intent.actor.id)?
+        .is_some_and(|(_, player)| player.as_deref() == Some(change.player_id.as_str())))
+}
+
 /// Whether a paired device may end the session on its own PC (Story 6.17): the player chose Log
 /// out at the kiosk. The Hub builds that `session.end` from the device's session; a kiosk cannot
 /// send it (it is outside the paired scope). Another PC's session stays denied.
@@ -243,6 +264,7 @@ pub fn check(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
                     || device_ends_own_session(tx, p, intent)?
                     || device_extends_own_session(tx, p, intent)?
                     || device_places_own_order(tx, p, intent)?
+                    || device_changes_own_password(tx, p, intent)?
             }
         },
     };

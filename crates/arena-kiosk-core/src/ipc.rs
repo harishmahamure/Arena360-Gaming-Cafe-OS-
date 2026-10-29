@@ -242,6 +242,15 @@ pub enum IpcMsg {
         rid: String,
         password: SecretPin,
     },
+    /// App -> service: the current and the new password typed on the Account page's Change
+    /// password form (Story 6.34). The answer is `reply` `rid`: the Hub's
+    /// `player.password_change_result` as the body (`{outcome, ...}`), or an `error` when the Hub
+    /// could not be asked. Both are [`SecretPin`]s: never printed, cleared once sent.
+    PlayerPasswordChange {
+        rid: String,
+        current: SecretPin,
+        new: SecretPin,
+    },
     /// App → service: a new player's sign-up (Story 6.10). The answer is `reply` `rid`: the Hub's
     /// `player.signup_result` as the body (`{outcome, ...}`), or an `error` when the Hub could not
     /// be asked or could not answer.
@@ -526,6 +535,20 @@ mod tests {
         assert!(!format!("{msg:?}").contains("hunter2"));
         let v: Value = serde_json::from_str(&msg.to_line()).unwrap();
         assert_eq!(v["type"], "player_unlock");
+        assert_eq!(IpcMsg::parse(&msg.to_line()).unwrap(), msg);
+    }
+
+    #[test]
+    fn the_password_change_message_never_prints_either_password() {
+        let msg = IpcMsg::PlayerPasswordChange {
+            rid: "c".into(),
+            current: SecretPin::new("hunter2-secret"),
+            new: SecretPin::new("swordfish-new"),
+        };
+        let text = format!("{msg:?}");
+        assert!(!text.contains("hunter2") && !text.contains("swordfish"));
+        let v: Value = serde_json::from_str(&msg.to_line()).unwrap();
+        assert_eq!(v["type"], "player_password_change");
         assert_eq!(IpcMsg::parse(&msg.to_line()).unwrap(), msg);
     }
 

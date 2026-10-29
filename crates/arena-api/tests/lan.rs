@@ -3785,6 +3785,158 @@ async fn the_account_shows_the_balance_and_owned_pack_hours_of_the_session_playe
     assert_eq!(account.packs[0].minutes_left, Some(300));
 }
 
+async fn account_page_frame(
+    client: &HubClient,
+) -> Result<arena_proto::PlayerAccountPage, ClientError> {
+    match client
+        .request("player.account_page", serde_json::Value::Null)
+        .await?
+        .body
+    {
+        FrameBody::PlayerAccountPageResult(r) => Ok(r),
+        other => panic!("{other:?}"),
+    }
+}
+
+async fn change_password_frame(
+    client: &HubClient,
+    current: &str,
+    new: &str,
+) -> arena_proto::PlayerPasswordChangeResult {
+    match client
+        .request(
+            "player.password_change",
+            serde_json::json!({ "current": current, "new": new }),
+        )
+        .await
+        .unwrap()
+        .body
+    {
+        FrameBody::PlayerPasswordChangeResult(r) => r,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_account_page_shows_details_with_a_masked_phone_wallet_and_packs() {
+    let hub = start("0.1.0", true).await;
+    let (client, _) = playing(&hub).await;
+    let page = account_page_frame(&client).await.unwrap();
+    assert_eq!(
+        (page.name.as_str(), page.username.as_str()),
+        ("Asha", "asha")
+    );
+    assert_eq!(
+        page.phone_masked
+            .chars()
+            .filter(char::is_ascii_digit)
+            .count(),
+        4
+    );
+    assert!(page.phone_masked.contains('•'), "{}", page.phone_masked);
+    assert_eq!(page.balance_minor, 4_000);
+    assert_eq!(page.packs.len(), 1);
+    assert_eq!(
+        (
+            page.packs[0].name.as_str(),
+            page.packs[0].minutes_left,
+            page.packs[0].expired
+        ),
+        ("5 h", Some(300), false)
+    );
+    assert!(!page.packs[0].groups.is_empty());
+    assert!(page.orders.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_account_page_of_a_guest_or_an_empty_pc_is_not_found() {
+    let hub = start("0.1.0", true).await;
+    rated_pc(&hub, 6_000).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    for guest in [false, true] {
+        if guest {
+            start_postpaid(&hub, None).await;
+        }
+        let ClientError::Hub(e) = account_page_frame(&client).await.unwrap_err() else {
+            panic!("a hub refusal")
+        };
+        assert_eq!(e.code, ErrorCode::NotFound);
+    }
+    // A guest has no password: the change is a wrong current password and nothing counts.
+    for _ in 0..6 {
+        assert_eq!(
+            change_password_frame(&client, "anything", "a-new-password").await,
+            arena_proto::PlayerPasswordChangeResult::WrongCurrent
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_player_changes_their_password_and_five_wrong_currents_pause_the_form() {
+    use arena_proto::PlayerPasswordChangeResult as R;
+    let hub = start("0.1.0", true).await;
+    let (client, _) = playing(&hub).await;
+    // A wrong current password, and a new one outside 6 to 128 characters, change nothing.
+    assert_eq!(
+        change_password_frame(&client, "wrong-one", "a-new-password").await,
+        R::WrongCurrent
+    );
+    assert_eq!(
+        change_password_frame(&client, "right-password", "short").await,
+        R::InvalidNew
+    );
+    assert_eq!(
+        change_password_frame(&client, "right-password", &"x".repeat(129)).await,
+        R::InvalidNew
+    );
+    assert_eq!(
+        unlock_frame(&client, "right-password").await,
+        arena_proto::PlayerUnlockResult::Ok
+    );
+    // The right current password stores the new one, as the device, and the old one stops working.
+    assert_eq!(
+        change_password_frame(&client, "right-password", "a-new-password").await,
+        R::Ok
+    );
+    assert_eq!(
+        unlock_frame(&client, "right-password").await,
+        arena_proto::PlayerUnlockResult::Rejected
+    );
+    assert_eq!(
+        unlock_frame(&client, "a-new-password").await,
+        arena_proto::PlayerUnlockResult::Ok
+    );
+    let reader = Store::open_reader(&hub.path).unwrap();
+    let changed = reader
+        .changes()
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|c| c.tbl == "players")
+        .unwrap();
+    assert_eq!(
+        (changed.actor_kind.as_str(), changed.actor_id.as_str()),
+        ("device", hub.paired_id.as_str())
+    );
+    // Four wrong in a row, then the fifth pauses the form for a minute, checking nothing more.
+    for _ in 0..4 {
+        assert_eq!(
+            change_password_frame(&client, "wrong-one", "another-one").await,
+            R::WrongCurrent
+        );
+    }
+    assert_eq!(
+        change_password_frame(&client, "wrong-one", "another-one").await,
+        R::Locked { retry_s: 60 }
+    );
+    assert!(matches!(
+        change_password_frame(&client, "a-new-password", "another-one").await,
+        R::Locked { retry_s } if retry_s > 0
+    ));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_account_of_a_guest_or_an_empty_pc_is_not_found() {
     let hub = start("0.1.0", true).await;

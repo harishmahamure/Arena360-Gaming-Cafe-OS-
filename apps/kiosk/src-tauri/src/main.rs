@@ -230,6 +230,30 @@ async fn player_account(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<
     Ok(service_request(&bridge, "player_account", serde_json::Value::Null).await)
 }
 
+/// What the Account page shows (Story 6.34): IPC `player_account_page`, answered with the Hub's
+/// `player.account_page_result` as the body. `None` when the service did not answer.
+#[tauri::command]
+async fn player_account_page(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
+    Ok(service_request(&bridge, "player_account_page", serde_json::Value::Null).await)
+}
+
+/// The Change password form (Story 6.34): both passwords go to the service only, as IPC
+/// `player_password_change`, and are dropped here. The answer is the Hub's outcome.
+#[tauri::command]
+async fn player_password_change(
+    current: String,
+    new: String,
+    bridge: tauri::State<'_, Arc<Bridge>>,
+) -> Result<Option<Answer>, ()> {
+    let current = arena_kiosk_core::ipc::SecretPin::new(current);
+    let new = arena_kiosk_core::ipc::SecretPin::new(new);
+    Ok(bridge
+        .request(
+            move |rid| arena_kiosk_core::ipc::IpcMsg::PlayerPasswordChange { rid, current, new },
+        )
+        .await)
+}
+
 /// Log out from the account menu (Story 6.17): IPC `player_end`, answered with the Hub's
 /// `player.end_result`. The Hub then locks the PC: the cleanup runs and the screen follows.
 #[tauri::command]
@@ -611,6 +635,8 @@ fn main() {
             volume_set,
             call_staff,
             player_account,
+            player_account_page,
+            player_password_change,
             player_end,
             player_lock,
             player_unlock,

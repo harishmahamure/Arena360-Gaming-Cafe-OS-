@@ -124,6 +124,49 @@ pub async fn account(ctx: &Ctx) -> Result<Value, AppError> {
     }
 }
 
+/// Asks the Hub for the Account page's content (Story 6.34): the `player.account_page_result` as
+/// the reply body. The Hub finds the player from the session on this PC.
+pub async fn account_page(ctx: &Ctx) -> Result<Value, AppError> {
+    let client = client(ctx)?;
+    match client.request("player.account_page", Value::Null).await {
+        Ok(frame) => match frame.body {
+            FrameBody::PlayerAccountPageResult(r) => serde_json::to_value(r)
+                .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string())),
+            other => Err(unexpected("player.account_page", other)),
+        },
+        Err(e) => Err(failed("player.account_page", e)),
+    }
+}
+
+/// Sends the passwords typed on the Change password form to the Hub (Story 6.34): the
+/// `player.password_change_result` as the reply body. Nothing is queued or retried, and both
+/// passwords are cleared once they are in the frame.
+pub async fn change_password(
+    ctx: &Ctx,
+    mut current: SecretPin,
+    mut new: SecretPin,
+) -> Result<Value, AppError> {
+    let client = match client(ctx) {
+        Ok(c) => c,
+        Err(e) => {
+            current.clear();
+            new.clear();
+            return Err(e);
+        }
+    };
+    let body = serde_json::json!({ "current": current.expose(), "new": new.expose() });
+    current.clear();
+    new.clear();
+    match client.request("player.password_change", body).await {
+        Ok(frame) => match frame.body {
+            FrameBody::PlayerPasswordChangeResult(r) => serde_json::to_value(r)
+                .map_err(|e| AppError::new(ErrorCode::Internal, e.to_string())),
+            other => Err(unexpected("player.password_change", other)),
+        },
+        Err(e) => Err(failed("player.password_change", e)),
+    }
+}
+
 /// Asks the Hub to end the player's own session (Story 6.17, Log out): the
 /// `player.end_result` as the reply body. The lock follows from the Hub as a PC command.
 pub async fn end(ctx: &Ctx) -> Result<Value, AppError> {

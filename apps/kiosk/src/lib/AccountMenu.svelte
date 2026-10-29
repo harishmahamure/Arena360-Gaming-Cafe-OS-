@@ -25,6 +25,7 @@
     connected,
     onclose,
     onmessages,
+    onaccount,
   }: {
     name: string;
     /** A profiled player: Balance and Lock are offered (a guest has no wallet and no password). */
@@ -43,6 +44,8 @@
     onclose: (refocus: boolean) => void;
     /** "Messages": open the messages bell's list. */
     onmessages: () => void;
+    /** "Account": open the Account page (Story 6.34). */
+    onaccount: () => void;
   } = $props();
 
   type View = "menu" | "balance" | "confirm" | "done";
@@ -126,6 +129,11 @@
   function messages() {
     onclose(false);
     onmessages();
+  }
+
+  function account_page() {
+    onclose(false);
+    onaccount();
   }
 
   /** "Extend": the HUD expands into its panel with the options, as Ctrl+Shift+E does. */
@@ -231,10 +239,21 @@
           onclick={messages}>{t("player.account.row.messages")}</button
         >
       </li>
-      {#if profiled && prepaid}
+      {#if profiled}
         <li>
           <button
             bind:this={rows[2]}
+            type="button"
+            class="row type-kiosk-label"
+            data-testid="account-row-account"
+            onclick={account_page}>{t("player.account.row.account")}</button
+          >
+        </li>
+      {/if}
+      {#if profiled && prepaid}
+        <li>
+          <button
+            bind:this={rows[3]}
             type="button"
             class="row extend type-kiosk-label"
             data-testid="account-row-extend"
@@ -258,7 +277,7 @@
       {#if profiled}
         <li>
           <button
-            bind:this={rows[3]}
+            bind:this={rows[4]}
             type="button"
             class="row type-kiosk-label"
             data-testid="account-row-lock"
@@ -270,7 +289,7 @@
       {#if !prepaid}
         <li>
           <button
-            bind:this={rows[4]}
+            bind:this={rows[5]}
             type="button"
             class="row type-kiosk-label"
             data-testid="account-row-done"
@@ -281,7 +300,7 @@
       {/if}
       <li>
         <button
-          bind:this={rows[5]}
+          bind:this={rows[6]}
           type="button"
           class="row type-kiosk-label"
           data-testid="account-row-logout"

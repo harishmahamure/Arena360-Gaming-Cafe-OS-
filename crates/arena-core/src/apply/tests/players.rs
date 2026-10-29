@@ -4,7 +4,7 @@ use crate::players::{KEK_LEN, open_field, seal};
 use crate::rbac::{ROLE_COUNTER, ROLE_KITCHEN};
 use arena_proto::PlayerForm;
 
-const KEK: [u8; KEK_LEN] = [9; KEK_LEN];
+pub(super) const KEK: [u8; KEK_LEN] = [9; KEK_LEN];
 
 pub(super) fn form(username: &str, phone: &str) -> PlayerForm {
     PlayerForm {

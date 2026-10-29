@@ -388,7 +388,12 @@ pub(super) fn mutate(
             Target::Player(t) => players::mutate_update(tx, p, t, now_ms),
             _ => Err(mismatch()),
         },
-        IntentPayload::PlayerPasswordReset(p) => players::mutate_reset(tx, p),
+        IntentPayload::PlayerPasswordReset(p) => {
+            players::mutate_reset(tx, &p.player_id, &p.password_hash)
+        }
+        IntentPayload::PlayerPasswordChange(p) => {
+            players::mutate_reset(tx, &p.player_id, &p.password_hash)
+        }
         IntentPayload::DeviceTestSessionStart(_) | IntentPayload::DeviceTestSessionCompleted(_) => {
             match target {
                 Target::TestSession(t) => super::test_session::mutate(tx, intent, t),

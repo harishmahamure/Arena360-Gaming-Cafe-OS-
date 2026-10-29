@@ -313,7 +313,10 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::ImportPlayers(p) => Target::ImportPlayers(Box::new(import_players::load(tx, p)?)),
         P::ImportPlans(_) => Target::ImportPlans(Box::new(import_plans::load(tx)?)),
         P::ImportSetup(s) => Target::ImportSetup(Box::new(import_setup::load(tx, &s.file, now)?)),
-        P::PlayerCreate(_) | P::PlayerUpdate(_) | P::PlayerPasswordReset(_) => {
+        P::PlayerCreate(_)
+        | P::PlayerUpdate(_)
+        | P::PlayerPasswordReset(_)
+        | P::PlayerPasswordChange(_) => {
             Target::Player(Box::new(players::load(tx, &intent.payload)?))
         }
         P::SessionStart(s) => Target::Session(Box::new(session::load(tx, s, now)?)),

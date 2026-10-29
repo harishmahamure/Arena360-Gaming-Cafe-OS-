@@ -20,10 +20,14 @@ import names from "../../src-tauri/ipc-names.json" with { type: "json" };
 import { extendOf, extendOptionsOf, type ExtendOptionsOutcome, type ExtendOutcome } from "./extend";
 import {
   accountOf,
+  accountPageOf,
   endOf,
+  passwordChangeOf,
   unlockOf,
   type AccountOutcome,
+  type AccountPageOutcome,
   type LogoutOutcome,
+  type PasswordChangeOutcome,
   type UnlockOutcome,
 } from "./account";
 import {
@@ -567,6 +571,27 @@ export async function callStaff(): Promise<boolean> {
 export async function playerAccount(): Promise<AccountOutcome> {
   if (!inTauri()) return { kind: "unreachable" };
   return accountOf(await ask(CMD.playerAccount));
+}
+
+/**
+ * What the Account page shows (Story 6.34): details, wallet and packs, and order history of the
+ * player on this PC's session. The Hub reads who it is; the kiosk names nobody.
+ */
+export async function playerAccountPage(): Promise<AccountPageOutcome> {
+  if (!inTauri()) return { kind: "unreachable" };
+  return accountPageOf(await ask(CMD.playerAccountPage));
+}
+
+/**
+ * The Change password form (Story 6.34). Both passwords go to the Kiosk service through the shell
+ * and nowhere else; the caller drops its own copies.
+ */
+export async function playerPasswordChange(
+  current: string,
+  next: string,
+): Promise<PasswordChangeOutcome> {
+  if (!inTauri()) return { kind: "unreachable" };
+  return passwordChangeOf(await ask(CMD.playerPasswordChange, { current, new: next }));
 }
 
 /**

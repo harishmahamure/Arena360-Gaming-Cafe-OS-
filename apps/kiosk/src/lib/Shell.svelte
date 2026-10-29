@@ -2,6 +2,7 @@
   import { BrandMark, t } from "@arena/ui";
   import type { SnapshotLocale } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
+  import Account from "./Account.svelte";
   import AccountMenu from "./AccountMenu.svelte";
   import type { ShopItem } from "@arena/ui/generated";
   import { callStaff } from "./bridge";
@@ -120,6 +121,9 @@
   let focused: Tab = $state("home");
   /** The item that takes Tab: the roving one, or the active one if the roving one left the nav. */
   const roving = $derived(tabs.includes(focused) ? focused : shown);
+  /** The Account page is open (Story 6.34) and the section it shows; the nav tab stays as it was. */
+  let accountOpen = $state(false);
+  let accountSection: "details" | "wallet" | "orders" | "password" = $state("details");
   /** The Home hero video was paused: it holds its frame for the rest of the session (Story 6.29). */
   let heroPaused = $state(false);
 
@@ -203,7 +207,10 @@
           tabindex={roving === id ? 0 : -1}
           data-testid={"tab-" + id}
           onfocus={() => (focused = id)}
-          onclick={() => (tab = id)}
+          onclick={() => {
+            tab = id;
+            accountOpen = false;
+          }}
           onkeydown={(e) => onkeydown(e, index)}
         >
           {t(LABELS[id])}
@@ -271,6 +278,10 @@
         {connected}
         onclose={closeMenu}
         onmessages={() => void bell?.show()}
+        onaccount={() => {
+          accountSection = "details";
+          accountOpen = true;
+        }}
       />
     {/if}
   </header>
@@ -278,7 +289,9 @@
   <main class="content" class:on-home={shown === "home"} aria-label={t(LABELS[shown])}>
     <h1 class="type-kiosk-headline" data-testid="session-device">{session.device}</h1>
     {@render status?.()}
-    {#if shown === "games"}
+    {#if accountOpen && session.username !== null}
+      <Account bind:section={accountSection} {locale} {connected} />
+    {:else if shown === "games"}
       <Games {games} {gameRunning} {launchers} {mostPlayed} {branch} {onlaunch} {onopenlauncher} />
     {:else if shown === "apps"}
       <Games kind="apps" games={apps} {gameRunning} onlaunch={onlaunchapp} />

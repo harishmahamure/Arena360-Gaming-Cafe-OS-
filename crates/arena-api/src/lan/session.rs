@@ -637,6 +637,20 @@ impl Ctx<'_> {
                 Ok(device) => self.spawn_player_account(rid, device, permits, tasks).await,
                 Err(e) => self.reply(Frame::error(rid, e)).await,
             },
+            "player.account_page" => match self.paired_device("player.account_page") {
+                Ok(device) => {
+                    self.spawn_player_account_page(rid, device, permits, tasks)
+                        .await
+                }
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
+            "player.password_change" => match self.check_player_password_change(value) {
+                Ok((device, request)) => {
+                    self.spawn_player_password_change(rid, device, request, permits, tasks)
+                        .await
+                }
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
             "player.end_session" => match self.paired_device("player.end_session") {
                 Ok(device) => self.spawn_player_end(rid, device, permits, tasks).await,
                 Err(e) => self.reply(Frame::error(rid, e)).await,
@@ -935,6 +949,19 @@ impl Ctx<'_> {
         });
     }
 
+    fn check_player_password_change(
+        &self,
+        value: Value,
+    ) -> Result<(String, arena_proto::PlayerChangePassword), AppError> {
+        let device = self.paired_device("player.password_change")?;
+        let frame = parse_frame_value(value).map_err(|e| e.error)?;
+        let FrameBody::PlayerPasswordChange(request) = frame.body else {
+            return Err(app(ErrorCode::BadFrame, "malformed player.password_change"));
+        };
+        request.validate()?;
+        Ok((device, request))
+    }
+
     fn check_player_unlock(
         &self,
         value: Value,
@@ -1131,6 +1158,51 @@ impl Ctx<'_> {
             let _permit = permit;
             let reply = match super::player_account::account(&hub, &device).await {
                 Ok(result) => Frame::new(rid, FrameBody::PlayerAccountResult(result)),
+                Err(e) => Frame::error(rid, e),
+            };
+            let _ = out.send(text(&reply)).await;
+        });
+    }
+
+    async fn spawn_player_account_page(
+        &self,
+        rid: String,
+        device: String,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let (hub, out) = (Arc::clone(self.hub), self.out.clone());
+        tasks.spawn(async move {
+            let _permit = permit;
+            let reply = match super::player_account::account_page(&hub, &device).await {
+                Ok(result) => Frame::new(rid, FrameBody::PlayerAccountPageResult(result)),
+                Err(e) => Frame::error(rid, e),
+            };
+            let _ = out.send(text(&reply)).await;
+        });
+    }
+
+    async fn spawn_player_password_change(
+        &self,
+        rid: String,
+        device: String,
+        request: arena_proto::PlayerChangePassword,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let (hub, out) = (Arc::clone(self.hub), self.out.clone());
+        tasks.spawn(async move {
+            let _permit = permit;
+            let reply = match super::player_account::change_password(&hub, &device, request).await {
+                Ok(result) => Frame::new(rid, FrameBody::PlayerPasswordChangeResult(result)),
                 Err(e) => Frame::error(rid, e),
             };
             let _ = out.send(text(&reply)).await;

@@ -268,6 +268,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Player(t) => players::validate_reset(p, t),
             _ => Err(internal_target()),
         },
+        IntentPayload::PlayerPasswordChange(p) => match target {
+            Target::Player(t) => players::validate_change(p, t),
+            _ => Err(internal_target()),
+        },
         IntentPayload::SessionStart(s) => match target {
             Target::Session(t) => super::session::validate(intent, s, t),
             _ => Err(internal_target()),

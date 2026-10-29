@@ -84,6 +84,7 @@ const INTENT_LABELS: Record<string, MessageKey> = {
   "session.settle.reverted": "hub.audit.intent.session.settle.reverted",
   "player.update": "hub.audit.intent.player.update",
   "player.password_reset": "hub.audit.intent.player.password_reset",
+  "player.password_change": "hub.audit.intent.player.password_change",
   "ads.consent": "hub.audit.intent.ads.consent",
   "printer.status": "hub.audit.intent.printer.status",
   "order.place": "hub.audit.intent.order.place",

@@ -264,6 +264,20 @@ impl DeviceDirectory {
         crate::player_account::player_account(&store, player_id, device_id, now_ms)
     }
 
+    /// What the Account page shows for `player_id` (Story 6.34).
+    pub fn account_page(
+        &self,
+        kek: &[u8; crate::players::KEK_LEN],
+        player_id: &str,
+        now_ms: i64,
+    ) -> Result<arena_proto::PlayerAccountPage, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?;
+        crate::player_account::account_page(&store, kek, player_id, now_ms)
+    }
+
     /// The extend panel's quotes and sources for the player on `device_id` (Story 6.21).
     pub fn extend_options(
         &self,

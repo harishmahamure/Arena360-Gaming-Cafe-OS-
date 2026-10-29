@@ -632,6 +632,25 @@ async fn serve(
                     let _ = out.send(reply).await;
                 });
             }
+            Ok(IpcMsg::PlayerPasswordChange { rid, current, new }) => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(
+                        rid,
+                        crate::player_session::change_password(&ctx, current, new).await,
+                    );
+                    let _ = out.send(reply).await;
+                });
+            }
+            Ok(IpcMsg::Request { rid, kind, .. }) if kind == "player_account_page" => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(rid, crate::player_session::account_page(&ctx).await);
+                    let _ = out.send(reply).await;
+                });
+            }
             Ok(IpcMsg::Request { rid, kind, .. }) if kind == "player_account" => {
                 let ctx = Arc::clone(&ctx);
                 let out = out_tx.clone();

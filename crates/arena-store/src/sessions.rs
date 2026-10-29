@@ -1005,6 +1005,68 @@ pub fn list_order_states(conn: &Connection) -> Result<Vec<OrderState>, AppError>
     .map_err(db_error)
 }
 
+/// One of a player's orders with product lines, for the kiosk's Account page (Story 6.34).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerOrderRow {
+    pub order_id: String,
+    pub created_at: i64,
+    pub status: String,
+    pub total_minor: i64,
+    pub invoice_no: Option<String>,
+    /// Each product line's name and quantity, in placing order.
+    pub items: Vec<(String, i64)>,
+}
+
+/// The newest `limit` orders of `player_id` that hold a product line, newest first. Time-only
+/// bills, top-ups, plan sales and credit collections are not orders a player placed.
+pub fn list_player_orders(
+    conn: &Connection,
+    player_id: &str,
+    limit: usize,
+) -> Result<Vec<PlayerOrderRow>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT o.id, o.created_at, o.status, o.total_minor, o.invoice_no
+             FROM orders o
+             WHERE o.player_id = ?1
+               AND EXISTS (SELECT 1 FROM order_lines l
+                           WHERE l.order_id = o.id AND l.product_id IS NOT NULL)
+             ORDER BY o.created_at DESC, o.id DESC LIMIT ?2",
+        )
+        .map_err(db_error)?;
+    let mut orders = stmt
+        .query_map(
+            params![player_id, i64::try_from(limit).unwrap_or(i64::MAX)],
+            |r| {
+                Ok(PlayerOrderRow {
+                    order_id: r.get(0)?,
+                    created_at: r.get(1)?,
+                    status: r.get(2)?,
+                    total_minor: r.get(3)?,
+                    invoice_no: r.get(4)?,
+                    items: Vec::new(),
+                })
+            },
+        )
+        .map_err(db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)?;
+    let mut lines = conn
+        .prepare(
+            "SELECT COALESCE(label, ''), COALESCE(qty, 1) FROM order_lines
+             WHERE order_id = ?1 AND product_id IS NOT NULL ORDER BY position, id",
+        )
+        .map_err(db_error)?;
+    for order in &mut orders {
+        order.items = lines
+            .query_map([&order.order_id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(db_error)?
+            .collect::<Result<_, _>>()
+            .map_err(db_error)?;
+    }
+    Ok(orders)
+}
+
 pub fn list_payment_ids(conn: &Connection, order_id: &str) -> Result<Vec<String>, AppError> {
     ids(
         conn,

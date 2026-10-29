@@ -135,6 +135,15 @@ pub struct PlayerPasswordReset {
     pub password_hash: String,
 }
 
+/// A player's own new password hash (Story 6.34): the Hub built it from a password it had just
+/// checked against the stored one, so the kiosk never sends a hash.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PlayerPasswordChange {
+    pub player_id: String,
+    pub password_hash: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct UiPlayerEditRequest {

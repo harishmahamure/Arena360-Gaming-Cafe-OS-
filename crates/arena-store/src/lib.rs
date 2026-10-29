@@ -195,10 +195,11 @@ pub use sessions::{
     unpaid_counter_minor,
 };
 pub use sessions::{
-    LineRow, OrderState, OrderVoid, PRODUCT_LINE_BASE, PlacedLine, add_order_amount,
-    count_product_lines, count_unserved_lines, find_line, find_placed_order, list_order_states,
-    list_ordered_counts, list_placement_lines, list_segment_line_ids, mark_line_served,
-    next_product_position, set_order_ready, sum_segment_amounts, void_order,
+    LineRow, OrderState, OrderVoid, PRODUCT_LINE_BASE, PlacedLine, PlayerOrderRow,
+    add_order_amount, count_product_lines, count_unserved_lines, find_line, find_placed_order,
+    list_order_states, list_ordered_counts, list_placement_lines, list_player_orders,
+    list_segment_line_ids, mark_line_served, next_product_position, set_order_ready,
+    sum_segment_amounts, void_order,
 };
 pub use sessions::{
     SessionListing, add_segment_pause, assign_order_player, assign_session_player, fold_pause,
@@ -1276,6 +1277,26 @@ impl Store {
             return Ok(Vec::new());
         }
         list_moves(&self.conn, product_id)
+    }
+
+    /// The player's newest orders with product lines (Story 6.34).
+    pub fn player_orders(
+        &self,
+        player_id: &str,
+        limit: usize,
+    ) -> Result<Vec<PlayerOrderRow>, AppError> {
+        if !self.table_exists("orders")? {
+            return Ok(Vec::new());
+        }
+        list_player_orders(&self.conn, player_id, limit)
+    }
+
+    /// The device groups' ids and names (Story 6.34).
+    pub fn group_names(&self) -> Result<Vec<(String, String)>, AppError> {
+        if !self.table_exists("device_groups")? {
+            return Ok(Vec::new());
+        }
+        reports::group_names(&self.conn)
     }
 
     pub fn player_packs(&self, player_id: &str) -> Result<Vec<PlayerPackRow>, AppError> {

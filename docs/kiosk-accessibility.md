@@ -207,3 +207,21 @@ Borderless-fullscreen games are not affected: the HUD draws over them like any w
   served yet"). It clears when the last line is served.
 - After the Hub was unreachable the kiosk shows each open order's latest status once; toasts missed
   meanwhile are not replayed.
+
+## The Account page (Story 6.34)
+
+- "Account" is a row of the account menu, below Messages, for a signed-in player; a guest has none.
+  It opens a page with a sub-nav on the left (Details · Wallet & packs · Order history · Change
+  password) and the section on the right. The sub-nav is a `nav` landmark with a roving tab stop:
+  Tab enters on the active item, Up and Down move between items and choose them. The active item
+  is `aria-current="page"` and shows a 3px left bar as well as the brighter ink. The pill-nav tab
+  the player came from stays active; choosing any pill-nav tab closes the page.
+- Details gives the phone with all but its last 4 digits masked by the Hub; the kiosk never holds
+  it whole.
+- An expired pack is muted and carries the word "Expired" and its unused time ("0h 45m unused"),
+  so it is not shown by colour alone.
+- Change password is a form of two labelled fields with Show and Hide buttons. A wrong current
+  password and a too-short new one are `alert`s tied to their field with `aria-invalid`, and focus
+  goes back to that field. "Password changed." is a `status`. Both fields are cleared the moment
+  they are sent. After five wrong current passwords the fields and the button are disabled and the
+  button carries "Too many tries. Try again in 0:60." counting down.

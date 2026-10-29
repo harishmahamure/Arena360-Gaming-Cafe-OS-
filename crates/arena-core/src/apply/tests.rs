@@ -48,6 +48,7 @@ mod order_ready;
 mod order_void;
 mod people_reports;
 mod plans;
+mod player_account_page;
 mod player_extend;
 mod player_signup;
 mod player_start;

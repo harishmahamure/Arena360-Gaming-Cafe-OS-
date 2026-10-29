@@ -9,13 +9,16 @@ import type { IntentResult } from "./IntentResult";
 import type { IntentSubmit } from "./IntentSubmit";
 import type { MostPlayed } from "./MostPlayed";
 import type { PcAck } from "./PcAck";
+import type { PlayerAccountPage } from "./PlayerAccountPage";
 import type { PlayerAccountResult } from "./PlayerAccountResult";
 import type { PlayerAuthResult } from "./PlayerAuthResult";
 import type { PlayerAuthenticate } from "./PlayerAuthenticate";
+import type { PlayerChangePassword } from "./PlayerChangePassword";
 import type { PlayerEndResult } from "./PlayerEndResult";
 import type { PlayerExtend } from "./PlayerExtend";
 import type { PlayerExtendOptions } from "./PlayerExtendOptions";
 import type { PlayerExtendResult } from "./PlayerExtendResult";
+import type { PlayerPasswordChangeResult } from "./PlayerPasswordChangeResult";
 import type { PlayerPlansResult } from "./PlayerPlansResult";
 import type { PlayerSignup } from "./PlayerSignup";
 import type { PlayerSignupResult } from "./PlayerSignupResult";
@@ -62,6 +65,10 @@ export type FrameBody =
   | { kind: "device.call_staff" }
   | { kind: "player.account" }
   | ({ kind: "player.account_result" } & PlayerAccountResult)
+  | { kind: "player.account_page" }
+  | ({ kind: "player.account_page_result" } & PlayerAccountPage)
+  | ({ kind: "player.password_change" } & PlayerChangePassword)
+  | ({ kind: "player.password_change_result" } & PlayerPasswordChangeResult)
   | { kind: "player.end_session" }
   | ({ kind: "player.end_result" } & PlayerEndResult)
   | ({ kind: "player.unlock" } & PlayerUnlock)

@@ -16,6 +16,11 @@
 //! - `player.end_session{}` -> `player.end_result{outcome}` (Log out).
 //! - `player.unlock{password}` -> `player.unlock_result{outcome}` (the player's own lock screen).
 //!
+//! The Account page (Story 6.34) adds two more, again naming no player:
+//!
+//! - `player.account_page{}` -> `player.account_page_result{name, username, phone_masked, ..}`.
+//! - `player.password_change{current, new}` -> `player.password_change_result{outcome}`.
+//!
 //! Extend (Story 6.21) adds two for a prepaid player on a live session, again naming no player and
 //! no session:
 //!
@@ -165,6 +170,131 @@ pub struct PlayerAccountResult {
     pub balance_minor: i64,
     /// Packs and passes valid for this PC's group and not expired, soonest expiry first.
     pub packs: Vec<AccountPack>,
+}
+
+/// One pack or pass on the Account page's Wallet & packs tab (Story 6.34), expired ones too.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct AccountPackEntry {
+    pub name: String,
+    /// The names of the device groups it is valid for.
+    pub groups: Vec<String>,
+    /// Minutes left on a pack; `None` for a pass, which has a window and no hours. On an expired
+    /// pack these are the unused minutes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number | null", optional)]
+    pub minutes_left: Option<i64>,
+    /// A pass's daily window as minutes since midnight (start, end); `None` for a pack or an
+    /// all-day pass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "[number, number] | null", optional)]
+    pub window_min: Option<(i64, i64)>,
+    /// When it expires (epoch ms).
+    #[ts(type = "number")]
+    pub expires_at: i64,
+    pub expired: bool,
+}
+
+/// One item of an order on the Account page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct AccountOrderItem {
+    pub name: String,
+    #[ts(type = "number")]
+    pub qty: i64,
+}
+
+/// One of the player's orders at this branch (Story 6.34).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct AccountOrder {
+    pub order_id: String,
+    /// When it was placed (epoch ms).
+    #[ts(type = "number")]
+    pub at: i64,
+    pub items: Vec<AccountOrderItem>,
+    #[ts(type = "number")]
+    pub total_minor: i64,
+    /// `open` (not paid yet), `settled` or `void`.
+    pub status: String,
+    /// The tax invoice number, once one was issued.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "string | null", optional)]
+    pub invoice_no: Option<String>,
+}
+
+/// `player.account_page_result` (Hub -> kiosk): what the Account page shows for the profiled
+/// player on this PC (Story 6.34). The phone is masked at the Hub: the kiosk never holds it whole.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PlayerAccountPage {
+    pub name: String,
+    pub username: String,
+    /// The phone with all but its last 4 digits masked.
+    pub phone_masked: String,
+    /// The wallet balance in minor units, less what running wallet sessions have set aside.
+    #[ts(type = "number")]
+    pub balance_minor: i64,
+    /// Owned packs and passes, unexpired first (soonest expiry first), then expired ones.
+    pub packs: Vec<AccountPackEntry>,
+    /// The player's orders at this branch, newest first.
+    pub orders: Vec<AccountOrder>,
+}
+
+/// How many orders the Account page lists.
+pub const ACCOUNT_ORDER_LIMIT: usize = 50;
+
+/// `player.password_change` (paired kiosk -> Hub): the current password and the new one. Never
+/// printed.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PlayerChangePassword {
+    pub current: String,
+    pub new: String,
+}
+
+impl std::fmt::Debug for PlayerChangePassword {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlayerChangePassword")
+            .field("current", &"[redacted]")
+            .field("new", &"[redacted]")
+            .finish()
+    }
+}
+
+impl PlayerChangePassword {
+    /// The frame rules: both fields 1–1024 bytes. (The new password's 6–128 characters is an
+    /// answer, `invalid_new`, not a bad frame.) A failure is `BAD_FRAME` naming the field, never
+    /// echoing its value.
+    pub fn validate(&self) -> Result<(), AppError> {
+        for (field, value) in [("current", &self.current), ("new", &self.new)] {
+            if value.is_empty() || value.len() > crate::MAX_LOGIN_PASSWORD_BYTES {
+                return Err(AppError::with_field(
+                    ErrorCode::BadFrame,
+                    field,
+                    "password must be 1–1024 bytes",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// `player.password_change_result` (Hub -> kiosk): the typed outcome of a password change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum PlayerPasswordChangeResult {
+    /// The new password is stored.
+    Ok,
+    /// The current password is wrong (also: no profiled player on this PC's session).
+    WrongCurrent,
+    /// The new password is not 6 to 128 characters.
+    InvalidNew,
+    /// This PC's field is paused after too many wrong tries; no hash was checked.
+    Locked { retry_s: u32 },
+    /// `apply()` refused: its code and message.
+    Refused { code: ErrorCode, message: String },
 }
 
 /// `player.end_result` (Hub -> kiosk): whether the Hub ended the player's own session.
@@ -464,6 +594,86 @@ mod tests {
             assert_eq!(serde_json::to_value(&f).unwrap()["kind"], kind);
             assert_eq!(parse_frame(&f.to_text()).unwrap(), f);
         }
+    }
+
+    #[test]
+    fn the_account_page_frames_round_trip() {
+        let req = parse_frame(r#"{"v":1,"kind":"player.account_page","rid":"a"}"#).unwrap();
+        assert_eq!(req.body, FrameBody::PlayerAccountPageRequest);
+        let page = Frame::new(
+            "a",
+            FrameBody::PlayerAccountPageResult(PlayerAccountPage {
+                name: "Asha Rao".into(),
+                username: "asha".into(),
+                phone_masked: "+91••••••3210".into(),
+                balance_minor: 25_000,
+                packs: vec![AccountPackEntry {
+                    name: "Night pass".into(),
+                    groups: vec!["PC".into()],
+                    minutes_left: None,
+                    window_min: Some((1_320, 360)),
+                    expires_at: 7,
+                    expired: false,
+                }],
+                orders: vec![AccountOrder {
+                    order_id: "O1".into(),
+                    at: 5,
+                    items: vec![AccountOrderItem {
+                        name: "Burger".into(),
+                        qty: 2,
+                    }],
+                    total_minor: 24_000,
+                    status: "settled".into(),
+                    invoice_no: Some("MUM/26-27/E1/1".into()),
+                }],
+            }),
+        );
+        let v = serde_json::to_value(&page).unwrap();
+        assert_eq!(v["kind"], "player.account_page_result");
+        assert_eq!(v["orders"][0]["invoice_no"], "MUM/26-27/E1/1");
+        assert_eq!(parse_frame(&page.to_text()).unwrap(), page);
+        let change = parse_frame(
+            r#"{"v":1,"kind":"player.password_change","rid":"b","current":"old","new":"newpass"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            change.body,
+            FrameBody::PlayerPasswordChange(PlayerChangePassword {
+                current: "old".into(),
+                new: "newpass".into(),
+            })
+        );
+        for result in [
+            PlayerPasswordChangeResult::Ok,
+            PlayerPasswordChangeResult::WrongCurrent,
+            PlayerPasswordChangeResult::InvalidNew,
+            PlayerPasswordChangeResult::Locked { retry_s: 60 },
+        ] {
+            let f = Frame::new("r", FrameBody::PlayerPasswordChangeResult(result));
+            assert_eq!(
+                serde_json::to_value(&f).unwrap()["kind"],
+                "player.password_change_result"
+            );
+            assert_eq!(parse_frame(&f.to_text()).unwrap(), f);
+        }
+    }
+
+    #[test]
+    fn a_password_change_is_bounded_and_never_printed() {
+        let change = |c: &str, n: &str| PlayerChangePassword {
+            current: c.to_owned(),
+            new: n.to_owned(),
+        };
+        assert!(change("x", "y").validate().is_ok());
+        for bad in [
+            change("", "y"),
+            change("x", ""),
+            change("x", &"y".repeat(1025)),
+        ] {
+            assert_eq!(bad.validate().unwrap_err().code, ErrorCode::BadFrame);
+        }
+        let text = format!("{:?}", change("hunter2", "swordfish"));
+        assert!(!text.contains("hunter2") && !text.contains("swordfish"));
     }
 
     #[test]

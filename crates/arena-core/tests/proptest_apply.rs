@@ -320,6 +320,13 @@ enum Op {
         slot: u8,
         kind: u8,
     },
+    /// A device actor changing a player's password (Story 6.34): it applies only for the profiled
+    /// player on the device's own live session, and is otherwise `PERMISSION_DENIED` with nothing
+    /// written.
+    PasswordChange {
+        slot: u8,
+        other: bool,
+    },
     /// An extend of the live session on an existing PC from the wallet, a pack or credit: it
     /// either moves the end out by exactly the minutes and writes its own settled order, or
     /// writes nothing.
@@ -764,6 +771,7 @@ fn op() -> impl Strategy<Value = Op> {
         }),
         1 => (0..3u8, 0..3u8).prop_map(|(slot, kind)| Op::DeviceStartDenied { slot, kind }),
         1 => (0..3u8, 0..3u8).prop_map(|(slot, kind)| Op::DevicePlayerDenied { slot, kind }),
+        2 => (0..3u8, any::<bool>()).prop_map(|(slot, other)| Op::PasswordChange { slot, other }),
         2 => (0..3u8, 0..3u8, 0..3u8).prop_map(|(slot, source, minutes)| Op::SessionExtend {
             slot,
             source,
@@ -4435,6 +4443,71 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             );
             prop_assert_eq!(hub.change_count(), before);
         }
+        Op::PasswordChange { slot, other } => {
+            let Some(device) = hub
+                .reader
+                .rows(Table::DevicesMeta)
+                .unwrap()
+                .get(usize::from(*slot))
+                .map(|d| text(d, "device_id"))
+            else {
+                return Ok(());
+            };
+            let own = hub
+                .reader
+                .rows(Table::Sessions)
+                .unwrap()
+                .iter()
+                .filter(|s| text(s, "device_id") == device)
+                .filter(|s| {
+                    matches!(text(s, "state").as_str(), "active" | "paused" | "grace")
+                        || (text(s, "state") == "expired"
+                            && matches!(s["ended_at"], RowValue::Null))
+                })
+                .find_map(|s| match &s["player_id"] {
+                    RowValue::Text(id) => Some(id.clone()),
+                    _ => None,
+                });
+            let players = hub.reader.rows(Table::Players).unwrap();
+            let target = match (&own, *other) {
+                (Some(id), false) => id.clone(),
+                _ => {
+                    let Some(p) = players
+                        .iter()
+                        .map(|p| text(p, "player_id"))
+                        .find(|id| Some(id) != own.as_ref())
+                    else {
+                        return Ok(());
+                    };
+                    p
+                }
+            };
+            let mut intent = hub.intent(
+                IntentPayload::PlayerPasswordChange(arena_proto::PlayerPasswordChange {
+                    player_id: target.clone(),
+                    password_hash: password_hash().to_owned(),
+                }),
+                None,
+            );
+            intent.actor = Actor {
+                kind: ActorKind::Device,
+                id: device,
+            };
+            let before = hub.change_count();
+            let out = hub.submit_new(intent);
+            if own.as_ref() == Some(&target) {
+                prop_assert!(out.is_ok(), "{:?}", out);
+                prop_assert_eq!(hub.change_count(), before + 1);
+            } else {
+                prop_assert_eq!(
+                    code(&out).map(|c| c.0),
+                    Some(ErrorCode::PermissionDenied),
+                    "{:?}",
+                    out
+                );
+                prop_assert_eq!(hub.change_count(), before);
+            }
+        }
         Op::WindowStart { slot, pass, guest } => {
             let Some(device) = hub
                 .reader
@@ -6874,7 +6947,7 @@ fn assert_voids_hold(hub: &Hub) -> Result<(), TestCaseError> {
 }
 
 /// The unpaid counter order invariants (Story 6.32): an open `pos_sale` is tied to a PC with no
-/// session, holds no payments and has no invoice number; a settled one has paid.
+/// session, holds no payments and has no invoice number; a settled one has paid (unless a coupon made it free).
 fn assert_counter_orders_hold(hub: &Hub) -> Result<(), TestCaseError> {
     let payments = hub.reader.rows(Table::Payments).unwrap();
     for o in hub.reader.rows(Table::Orders).unwrap() {
@@ -6889,7 +6962,12 @@ fn assert_counter_orders_hold(hub: &Hub) -> Result<(), TestCaseError> {
                 prop_assert_eq!(paid, 0);
                 prop_assert_eq!(&o["invoice_no"], &RowValue::Null);
             }
-            "settled" => prop_assert!(paid >= 1, "a settled sale with no payment: {:?}", o),
+            // A sale a coupon took to nothing settles with no payment to take.
+            "settled" => prop_assert!(
+                paid >= 1 || o["total_minor"] == RowValue::Integer(0),
+                "a settled sale with no payment: {:?}",
+                o
+            ),
             _ => {}
         }
     }

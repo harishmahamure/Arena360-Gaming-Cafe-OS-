@@ -1,6 +1,7 @@
 use arena_proto::{
     AppError, CONSENT_TRANSACTIONAL, ErrorCode, Intent, IntentPayload, PlayerCreate,
-    PlayerPasswordReset, PlayerUpdate, valid_policy_version, valid_tags, valid_username,
+    PlayerPasswordChange, PlayerPasswordReset, PlayerUpdate, valid_policy_version, valid_tags,
+    valid_username,
 };
 use arena_store::{
     ChangeOp, PlayerRow, RowKey, StoreTx, find_player, insert_consent, insert_player,
@@ -44,6 +45,7 @@ pub(super) fn load(tx: &StoreTx<'_>, p: &IntentPayload) -> Result<PlayerTarget, 
         IntentPayload::PlayerCreate(c) => return load_create(tx, c),
         IntentPayload::PlayerUpdate(u) => &u.player_id,
         IntentPayload::PlayerPasswordReset(r) => &r.player_id,
+        IntentPayload::PlayerPasswordChange(c) => &c.player_id,
         _ => return Ok(PlayerTarget::default()),
     };
     let existing = match find_player(tx, id)? {
@@ -188,8 +190,16 @@ pub(super) fn validate_update(p: &PlayerUpdate, t: &PlayerTarget) -> Result<(), 
 }
 
 pub(super) fn validate_reset(p: &PlayerPasswordReset, t: &PlayerTarget) -> Result<(), AppError> {
+    check_hash(&p.password_hash, t)
+}
+
+pub(super) fn validate_change(p: &PlayerPasswordChange, t: &PlayerTarget) -> Result<(), AppError> {
+    check_hash(&p.password_hash, t)
+}
+
+fn check_hash(password_hash: &str, t: &PlayerTarget) -> Result<(), AppError> {
     existing(t)?;
-    if !p.password_hash.starts_with("$argon2id$") {
+    if !password_hash.starts_with("$argon2id$") {
         return Err(invalid(
             "password_hash",
             "password must be an argon2id hash",
@@ -304,14 +314,16 @@ pub(super) fn mutate_update(
     Ok(written)
 }
 
+/// Stores a new password hash: a staff reset (Story 3.8) or the player's own change (Story 6.34).
 pub(super) fn mutate_reset(
     tx: &StoreTx<'_>,
-    p: &PlayerPasswordReset,
+    player_id: &str,
+    password_hash: &str,
 ) -> Result<Vec<Written>, AppError> {
-    set_player_password(tx, &p.player_id, &p.password_hash)?;
+    set_player_password(tx, player_id, password_hash)?;
     Ok(vec![Written {
         key: RowKey::Players {
-            player_id: p.player_id.clone(),
+            player_id: player_id.to_owned(),
         },
         op: ChangeOp::Update,
         before: None,

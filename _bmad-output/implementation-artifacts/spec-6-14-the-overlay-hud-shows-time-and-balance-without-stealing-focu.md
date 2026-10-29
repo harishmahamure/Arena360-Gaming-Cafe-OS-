@@ -2,7 +2,7 @@
 title: 'Story 6.14: The overlay HUD shows time and balance without stealing focus'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: 'a4b7e22'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'
@@ -52,3 +52,8 @@ context:
 
 - Borderless-fullscreen games are not treated as exclusive; the pill stays over them, as it should. Time warnings as toasts, the taskbar flash and the Extend action are Stories 6.19 and 6.21; the panel's Extend options come with 6.21. Staff messages still show in the kiosk window (Story 6.16 moves them); order status on the HUD is Story 6.33.
 - The "Counter is reconnecting" state is not shown on the pill until Story 6.36.
+
+## Review
+
+- Fixed: a session that ended or locked while the panel was open cleared the page's `expanded` flag without telling the shell, leaving the HUD window focusable and the remembered foreground window stale (the next Ctrl+Shift+E would not re-capture it). `Hud.svelte` now calls `collapse()` (→ `hud_collapse`) in that case.
+- Fixed: the fullscreen watcher reset the shell's `expanded` flag while the page still showed the panel, so shell and page disagreed; the watcher now only hides/shows the window.

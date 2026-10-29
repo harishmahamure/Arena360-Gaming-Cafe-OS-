@@ -180,7 +180,7 @@ development_status:
   6-11-session-end-cleanup-ends-the-player-s-programs-and-clears-th: done
   6-12-session-end-cleanup-signs-out-launchers-discord-and-browsers: done
   6-13-the-player-shell-with-top-bar-pill-nav-and-time-chip: done
-  6-14-the-overlay-hud-shows-time-and-balance-without-stealing-focu: review
+  6-14-the-overlay-hud-shows-time-and-balance-without-stealing-focu: done
   6-15-volume-control-and-calling-staff-from-the-top-bar: backlog
   6-16-staff-messages-reach-the-seat-and-stay-in-the-messages-bell: backlog
   6-17-the-account-menu-with-lock-and-log-out: backlog

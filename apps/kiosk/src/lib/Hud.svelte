@@ -83,7 +83,9 @@
           plan: v.plan_name,
         }
       : null;
-    if (session === null || locked) expanded = false;
+    // A session that ends or locks closes the panel; the shell must make the window
+    // non-focusable again and hand the focus back, or the next Ctrl+Shift+E would not.
+    if ((session === null || locked) && expanded) collapse();
   };
 
   /** A short tone for a new toast: a two-note chime for a warning, one note for info. */

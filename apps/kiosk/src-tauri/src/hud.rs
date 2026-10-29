@@ -181,15 +181,9 @@ pub fn watch_fullscreen<R: Runtime>(handle: AppHandle<R>) {
                 let hud = Arc::clone(handle.state::<Arc<Hud>>().inner());
                 if hud.set_exclusive(sys::exclusive_fullscreen()) {
                     let h = handle.clone();
-                    let _ = handle.run_on_main_thread(move || {
-                        // The panel cannot stay open over a game that hides the HUD.
-                        if h.state::<Arc<Hud>>().exclusive.load(Ordering::SeqCst) {
-                            h.state::<Arc<Hud>>()
-                                .expanded
-                                .store(false, Ordering::SeqCst);
-                        }
-                        refresh(&h);
-                    });
+                    // The panel's state is left alone: the page and the shell must agree on
+                    // whether it is open, and `collapse` is the only way that changes.
+                    let _ = handle.run_on_main_thread(move || refresh(&h));
                 }
             }
         });

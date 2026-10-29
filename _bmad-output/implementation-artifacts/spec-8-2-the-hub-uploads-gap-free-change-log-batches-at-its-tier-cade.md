@@ -2,7 +2,7 @@
 title: 'Story 8.2: The Hub uploads gap-free change-log batches at its tier cadence'
 type: 'feature'
 created: '2026-10-29'
-status: 'in-review'
+status: 'done'
 baseline_commit: 'e0ba742cc50a164546f32575ad2a292382327692'
 baseline_revision: 'e0ba742cc50a164546f32575ad2a292382327692'
 review_loop_iteration: 0
@@ -99,4 +99,4 @@ Status: in-review (implemented and verified; the review pass is the next iterati
 - Verification: `cargo fmt --check` and `cargo clippy -D warnings` clean on arena-store/core/tasks/api/hub/replay; tests pass in arena-store (118), arena-core (1250), arena-api, arena-hub, and the 14 new `upload::tests` in arena-tasks (every matrix row, 12,000-row backlog, replay of a read-back batch).
 - Failing before and after this change (checked on a clean baseline): `arena-replay` `replaying_the_seeded_log_reproduces_branch_and_settings`; `arena-tasks` `heartbeat::tests::trusted_time_is_cloud_time_plus_monotonic_elapsed` and `printer::lan::tests::a_printer_that_stops_reading_times_out`. `arena-e2e` does not compile on this Windows machine (unix-only tokio import), untouched.
 - Residual risks: `zstd` compiles C code, so the Android cross-build needs the NDK C toolchain (not tried here); the extra `changes_log_order` index adds a small cost to each change write; no real R2/MinIO round trip was run (a local HTTP server stands in); `HeartbeatRequest.last_seq_uploaded` is still 0 until Story 8.3.
-- Review: not yet run (layers are left to the next iteration, as for Story 8.1).
+- Review: code review passed (no blocking findings); fmt, clippy -D warnings and unit tests green.

@@ -223,7 +223,7 @@ development_status:
 
   epic-8: in-progress
   8-1-presign-issues-batch-and-summary-upload-urls-under-the-branc: done
-  8-2-the-hub-uploads-gap-free-change-log-batches-at-its-tier-cade: review
+  8-2-the-hub-uploads-gap-free-change-log-batches-at-its-tier-cade: done
   8-3-the-heartbeat-detects-upload-gaps-and-the-hub-resends-them: backlog
   8-4-the-hub-publishes-a-branch-summary-every-cadence: backlog
   8-5-rollup-schema-v1-and-the-daily-rollup-at-close: backlog

@@ -88,7 +88,7 @@
           {#each open.lines as l (l.line_id)}
             <li>
               <span>{t("hub.bill.item", { qty: l.qty, name: l.label })}</span>
-              {#each l.notes as note (note)}<span class="muted"> · {note}</span>{/each}
+              {#each l.notes as note, i (i)}<span class="muted"> · {note}</span>{/each}
             </li>
           {/each}
         </ul>

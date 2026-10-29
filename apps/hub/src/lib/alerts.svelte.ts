@@ -6,6 +6,7 @@
 import { t } from "@arena/ui";
 import type { AlertKind, HubSnapshot, SnapshotAlert } from "@arena/ui/generated";
 import type { MessageKey } from "@arena/ui/messages";
+import { SvelteMap } from "svelte/reactivity";
 import { newIdempotencyKey, submitIntent } from "./auth";
 
 /** The bundled sound (a file in `static/sounds`, never fetched from anywhere else). */
@@ -116,17 +117,17 @@ export const openFor = (deviceId: string) => alerts.open.filter((a) => a.device_
  * is Ready, else `order` while one is New or Preparing. It comes from the ticket stages, so it
  * follows the stage change and clears when the last ticket closes.
  */
-const ticketTags: Map<string, "ready" | "order"> = $state(new Map());
+const ticketTags = new SvelteMap<string, "ready" | "order">();
 
 /**
- * The tag a device's tile shows: READY while a ticket is Ready (it replaces ORDER), else its
+ * The tag a device's tile shows: READY while a ticket is Ready (it outranks every alert tag), else its
  * oldest open alert's, else ORDER while a ticket is in the kitchen.
  */
 export const tagOf = (deviceId: string): TileTag | undefined => {
   const first = openFor(deviceId)[0];
   const alert = first ? (KIND_TAGS[first.kind] ?? undefined) : undefined;
   const kitchen = ticketTags.get(deviceId);
-  if (kitchen === "ready" && (alert === undefined || alert === "order")) return "ready";
+  if (kitchen === "ready") return "ready";
   return alert ?? kitchen;
 };
 

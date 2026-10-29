@@ -2,7 +2,7 @@
 title: 'Story 7.4: The floor tile shows READY and the Hub chimes when food is ready'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '51e6dbf'
 route: 'dispatch'
 review_loop_iteration: 0
@@ -91,3 +91,20 @@ Self-review while building (no separate reviewer run in the unattended loop):
 - `alert.raise` refuses `order_ready` (only a Ready advance raises it), as it does for low stock.
 - The chime plays once per new `order_ready` alert and is excluded from the 30 s repeat loop.
 - The Hub POS strip sits in the catalogue column under the page head (the cart column is not a wrapper for it); the next-stage button there moves one stage per tap.
+
+## Code Review (2026-10-29)
+
+Blind, edge-case and acceptance reviewers ran on the implementation commit.
+
+Fixed:
+- `tagOf`: READY now outranks every alert tag (the spec derives the tile from ticket stages first).
+- `ticketTags` is a `SvelteMap`, so tile tags are reactive on their own rather than via the `alerts.open` reassignment.
+- Sheet "Ready" copy waits for the fulfilment setting (no wrong "deliver to" flash on pick-up branches) and falls back to seat if the settings load fails.
+- Open-ticket detail keys notes by index (duplicate notes crashed the keyed each).
+
+Deferred / accepted:
+- Undoing a Served advance back to Ready raises no new alert: re-raising would chime on an undo, which the spec forbids.
+- The chime replays for already-open order-ready alerts after a Hub reload (same as other alert kinds).
+- Strip sits under the page head in the catalogue column (noted in the self-review log); extra stage buttons in the strip are accepted scope.
+
+Verification: cargo fmt/clippy `-D warnings` and tests for proto/store/core/api green; Hub `check`, `format:check`, `check:strings`, `check:layers` green; Hub `alerts`, `tile-sheet`, `pos` specs 207 passed.

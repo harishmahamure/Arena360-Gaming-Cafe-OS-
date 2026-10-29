@@ -572,3 +572,8 @@
 - The POS strip advances one stage per tap and does not offer Undo; the board (Stories 7.7 and 7.8) owns that.
 - A first snapshot load after a Hub UI reload chimes once for each order-ready alert that is still open.
 - The fulfilment setting is read from `/ui/settings` by the order section rather than carried in the snapshot.
+
+## Deferred from review of 7-4
+
+- Undo of a Served advance back to Ready leaves the ticket Ready with no `order_ready` alert (re-raising would chime on undo, which 7.4 forbids); decide the desired behaviour.
+- The order-ready chime replays after a Hub reload for alerts already open.

@@ -68,8 +68,10 @@
   $effect(() => {
     if (fulfilment !== null || !tickets.some((tk) => tk.stage === "ready")) return;
     void loadSettings().then((r) => {
-      if (r.kind === "ok")
-        fulfilment = r.settings.find((s) => s.key === KEY_FULFILMENT)?.value ?? "seat";
+      fulfilment =
+        r.kind === "ok"
+          ? (r.settings.find((s) => s.key === KEY_FULFILMENT)?.value ?? "seat")
+          : "seat";
     });
   });
 
@@ -149,7 +151,7 @@
               >{t("hub.order.ticket_elapsed", { minutes: minutes(tk) })}</span
             >
           </div>
-          {#if tk.stage === "ready"}
+          {#if tk.stage === "ready" && fulfilment !== null}
             <p class="muted" data-testid="ticket-ready-copy">
               {fulfilment === "counter"
                 ? t("hub.order.ready_pickup")

@@ -211,7 +211,7 @@ development_status:
   7-1-kitchen-settings-at-the-hub-locked-on-free: done
   7-2-kitchen-notes-on-order-lines-from-the-pos-and-the-kiosk-cart: done
   7-3-every-order-with-kitchen-items-opens-a-kitchen-ticket-that-t: done
-  7-4-the-floor-tile-shows-ready-and-the-hub-chimes-when-food-is-r: review
+  7-4-the-floor-tile-shows-ready-and-the-hub-chimes-when-food-is-r: done
   7-5-a-kot-prints-within-3-s-and-can-be-reprinted-from-the-hub: backlog
   7-6-pair-a-kitchen-tablet-by-code-as-a-scoped-display: backlog
   7-7-the-kitchen-board-shows-open-tickets-in-four-columns: backlog

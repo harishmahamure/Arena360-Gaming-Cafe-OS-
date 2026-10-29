@@ -2,7 +2,7 @@
 title: 'Story 6.22: The grace lock with Extend, then the branch time-up mode at the kiosk'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '9e4d361'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'
@@ -76,3 +76,7 @@ deferred:
 - `pnpm check:strings check:hex check:no-blur check:layers check:pins check:protocol format:check` -- pass
 
 Not run: a real Hub-to-kiosk round trip, the Tauri shell, a real fullscreen-exclusive game (taskbar flash and beep), `NtSuspendProcess` against a real game on Windows.
+
+## Review (2026-10-29)
+
+No blocking findings. Typecheck, clippy, fmt, kiosk-core (74), kiosk-svc lib (same 14 pre-existing Windows-privilege failures) and the HUD Playwright suite (49) are green. Note: `follow_freeze` runs the process enumeration synchronously inside the lock path; it only fires on a freeze/thaw transition, so it is accepted as is.

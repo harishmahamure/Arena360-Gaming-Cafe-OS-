@@ -147,6 +147,7 @@
     STALE: "kitchen.toast.stale",
     BAD_STAGE: "kitchen.toast.stale",
     NOT_FOUND: "kitchen.toast.stale",
+    TIER_LOCKED: "kitchen.toast.stale",
     OFFLINE: "kitchen.toast.offline",
   };
 
@@ -155,6 +156,25 @@
     if (!to || !conn || pending.has(ticket.id)) return;
     const key = ulid();
     tick = performance.now();
+    if (mode !== "connected") {
+      // Offline: refuse the tap with a note and leave the ticket where it is.
+      showToast(
+        {
+          key,
+          ticketId: ticket.id,
+          seat: ticket.seat,
+          number: ticketLabel(ticket.number),
+          from: ticket.stage,
+          to,
+          tappedRev: ticket.rev,
+          expiresAt: tick,
+          undoing: false,
+          notice: MOVE_NOTICES.OFFLINE,
+        },
+        NOTICE_MS,
+      );
+      return;
+    }
     pending = new Map(pending).set(ticket.id, { from: ticket.stage, to });
     pinned = ticket.id;
     showToast(
@@ -175,6 +195,7 @@
     const result = await conn.advance(ticket.id, to, ticket.rev, key);
     if (result.ok) return;
     snap(ticket.id);
+    void focusTicket(ticket.id);
     if (toast?.key === key) {
       showToast(
         { ...toast, notice: MOVE_NOTICES[result.code] ?? "kitchen.toast.failed" },
@@ -197,6 +218,7 @@
       return;
     }
     snap(cur.ticketId);
+    void focusTicket(cur.ticketId);
     if (toast?.key !== cur.key) return;
     if (result.code === "OFFLINE" || result.code === "INTERNAL") {
       toast = { ...cur, undoing: false, error: "kitchen.toast.undo_failed" };

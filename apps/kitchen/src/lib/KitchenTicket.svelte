@@ -40,7 +40,7 @@
   const hintId = $derived(`hint-${ticket.id}`); // i18n-ignore (an element id)
 
   function press(event: KeyboardEvent) {
-    if (!actionable || event.target !== event.currentTarget) return;
+    if (!actionable || event.repeat || event.target !== event.currentTarget) return;
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       onadvance?.(ticket);

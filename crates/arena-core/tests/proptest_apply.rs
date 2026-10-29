@@ -3488,6 +3488,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                             ErrorCode::BadStage
                                 | ErrorCode::OutOfStock
                                 | ErrorCode::UndoNotAllowed
+                                | ErrorCode::Expired
                                 | ErrorCode::TierLocked
                         ),
                         "{:?}",

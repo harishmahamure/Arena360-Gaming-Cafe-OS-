@@ -2,7 +2,7 @@
 title: 'Story 7.8: One tap advances a ticket, with Undo'
 type: 'feature'
 created: '2026-10-29'
-status: 'in-review'
+status: 'done'
 baseline_commit: '1ecb653'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -103,3 +103,8 @@ Status: in-review (implementation and verification complete; the multi-reviewer 
 - **Change.** Tapping, or pressing Enter or Space on, a New, Preparing or Ready ticket sends `kitchen.advance` and moves it to the top of the next column at once, with the shared `undo-toast` for 8 s. Undo sends `kitchen.advance.reverted` based on the rev the board shows at the new stage. A refused move (`STALE`, `BAD_STAGE`, `NOT_FOUND`) snaps the ticket to the Hub board and reads "Already moved at the counter". The Hub now answers an Undo after its window with `EXPIRED` (it was `UNDO_NOT_ALLOWED`).
 - **Verification.** `cargo fmt --check` and `cargo clippy -D warnings` (arena-core, arena-api) clean; `cargo test` on proto, store, core (1250) and api (lan 101, 2 new): 0 failed. Kitchen svelte-check 0 errors, 0 warnings; build ok; `pnpm --filter @arena/hub test:kitchen` 37 passed (unit and browser, including two axe runs); `check:strings`, `check:layers`, `check:protocol`, `check:hex`, `check:generated`, `format:check` ok.
 - **Residual risks.** The browser specs stub the Hub socket, so no run drove a real Hub end to end from the tablet; a tablet that reloads mid-window loses its Undo; Undo works only for the display that made the advance (the Hub checks the actor).
+
+## Review Triage Log (code review)
+
+Fixed: `TIER_LOCKED` now reads "Already moved at the counter"; an offline tap is refused before any optimistic move or Undo toast; held keys no longer repeat an advance; focus returns to the ticket after a snap; proptest allow-list accepts `EXPIRED`; browser specs added for `NOT_FOUND`, `TIER_LOCKED` and Space.
+Deferred (minor/accepted): refusal of an already-replaced advance snaps silently; a dropped link after the Hub applied an intent reports "not moved" until the next board push; Undo retry mints a fresh idempotency key.

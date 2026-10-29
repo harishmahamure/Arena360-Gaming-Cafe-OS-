@@ -421,6 +421,17 @@ test("Enter on a focused ticket advances it, and a ticket that moved keeps keybo
   await expect(column(page, "served").locator('[data-ticket="T1"]')).toBeFocused();
 });
 
+test("Space on a focused ticket advances it once", async ({ page }) => {
+  const stub = await connectDisplay(page, board([ticket(1, "new")]));
+  await page.goto("/kitchen/");
+  await expect(page.getByTestId("kitchen-board")).toBeVisible();
+  await page.keyboard.press("Tab");
+  await expect(page.getByTestId("kitchen-ticket")).toBeFocused();
+  await page.keyboard.press("Space");
+  await expect.poll(() => intents(stub, "kitchen.advance").length).toBe(1);
+  expect(intents(stub, "kitchen.advance")[0].intent.payload).toMatchObject({ to: "preparing" });
+});
+
 test("Undo within the window sends the advance's resulting rev and returns the ticket", async ({
   page,
 }) => {
@@ -488,7 +499,7 @@ test("a Served or cancelled ticket does nothing when tapped", async ({ page }) =
   await expect(column(page, "served").locator('[data-ticket="T1"]')).toHaveCount(1);
 });
 
-for (const code of ["STALE", "BAD_STAGE"]) {
+for (const code of ["STALE", "BAD_STAGE", "NOT_FOUND", "TIER_LOCKED"]) {
   test(`a ${code} answer snaps the ticket back to the Hub's board with no Undo`, async ({
     page,
   }) => {

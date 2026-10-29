@@ -77,3 +77,22 @@ export async function signOut() {
   await fetchJson("/signout", "POST");
   await dropCache();
 }
+
+/** Fetches a file (a CSV export) with the session; `"signed-out"` when the session ended. */
+export async function download(path: string): Promise<Blob | "signed-out" | null> {
+  const get = async () => {
+    try {
+      return await fetch(url(path), { credentials: "include", headers: { accept: "text/csv" } });
+    } catch {
+      return null;
+    }
+  };
+  let res = await get();
+  if (res?.status === 401) {
+    const fresh = await rotate();
+    if (fresh?.ok) res = await get();
+    else if (fresh && fresh.status < 500) return "signed-out";
+  }
+  if (res?.status === 401) return "signed-out";
+  return res?.ok ? await res.blob() : null;
+}

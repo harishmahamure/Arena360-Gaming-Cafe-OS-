@@ -16,7 +16,7 @@ use arena_proto::{
 
 const LAN: &str = r#"{"kind":"lan","id_or_addr":"192.168.1.50:9100","name":"Counter"}"#;
 
-fn open(float_minor: i64) -> IntentPayload {
+pub(super) fn open(float_minor: i64) -> IntentPayload {
     IntentPayload::ShiftOpen(ShiftOpen { float_minor })
 }
 
@@ -29,7 +29,7 @@ pub(super) fn close(counted_minor: i64) -> ShiftClose {
     }
 }
 
-async fn product(f: &Fixture, name: &str, price: i64, qty: i64) -> String {
+pub(super) async fn product(f: &Fixture, name: &str, price: i64, qty: i64) -> String {
     let id = make(
         f,
         ProductUpsert {
@@ -43,7 +43,7 @@ async fn product(f: &Fixture, name: &str, price: i64, qty: i64) -> String {
     id
 }
 
-async fn sell(f: &Fixture, id: &str, qty: i64, payments: Vec<PaymentRow>) -> String {
+pub(super) async fn sell(f: &Fixture, id: &str, qty: i64, payments: Vec<PaymentRow>) -> String {
     submit(
         f,
         owner(),
@@ -74,7 +74,7 @@ async fn sell(f: &Fixture, id: &str, qty: i64, payments: Vec<PaymentRow>) -> Str
     .clone()
 }
 
-async fn revert(f: &Fixture, order: &str) -> Result<Applied, AppError> {
+pub(super) async fn revert(f: &Fixture, order: &str) -> Result<Applied, AppError> {
     let mut i = intent(
         owner(),
         IntentPayload::PosSaleReverted(PosSaleReverted {
@@ -87,7 +87,7 @@ async fn revert(f: &Fixture, order: &str) -> Result<Applied, AppError> {
 }
 
 /// Closes the Undo window and numbers the order.
-async fn number(f: &Fixture, order: &str) -> String {
+pub(super) async fn number(f: &Fixture, order: &str) -> String {
     f.clock.advance(UNDO_WINDOW_MS + 1);
     let mut i = intent(
         system(),

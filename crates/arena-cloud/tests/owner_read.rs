@@ -299,6 +299,20 @@ impl Harness {
         self.call("GET", path, None, &c.access).await
     }
 
+    /// A GET whose answer is not JSON: the status, headers and body text.
+    async fn get_raw(&self, c: &Cafe, path: &str) -> (u16, axum::http::HeaderMap, String) {
+        let req = Request::builder()
+            .method("GET")
+            .uri(path)
+            .header("cookie", format!("arena_access={}", c.access))
+            .body(Body::empty())
+            .unwrap();
+        let res = self.app.clone().oneshot(req).await.unwrap();
+        let (status, headers) = (res.status().as_u16(), res.headers().clone());
+        let bytes = to_bytes(res.into_body(), 1 << 20).await.unwrap();
+        (status, headers, String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
     /// The Hub checks in now (sets its `last_seen_at`).
     async fn beat(&self, c: &Cafe) {
         let req = Request::builder()
@@ -1063,4 +1077,100 @@ async fn a_report_for_another_cafe_a_free_branch_or_nobody_is_refused() {
     assert_eq!(r.status, 401);
     assert_eq!(h.st.data_age.stats(&a.tenant, &a.branch).opens, 0);
     assert_eq!(h.st.data_age.stats(&b.tenant, &b.branch).opens, 0);
+}
+
+fn export(c: &Cafe, query: &str) -> String {
+    format!("/v1/branches/{}/export?{query}", c.branch)
+}
+
+#[tokio::test]
+async fn an_export_is_a_csv_of_the_same_rollups_the_summary_sums() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    for (d, total) in [("2026-10-26", 1_050), ("2026-10-27", 2_000)] {
+        h.put_rollup(&a, d, 1, total).await;
+    }
+    let range = "from=2026-10-26&to=2026-10-28";
+    let (status, headers, csv) = h
+        .get_raw(&a, &export(&a, &format!("{range}&report=revenue")))
+        .await;
+    assert_eq!(status, 200, "{csv}");
+    assert!(
+        headers["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/csv")
+    );
+    assert_eq!(
+        headers["content-disposition"],
+        "attachment; filename=\"arena360-revenue-2026-10-26-to-2026-10-28.csv\""
+    );
+    let lines: Vec<&str> = csv.trim_start_matches('\u{feff}').lines().collect();
+    assert_eq!(lines[0], "Report,Revenue");
+    assert_eq!(lines[1], "Range,2026-10-26 to 2026-10-28");
+    assert!(lines[2].starts_with("Branches,"));
+    assert!(lines[3].starts_with("Generated,"));
+    // One row per day: two with figures, one without.
+    assert_eq!(lines.len(), 9, "{csv}");
+    assert!(lines[6].starts_with("2026-10-26,"), "{csv}");
+    assert!(lines[6].contains(",INR,10.50,"), "{csv}");
+    assert!(lines[7].starts_with("2026-10-27,"), "{csv}");
+    assert!(lines[7].contains(",INR,20.00,"), "{csv}");
+    assert!(csv.contains("2026-10-28,"));
+    assert!(csv.contains("No figures"));
+
+    // The days of the CSV add up to the summary's total.
+    let s = h
+        .get(&a, &summary(&a, &format!("{range}&group_by=day")))
+        .await;
+    assert_eq!(s.body["totals"]["revenue"]["total"], 3_050);
+
+    for report in ["cash", "stock"] {
+        let (status, _, body) = h
+            .get_raw(&a, &export(&a, &format!("{range}&report={report}")))
+            .await;
+        assert_eq!(status, 200, "{body}");
+    }
+    let (status, _, _) = h
+        .get_raw(&a, &export(&a, &format!("{range}&report=nope")))
+        .await;
+    assert_eq!(status, 422);
+    let (status, _, _) = h
+        .get_raw(&a, &export(&a, "from=2026-10-26&to=2026-10-28"))
+        .await;
+    assert_eq!(status, 422, "report is required");
+}
+
+#[tokio::test]
+async fn an_export_is_refused_for_a_free_branch_and_another_cafe() {
+    let h = Harness::new().await;
+    let free = h.cafe(PHONE_A, "Pixel Arena", "198.51.100.4").await;
+    let q = "from=2026-10-26&to=2026-10-26&report=revenue";
+    let (status, _, body) = h.get_raw(&free, &export(&free, q)).await;
+    assert_eq!(status, 403, "{body}");
+    assert!(body.contains("FEATURE_NOT_ENTITLED"));
+
+    let h = Harness::new().await;
+    let other = h.paid_cafe().await;
+    let mut crossed = export(&other, q);
+    crossed = crossed.replace(&other.branch, "someone-elses-branch");
+    let (status, _, _) = h.get_raw(&other, &crossed).await;
+    assert_eq!(status, 404);
+}
+
+#[tokio::test]
+async fn an_all_export_can_be_narrowed_to_the_branches_the_app_shows() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    h.put_rollup(&a, "2026-10-26", 1, 1_000).await;
+    let base = "from=2026-10-26&to=2026-10-26&report=revenue";
+    let path = |q: &str| format!("/v1/branches/all/export?{base}{q}");
+    let (status, _, csv) = h
+        .get_raw(&a, &path(&format!("&branches={}", a.branch)))
+        .await;
+    assert_eq!(status, 200, "{csv}");
+    assert!(csv.contains("2026-10-26,"));
+    // Ids that are not the owner's café's narrow to nothing: refused, nothing read for them.
+    let (status, _, _) = h.get_raw(&a, &path("&branches=someone-else")).await;
+    assert_eq!(status, 403);
 }

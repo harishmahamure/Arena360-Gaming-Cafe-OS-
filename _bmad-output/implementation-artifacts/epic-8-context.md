@@ -51,3 +51,11 @@ The café owner sees every branch and changes it from a phone or laptop, without
 - **Expiring.** Lots in the newest rollup with `expires_on` within 7 days of today (already-expired ones carry an "Expired" badge). The Hub's rollup lists lots inside the branch's own warning window (default 3 days), so a lot 4–7 days out shows only when that window is at least as wide.
 - **All branches.** One section per currency; levels and waste are tables with a column per branch and a Total, rows matched by trimmed, case-insensitive name and category, "—" where a branch lacks the product. Waste cells read "qty · value" and value is summed only inside a currency.
 - **Untracked.** A branch whose newest rollup lists no tracked products reads "No tracked products at this branch."; one with no rollup in the week reads "No stock figures yet."
+
+## Story 8.17: Owner reports export to CSV and PDF and match the Hub's Z-reports exactly
+
+- **Cloud CSV.** `GET /v1/branches/{id|all}/export?from&to&report=revenue|cash|stock` answers `text/csv` with a filename; it uses `branches_for` and `range_of`, so entitlement, tenant checks, the rate limit and the sums are exactly `summary`'s. `all` may carry `branches=<ids>` so the app exports only the live, paid branches it shows; an id outside the café narrows to nothing.
+- **Format.** Header rows (Report, Range, Branches, Generated in UTC), a blank line, then one row per day per branch; amounts are major units by the currency's exponent with the currency code in a column; days without a rollup read "No figures"; Stock lists Level, Waste and Expiring rows. Text cells starting `=`, `+`, `-`, `@`, tab or return get a leading `'`.
+- **PDF.** No server PDF: Export PDF shows the report tab and calls `window.print()`. Print media hides the header/nav and the controls, switches to the light tokens and shows `.print-header` (report, branches, range, generated time, data age).
+- **Exports tab.** Lists Revenue, Cash reconciliation and Stock with CSV and PDF for the current range and pick.
+- **NFR10.** `thirty_days_of_rollups_sum_to_the_thirty_z_reports` (arena-core) runs 30 business days (sales, undone sale, refunds, shorts, closes) and compares the summed rollups to the summed Z-reports. It does not go through MinIO.

@@ -6,7 +6,7 @@ import type {
   OwnerRangeStock,
   OwnerRangeTotals,
 } from "@arena/ui/generated";
-import { load } from "./api";
+import { download, load } from "./api";
 
 export type RangeKind = "today" | "week" | "month" | "custom";
 
@@ -398,4 +398,38 @@ export function stockViews(
     );
   }
   return out;
+}
+
+/** The reports that export to CSV (Story 8.17). */
+export type ExportKind = "revenue" | "cash" | "stock";
+export const EXPORTS = ["revenue", "cash", "stock"] as const satisfies readonly ExportKind[];
+
+/** The export path of `kind`: one branch by id, several through `all` narrowed to the pick. */
+export function exportPath(kind: ExportKind, picked: OwnerBranch[], from: string, to: string) {
+  const query = `from=${from}&to=${to}&report=${kind}`; // i18n-ignore
+  if (picked.length === 1) return `${base(picked[0].id)}/export?${query}`; // i18n-ignore
+  const ids = picked.map((b) => encodeURIComponent(b.id)).join(",");
+  return `/branches/all/export?${query}&branches=${ids}`; // i18n-ignore
+}
+
+/** Downloads the CSV of a report; `"failed"` when the cloud could not be reached or refused. */
+export async function downloadCsv(
+  kind: ExportKind,
+  picked: OwnerBranch[],
+  from: string,
+  to: string,
+): Promise<"ok" | "failed" | "signed-out"> {
+  if (!picked.length) return "failed";
+  const file = await download(exportPath(kind, picked, from, to));
+  if (file === "signed-out") return "signed-out";
+  if (!file) return "failed";
+  const href = URL.createObjectURL(file);
+  const link = document.createElement("a");
+  link.href = href;
+  link.download = `arena360-${kind}-${from}-to-${to}.csv`; // i18n-ignore
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 10_000);
+  return "ok";
 }

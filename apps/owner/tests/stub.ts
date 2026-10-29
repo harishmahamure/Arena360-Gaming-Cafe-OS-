@@ -137,7 +137,12 @@ export type StubOptions = {
   range?: Record<string, OwnerRange | ((query: URLSearchParams) => OwnerRange)>;
   /** The `live` answer per branch id (a function is called on every request); default: online. */
   live?: Record<string, OwnerLive | (() => OwnerLive)>;
+  /** The status the export route answers with (default 200, with a small CSV). */
+  exportStatus?: number;
 };
+
+/** The CSV the stubbed export route answers with. */
+export const EXPORT_CSV = "Report,Revenue\r\nRange,2026-10-26 to 2026-10-30\r\n";
 
 export async function stubCloud(
   page: Page,
@@ -147,6 +152,7 @@ export async function stubCloud(
   const list = () => (typeof branches === "function" ? branches() : branches);
   const calls: string[] = [];
   const bodies: Record<string, unknown[]> = {};
+  const exports: string[] = [];
   await page.route("**/v1/**", (route) => {
     const req = route.request();
     const path = new URL(req.url()).pathname;
@@ -181,6 +187,17 @@ export async function stubCloud(
       const query = new URL(req.url()).searchParams;
       return json(typeof given === "function" ? given(query) : (given ?? rangeOfBranch(range[1])));
     }
+    const exp = path.match(/^\/v1\/branches\/([^/]+)\/export$/);
+    if (exp && req.method() === "GET") {
+      exports.push(path + new URL(req.url()).search);
+      if ((opts.exportStatus ?? 200) !== 200)
+        return json({ code: "UNAVAILABLE", message: "" }, opts.exportStatus);
+      return route.fulfill({
+        status: 200,
+        contentType: "text/csv; charset=utf-8",
+        body: EXPORT_CSV,
+      });
+    }
     const age = path.match(/^\/v1\/branches\/([^/]+)\/data-age$/);
     if (age && req.method() === "POST") {
       (bodies[age[1]] ??= []).push(req.postDataJSON());
@@ -192,7 +209,7 @@ export async function stubCloud(
     if (path === "/v1/signout") return json(null, 200);
     return json({ code: "NOT_FOUND", message: "" }, 404);
   });
-  return Object.assign(calls, { bodies });
+  return Object.assign(calls, { bodies, exports });
 }
 
 export const cacheCount = (page: Page) =>

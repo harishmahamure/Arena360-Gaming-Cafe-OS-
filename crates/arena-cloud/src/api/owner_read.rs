@@ -14,15 +14,15 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arena_proto::{
-    AppError, BRANCH_ONLINE_WINDOW_MS, DataAgeReport, ErrorCode, GroupBy, OWNER_ALL_BRANCHES,
-    OWNER_API_LIMIT_PER_MIN, OWNER_RANGE_MAX_DAYS, OwnerLive, OwnerLiveAll, OwnerRange,
-    OwnerRangeAll, OwnerRangeRow, OwnerRangeShift, OwnerRangeStock, OwnerRangeTotals, Tier,
-    dates_between, is_rollup_date,
+    AppError, BRANCH_ONLINE_WINDOW_MS, DataAgeReport, ErrorCode, ExportReport, GroupBy,
+    OWNER_ALL_BRANCHES, OWNER_API_LIMIT_PER_MIN, OWNER_RANGE_MAX_DAYS, OwnerLive, OwnerLiveAll,
+    OwnerRange, OwnerRangeAll, OwnerRangeRow, OwnerRangeShift, OwnerRangeStock, OwnerRangeTotals,
+    Tier, dates_between, is_rollup_date, owner_csv,
 };
 use arena_store::control::{Branch, RateRule};
 use axum::extract::rejection::QueryRejection;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -45,6 +45,8 @@ struct RangeQuery {
     from: Option<String>,
     to: Option<String>,
     group_by: Option<String>,
+    report: Option<String>,
+    branches: Option<String>,
 }
 
 fn not_entitled() -> ApiError {
@@ -304,6 +306,60 @@ async fn summary(
     })
 }
 
+/// `GET /v1/branches/{id}/export?from=&to=&report=revenue|cash|stock` (Story 8.17): the CSV of a
+/// report over a range, built from the same rollups and sums as `summary`, one row per day per
+/// branch. `all` in place of the id exports every paid branch.
+async fn export(
+    State(st): State<Arc<AuthState>>,
+    RequireSetupComplete(signed): RequireSetupComplete,
+    Path(id): Path<String>,
+    query: Result<Query<RangeQuery>, QueryRejection>,
+) -> Result<Response, ApiError> {
+    let (report, only) = match &query {
+        Ok(Query(q)) => (
+            q.report.as_deref().and_then(ExportReport::parse),
+            q.branches.clone(),
+        ),
+        Err(_) => (None, None),
+    };
+    let report =
+        report.ok_or_else(|| ApiError::validation("report", "Choose revenue, cash or stock."))?;
+    let range = parse_range(query)?;
+    let now = st.now();
+    let mut branches = branches_for(&st, &signed.owner.id, &id, now).await?;
+    // `all` may be narrowed to the branches the app is showing (ids the owner is allowed anyway).
+    if let Some(only) = only.filter(|_| id == OWNER_ALL_BRANCHES) {
+        let ids: Vec<&str> = only.split(',').collect();
+        branches.retain(|b| ids.contains(&b.id.as_str()));
+        if branches.is_empty() {
+            return Err(not_entitled());
+        }
+    }
+    let presigner = bucket(&st)?;
+    let mut out = Vec::with_capacity(branches.len());
+    for b in &branches {
+        let answer = range_of(&st, presigner, b, &range, now).await?;
+        out.push((b.name.clone(), answer));
+    }
+    let csv = owner_csv(report, &out, now);
+    let name = format!(
+        "arena360-{}-{}-to-{}.csv",
+        report.as_str(),
+        range.from,
+        range.to
+    );
+    let mut res = csv.into_response();
+    let h = res.headers_mut();
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/csv; charset=utf-8"),
+    );
+    if let Ok(v) = HeaderValue::from_str(&format!("attachment; filename=\"{name}\"")) {
+        h.insert(header::CONTENT_DISPOSITION, v);
+    }
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(res)
+}
 /// Seconds a figure's age may be before the report is refused as nonsense (a year).
 const DATA_AGE_MAX_S: u64 = 365 * 24 * 60 * 60;
 
@@ -334,6 +390,7 @@ pub(super) fn router(st: Arc<AuthState>) -> Router {
     Router::new()
         .route("/branches/{id}/live", get(live))
         .route("/branches/{id}/summary", get(summary))
+        .route("/branches/{id}/export", get(export))
         .route("/branches/{id}/data-age", post(data_age))
         .with_state(st)
 }

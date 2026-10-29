@@ -113,7 +113,7 @@ test("today's row is the live figure, labelled and aged, and today is not a miss
   await expect(
     main.getByText(t("owner.reports.missing.one", { dates: "2026-10-02" })),
   ).toBeVisible();
-  await expect(main.getByText(day)).toHaveCount(1);
+  await expect(page.getByRole("tabpanel").getByText(day)).toHaveCount(1);
 });
 
 test("days without a rollup are listed and the totals are marked partial", async ({ page }) => {

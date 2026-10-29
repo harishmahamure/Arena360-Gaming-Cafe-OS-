@@ -379,3 +379,131 @@ async fn the_planner_reads_the_real_ledger_shifts_and_late_changes() {
         [day]
     );
 }
+
+/// Story 8.17 (NFR10): thirty business days of sales, undone sales, refunds and shift closes at
+/// one Hub; the owner read API's sums of the thirty rollups equal the sums of the Z-reports.
+#[tokio::test]
+async fn thirty_days_of_rollups_sum_to_the_thirty_z_reports() {
+    use super::session::pay;
+    use super::z_report::{number, open, product, revert, sell};
+    use arena_proto::OwnerRangeTotals;
+    use arena_proto::PaymentMethod::{Card, Cash, Upi};
+
+    const DAY: i64 = 24 * 60 * 60 * 1000;
+    let f = bootstrapped_closed().await;
+    let cola = product(&f, "Cola", 4_000, 600).await;
+    let mut variances = 0;
+    for day in 0..30_i64 {
+        submit(&f, owner(), open(50_000 + day * 100)).await.unwrap();
+        let qty = 1 + day % 4;
+        let cash = sell(&f, &cola, qty, vec![pay(Cash, 4_000 * qty, None)]).await;
+        sell(&f, &cola, 2, vec![pay(Upi, 8_000, Some("1234"))]).await;
+        if day % 3 == 0 {
+            sell(&f, &cola, 1, vec![pay(Card, 4_000, Some("T-9"))]).await;
+        }
+        // A sale taken back inside its Undo window nets to zero.
+        let undone = sell(&f, &cola, 1, vec![pay(Upi, 4_000, Some("9999"))]).await;
+        revert(&f, &undone).await.unwrap();
+        // A cash refund of one cola on every other day.
+        if day % 2 == 0 {
+            let invoice = number(&f, &cash).await;
+            let line = table(&f, Table::OrderLines)
+                .into_iter()
+                .find(|l| text(l, "order_id") == cash)
+                .map(|l| text(&l, "id"))
+                .unwrap();
+            let mut refund = super::stock::intent(
+                owner(),
+                IntentPayload::RefundCreate(arena_proto::RefundCreate {
+                    invoice_no: invoice,
+                    lines: vec![arena_proto::RefundLineReq {
+                        line_id: line,
+                        qty: 1,
+                        return_to_stock: None,
+                    }],
+                    method: Some(Cash),
+                    reference: None,
+                    note: None,
+                    receipt: None,
+                }),
+            );
+            refund.reason = Some(arena_proto::ReasonCode::Mistake);
+            refund.issued_at = f.clock.now_ms();
+            f.writer.submit_intent(refund).await.unwrap();
+        }
+        let counted = 50_000 + day * 100 + 4_000 * qty - if day % 2 == 0 { 4_000 } else { 0 };
+        let variance = if day % 5 == 0 { -300 } else { 0 };
+        variances += variance;
+        let mut c = close(counted + variance);
+        if variance != 0 {
+            c.reason = Some(arena_proto::VarianceReason::CountingError);
+        }
+        submit(&f, owner(), IntentPayload::ShiftClose(c))
+            .await
+            .unwrap();
+        f.clock.advance(DAY);
+    }
+
+    // Each business day of the thirty has one rollup.
+    let mut days: Vec<String> = table(&f, Table::Orders)
+        .iter()
+        .map(|o| text(o, "business_day"))
+        .collect();
+    days.sort();
+    days.dedup();
+    assert_eq!(days.len(), 30, "one business day per synthetic day");
+    let mut sum = OwnerRangeTotals::default();
+    let mut shifts = Vec::new();
+    for day in &days {
+        let r = rollup_of(&f, day);
+        sum.add_rollup(&r);
+        shifts.extend(r.shifts);
+    }
+
+    let reader = SnapshotReader::open(&f.path).unwrap();
+    let zs: Vec<_> = table(&f, Table::Shifts)
+        .iter()
+        .map(|s| reader.z_report(&text(s, "id"), f.clock.now_ms()).unwrap())
+        .collect();
+    assert_eq!(zs.len(), 30);
+    let by = |key: &str| zs.iter().map(|z| amount(&z.payments, key)).sum::<i64>();
+
+    assert_eq!(sum.days, 30);
+    assert_eq!(
+        sum.revenue.total,
+        zs.iter().map(|z| z.sales_minor).sum::<i64>()
+    );
+    let (m, t) = (&sum.revenue.by_method, &sum.revenue.by_type);
+    assert_eq!((m.cash, m.upi, m.card), (by("cash"), by("upi"), by("card")));
+    assert_eq!(
+        sum.revenue.total,
+        t.play + t.products + t.plans + t.other,
+        "revenue by type adds to the total"
+    );
+    assert_eq!(
+        t.products,
+        zs.iter()
+            .map(|z| amount(&z.by_type, "products"))
+            .sum::<i64>()
+    );
+    assert_eq!(
+        sum.refunds.amount,
+        -zs.iter().map(|z| z.refunds_minor).sum::<i64>()
+    );
+    assert_eq!(
+        sum.voids.amount,
+        zs.iter()
+            .flat_map(|z| &z.voids)
+            .map(|v| v.amount_minor)
+            .sum::<i64>()
+    );
+    // Cash expected, counted and variance, shift by shift and in total.
+    assert_eq!(shifts.len(), 30);
+    let (expected, counted, variance) = shifts.iter().fold((0, 0, 0), |a, s| {
+        (a.0 + s.expected, a.1 + s.counted, a.2 + s.variance)
+    });
+    assert_eq!(expected, zs.iter().map(|z| z.expected_minor).sum::<i64>());
+    assert_eq!(counted, zs.iter().map(|z| z.counted_minor).sum::<i64>());
+    assert_eq!(variance, zs.iter().map(|z| z.variance_minor).sum::<i64>());
+    assert_eq!(variance, variances, "the synthetic shorts are all there");
+}

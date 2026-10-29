@@ -210,4 +210,34 @@
       letter-spacing: normal;
     }
   }
+
+  /* A printed report (Export → PDF) is the page on paper: no chrome, light colours. */
+  @media print {
+    :global(:root),
+    :global([data-theme]) {
+      --bg: var(--color-bg-light);
+      --surface: var(--color-surface-light);
+      --surface-2: var(--color-surface-2-light);
+      --line: var(--color-line-light);
+      --border-strong: var(--color-border-strong-light);
+      --text: var(--color-text-light);
+      --text-muted: var(--color-text-muted-light);
+    }
+    :global(body) {
+      background: var(--bg);
+      color: var(--text);
+    }
+    .header,
+    .nav {
+      display: none;
+    }
+    .shell {
+      display: block;
+      padding-bottom: 0;
+    }
+    .main {
+      max-width: none;
+      padding: 0;
+    }
+  }
 </style>

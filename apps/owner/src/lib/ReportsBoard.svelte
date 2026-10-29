@@ -1,14 +1,16 @@
 <script lang="ts">
   import { Button, TabControl, TierLock, t } from "@arena/ui";
   import type { MessageKey } from "@arena/ui/messages";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import CashPanel from "./CashPanel.svelte";
+  import ExportsPanel from "./ExportsPanel.svelte";
   import RevenuePanel from "./RevenuePanel.svelte";
   import SetupGate from "./SetupGate.svelte";
   import StockPanel from "./StockPanel.svelte";
   import {
     byCurrency,
     dateIn,
+    downloadCsv,
     loadLevels,
     loadReport,
     rangeOf,
@@ -16,6 +18,7 @@
     shiftsOf,
     stockViews,
     type BranchReport,
+    type ExportKind,
     type LevelsWindow,
     type RangeKind,
   } from "./reports";
@@ -31,6 +34,7 @@
     { id: "revenue", label: "owner.reports.tab.revenue" },
     { id: "cash", label: "owner.reports.tab.cash" },
     { id: "stock", label: "owner.reports.tab.stock" },
+    { id: "exports", label: "owner.reports.tab.exports" },
   ] as const satisfies readonly { id: string; label: MessageKey }[];
   const ALL = "all";
 
@@ -49,6 +53,8 @@
   let loaded = $state(false);
   let failed = $state(false);
   let loading = $state(false);
+  let exporting = $state(false);
+  let exportFailed = $state(false);
   let now = $state(Date.now());
   let ticket = 0;
   let windowTicket = 0;
@@ -130,6 +136,37 @@
     return () => clearInterval(id);
   });
 
+  // Export → CSV: the cloud builds it from the same rollups; the browser saves the file.
+  async function exportCsv(kind: ExportKind) {
+    if (exporting || !picked.length) return;
+    exporting = true;
+    exportFailed = false;
+    const res = await downloadCsv(kind, picked, range.from, range.to);
+    exporting = false;
+    if (res === "signed-out") await refresh();
+    else exportFailed = res === "failed";
+  }
+
+  // Export → PDF: the report is shown with its print header, and the browser prints it to PDF.
+  async function exportPdf(kind: ExportKind) {
+    tab = kind;
+    await tick();
+    for (let i = 0; i < 100 && (loading || (kind === "stock" && !windowsLoaded)); i++) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    await tick();
+    now = Date.now();
+    window.print();
+  }
+
+  const generated = $derived(
+    new Intl.DateTimeFormat("en-GB", {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: picked[0]?.timezone ?? "UTC",
+    }).format(now),
+  );
+
   const ago = (iso: string) => {
     const [key, n] = age(iso, now);
     return t(key, { n });
@@ -178,7 +215,33 @@
       {t(problem === "order" ? "owner.reports.error.order" : "owner.reports.error.long")}
     </p>{/if}
 
-  <TabControl items={[...TABS]} label="owner.reports.tabs" bind:selected={tab} />
+  <div class="screen">
+    <TabControl items={[...TABS]} label="owner.reports.tabs" bind:selected={tab} />
+  </div>
+  {#if tab !== "exports"}
+    <div class="screen export" role="group" aria-label={t("owner.reports.export")}>
+      <Button
+        label="owner.reports.export.csv"
+        variant="secondary"
+        onclick={() => exportCsv(tab as ExportKind)}
+        disabled={exporting}
+        disabledReason="owner.reports.export.busy"
+      />
+      <Button
+        label="owner.reports.export.pdf"
+        variant="secondary"
+        onclick={() => exportPdf(tab as ExportKind)}
+      />
+    </div>
+  {/if}
+  {#if exportFailed}<p role="alert" class="screen">{t("owner.reports.export.failed")}</p>{/if}
+  <div class="print-header">
+    <h2>{t(TABS.find((x) => x.id === tab)?.label ?? "owner.reports.tab.revenue")}</h2>
+    <p>{t("owner.reports.print.branches", { names: picked.map((b) => b.name).join(", ") })}</p>
+    <p>{t("owner.reports.print.range", { from: range.from, to: range.to })}</p>
+    <p>{t("owner.reports.print.generated", { time: generated })}</p>
+    {#if asOf}<p>{t("owner.reports.print.age", { age: ago(asOf) })}</p>{/if}
+  </div>
   <div class="status" role="status">
     {#if loading}{t("owner.loading")}{:else if asOf && stale}{t("owner.updated", {
         age: ago(asOf),
@@ -190,7 +253,16 @@
     aria-label={t(TABS.find((x) => x.id === tab)?.label ?? "owner.reports.tab.revenue")}
     class="panel"
   >
-    {#if !loaded && !failed}
+    {#if tab === "exports"}
+      <ExportsPanel
+        from={range.from}
+        to={range.to}
+        branches={picked.map((b) => b.name).join(", ")}
+        busy={exporting}
+        csv={exportCsv}
+        pdf={exportPdf}
+      />
+    {:else if !loaded && !failed}
       <p>{t("owner.loading")}</p>
     {:else if failed}
       <p>{t("owner.unavailable")}</p>
@@ -260,5 +332,28 @@
   }
   h2 {
     margin: var(--space-4) 0 var(--space-2);
+  }
+  .export {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    margin-bottom: var(--space-2);
+  }
+  .print-header {
+    display: none;
+  }
+  @media print {
+    .controls,
+    .screen,
+    .status {
+      display: none;
+    }
+    .print-header {
+      display: block;
+      margin-bottom: var(--space-4);
+    }
+    .print-header p {
+      margin: 0;
+    }
   }
 </style>

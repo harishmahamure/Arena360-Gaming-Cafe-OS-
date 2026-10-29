@@ -669,3 +669,47 @@ async fn a_stored_cover_is_served_to_a_signed_in_staff_member_and_nothing_else_i
         assert_eq!(resp.status(), StatusCode::NOT_FOUND, "{missing}");
     }
 }
+
+// ---- Story 6.25: `GET /ui/games/launch-times` ----
+
+async fn launched(hub: &Hub, device_id: &str, at: i64, game: &str, ms: Option<u32>) {
+    let mut i = intent_as(
+        Actor {
+            kind: ActorKind::Device,
+            id: device_id.into(),
+        },
+        IntentPayload::KioskGameLaunched(arena_proto::KioskGameLaunched {
+            game_id: game.into(),
+            name: format!("Game {game}"),
+            launch_ms: ms,
+        }),
+        None,
+    );
+    i.issued_at = at;
+    hub.writer.submit_intent(i).await.unwrap();
+}
+
+#[tokio::test]
+async fn launch_times_give_each_pcs_last_launch_and_seven_day_medians() {
+    const DAY: i64 = 24 * 60 * 60 * 1000;
+    let hub = hub().await;
+    let (status, _) = call(&hub, "GET", "/ui/games/launch-times", None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let counter = token_for(&hub, "counter", "c-pass").await;
+    let (status, v) = call(&hub, "GET", "/ui/games/launch-times", Some(&counter), None).await;
+    assert_eq!((status, &v), (StatusCode::OK, &json!({"devices": []})));
+
+    let a = register_pc(&hub, "PC-A").await;
+    let now = T0;
+    launched(&hub, &a, now - 3 * DAY, "g1", Some(10_000)).await;
+    launched(&hub, &a, now - 2 * DAY, "g1", Some(20_000)).await;
+    launched(&hub, &a, now - 1000, "g1", None).await;
+    let (status, v) = call(&hub, "GET", "/ui/games/launch-times", Some(&counter), None).await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let pc = &v["devices"][0];
+    assert_eq!(pc["name"], "PC-A");
+    assert_eq!(pc["last"]["name"], "Game g1");
+    assert_eq!(pc["last"]["launch_ms"], 20_000);
+    assert_eq!(pc["games"][0]["launches"], 3);
+    assert_eq!(pc["games"][0]["median_ms"], 15_000);
+}

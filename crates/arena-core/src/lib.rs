@@ -20,6 +20,7 @@ pub mod import_players;
 pub mod import_products;
 pub mod import_starter;
 pub mod invoice;
+pub mod launch_times;
 pub mod locale;
 pub mod media_cache;
 pub mod pairing;

@@ -46,6 +46,7 @@ fn main() -> ExitCode {
             data_dir: d,
         } => lockdown(data_dir(d), action, player_user),
         Command::CleanupHelper(task) => cleanup_helper(task),
+        Command::WindowWatch(pid) => window_watch(pid),
         #[cfg(feature = "dev-fixtures")]
         Command::DevProvision {
             hub,
@@ -255,5 +256,18 @@ fn cleanup_helper(task: HelperTask) -> ExitCode {
 #[cfg(not(windows))]
 fn cleanup_helper(_task: HelperTask) -> ExitCode {
     eprintln!("arena-kiosk-svc: cleanup-helper is Windows only");
+    ExitCode::from(EXIT_NOT_WINDOWS)
+}
+
+/// A game's window watcher (Story 6.25): the service starts this in the player's session, where
+/// the game's windows are, and reads how it exited (0: a window appeared).
+#[cfg(windows)]
+fn window_watch(pid: u32) -> ExitCode {
+    ExitCode::from(arena_kiosk_svc::games_windows::run_window_watch(pid) as u8)
+}
+
+#[cfg(not(windows))]
+fn window_watch(_pid: u32) -> ExitCode {
+    eprintln!("arena-kiosk-svc: window-watch is Windows only");
     ExitCode::from(EXIT_NOT_WINDOWS)
 }

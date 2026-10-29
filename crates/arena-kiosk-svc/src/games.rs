@@ -15,6 +15,21 @@
 //! - A game started from a launcher URI hands over to the launcher, so what is tracked is the
 //!   process the service started (the launcher's URI handler), not the game it goes on to start.
 //!
+//! - **The booster (Story 6.25).** Before a game starts, the programs on the branch's close list
+//!   (`kiosk.booster_close`) are closed in the player's session through the process enforcer's
+//!   kill path (the app, the service and protected images are never touched); with
+//!   `kiosk.booster_power_plan` on, the active power plan is remembered (queue kv
+//!   `games.power_restore`, so a restart still restores it) and High performance is switched on;
+//!   once the game has started its priority is set (`kiosk.booster_priority`). The session-end
+//!   cleanup restores the remembered plan ([`restore_power_plan`], its `power_plan` step). A
+//!   program that will not close, or a plan or priority that will not change, is logged (a
+//!   `kiosk.log` warning for the Hub) and the game still starts.
+//! - **Launch time (Story 6.25).** From the click, the service watches for the started process's
+//!   first window; the `game.launched` record is queued once it has appeared (`launch_ms`), or
+//!   with none when the process exits first or [`LAUNCH_WINDOW_TIMEOUT_MS`] passes. The record's
+//!   time is still the click. A game started from a launcher link is measured by the launcher's
+//!   window, as it is tracked by the launcher's process.
+//!
 //! Nothing here is written without a session on screen, and nothing is started while the PC is
 //! locked.
 
@@ -24,8 +39,8 @@ use std::time::Duration;
 
 use arena_kiosk_core::procpolicy::{Decision, ProcInfo, decide, normalize_path};
 use arena_proto::{
-    AppError, ErrorCode, KioskGameLaunched, KioskLibraryEntry, KioskLogLevel, is_launch_uri,
-    launcher_install_globs,
+    AppError, Booster, BoosterPriority, ErrorCode, KioskGameLaunched, KioskLibraryEntry,
+    KioskLogLevel, LAUNCH_WINDOW_TIMEOUT_MS, is_launch_uri, launcher_install_globs,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -36,8 +51,16 @@ use crate::runtime::Ctx;
 
 /// How often the running games are checked for having exited.
 pub const POLL: Duration = Duration::from_secs(2);
+/// How often a started game is checked for its first window.
+pub const WINDOW_POLL: Duration = Duration::from_millis(250);
 /// The `kiosk.log` code of a game that would not start.
 pub const FAILED_CODE: &str = "game_launch_failed";
+/// The `kiosk.log` code of a booster step that did not work (the game started anyway).
+pub const BOOSTER_CODE: &str = "booster_failed";
+/// The id of Windows' High performance power plan.
+pub const HIGH_PERFORMANCE_PLAN: &str = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c";
+/// The queue kv key holding the power plan to restore at session end.
+const POWER_RESTORE_KEY: &str = "games.power_restore";
 /// The longest `kiosk.log` detail of a failed launch, in characters.
 const DETAIL_MAX: usize = 300;
 
@@ -58,6 +81,14 @@ pub trait GameHost: Send + Sync {
     fn start(&self, spec: &LaunchSpec) -> Result<u32, String>;
     /// Whether process `pid` is still running.
     fn alive(&self, pid: u32) -> bool;
+    /// Sets the priority of process `pid` (Story 6.25).
+    fn set_priority(&self, pid: u32, priority: BoosterPriority) -> Result<(), String>;
+    /// Whether process `pid` has shown a main window in the player's session (Story 6.25).
+    fn has_window(&self, pid: u32) -> bool;
+    /// The id of the active power plan (Story 6.25).
+    fn power_plan(&self) -> Result<String, String>;
+    /// Makes the power plan `id` the active one (Story 6.25).
+    fn set_power_plan(&self, id: &str) -> Result<(), String>;
 }
 
 /// The games this service started that have not exited yet.
@@ -326,6 +357,11 @@ async fn start_entry(
     if !allowed(&lists, entry, &spec) {
         return Ok(failed(ctx, &entry.name, "not allowed on this PC"));
     }
+    let clicked = tokio::time::Instant::now();
+    let clicked_ms = ctx.clock.now_ms();
+    let booster =
+        crate::operating::load(&ctx.queue.lock().unwrap_or_else(|p| p.into_inner())).booster;
+    boost_before(ctx, host, &booster).await;
     let start_host = Arc::clone(host);
     let started = tokio::task::spawn_blocking(move || start_host.start(&spec))
         .await
@@ -335,12 +371,176 @@ async fn start_entry(
         Err(why) => return Ok(failed(ctx, &entry.name, &why)),
     };
     ctx.games.started(&entry.id, pid);
-    let intent = crate::intents::game_launched(
-        device,
-        ctx.clock.now_ms(),
-        KioskGameLaunched {
+    if booster.priority != BoosterPriority::Normal
+        && let Err(why) = host.set_priority(pid, booster.priority)
+    {
+        booster_failed(ctx, &format!("priority: {why}"));
+    }
+    tracing::info!(game = %entry.id, pid, "a game started");
+    tokio::spawn(record_launch(
+        Arc::clone(ctx),
+        Arc::clone(host),
+        Launch {
+            device: device.to_owned(),
             game_id: entry.id.clone(),
             name: entry.name.clone(),
+            pid,
+            clicked,
+            clicked_ms,
+        },
+    ));
+    Ok(json!({ "outcome": "started" }))
+}
+
+/// Logs a booster step that did not work, for the Hub and the service log. The game still starts.
+fn booster_failed(ctx: &Ctx, what: &str) {
+    let detail: String = what.chars().take(DETAIL_MAX).collect();
+    tracing::warn!(%detail, "a booster step did not work");
+    if let Err(e) = ctx.log_event(KioskLogLevel::Warn, BOOSTER_CODE, &detail) {
+        tracing::error!(error = %e, "the booster failure could not be queued");
+    }
+}
+
+/// What runs before the game starts: closes the listed programs and raises the power plan. A
+/// failure of either is logged and does not stop the game.
+async fn boost_before(ctx: &Arc<Ctx>, host: &Arc<dyn GameHost>, booster: &Booster) {
+    if !booster.close.is_empty() {
+        let close_ctx = Arc::clone(ctx);
+        let names = booster.close.clone();
+        let closed = tokio::task::spawn_blocking(move || {
+            let images: Vec<&str> = names.iter().map(String::as_str).collect();
+            crate::cleanup::close(&close_ctx, crate::procs::CloseScope::Images(&images))
+        })
+        .await;
+        match closed {
+            Ok(Ok(report)) if report.failed == 0 => {
+                tracing::info!(
+                    closed = report.closed,
+                    "the booster closed the listed programs"
+                );
+            }
+            Ok(Ok(report)) => booster_failed(
+                ctx,
+                &format!("{} listed program(s) would not close", report.failed),
+            ),
+            Ok(Err(why)) => booster_failed(ctx, &format!("close: {why}")),
+            Err(e) => booster_failed(ctx, &format!("close: {e}")),
+        }
+    }
+    if booster.high_performance {
+        let (ctx, host) = (Arc::clone(ctx), Arc::clone(host));
+        let raised = tokio::task::spawn_blocking(move || {
+            raise_power_plan(&ctx, host.as_ref()).map_err(|why| (ctx, why))
+        })
+        .await;
+        if let Ok(Err((ctx, why))) = raised {
+            booster_failed(&ctx, &format!("power plan: {why}"));
+        }
+    }
+}
+
+fn kv_get(ctx: &Ctx, key: &str) -> Option<String> {
+    match ctx
+        .queue
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .kv_get(key)
+    {
+        Ok(Some((v, _))) if !v.is_empty() => Some(v),
+        _ => None,
+    }
+}
+
+/// Stores `value` (empty clears it).
+fn kv_set(ctx: &Ctx, key: &str, value: &str) -> Result<(), String> {
+    ctx.queue
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .kv_set(key, value, 0)
+        .map_err(|e| e.to_string())
+}
+
+/// Switches to High performance, first remembering the plan to go back to. A plan already
+/// remembered (an earlier launch in this session raised it) is kept: the first one is the
+/// original.
+fn raise_power_plan(ctx: &Ctx, host: &dyn GameHost) -> Result<(), String> {
+    if kv_get(ctx, POWER_RESTORE_KEY).is_some() {
+        return Ok(());
+    }
+    let current = host.power_plan()?;
+    if current.eq_ignore_ascii_case(HIGH_PERFORMANCE_PLAN) {
+        return Ok(());
+    }
+    kv_set(ctx, POWER_RESTORE_KEY, &current)?;
+    if let Err(why) = host.set_power_plan(HIGH_PERFORMANCE_PLAN) {
+        let _ = kv_set(ctx, POWER_RESTORE_KEY, "");
+        return Err(why);
+    }
+    Ok(())
+}
+
+/// Puts back the power plan a launch replaced (the cleanup's `power_plan` step); nothing when
+/// none was. A failure keeps the memory, so the next cleanup tries again.
+pub fn restore_power_plan(ctx: &Ctx) -> Result<(), String> {
+    let Some(original) = kv_get(ctx, POWER_RESTORE_KEY) else {
+        return Ok(());
+    };
+    let Some(host) = ctx.games.host() else {
+        return Err("this PC cannot change its power plan".into());
+    };
+    host.set_power_plan(&original)?;
+    kv_set(ctx, POWER_RESTORE_KEY, "")
+}
+
+/// A started game whose launch is to be recorded.
+struct Launch {
+    device: String,
+    game_id: String,
+    name: String,
+    pid: u32,
+    clicked: tokio::time::Instant,
+    clicked_ms: i64,
+}
+
+/// The milliseconds from `clicked` to the first window of process `pid`; `None` when the process
+/// exits first or `timeout` passes with no window.
+async fn first_window_ms(
+    host: &dyn GameHost,
+    pid: u32,
+    clicked: tokio::time::Instant,
+    poll: Duration,
+    timeout: Duration,
+) -> Option<u32> {
+    loop {
+        let elapsed = clicked.elapsed();
+        if host.has_window(pid) {
+            return Some(u32::try_from(elapsed.as_millis()).unwrap_or(u32::MAX));
+        }
+        if elapsed >= timeout || !host.alive(pid) {
+            return None;
+        }
+        tokio::time::sleep(poll).await;
+    }
+}
+
+/// Waits for the game's first window, then queues `game.launched` (with the time, or without).
+async fn record_launch(ctx: Arc<Ctx>, host: Arc<dyn GameHost>, launch: Launch) {
+    let launch_ms = first_window_ms(
+        host.as_ref(),
+        launch.pid,
+        launch.clicked,
+        WINDOW_POLL,
+        Duration::from_millis(u64::from(LAUNCH_WINDOW_TIMEOUT_MS)),
+    )
+    .await
+    .map(|ms| ms.min(LAUNCH_WINDOW_TIMEOUT_MS));
+    let intent = crate::intents::game_launched(
+        &launch.device,
+        launch.clicked_ms,
+        KioskGameLaunched {
+            game_id: launch.game_id,
+            name: launch.name,
+            launch_ms,
         },
     );
     let queued = ctx
@@ -352,8 +552,6 @@ async fn start_entry(
         Ok(()) => ctx.queued.notify_one(),
         Err(e) => tracing::error!(error = %e, "the game launch could not be queued"),
     }
-    tracing::info!(game = %entry.id, pid, "a game started");
-    Ok(json!({ "outcome": "started" }))
 }
 
 /// Keeps the running games current until `stop` is set.
@@ -373,24 +571,52 @@ pub async fn run(ctx: Arc<Ctx>, mut stop: watch::Receiver<bool>) {
 }
 
 /// A host that starts nothing real: process ids are handed out in order and a test decides
-/// which have exited.
+/// which have exited and which have shown a window.
 pub mod fake {
     use std::collections::HashSet;
     use std::sync::Mutex;
 
+    use arena_proto::BoosterPriority;
+
     use super::{GameHost, LaunchSpec};
 
-    #[derive(Default)]
+    /// The plan a fake PC starts on (Windows' Balanced).
+    pub const BALANCED_PLAN: &str = "381b4222-f694-41f0-9685-ff5bb260df2e";
+
     pub struct FakeGames {
         inner: Mutex<Inner>,
     }
 
-    #[derive(Default)]
     struct Inner {
         next: u32,
         alive: HashSet<u32>,
+        windows: HashSet<u32>,
         started: Vec<LaunchSpec>,
         fail: Option<String>,
+        priorities: Vec<(u32, BoosterPriority)>,
+        priority_fail: Option<String>,
+        plan: String,
+        plan_sets: Vec<String>,
+        plan_fail: Option<String>,
+    }
+
+    impl Default for FakeGames {
+        fn default() -> Self {
+            Self {
+                inner: Mutex::new(Inner {
+                    next: 0,
+                    alive: HashSet::new(),
+                    windows: HashSet::new(),
+                    started: Vec::new(),
+                    fail: None,
+                    priorities: Vec::new(),
+                    priority_fail: None,
+                    plan: BALANCED_PLAN.into(),
+                    plan_sets: Vec::new(),
+                    plan_fail: None,
+                }),
+            }
+        }
     }
 
     impl FakeGames {
@@ -409,11 +635,46 @@ pub mod fake {
             self.inner.lock().unwrap().alive.remove(&pid);
         }
 
+        /// Shows a main window for process `pid`.
+        pub fn show_window(&self, pid: u32) {
+            self.inner.lock().unwrap().windows.insert(pid);
+        }
+
         /// The process ids still running.
         pub fn alive_pids(&self) -> Vec<u32> {
             let mut v: Vec<u32> = self.inner.lock().unwrap().alive.iter().copied().collect();
             v.sort_unstable();
             v
+        }
+
+        /// The priorities set, in order.
+        pub fn priorities(&self) -> Vec<(u32, BoosterPriority)> {
+            self.inner.lock().unwrap().priorities.clone()
+        }
+
+        /// Makes every later priority change fail with `why` (`None`: succeed again).
+        pub fn fail_priority_with(&self, why: Option<&str>) {
+            self.inner.lock().unwrap().priority_fail = why.map(str::to_owned);
+        }
+
+        /// The active power plan.
+        pub fn plan(&self) -> String {
+            self.inner.lock().unwrap().plan.clone()
+        }
+
+        /// Makes the PC run on power plan `id`.
+        pub fn set_plan(&self, id: &str) {
+            self.inner.lock().unwrap().plan = id.to_owned();
+        }
+
+        /// Every plan switched to, in order.
+        pub fn plan_sets(&self) -> Vec<String> {
+            self.inner.lock().unwrap().plan_sets.clone()
+        }
+
+        /// Makes every later plan switch fail with `why` (`None`: succeed again).
+        pub fn fail_plan_with(&self, why: Option<&str>) {
+            self.inner.lock().unwrap().plan_fail = why.map(str::to_owned);
         }
     }
 
@@ -432,6 +693,33 @@ pub mod fake {
 
         fn alive(&self, pid: u32) -> bool {
             self.inner.lock().unwrap().alive.contains(&pid)
+        }
+
+        fn set_priority(&self, pid: u32, priority: BoosterPriority) -> Result<(), String> {
+            let mut inner = self.inner.lock().unwrap();
+            if let Some(why) = &inner.priority_fail {
+                return Err(why.clone());
+            }
+            inner.priorities.push((pid, priority));
+            Ok(())
+        }
+
+        fn has_window(&self, pid: u32) -> bool {
+            self.inner.lock().unwrap().windows.contains(&pid)
+        }
+
+        fn power_plan(&self) -> Result<String, String> {
+            Ok(self.inner.lock().unwrap().plan.clone())
+        }
+
+        fn set_power_plan(&self, id: &str) -> Result<(), String> {
+            let mut inner = self.inner.lock().unwrap();
+            if let Some(why) = &inner.plan_fail {
+                return Err(why.clone());
+            }
+            inner.plan = id.to_owned();
+            inner.plan_sets.push(id.to_owned());
+            Ok(())
         }
     }
 }

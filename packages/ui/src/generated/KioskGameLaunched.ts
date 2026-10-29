@@ -5,4 +5,13 @@
  * Hub names the player and session itself from the device's live session; the kiosk never does.
  * `name` is the library name at the time, so the log reads the same after a rename.
  */
-export type KioskGameLaunched = { game_id: string; name: string };
+export type KioskGameLaunched = {
+  game_id: string;
+  name: string;
+  /**
+   * Story 6.25: the milliseconds from the click to the game's first window, or `null` when it
+   * showed none within [`LAUNCH_WINDOW_TIMEOUT_MS`](crate::LAUNCH_WINDOW_TIMEOUT_MS) (or
+   * exited first). The record is sent once this is known, with `issued_at` still the click.
+   */
+  launch_ms: number | null;
+};

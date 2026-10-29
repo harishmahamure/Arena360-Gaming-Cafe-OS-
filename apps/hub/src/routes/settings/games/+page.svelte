@@ -13,6 +13,7 @@
     submitIntent,
   } from "../../../lib/auth";
   import { library } from "../../../lib/catalog.svelte";
+  import BoosterPanel from "../../../lib/BoosterPanel.svelte";
   import FoundOnPcs from "../../../lib/FoundOnPcs.svelte";
   import { branchLocale } from "../../../lib/locale.svelte";
   import {
@@ -429,6 +430,8 @@
       {/each}
     </ul>
   {/if}
+
+  <BoosterPanel />
 </section>
 
 <style>

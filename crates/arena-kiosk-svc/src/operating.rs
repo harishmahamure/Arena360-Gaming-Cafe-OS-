@@ -1,8 +1,10 @@
 use arena_proto::{
-    BILLING_GRACE_RANGE, FULFILMENT_MODES, KEY_BILLING_GRACE_MIN, KEY_BILLING_LOW_BALANCE,
-    KEY_BILLING_TIME_UP_MODE, KEY_BILLING_WARN_MARKS, KEY_FULFILMENT, KEY_KIOSK_VOLUME_DEFAULT,
-    KIOSK_BILLING_KEYS, KIOSK_OPERATING_KEYS, KIOSK_VOLUME_MAX, SESSION_WARNING_MARKS_MIN,
-    SettingEntry, TimeUpMode, low_balance_from, parse_low_balance, parse_warn_marks,
+    BILLING_GRACE_RANGE, Booster, BoosterPriority, FULFILMENT_MODES, KEY_BILLING_GRACE_MIN,
+    KEY_BILLING_LOW_BALANCE, KEY_BILLING_TIME_UP_MODE, KEY_BILLING_WARN_MARKS, KEY_BOOSTER_CLOSE,
+    KEY_BOOSTER_POWER_PLAN, KEY_BOOSTER_PRIORITY, KEY_FULFILMENT, KEY_KIOSK_VOLUME_DEFAULT,
+    KIOSK_BILLING_KEYS, KIOSK_BOOSTER_KEYS, KIOSK_OPERATING_KEYS, KIOSK_VOLUME_MAX,
+    SESSION_WARNING_MARKS_MIN, SettingEntry, TimeUpMode, low_balance_from, parse_booster_programs,
+    parse_low_balance, parse_warn_marks,
 };
 
 use crate::procs::AppliedRevs;
@@ -25,6 +27,9 @@ pub struct KioskOperating {
     pub warn_marks: Option<Vec<u8>>,
     /// The wallet amount (minor units) the low-balance warning fires at; `Some(0)` is off.
     pub low_balance_minor: Option<i64>,
+    /// What a game launch frees up (Story 6.25): the branch's, or nothing, normal priority
+    /// above normal and no power plan switch before the Hub ever sent it.
+    pub booster: Booster,
 }
 
 impl KioskOperating {
@@ -44,13 +49,16 @@ impl KioskOperating {
     }
 }
 
-pub const KEYS: [&str; 6] = [
+pub const KEYS: [&str; 9] = [
     KIOSK_OPERATING_KEYS[0],
     KIOSK_OPERATING_KEYS[1],
     KIOSK_BILLING_KEYS[0],
     KIOSK_BILLING_KEYS[1],
     KIOSK_BILLING_KEYS[2],
     KIOSK_BILLING_KEYS[3],
+    KIOSK_BOOSTER_KEYS[0],
+    KIOSK_BOOSTER_KEYS[1],
+    KIOSK_BOOSTER_KEYS[2],
 ];
 
 fn valid(key: &str, value: &str) -> bool {
@@ -61,6 +69,9 @@ fn valid(key: &str, value: &str) -> bool {
         KEY_BILLING_TIME_UP_MODE => TimeUpMode::parse(value).is_some(),
         KEY_BILLING_WARN_MARKS => parse_warn_marks(value).is_ok(),
         KEY_BILLING_LOW_BALANCE => parse_low_balance(value).is_some(),
+        KEY_BOOSTER_CLOSE => parse_booster_programs(value).is_ok(),
+        KEY_BOOSTER_PRIORITY => BoosterPriority::parse(value).is_some(),
+        KEY_BOOSTER_POWER_PLAN => matches!(value, "true" | "false"),
         _ => false,
     }
 }
@@ -103,6 +114,15 @@ pub fn load(queue: &QueueDb) -> KioskOperating {
         time_up_mode: read(KEY_BILLING_TIME_UP_MODE).and_then(|v| TimeUpMode::parse(&v)),
         warn_marks: read(KEY_BILLING_WARN_MARKS).and_then(|v| parse_warn_marks(&v).ok()),
         low_balance_minor: read(KEY_BILLING_LOW_BALANCE).and_then(|v| parse_low_balance(&v)),
+        booster: Booster {
+            close: read(KEY_BOOSTER_CLOSE)
+                .and_then(|v| parse_booster_programs(&v).ok())
+                .unwrap_or_default(),
+            priority: read(KEY_BOOSTER_PRIORITY)
+                .and_then(|v| BoosterPriority::parse(&v))
+                .unwrap_or_default(),
+            high_performance: read(KEY_BOOSTER_POWER_PLAN).is_some_and(|v| v == "true"),
+        },
     }
 }
 
@@ -216,5 +236,31 @@ mod tests {
         assert!(!valid(KEY_BILLING_WARN_MARKS, "10,10"));
         assert!(valid(KEY_BILLING_LOW_BALANCE, "0"));
         assert!(!valid(KEY_BILLING_LOW_BALANCE, "-1"));
+    }
+
+    #[test]
+    fn the_booster_defaults_until_the_hub_sends_it_and_ignores_bad_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let q = QueueDb::open(&dir.path().join("queue.db")).unwrap();
+        let cold = load(&q).booster;
+        assert_eq!(cold, Booster::default());
+        assert_eq!(cold.priority, BoosterPriority::AboveNormal);
+        assert!(cold.close.is_empty() && !cold.high_performance);
+        q.kv_set(KEY_BOOSTER_CLOSE, "discord.exe, OneDrive.exe", 2)
+            .unwrap();
+        q.kv_set(KEY_BOOSTER_PRIORITY, "high", 2).unwrap();
+        q.kv_set(KEY_BOOSTER_POWER_PLAN, "true", 2).unwrap();
+        let b = load(&q).booster;
+        assert_eq!(b.close, ["discord.exe", "OneDrive.exe"]);
+        assert_eq!(b.priority, BoosterPriority::High);
+        assert!(b.high_performance);
+        q.kv_set(KEY_BOOSTER_CLOSE, "discord", 3).unwrap();
+        q.kv_set(KEY_BOOSTER_PRIORITY, "realtime", 3).unwrap();
+        q.kv_set(KEY_BOOSTER_POWER_PLAN, "yes", 3).unwrap();
+        assert_eq!(load(&q).booster, Booster::default());
+        assert!(valid(KEY_BOOSTER_CLOSE, ""));
+        assert!(!valid(KEY_BOOSTER_CLOSE, "x"));
+        assert!(valid(KEY_BOOSTER_PRIORITY, "normal") && !valid(KEY_BOOSTER_PRIORITY, "idle"));
+        assert!(valid(KEY_BOOSTER_POWER_PLAN, "false") && !valid(KEY_BOOSTER_POWER_PLAN, "1"));
     }
 }

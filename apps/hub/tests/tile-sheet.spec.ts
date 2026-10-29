@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import type {
+  LaunchTimesView,
   SessionStaff,
   SnapshotBill,
   SnapshotDevice,
@@ -52,6 +53,8 @@ type Hub = {
   ack: boolean;
   online: boolean;
   hc: boolean;
+  /** The launch times the Hub answers (Story 6.25). */
+  launchTimes?: LaunchTimesView;
 };
 
 const PIN = "2222";
@@ -147,6 +150,8 @@ async function open(page: Page, token: string, over: Partial<Hub> = {}): Promise
         return json(route, STAFF[token]);
       case "/ui/settings":
         return json(route, []);
+      case "/ui/games/launch-times":
+        return json(route, hub.launchTimes ?? { devices: [] });
       case "/ui/elevate": {
         const body = req.postDataJSON() as { items: unknown[]; pin: string };
         hub.elevations.push(body);
@@ -300,6 +305,35 @@ test("the sheet shows name, group, zone, rate and status", async ({ page }) => {
   await expect(page.getByTestId("sheet-zone")).toHaveText("Main hall");
   await expect(page.getByTestId("sheet-rate")).toHaveText("₹100.00/hr");
   await expect(page.getByTestId("sheet-status")).toContainText(en["ui.status.in_session"]);
+});
+
+test("the sheet shows the PC's last measured launch, and nothing before there is one", async ({
+  page,
+}) => {
+  const pc2 = device(2, {}).device_id;
+  await open(page, "counter-token", {
+    launchTimes: {
+      devices: [
+        {
+          device_id: pc2,
+          name: "PC 2",
+          last: { game_id: "g1", name: "Valorant", launch_ms: 14_200, at: Date.now() },
+          games: [],
+        },
+      ],
+    },
+  });
+  await face(page, "PC 2").focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("sheet-last-launch")).toHaveText(
+    en["hub.sheet.last_launch_value"].replace("{game}", "Valorant").replace("{seconds}", "14.2"),
+  );
+  await page.keyboard.press("Escape");
+  // Another PC that has launched nothing shows no such line.
+  await face(page, "PC 1").focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("sheet-group")).toBeVisible();
+  await expect(page.getByTestId("sheet-last-launch")).toHaveCount(0);
 });
 
 test("an in-session PC shows the clock and the player on its tile and offers no start", async ({

@@ -86,13 +86,30 @@ pub const MAX_GAME_ID_LEN: usize = 64;
 pub struct KioskGameLaunched {
     pub game_id: String,
     pub name: String,
+    /// Story 6.25: the milliseconds from the click to the game's first window, or `null` when it
+    /// showed none within [`LAUNCH_WINDOW_TIMEOUT_MS`](crate::LAUNCH_WINDOW_TIMEOUT_MS) (or
+    /// exited first). The record is sent once this is known, with `issued_at` still the click.
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub launch_ms: Option<u32>,
 }
 
 impl KioskGameLaunched {
     /// `game_id` is 1-64 of `A-Z a-z 0-9 _ -`; `name` is 1-80 characters with no control
-    /// character. A failure is `VALIDATION_FAILED` naming the field.
+    /// character; `launch_ms` is at most the window timeout. A failure is `VALIDATION_FAILED`
+    /// naming the field.
     pub fn validate(&self) -> Result<(), crate::AppError> {
         use crate::{AppError, ErrorCode};
+        if self
+            .launch_ms
+            .is_some_and(|ms| ms > crate::LAUNCH_WINDOW_TIMEOUT_MS)
+        {
+            return Err(AppError::with_field(
+                ErrorCode::ValidationFailed,
+                "launch_ms",
+                "launch_ms must be within the 3 minute window",
+            ));
+        }
         let id_ok = (1..=MAX_GAME_ID_LEN).contains(&self.game_id.len())
             && self
                 .game_id
@@ -148,6 +165,7 @@ mod tests {
         let ok = KioskGameLaunched {
             game_id: "01JABC-def_9".into(),
             name: "Valorant".into(),
+            launch_ms: None,
         };
         assert!(ok.validate().is_ok());
         for (id, name, field) in [
@@ -160,14 +178,39 @@ mod tests {
             let bad = KioskGameLaunched {
                 game_id: id.into(),
                 name: name.into(),
+                launch_ms: None,
             };
             assert_eq!(bad.validate().unwrap_err().field.as_deref(), Some(field));
         }
         let long = KioskGameLaunched {
             game_id: "a".repeat(MAX_GAME_ID_LEN + 1),
             name: "X".into(),
+            launch_ms: None,
         };
         assert!(long.validate().is_err());
+    }
+
+    #[test]
+    fn a_launch_time_is_within_the_three_minute_window_and_optional_on_the_wire() {
+        let timed = |launch_ms| KioskGameLaunched {
+            game_id: "g".into(),
+            name: "X".into(),
+            launch_ms,
+        };
+        assert!(timed(Some(14_200)).validate().is_ok());
+        assert!(
+            timed(Some(crate::LAUNCH_WINDOW_TIMEOUT_MS))
+                .validate()
+                .is_ok()
+        );
+        let late = timed(Some(crate::LAUNCH_WINDOW_TIMEOUT_MS + 1))
+            .validate()
+            .unwrap_err();
+        assert_eq!(late.field.as_deref(), Some("launch_ms"));
+        // A record from before Story 6.25 has no launch time.
+        let old: KioskGameLaunched =
+            serde_json::from_value(serde_json::json!({"game_id": "g", "name": "X"})).unwrap();
+        assert_eq!(old.launch_ms, None);
     }
 
     #[test]

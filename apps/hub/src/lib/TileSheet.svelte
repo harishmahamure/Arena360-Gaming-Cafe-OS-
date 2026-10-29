@@ -24,12 +24,14 @@
     PaymentRow,
     ReasonCode,
     BusinessBuyer,
+    LastLaunch,
     ReceiptChoice,
   } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { goto, invalidate } from "$app/navigation";
   import { onMount, tick } from "svelte";
   import { ackAlerts, checkPcOf } from "./alerts.svelte";
+  import { loadLaunchTimes, seconds } from "./booster";
   import { pushBack } from "./back";
   import {
     SESSION_DEPENDENCY,
@@ -195,6 +197,28 @@
     if (!billing) return;
     const timer = setInterval(() => void invalidate(SNAPSHOT_DEPENDENCY), 10_000);
     return () => clearInterval(timer);
+  });
+  /** The PC's latest measured game launch (Story 6.25), read when the sheet opens and refreshed. */
+  let lastLaunch: LastLaunch | null = $state(null);
+  $effect(() => {
+    if (!isPc) {
+      lastLaunch = null;
+      return;
+    }
+    const deviceId = device.device_id;
+    let current = true;
+    const read = async () => {
+      const result = await loadLaunchTimes();
+      if (current && result.kind === "ok") {
+        lastLaunch = result.devices.find((d) => d.device_id === deviceId)?.last ?? null;
+      }
+    };
+    void read();
+    const timer = setInterval(() => void read(), 15_000);
+    return () => {
+      current = false;
+      clearInterval(timer);
+    };
   });
   const canLookup = $derived(hasPermission(staff, "player.view"));
   /** The open CHECK PC alert: the kiosk could not finish cleaning the PC after a session. */
@@ -523,6 +547,17 @@
         />
       </dd>
     </div>
+    {#if lastLaunch}
+      <div>
+        <dt>{t("hub.sheet.last_launch")}</dt>
+        <dd data-testid="sheet-last-launch" class="tabular-nums">
+          {t("hub.sheet.last_launch_value", {
+            game: lastLaunch.name,
+            seconds: seconds(lastLaunch.launch_ms),
+          })}
+        </dd>
+      </div>
+    {/if}
     {#if session?.state === "paused"}
       <div>
         <dt>{t("hub.pause.paused_for")}</dt>

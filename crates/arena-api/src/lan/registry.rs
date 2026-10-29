@@ -1177,6 +1177,7 @@ mod tests {
                 change("settings", "B/display.hc.01JABCDEFGHJKMNPQRSTVWXYZ0"),
                 change("settings", "B/branch.fulfilment"),
                 change("settings", "B/kiosk.volume_default"),
+                change("settings", "B/kiosk.booster_priority"),
                 change("settings", "B/billing.grace_min"),
                 change("settings", "B/billing.time_up_mode"),
                 change("settings", "B/billing.warn_marks"),
@@ -1195,6 +1196,7 @@ mod tests {
                 "billing.warn_marks",
                 "branch.fulfilment",
                 "display.hc.01JABCDEFGHJKMNPQRSTVWXYZ0",
+                "kiosk.booster_priority",
                 "kiosk.process_allow",
                 "kiosk.process_block",
                 "kiosk.volume_default"

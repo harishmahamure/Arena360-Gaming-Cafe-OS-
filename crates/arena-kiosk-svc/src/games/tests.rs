@@ -147,6 +147,17 @@ fn queued(t: &T) -> Vec<(IntentKind, Option<IntentPayload>)> {
         .collect()
 }
 
+/// Waits until `n` intents wait for the Hub (the launch record follows the game's first window).
+async fn wait_queued(t: &T, n: usize) {
+    for _ in 0..300 {
+        if queued(t).len() >= n {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("{} intents queued, wanted {n}", queued(t).len());
+}
+
 async fn go(t: &T, entries: &[KioskLibraryEntry], id: &str) -> serde_json::Value {
     launch_in(&t.ctx, ME, entries.to_vec(), id.into())
         .await
@@ -271,6 +282,8 @@ async fn a_launch_starts_the_game_and_queues_game_launched_for_the_hub() {
     assert_eq!(t.host.started().len(), 1);
     assert_eq!(t.host.started()[0].exe.as_deref(), Some(r"C:\Games\v.exe"));
     assert!(t.ctx.games.any_running());
+    t.host.show_window(t.host.alive_pids()[0]);
+    wait_queued(&t, 1).await;
 
     let q = queued(&t);
     assert_eq!(q.len(), 1);
@@ -280,6 +293,11 @@ async fn a_launch_starts_the_game_and_queues_game_launched_for_the_hub() {
     };
     assert_eq!((p.game_id.as_str(), p.name.as_str()), ("G1", "Valorant"));
     p.validate().unwrap();
+    assert!(
+        p.launch_ms.is_some_and(|ms| ms < 5_000),
+        "{:?}",
+        p.launch_ms
+    );
 }
 
 #[tokio::test]
@@ -288,6 +306,8 @@ async fn a_second_launch_brings_the_running_game_forward_instead_of_starting_it_
     let t = t(&entries);
     go(&t, &entries, "G1").await;
     let pid = t.host.alive_pids()[0];
+    t.host.show_window(pid);
+    wait_queued(&t, 1).await;
 
     let out = go(&t, &entries, "G1").await;
     assert_eq!(out, json!({"outcome": "already_running", "pid": pid}));
@@ -399,4 +419,261 @@ async fn a_request_without_an_id_or_a_host_is_refused() {
     let (_dir, ctx) = bare(&[]);
     let err = launch(&ctx, json!({"id": "G1"})).await.unwrap_err();
     assert_eq!(err.code, ErrorCode::Unsupported);
+}
+
+// ---- Story 6.25: the booster and the launch time ----
+
+use arena_proto::BoosterPriority;
+
+use crate::procs::{CloseReport, CloseScope};
+
+fn set_setting(t: &T, key: &str, value: &str) {
+    t.ctx.queue.lock().unwrap().kv_set(key, value, 1).unwrap();
+}
+
+/// The launch times of the `game.launched` records waiting for the Hub, oldest first.
+fn launches(t: &T) -> Vec<Option<u32>> {
+    queued(t)
+        .into_iter()
+        .filter_map(|(_, p)| match p {
+            Some(IntentPayload::KioskGameLaunched(g)) => Some(g.launch_ms),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The codes of the `kiosk.log` events waiting for the Hub, oldest first.
+fn log_codes(t: &T) -> Vec<String> {
+    queued(t)
+        .into_iter()
+        .filter_map(|(_, p)| match p {
+            Some(IntentPayload::KioskLog(l)) => Some(l.code),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Makes the process enforcer's closer record the image names it is asked to close, and how
+/// many games had started when it was asked.
+/// The image names a closer was asked for, and how many games had started by then.
+type Closed = Arc<Mutex<Vec<(Vec<String>, usize)>>>;
+
+fn recording_closer(t: &T, failed: usize) -> Closed {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (log, host) = (Arc::clone(&seen), Arc::clone(&t.host));
+    *t.ctx.closer.lock().unwrap() = Some(Arc::new(move |scope| {
+        let CloseScope::Images(names) = scope else {
+            panic!("the booster closes by image name");
+        };
+        log.lock().unwrap().push((
+            names.iter().map(|n| (*n).to_owned()).collect(),
+            host.started().len(),
+        ));
+        Ok(CloseReport { closed: 1, failed })
+    }));
+    seen
+}
+
+#[tokio::test]
+async fn the_listed_programs_close_before_the_game_starts_and_a_stubborn_one_does_not_stop_it() {
+    let entries = vec![entry("G1", "Valorant", r"C:\Games\v.exe")];
+    let t = t(&entries);
+    set_setting(&t, "kiosk.booster_close", "discord.exe, OneDrive.exe");
+    let seen = recording_closer(&t, 0);
+    assert_eq!(go(&t, &entries, "G1").await["outcome"], "started");
+    assert_eq!(
+        *seen.lock().unwrap(),
+        [(vec!["discord.exe".to_owned(), "OneDrive.exe".to_owned()], 0)],
+        "closed first, with nothing started yet"
+    );
+    assert!(log_codes(&t).is_empty());
+
+    // A program that refuses to close: logged for the Hub, the game still starts.
+    let t = self::t(&entries);
+    set_setting(&t, "kiosk.booster_close", "discord.exe");
+    recording_closer(&t, 2);
+    assert_eq!(go(&t, &entries, "G1").await["outcome"], "started");
+    assert_eq!(t.host.started().len(), 1);
+    assert_eq!(log_codes(&t), [BOOSTER_CODE]);
+
+    // No process control running: logged too, the game still starts.
+    let t = self::t(&entries);
+    set_setting(&t, "kiosk.booster_close", "discord.exe");
+    assert_eq!(go(&t, &entries, "G1").await["outcome"], "started");
+    assert_eq!(log_codes(&t), [BOOSTER_CODE]);
+
+    // An empty list closes nothing.
+    let t = self::t(&entries);
+    let seen = recording_closer(&t, 0);
+    go(&t, &entries, "G1").await;
+    assert!(seen.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn the_game_gets_the_branch_priority_above_normal_by_default() {
+    let entries = vec![entry("G1", "Valorant", r"C:\Games\v.exe")];
+    let t = t(&entries);
+    go(&t, &entries, "G1").await;
+    let pid = t.host.alive_pids()[0];
+    assert_eq!(t.host.priorities(), [(pid, BoosterPriority::AboveNormal)]);
+
+    let t = self::t(&entries);
+    set_setting(&t, "kiosk.booster_priority", "high");
+    go(&t, &entries, "G1").await;
+    assert_eq!(t.host.priorities()[0].1, BoosterPriority::High);
+
+    // Normal is the priority a process starts with: nothing to set.
+    let t = self::t(&entries);
+    set_setting(&t, "kiosk.booster_priority", "normal");
+    go(&t, &entries, "G1").await;
+    assert!(t.host.priorities().is_empty());
+
+    // A priority that will not change is logged and the game keeps running.
+    let t = self::t(&entries);
+    t.host
+        .fail_priority_with(Some("SetPriorityClass: access denied"));
+    assert_eq!(go(&t, &entries, "G1").await["outcome"], "started");
+    assert!(t.ctx.games.any_running());
+    assert_eq!(log_codes(&t), [BOOSTER_CODE]);
+}
+
+#[tokio::test]
+async fn the_power_plan_is_raised_for_play_and_put_back_at_session_end() {
+    let entries = vec![
+        entry("G1", "One", r"C:\Games\1.exe"),
+        entry("G2", "Two", r"C:\Games\2.exe"),
+    ];
+    let t = t(&entries);
+    // Off by default: the plan is left alone and nothing is remembered.
+    go(&t, &entries, "G1").await;
+    assert!(t.host.plan_sets().is_empty());
+    assert_eq!(kv_get(&t.ctx, POWER_RESTORE_KEY), None);
+    assert_eq!(restore_power_plan(&t.ctx), Ok(()));
+
+    let t = self::t(&entries);
+    set_setting(&t, "kiosk.booster_power_plan", "true");
+    go(&t, &entries, "G1").await;
+    assert_eq!(t.host.plan(), HIGH_PERFORMANCE_PLAN);
+    assert_eq!(
+        kv_get(&t.ctx, POWER_RESTORE_KEY).as_deref(),
+        Some(fake::BALANCED_PLAN)
+    );
+    // A second game in the same session keeps the first plan as the one to go back to.
+    go(&t, &entries, "G2").await;
+    assert_eq!(t.host.plan_sets(), [HIGH_PERFORMANCE_PLAN]);
+    assert_eq!(
+        kv_get(&t.ctx, POWER_RESTORE_KEY).as_deref(),
+        Some(fake::BALANCED_PLAN)
+    );
+
+    // The session-end cleanup's step puts the original back, once.
+    let step = crate::cleanup::PowerPlan;
+    let host = crate::cleanup::fake::FakeHost::default();
+    let env = crate::cleanup::StepEnv {
+        ctx: &t.ctx,
+        host: &host,
+    };
+    assert_eq!(crate::cleanup::CleanupStep::name(&step), "power_plan");
+    crate::cleanup::CleanupStep::run(&step, &env).unwrap();
+    assert_eq!(t.host.plan(), fake::BALANCED_PLAN);
+    assert_eq!(kv_get(&t.ctx, POWER_RESTORE_KEY), None);
+    crate::cleanup::CleanupStep::run(&step, &env).unwrap();
+    assert_eq!(t.host.plan_sets().len(), 2, "nothing left to restore");
+}
+
+#[tokio::test]
+async fn a_plan_that_cannot_change_is_logged_remembers_nothing_and_a_high_plan_is_left_alone() {
+    let entries = vec![entry("G1", "One", r"C:\Games\1.exe")];
+    let t = t(&entries);
+    set_setting(&t, "kiosk.booster_power_plan", "true");
+    t.host.fail_plan_with(Some("powercfg failed"));
+    assert_eq!(go(&t, &entries, "G1").await["outcome"], "started");
+    assert_eq!(log_codes(&t), [BOOSTER_CODE]);
+    assert_eq!(kv_get(&t.ctx, POWER_RESTORE_KEY), None);
+
+    // Already on High performance: nothing to change, nothing to restore.
+    let t = self::t(&entries);
+    set_setting(&t, "kiosk.booster_power_plan", "true");
+    t.host.set_plan(&HIGH_PERFORMANCE_PLAN.to_uppercase());
+    go(&t, &entries, "G1").await;
+    assert!(t.host.plan_sets().is_empty());
+    assert_eq!(kv_get(&t.ctx, POWER_RESTORE_KEY), None);
+
+    // A restore that fails keeps the memory for the next cleanup.
+    let t = self::t(&entries);
+    set_setting(&t, "kiosk.booster_power_plan", "true");
+    go(&t, &entries, "G1").await;
+    t.host.fail_plan_with(Some("powercfg failed"));
+    assert!(restore_power_plan(&t.ctx).is_err());
+    assert_eq!(
+        kv_get(&t.ctx, POWER_RESTORE_KEY).as_deref(),
+        Some(fake::BALANCED_PLAN)
+    );
+    t.host.fail_plan_with(None);
+    assert_eq!(restore_power_plan(&t.ctx), Ok(()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_launch_time_is_the_wait_for_the_first_window_and_none_after_three_minutes_or_an_exit()
+{
+    let host = fake::FakeGames::default();
+    let spec = LaunchSpec {
+        exe: Some(r"C:\g.exe".into()),
+        args: String::new(),
+        uri: None,
+    };
+    let pid = host.start(&spec).unwrap();
+    let poll = Duration::from_millis(250);
+    let timeout = Duration::from_millis(u64::from(LAUNCH_WINDOW_TIMEOUT_MS));
+
+    // The window is already up: measured at once.
+    host.show_window(pid);
+    let now = tokio::time::Instant::now();
+    assert_eq!(
+        first_window_ms(&host, pid, now, poll, timeout).await,
+        Some(0)
+    );
+
+    // The click was 14.2 s ago and the window shows now.
+    let clicked = tokio::time::Instant::now();
+    tokio::time::advance(Duration::from_millis(14_200)).await;
+    assert_eq!(
+        first_window_ms(&host, pid, clicked, poll, timeout).await,
+        Some(14_200)
+    );
+
+    // No window ever: nothing after the timeout.
+    let quiet = host.start(&spec).unwrap();
+    let clicked = tokio::time::Instant::now();
+    assert_eq!(
+        first_window_ms(&host, quiet, clicked, poll, timeout).await,
+        None
+    );
+    assert!(clicked.elapsed() >= timeout);
+
+    // Exits first: nothing, without waiting out the timeout.
+    let gone = host.start(&spec).unwrap();
+    host.exit(gone);
+    let clicked = tokio::time::Instant::now();
+    assert_eq!(
+        first_window_ms(&host, gone, clicked, poll, timeout).await,
+        None
+    );
+    assert!(clicked.elapsed() < timeout);
+}
+
+#[tokio::test]
+async fn a_game_that_shows_no_window_is_recorded_with_no_launch_time_and_no_error() {
+    let entries = vec![entry("G1", "Valorant", r"C:\Games\v.exe")];
+    let t = t(&entries);
+    assert_eq!(go(&t, &entries, "G1").await["outcome"], "started");
+    // Nothing is queued while the game is still starting up.
+    assert!(launches(&t).is_empty());
+    t.host.exit(t.host.alive_pids()[0]);
+    wait_queued(&t, 1).await;
+    assert_eq!(launches(&t), [None]);
+    assert!(
+        log_codes(&t).is_empty(),
+        "no error for a game with no window"
+    );
 }

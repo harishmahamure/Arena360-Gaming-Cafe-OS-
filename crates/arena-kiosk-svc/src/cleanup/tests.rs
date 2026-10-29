@@ -272,7 +272,8 @@ fn the_standard_pipeline_names_its_steps_in_order() {
             "credentials",
             "clipboard",
             "temp_files",
-            "volume"
+            "volume",
+            "power_plan"
         ]
     );
 }

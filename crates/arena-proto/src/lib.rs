@@ -11,6 +11,7 @@ mod alert;
 mod attract;
 mod audit;
 mod billing;
+mod booster;
 mod catalog;
 mod commands;
 mod connectivity;
@@ -106,6 +107,13 @@ pub use billing::{
     KEY_BILLING_TIME_UP_MODE, KEY_BILLING_WARN_MARKS, KIOSK_BILLING_KEYS, TIME_UP_MODES,
     TimeUpMode, WarnMarksProblem, low_balance_from, parse_low_balance, parse_warn_marks,
     warn_marks_from,
+};
+pub use booster::{
+    BOOSTER_PRIORITIES, BOOSTER_PROGRAM_NAME_MAX, BOOSTER_PROGRAMS_MAX, Booster, BoosterPriority,
+    BoosterProgramsProblem, DEFAULT_BOOSTER_CLOSE, DEFAULT_BOOSTER_POWER_PLAN,
+    DEFAULT_BOOSTER_PRIORITY, DeviceLaunchTimes, GameLaunchMedian, KEY_BOOSTER_CLOSE,
+    KEY_BOOSTER_POWER_PLAN, KEY_BOOSTER_PRIORITY, KIOSK_BOOSTER_KEYS, LAUNCH_MEDIAN_DAYS,
+    LAUNCH_WINDOW_TIMEOUT_MS, LastLaunch, LaunchTimesView, median_ms, parse_booster_programs,
 };
 pub use catalog::{
     BundleComponent, CatalogEntry, ComponentView, IMAGE_PREFIX, MAX_BARCODE_CHARS,

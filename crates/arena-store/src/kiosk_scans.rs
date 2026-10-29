@@ -149,6 +149,42 @@ pub fn list_kiosk_scans(conn: &Connection) -> Result<Vec<KioskScanRow>, AppError
     rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
 }
 
+/// One `game_launched` device event of a live paired PC (Story 6.25): the PC, when the player
+/// clicked, and the JSON detail (`game_id`, `name`, `launch_ms`, ...).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GameLaunchRow {
+    pub device_id: String,
+    pub label: String,
+    pub at: i64,
+    pub detail: String,
+}
+
+/// Every `game_launched` event at or after `since` on a live paired PC, oldest first.
+pub fn list_game_launches(conn: &Connection, since: i64) -> Result<Vec<GameLaunchRow>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT e.device_id, COALESCE(m.label, d.label), e.at, e.detail
+             FROM device_events e
+             JOIN devices d ON d.device_id = e.device_id
+             LEFT JOIN devices_meta m ON m.device_id = d.device_id
+             WHERE e.code = 'game_launched' AND e.at >= ?1
+               AND d.class = 'paired' AND d.revoked_at IS NULL AND m.deleted_at IS NULL
+             ORDER BY e.at, e.event_id",
+        )
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map([since], |r| {
+            Ok(GameLaunchRow {
+                device_id: r.get(0)?,
+                label: r.get(1)?,
+                at: r.get(2)?,
+                detail: r.get(3)?,
+            })
+        })
+        .map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,5 +277,41 @@ mod tests {
         assert_eq!(list[1].entry_count, Some(3));
         assert_eq!(list[1].skipped, Some(3));
         assert!(list[1].launchers.as_deref().unwrap().contains("steam"));
+    }
+
+    #[test]
+    fn launches_are_the_game_launched_events_of_live_paired_pcs_since_a_time() {
+        let c = conn();
+        c.execute_batch(
+            "PRAGMA foreign_keys = OFF; CREATE TABLE branch (branch_id TEXT PRIMARY KEY);",
+        )
+        .unwrap();
+        c.execute_batch(include_str!("../migrations/0009_device_events.sql"))
+            .unwrap();
+        device(&c, "P1", "paired", "PC 1", None);
+        device(&c, "P2", "paired", "PC 2", Some(5));
+        device(&c, "H", "hub", "Hub", None);
+        let event = |id: &str, dev: &str, at: i64, code: &str| {
+            c.execute(
+                "INSERT INTO device_events VALUES (?1, 'B', ?2, ?3, 'info', ?4, '{}', 1, 0, 0)",
+                params![id, dev, at, code],
+            )
+            .unwrap();
+        };
+        event("E1", "P1", 100, "game_launched");
+        event("E2", "P1", 50, "game_launched");
+        event("E3", "P1", 120, "cleanup_failed");
+        event("E4", "P2", 120, "game_launched");
+        event("E5", "H", 120, "game_launched");
+        let rows = list_game_launches(&c, 60).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            (
+                rows[0].device_id.as_str(),
+                rows[0].label.as_str(),
+                rows[0].at
+            ),
+            ("P1", "PC 1", 100)
+        );
     }
 }

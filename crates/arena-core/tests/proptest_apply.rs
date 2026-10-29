@@ -2328,6 +2328,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     "01JGAMEAAAAAAAAAAAAAAAAAAA".into()
                 },
                 name: "Game".into(),
+                launch_ms: None,
             };
             let mut intent = hub.intent(IntentPayload::KioskGameLaunched(launched), None);
             intent.actor = Actor {

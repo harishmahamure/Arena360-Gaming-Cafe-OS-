@@ -40,6 +40,25 @@ pub(crate) async fn scans(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -
     }
 }
 
+/// `GET /ui/games/launch-times` (same access as `GET /ui/library`): for every live paired PC that
+/// launched a game in the last 7 days, its latest measured launch and each game's median
+/// measured launch time (Story 6.25).
+pub(crate) async fn launch_times(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+    let Some(token) = bearer(&headers).map(str::to_owned) else {
+        return fail(auth_failed());
+    };
+    if let Err(e) = auth.acting_session(&token).await {
+        return fail(e);
+    }
+    let reader = Arc::clone(auth.reader());
+    let now = auth.clock().now_ms();
+    match tokio::task::spawn_blocking(move || reader.game_launch_times(now)).await {
+        Ok(Ok(view)) => Json(view).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
 /// `GET /ui/library`: every live entry, enabled or not, ordered by name. For an entry linked to
 /// the catalogue the name, launcher and age rating are the cached catalogue's (an entry whose
 /// game the cache no longer holds shows what it was saved with).

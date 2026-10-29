@@ -1632,6 +1632,17 @@ impl SnapshotReader {
         })
     }
 
+    /// The launch times of the last [`arena_proto::LAUNCH_MEDIAN_DAYS`] days before `now_ms`, per
+    /// live paired PC (Story 6.25).
+    pub fn game_launch_times(&self, now_ms: i64) -> Result<arena_proto::LaunchTimesView, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        let since = now_ms - arena_proto::LAUNCH_MEDIAN_DAYS * 24 * 60 * 60 * 1000;
+        store.read_consistent(|s| Ok(crate::launch_times::build(s.game_launches(since)?)))
+    }
+
     /// Every live paired PC with its last installed-software scan, ordered by name (Story 6.4).
     /// The scan fields are `None` for a PC that was never scanned.
     pub fn kiosk_scans(&self) -> Result<Vec<arena_proto::DeviceScanView>, AppError> {

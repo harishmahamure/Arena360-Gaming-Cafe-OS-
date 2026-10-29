@@ -22,6 +22,10 @@ use arena_proto::{
     KEY_BILLING_LOW_BALANCE, KEY_BILLING_WARN_MARKS,
 };
 use arena_proto::{
+    BOOSTER_PRIORITIES, DEFAULT_BOOSTER_CLOSE, DEFAULT_BOOSTER_POWER_PLAN,
+    DEFAULT_BOOSTER_PRIORITY, KEY_BOOSTER_CLOSE, KEY_BOOSTER_POWER_PLAN, KEY_BOOSTER_PRIORITY,
+};
+use arena_proto::{
     DEFAULT_INVENTORY_TAKE_STOCK_AT, DEFAULT_STOCK_EXPIRY_WARN_DAYS, KEY_INVENTORY_TAKE_STOCK_AT,
     KEY_STOCK_EXPIRY_WARN_DAYS, STOCK_EXPIRY_WARN_RANGE, TAKE_STOCK_AT_MODES,
 };
@@ -157,6 +161,10 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
         DEFAULT_SHIFT_VARIANCE_THRESHOLD,
     ),
     (KEY_MEDIA_CAP_GB, DEFAULT_MEDIA_CAP_GB),
+    // Story 6.25: the game booster, read by every paired PC.
+    (KEY_BOOSTER_CLOSE, DEFAULT_BOOSTER_CLOSE),
+    (KEY_BOOSTER_PRIORITY, DEFAULT_BOOSTER_PRIORITY),
+    (KEY_BOOSTER_POWER_PLAN, DEFAULT_BOOSTER_POWER_PLAN),
 ];
 
 pub const SYSTEM_MANAGED_KEYS: [&str; 7] = [
@@ -169,7 +177,10 @@ pub const SYSTEM_MANAGED_KEYS: [&str; 7] = [
     KEY_TEST_SESSION,
 ];
 
-pub const KEYED_FIELD_KEYS: [&str; 32] = [
+pub const KEYED_FIELD_KEYS: [&str; 35] = [
+    KEY_BOOSTER_CLOSE,
+    KEY_BOOSTER_PRIORITY,
+    KEY_BOOSTER_POWER_PLAN,
     KEY_KIOSK_LOGO,
     KEY_MEDIA_CAP_GB,
     KEY_RECEIPT_ADDRESS,
@@ -252,6 +263,8 @@ pub enum SettingRule {
     Tax,
     BranchCode,
     BranchName,
+    /// `kiosk.booster_close`: executable names to close at launch (`arena_proto::parse_booster_programs`).
+    BoosterPrograms,
     /// `billing.warn_marks`: one to three distinct minutes (`arena_proto::parse_warn_marks`).
     WarnMarks,
     /// Up to `max_lines` receipt text lines (`arena_proto::valid_receipt_lines`).
@@ -406,6 +419,9 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
             max: MEDIA_CAP_GB_RANGE.1,
         },
     ),
+    (KEY_BOOSTER_CLOSE, SettingRule::BoosterPrograms),
+    (KEY_BOOSTER_PRIORITY, SettingRule::OneOf(BOOSTER_PRIORITIES)),
+    (KEY_BOOSTER_POWER_PLAN, SettingRule::Bool),
     (KEY_BRANCH_CODE, SettingRule::BranchCode),
     (KEY_BRANCH_NAME, SettingRule::BranchName),
     (KEY_BRANCH_CODE_LOCKED_AT, SettingRule::Text),
@@ -467,6 +483,7 @@ impl SettingRule {
             Self::Tax => TaxSettings::parse(value).is_some_and(|t| t.check().is_ok()),
             Self::ReceiptLines { max_lines } => valid_receipt_lines(value, max_lines),
             Self::WarnMarks => arena_proto::parse_warn_marks(value).is_ok(),
+            Self::BoosterPrograms => arena_proto::parse_booster_programs(value).is_ok(),
             Self::BranchCode => arena_proto::valid_branch_code(value),
             Self::BranchName => {
                 let n = value.chars().count();
@@ -770,6 +787,29 @@ mod tests {
         for k in arena_proto::NOTIFY_KEYS {
             assert!(rule(k).accepts("true") && !rule(k).accepts("on"), "{k}");
             assert!(DEFAULT_SETTINGS.contains(&(k, "false")), "{k}");
+            assert!(KEYED_FIELD_KEYS.contains(&k), "{k}");
+        }
+    }
+
+    #[test]
+    fn booster_rules() {
+        let rule = |k| setting_rule(k).unwrap();
+        assert!(rule(KEY_BOOSTER_CLOSE).accepts(""));
+        assert!(rule(KEY_BOOSTER_CLOSE).accepts("discord.exe, OneDrive.exe"));
+        assert!(!rule(KEY_BOOSTER_CLOSE).accepts("discord"));
+        assert!(!rule(KEY_BOOSTER_CLOSE).accepts(r"C:\x\discord.exe"));
+        for word in ["normal", "above_normal", "high"] {
+            assert!(rule(KEY_BOOSTER_PRIORITY).accepts(word), "{word}");
+        }
+        assert!(!rule(KEY_BOOSTER_PRIORITY).accepts("realtime"));
+        assert!(rule(KEY_BOOSTER_POWER_PLAN).accepts("true"));
+        assert!(!rule(KEY_BOOSTER_POWER_PLAN).accepts("yes"));
+        for (k, v) in [
+            (KEY_BOOSTER_CLOSE, ""),
+            (KEY_BOOSTER_PRIORITY, "above_normal"),
+            (KEY_BOOSTER_POWER_PLAN, "false"),
+        ] {
+            assert!(DEFAULT_SETTINGS.contains(&(k, v)), "{k}");
             assert!(KEYED_FIELD_KEYS.contains(&k), "{k}");
         }
     }

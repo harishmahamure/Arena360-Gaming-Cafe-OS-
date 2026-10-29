@@ -117,8 +117,9 @@ pub use invoices::{
     set_invoice_no, set_order_buyer, take_sequence,
 };
 pub use kiosk_scans::{
-    KioskScanRow, KioskScanSummary, KioskScanWrite, find_kiosk_scan, insert_kiosk_scan,
-    list_kiosk_scan_summaries, list_kiosk_scans, replace_kiosk_scan,
+    GameLaunchRow, KioskScanRow, KioskScanSummary, KioskScanWrite, find_kiosk_scan,
+    insert_kiosk_scan, list_game_launches, list_kiosk_scan_summaries, list_kiosk_scans,
+    replace_kiosk_scan,
 };
 pub use library::{
     LibraryRow, LibraryWrite, find_library_entry, insert_library_entry, list_library_entries,
@@ -1521,6 +1522,15 @@ impl Store {
             return Ok(Vec::new());
         }
         list_kiosk_scan_summaries(&self.conn)
+    }
+
+    /// The `game_launched` events at or after `since` on live paired PCs, oldest first (empty
+    /// before migration 9).
+    pub fn game_launches(&self, since: i64) -> Result<Vec<GameLaunchRow>, AppError> {
+        if !self.table_exists("device_events")? {
+            return Ok(Vec::new());
+        }
+        list_game_launches(&self.conn, since)
     }
 
     /// Every device's stored scan, ordered by device id (empty before migration 63).

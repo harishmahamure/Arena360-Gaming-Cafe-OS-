@@ -122,6 +122,11 @@ pub(super) fn validate(s: &SettingsSet, row: Option<&SettingRef>) -> Result<(), 
                     )
                 });
         }
+        SettingRule::BoosterPrograms => {
+            return arena_proto::parse_booster_programs(&s.value)
+                .map(|_| ())
+                .map_err(|p| invalid(field, p.message()));
+        }
         SettingRule::PrinterSelected => {
             return PrinterSelected::parse(&s.value)
                 .map(|_| ())

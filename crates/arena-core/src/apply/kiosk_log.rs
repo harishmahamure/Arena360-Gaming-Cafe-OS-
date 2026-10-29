@@ -10,7 +10,7 @@
 //! is already open.
 //!
 //! `game.launched` (Story 6.23) writes an `info` row `game_launched` whose detail is the JSON
-//! `{game_id, name, session_id, player_id}`: the session and player are the ones live on the
+//! `{game_id, name, session_id, player_id, launch_ms}`: the session and player are the ones live on the
 //! device when the Hub applies it (a guest has `player_id: null`, no session at all gives both
 //! `null`).
 
@@ -107,6 +107,7 @@ pub(super) fn mutate(
                 "name": g.name,
                 "session_id": session_id,
                 "player_id": player_id.flatten(),
+                "launch_ms": g.launch_ms,
             })
             .to_string();
             ("info", GAME_LAUNCHED_CODE, detail.as_str())

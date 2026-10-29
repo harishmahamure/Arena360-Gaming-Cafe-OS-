@@ -9,6 +9,7 @@ pub const USAGE: &str = "usage:
   arena-kiosk-svc service install|uninstall|run          (Windows)
   arena-kiosk-svc lockdown apply|restore|reset-shell [--player-user <name>] [--data-dir <path>]   (Windows, elevated)
   arena-kiosk-svc cleanup-helper --clipboard | --volume <0-100>   (Windows; started by the service in the player's session)
+  arena-kiosk-svc window-watch <pid>   (Windows; started by the service in the player's session)
   arena-kiosk-svc dev provision --hub <host:7400> --fingerprint <hex> --token <token>
                   [--player-user <name>] [--data-dir <path>]   (dev-fixtures builds)
   arena-kiosk-svc --help | --version";
@@ -19,6 +20,7 @@ pub const USAGE: &str = "usage:
   arena-kiosk-svc service install|uninstall|run          (Windows)
   arena-kiosk-svc lockdown apply|restore|reset-shell [--player-user <name>] [--data-dir <path>]   (Windows, elevated)
   arena-kiosk-svc cleanup-helper --clipboard | --volume <0-100>   (Windows; started by the service in the player's session)
+  arena-kiosk-svc window-watch <pid>   (Windows; started by the service in the player's session)
   arena-kiosk-svc --help | --version";
 
 /// A parsed command line.
@@ -45,6 +47,9 @@ pub enum Command {
     /// `cleanup-helper`: the part of the session-end cleanup that must run in the player's
     /// session (Story 6.11). The service starts it there; it exits 0 on success.
     CleanupHelper(HelperTask),
+    /// `window-watch <pid>`: waits in the player's session until process `pid` shows a window
+    /// (Story 6.25); exits 0 when it did, 2 when the process ended or time ran out.
+    WindowWatch(u32),
     /// `dev provision`.
     #[cfg(feature = "dev-fixtures")]
     DevProvision {
@@ -135,6 +140,15 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                 .map(|p| Command::CleanupHelper(HelperTask::Volume(p)))
                 .ok_or_else(|| "--volume takes a whole number from 0 to 100".into()),
             _ => Err("cleanup-helper takes --clipboard, --volume <0-100>, --steam-login or --credentials".into()),
+        },
+        "window-watch" => match (args.get(1).and_then(|a| a.to_str()), args.get(2)) {
+            (Some(pid), None) if !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit()) => pid
+                .parse::<u32>()
+                .ok()
+                .filter(|p| *p > 0)
+                .map(Command::WindowWatch)
+                .ok_or_else(|| "window-watch takes a process id".into()),
+            _ => Err("window-watch takes a process id".into()),
         },
         #[cfg(feature = "dev-fixtures")]
         "dev" => {
@@ -314,12 +328,32 @@ mod tests {
             &["cleanup-helper", "--volume", "-1"],
             &["cleanup-helper", "--volume", "5", "x"],
             &["cleanup-helper", "--clipboard", "x"],
+            &["window-watch"],
+            &["window-watch", "0"],
+            &["window-watch", "x"],
+            &["window-watch", "1", "2"],
             &["bogus"],
         ] {
             assert!(p(bad).is_err(), "{bad:?}");
         }
     }
 
+    #[test]
+    fn window_watch_takes_one_process_id() {
+        assert_eq!(
+            p(&["window-watch", "4242"]).unwrap(),
+            Command::WindowWatch(4242)
+        );
+        for bad in [
+            &["window-watch"][..],
+            &["window-watch", "0"],
+            &["window-watch", "-1"],
+            &["window-watch", "x"],
+            &["window-watch", "1", "2"],
+        ] {
+            assert!(p(bad).is_err(), "{bad:?}");
+        }
+    }
     #[cfg(not(feature = "dev-fixtures"))]
     #[test]
     fn a_release_build_has_no_dev_provision_command() {

@@ -4231,13 +4231,16 @@ mod process_lists {
         let applied = f.writer.seed_defaults().await.unwrap().unwrap();
         let mut ids: Vec<&str> = applied.changes.iter().map(|c| c.row_id.as_str()).collect();
         ids.sort_unstable();
-        assert_eq!(ids.len(), 6);
-        assert!(ids[0].ends_with("/kiosk.library"), "{ids:?}");
-        assert!(ids[1].ends_with("/kiosk.logo"), "{ids:?}");
-        assert!(ids[2].ends_with("/kiosk.process_allow"), "{ids:?}");
-        assert!(ids[3].ends_with("/kiosk.process_block"), "{ids:?}");
-        assert!(ids[4].ends_with("/kiosk.process_mode"), "{ids:?}");
-        assert!(ids[5].ends_with("/kiosk.volume_default"), "{ids:?}");
+        assert_eq!(ids.len(), 9);
+        assert!(ids[0].ends_with("/kiosk.booster_close"), "{ids:?}");
+        assert!(ids[1].ends_with("/kiosk.booster_power_plan"), "{ids:?}");
+        assert!(ids[2].ends_with("/kiosk.booster_priority"), "{ids:?}");
+        assert!(ids[3].ends_with("/kiosk.library"), "{ids:?}");
+        assert!(ids[4].ends_with("/kiosk.logo"), "{ids:?}");
+        assert!(ids[5].ends_with("/kiosk.process_allow"), "{ids:?}");
+        assert!(ids[6].ends_with("/kiosk.process_block"), "{ids:?}");
+        assert!(ids[7].ends_with("/kiosk.process_mode"), "{ids:?}");
+        assert!(ids[8].ends_with("/kiosk.volume_default"), "{ids:?}");
         assert_eq!(
             setting(&reopen(&f), "kiosk.process_block")["value"],
             RowValue::Text(DEFAULT_PROCESS_BLOCK.into())
@@ -4545,6 +4548,7 @@ mod process_lists {
             IntentPayload::KioskGameLaunched(arena_proto::KioskGameLaunched {
                 game_id: game_id.into(),
                 name: name.into(),
+                launch_ms: None,
             }),
         );
         i.actor.id = device_id.into();
@@ -4578,6 +4582,7 @@ mod process_lists {
                 "name": "Valorant",
                 "session_id": null,
                 "player_id": null,
+                "launch_ms": null,
             })
         );
         let change = store.changes().unwrap().pop().unwrap();
@@ -4611,6 +4616,78 @@ mod process_lists {
             Some("base_rev")
         );
         assert_eq!(reopen(&f).rows(Table::DeviceEvents).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_game_launch_carries_its_launch_time_within_the_three_minute_window() {
+        let mut f = primary();
+        let (id, _) = with_device(&mut f).await;
+        let mut timed = game_launched(&id, "01JGAME", "Valorant");
+        let IntentPayload::KioskGameLaunched(p) = &mut timed.payload else {
+            unreachable!()
+        };
+        p.launch_ms = Some(14_200);
+        f.writer.submit_intent(timed).await.unwrap();
+        let rows = reopen(&f).rows(Table::DeviceEvents).unwrap();
+        let RowValue::Text(detail) = &rows[0]["detail"] else {
+            panic!("text detail")
+        };
+        let detail: serde_json::Value = serde_json::from_str(detail).unwrap();
+        assert_eq!(detail["launch_ms"], serde_json::json!(14_200));
+
+        let mut late = game_launched(&id, "01JGAME", "Valorant");
+        let IntentPayload::KioskGameLaunched(p) = &mut late.payload else {
+            unreachable!()
+        };
+        p.launch_ms = Some(arena_proto::LAUNCH_WINDOW_TIMEOUT_MS + 1);
+        assert_eq!(
+            expect_err(&f, late).await.field.as_deref(),
+            Some("launch_ms")
+        );
+        assert_eq!(reopen(&f).rows(Table::DeviceEvents).unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_booster_settings_exist_with_their_defaults_and_refuse_bad_values() {
+        let f = bootstrapped().await;
+        let s = reopen(&f);
+        for (key, value) in [
+            ("kiosk.booster_close", ""),
+            ("kiosk.booster_priority", "above_normal"),
+            ("kiosk.booster_power_plan", "false"),
+        ] {
+            assert_eq!(setting(&s, key)["value"], RowValue::Text(value.into()));
+        }
+        f.writer
+            .submit_intent(set(
+                "kiosk.booster_close",
+                "discord.exe, chrome.exe",
+                Some(1),
+            ))
+            .await
+            .unwrap();
+        f.writer
+            .submit_intent(set("kiosk.booster_priority", "high", Some(1)))
+            .await
+            .unwrap();
+        f.writer
+            .submit_intent(set("kiosk.booster_power_plan", "true", Some(1)))
+            .await
+            .unwrap();
+        for (key, value) in [
+            ("kiosk.booster_close", "discord"),
+            ("kiosk.booster_close", "a.exe,a.exe"),
+            ("kiosk.booster_priority", "realtime"),
+            ("kiosk.booster_power_plan", "yes"),
+        ] {
+            let err = expect_err(&f, set(key, value, Some(2))).await;
+            assert_eq!(err.code, ErrorCode::ValidationFailed, "{key} {value}");
+            assert_eq!(err.field.as_deref(), Some(key));
+        }
+        assert_eq!(
+            setting(&reopen(&f), "kiosk.booster_close")["value"],
+            RowValue::Text("discord.exe, chrome.exe".into())
+        );
     }
 }
 

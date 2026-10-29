@@ -53,6 +53,7 @@ pub const STEP_PROGRAMS: &str = "programs";
 pub const STEP_CLIPBOARD: &str = "clipboard";
 pub const STEP_TEMP_FILES: &str = "temp_files";
 pub const STEP_VOLUME: &str = "volume";
+pub const STEP_POWER_PLAN: &str = "power_plan";
 
 /// The volume used when the branch default was never synced.
 pub const DEFAULT_VOLUME: u8 = 50;
@@ -108,6 +109,8 @@ pub struct Programs;
 pub struct Clipboard;
 /// Clears the player account's temp folder.
 pub struct TempFiles;
+/// Puts back the power plan a game launch's booster replaced (Story 6.25).
+pub struct PowerPlan;
 /// Sets the system volume to the branch default.
 pub struct Volume;
 
@@ -164,6 +167,16 @@ impl CleanupStep for Volume {
     }
 }
 
+impl CleanupStep for PowerPlan {
+    fn name(&self) -> &'static str {
+        STEP_POWER_PLAN
+    }
+
+    fn run(&self, env: &StepEnv<'_>) -> Result<(), String> {
+        crate::games::restore_power_plan(env.ctx)
+    }
+}
+
 /// Ends the player's programs that match `scope` through the process enforcer's kill path
 /// (the app, the service and protected images are never touched).
 pub(crate) fn close(ctx: &Ctx, scope: CloseScope<'_>) -> Result<CloseReport, String> {
@@ -194,6 +207,7 @@ impl Pipeline {
         steps.push(Arc::new(Clipboard));
         steps.push(Arc::new(TempFiles));
         steps.push(Arc::new(Volume));
+        steps.push(Arc::new(PowerPlan));
         Self { steps }
     }
 

@@ -6,17 +6,19 @@
 
   // The kitchen board (Story 7.7): the `kitchen-top-bar` over four columns, New, Preparing,
   // Ready and Served, each scrolling on its own. `columns` already holds the tickets on the board,
-  // newest first; `now` is the Hub's clock.
+  // newest first; `now` is the Hub's clock. A tap on a ticket calls `onadvance` (Story 7.8).
   let {
     branch,
     columns,
     now,
     connected,
+    onadvance,
   }: {
     branch: string;
     columns: Record<Column, KitchenBoardTicket[]>;
     now: number;
     connected: boolean;
+    onadvance?: (ticket: KitchenBoardTicket) => void;
   } = $props();
 
   const summary = $derived(openSummary(Object.values(columns).flat(), now));
@@ -55,7 +57,7 @@
         </h2>
         <div class="stack">
           {#each columns[column] as ticket (ticket.id)}
-            <KitchenTicket {ticket} {column} {now} />
+            <KitchenTicket {ticket} {column} {now} {onadvance} />
           {/each}
         </div>
       </section>

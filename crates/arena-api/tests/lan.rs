@@ -5699,3 +5699,126 @@ async fn the_board_still_serves_its_tickets_after_a_lapse_to_free() {
         "the licence flags do not gate the read"
     );
 }
+
+/// Submits a kitchen intent as the display and returns the reply to it, skipping pushed events.
+async fn kitchen_move<S: AsyncRead + AsyncWrite + Unpin>(
+    ws: &mut WebSocketStream<S>,
+    rid: &str,
+    payload: IntentPayload,
+    base_rev: i64,
+) -> Frame {
+    let intent = Intent {
+        base_rev: Some(base_rev),
+        ..intent(system(), payload, None)
+    };
+    send(
+        ws,
+        &Frame::new(rid, FrameBody::IntentSubmit(IntentSubmit { intent })).to_text(),
+    )
+    .await;
+    loop {
+        let frame = recv_any(ws).await.expect("a reply");
+        if frame.rid == rid && !matches!(frame.body, FrameBody::Event(_)) {
+            return frame;
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_display_advances_a_ticket_one_stage_and_takes_the_latest_advance_back() {
+    let hub = start("0.1.0", true).await;
+    seed_tickets(&hub, T0);
+    let mut ws = hub.plain().await;
+    hello_ok(
+        &mut ws,
+        hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0"),
+    )
+    .await;
+    let advance = |to: &str| {
+        IntentPayload::KitchenAdvance(arena_proto::KitchenAdvance {
+            ticket_id: "T1".into(),
+            to: to.into(),
+        })
+    };
+    let revert = || {
+        IntentPayload::KitchenAdvanceReverted(arena_proto::KitchenAdvanceReverted {
+            ticket_id: "T1".into(),
+        })
+    };
+    let rev_of =
+        |b: &arena_proto::KitchenBoard| b.tickets.iter().find(|t| t.id == "T1").unwrap().rev;
+
+    let board = match kitchen_board(&mut ws, "b0").await.body {
+        FrameBody::KitchenBoardResult(b) => b,
+        other => panic!("{other:?}"),
+    };
+    let rev = rev_of(&board);
+
+    // A skipped stage and a stale rev change nothing.
+    let skip = kitchen_move(&mut ws, "a0", advance("ready"), rev).await;
+    assert_eq!(error_of(&skip).1, ErrorCode::BadStage);
+    let stale = kitchen_move(&mut ws, "a1", advance("preparing"), rev + 5).await;
+    assert_eq!(error_of(&stale).1, ErrorCode::Stale);
+
+    let done = kitchen_move(&mut ws, "a2", advance("preparing"), rev).await;
+    assert!(matches!(done.body, FrameBody::IntentResult(_)), "{done:?}");
+    let board = match kitchen_board(&mut ws, "b1").await.body {
+        FrameBody::KitchenBoardResult(b) => b,
+        other => panic!("{other:?}"),
+    };
+    let moved = board.tickets.iter().find(|t| t.id == "T1").unwrap();
+    assert_eq!(moved.stage, "preparing");
+
+    // The Undo carries the rev the advance left; any other rev is stale.
+    let stale = kitchen_move(&mut ws, "u0", revert(), rev).await;
+    assert_eq!(error_of(&stale).1, ErrorCode::Stale);
+    let undone = kitchen_move(&mut ws, "u1", revert(), moved.rev).await;
+    assert!(
+        matches!(undone.body, FrameBody::IntentResult(_)),
+        "{undone:?}"
+    );
+    let board = match kitchen_board(&mut ws, "b2").await.body {
+        FrameBody::KitchenBoardResult(b) => b,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        board.tickets.iter().find(|t| t.id == "T1").unwrap().stage,
+        "new"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn after_a_lapse_a_display_advances_only_tickets_that_already_exist() {
+    let hub = start("0.1.0", true).await;
+    seed_tickets(&hub, T0);
+    set_flags(&hub, "kitchen").await;
+    set_flags(&hub, "").await;
+    let mut ws = hub.plain().await;
+    hello_ok(
+        &mut ws,
+        hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0"),
+    )
+    .await;
+    let other = kitchen_move(
+        &mut ws,
+        "x1",
+        IntentPayload::KitchenAdvance(arena_proto::KitchenAdvance {
+            ticket_id: "NOPE".into(),
+            to: "preparing".into(),
+        }),
+        0,
+    )
+    .await;
+    assert_eq!(error_of(&other).1, ErrorCode::TierLocked);
+    let old = kitchen_move(
+        &mut ws,
+        "x2",
+        IntentPayload::KitchenAdvance(arena_proto::KitchenAdvance {
+            ticket_id: "T1".into(),
+            to: "preparing".into(),
+        }),
+        0,
+    )
+    .await;
+    assert!(matches!(old.body, FrameBody::IntentResult(_)), "{old:?}");
+}

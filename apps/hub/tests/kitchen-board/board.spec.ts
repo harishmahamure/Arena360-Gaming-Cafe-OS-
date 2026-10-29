@@ -2,7 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type WebSocketRoute } from "@playwright/test";
 import type { KitchenBoard, KitchenBoardTicket } from "@arena/ui/generated";
 
-// The kitchen board (Story 7.7), in a browser against the built Kitchen app. The Hub is a
+// The kitchen board (Story 7.7) and its one-tap advance with Undo (Story 7.8), in a browser against the built Kitchen app. The Hub is a
 // `routeWebSocket` stub that answers `hello` and `kitchen.board` and pushes boards.
 
 const DISPLAY = "01JKITCHENDISPLAY00000000A";
@@ -35,6 +35,8 @@ function board(tickets: KitchenBoardTicket[]): KitchenBoard {
 
 type Stub = {
   sent: Record<string, unknown>[];
+  /** Makes the Hub refuse intents of this kind with this error code (null accepts again). */
+  refuse: (kind: string, code: string | null) => void;
   push: (event: Record<string, unknown>) => void;
   revoke: () => void;
   drop: () => void;
@@ -46,6 +48,9 @@ async function connectDisplay(page: Page, first: KitchenBoard, hc = false): Prom
     route: null,
     sent: [],
   };
+  // The Hub answers a board request with its latest board, the last one it pushed.
+  let current = first;
+  const refusals = new Map<string, string>();
   await page.routeWebSocket(/\/ws$/, (ws) => {
     stub.route = ws;
     ws.onMessage((raw) => {
@@ -62,7 +67,13 @@ async function connectDisplay(page: Page, first: KitchenBoard, hc = false): Prom
           primary: true,
         });
       } else if (frame.kind === "kitchen.board") {
-        reply({ kind: "kitchen.board_result", ...first });
+        reply({ kind: "kitchen.board_result", ...current });
+      } else if (frame.kind === "intent.submit") {
+        const intent = (frame as unknown as { intent: { kind: string; intent_id: string } }).intent;
+        const code = refusals.get(intent.kind);
+        if (code) reply({ kind: "error", error: { code, message: code } });
+        else
+          reply({ kind: "intent.result", applied: { intent_id: intent.intent_id, changes: [] } });
       } else if (frame.kind === "settings.get") {
         reply({
           kind: "settings.values",
@@ -74,7 +85,11 @@ async function connectDisplay(page: Page, first: KitchenBoard, hc = false): Prom
   await page.addInitScript((token) => localStorage.setItem("arena.kitchen.token", token), TOKEN);
   return {
     sent: stub.sent,
-    push: (event) => stub.route?.send(JSON.stringify({ v: 1, rid: "ev-1", kind: "event", event })),
+    refuse: (kind, code) => void (code ? refusals.set(kind, code) : refusals.delete(kind)),
+    push: (event) => {
+      if (event.kind === "kitchen.board") current = event as unknown as KitchenBoard;
+      stub.route?.send(JSON.stringify({ v: 1, rid: "ev-1", kind: "event", event }));
+    },
     drop: () => void stub.route?.close(),
     revoke: () => {
       stub.route?.send(
@@ -254,7 +269,8 @@ test("a cancelled ticket greys out, shows CANCELLED, cannot be acted on and leav
   await expect(cancelled.getByText("2× Burger")).toHaveCSS("text-decoration-line", "line-through");
   // It stays in the column it was in, and the board has no cancel (or any) control.
   await expect(column(page, "preparing").locator('[data-ticket="T2"]')).toHaveCount(1);
-  await expect(page.getByRole("button")).toHaveCount(0);
+  await expect(cancelled).not.toHaveAttribute("role", "button");
+  await expect(page.getByRole("button")).toHaveCount(1); // only the Preparing ticket takes a tap
   await expect(page.getByTestId("board-open")).toHaveText("1 open · oldest 5 min");
 
   await page.clock.runFor(61_000);
@@ -342,6 +358,199 @@ test("the board has no accessibility violations", async ({ page }) => {
   );
   await page.goto("/kitchen/");
   await expect(page.getByTestId("kitchen-board")).toBeVisible();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});
+
+const intents = (stub: Stub, kind: string) =>
+  stub.sent.filter(
+    (f) => f.kind === "intent.submit" && (f.intent as { kind: string }).kind === kind,
+  ) as unknown as { intent: Record<string, unknown> }[];
+
+test("a tap moves a ticket to the top of the next column at once and shows the Undo toast", async ({
+  page,
+}) => {
+  const stub = await connectDisplay(
+    page,
+    board([
+      ticket(12, "new", { rev: 3, seat: "PC 12" }),
+      ticket(11, "preparing", { placed_at: HUB_NOW - 1 * MIN }),
+    ]),
+  );
+  await page.goto("/kitchen/");
+  await page.locator('[data-ticket="T12"]').click();
+
+  // Sent with the ticket's rev and fresh ULIDs.
+  await expect.poll(() => intents(stub, "kitchen.advance").length).toBe(1);
+  const sent = intents(stub, "kitchen.advance")[0].intent;
+  expect(sent.base_rev).toBe(3);
+  expect(sent.payload).toEqual({ kind: "kitchen.advance", ticket_id: "T12", to: "preparing" });
+  expect(sent.idempotency_key).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+  expect(sent.intent_id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+  expect(sent.idempotency_key).not.toBe(sent.intent_id);
+
+  // At once: first in Preparing, ahead of the newer ticket already there.
+  await expect(column(page, "new").locator('[data-ticket="T12"]')).toHaveCount(0);
+  await expect(column(page, "preparing").getByTestId("kitchen-ticket").first()).toHaveAttribute(
+    "data-ticket",
+    "T12",
+  );
+  const toast = page.getByTestId("undo-toast");
+  await expect(toast.getByTestId("undo-message")).toHaveText("PC 12 · #K-12 moved to Preparing");
+  await expect(toast.getByTestId("undo-seconds")).toHaveText("8 s left");
+  await expect(toast.getByRole("button", { name: "Undo" })).toBeVisible();
+
+  // The toast counts down and goes at 8 s: the advance is final.
+  await page.clock.runFor(3_000);
+  await expect(toast.getByTestId("undo-seconds")).toHaveText("5 s left");
+  await page.clock.runFor(5_500);
+  await expect(toast).toHaveCount(0);
+});
+
+test("Enter on a focused ticket advances it, and a ticket that moved keeps keyboard focus", async ({
+  page,
+}) => {
+  const stub = await connectDisplay(page, board([ticket(1, "ready")]));
+  await page.goto("/kitchen/");
+  await expect(page.getByTestId("kitchen-board")).toBeVisible();
+  await page.keyboard.press("Tab");
+  await expect(page.getByTestId("kitchen-ticket")).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => intents(stub, "kitchen.advance").length).toBe(1);
+  expect(intents(stub, "kitchen.advance")[0].intent.payload).toMatchObject({ to: "served" });
+  await expect(column(page, "served").locator('[data-ticket="T1"]')).toBeFocused();
+});
+
+test("Undo within the window sends the advance's resulting rev and returns the ticket", async ({
+  page,
+}) => {
+  const stub = await connectDisplay(page, board([ticket(1, "new", { rev: 2 })]));
+  await page.goto("/kitchen/");
+  await page.locator('[data-ticket="T1"]').click();
+  await expect(column(page, "preparing").locator('[data-ticket="T1"]')).toHaveCount(1);
+  // The Hub pushes the board with the ticket at its new stage and rev.
+  stub.push({
+    kind: "kitchen.board",
+    ...board([ticket(1, "preparing", { rev: 3, stage_at: HUB_NOW })]),
+    now_ms: HUB_NOW + 1_000,
+  });
+  await page.getByRole("button", { name: "Undo" }).click();
+
+  await expect.poll(() => intents(stub, "kitchen.advance.reverted").length).toBe(1);
+  const sent = intents(stub, "kitchen.advance.reverted")[0].intent;
+  expect(sent.base_rev).toBe(3);
+  expect(sent.payload).toEqual({ kind: "kitchen.advance.reverted", ticket_id: "T1" });
+  await expect(column(page, "new").locator('[data-ticket="T1"]')).toHaveCount(1);
+  await expect(page.getByTestId("undo-toast")).toHaveCount(0);
+
+  // The Hub's own board agrees.
+  stub.push({
+    kind: "kitchen.board",
+    ...board([ticket(1, "new", { rev: 4 })]),
+    now_ms: HUB_NOW + 2_000,
+  });
+  await expect(column(page, "new").locator('[data-ticket="T1"]')).toHaveCount(1);
+});
+
+test("advancing another ticket replaces the toast and the first advance stays", async ({
+  page,
+}) => {
+  const stub = await connectDisplay(page, board([ticket(1, "new"), ticket(2, "new")]));
+  await page.goto("/kitchen/");
+  await page.locator('[data-ticket="T1"]').click();
+  await expect(page.getByTestId("undo-message")).toContainText("#K-1 moved to Preparing");
+  await page.locator('[data-ticket="T2"]').click();
+  await expect(page.getByTestId("undo-toast")).toHaveCount(1);
+  await expect(page.getByTestId("undo-message")).toContainText("#K-2 moved to Preparing");
+  await page.getByRole("button", { name: "Undo" }).click();
+  await expect.poll(() => intents(stub, "kitchen.advance.reverted").length).toBe(1);
+  expect(intents(stub, "kitchen.advance.reverted")[0].intent.payload).toMatchObject({
+    ticket_id: "T2",
+  });
+  await expect(column(page, "preparing").locator('[data-ticket="T1"]')).toHaveCount(1);
+});
+
+test("a Served or cancelled ticket does nothing when tapped", async ({ page }) => {
+  const stub = await connectDisplay(
+    page,
+    board([
+      ticket(1, "served", { stage_at: HUB_NOW - MIN }),
+      ticket(2, "cancelled", { stage_at: HUB_NOW }),
+    ]),
+  );
+  await page.goto("/kitchen/");
+  await page.locator('[data-ticket="T1"]').click();
+  await page.locator('[data-ticket="T2"]').click();
+  await page.locator('[data-ticket="T1"]').press("Enter");
+  await expect(page.getByRole("button", { name: /Ticket/ })).toHaveCount(0);
+  await expect(page.getByTestId("undo-toast")).toHaveCount(0);
+  expect(stub.sent.filter((f) => f.kind === "intent.submit")).toHaveLength(0);
+  await expect(column(page, "served").locator('[data-ticket="T1"]')).toHaveCount(1);
+});
+
+for (const code of ["STALE", "BAD_STAGE"]) {
+  test(`a ${code} answer snaps the ticket back to the Hub's board with no Undo`, async ({
+    page,
+  }) => {
+    const stub = await connectDisplay(page, board([ticket(1, "new")]));
+    stub.refuse("kitchen.advance", code);
+    await page.goto("/kitchen/");
+    await page.locator('[data-ticket="T1"]').click();
+    const toast = page.getByTestId("undo-toast");
+    await expect(toast.getByTestId("undo-notice")).toContainText("Already moved at the counter");
+    await expect(toast.getByRole("button", { name: "Undo" })).toHaveCount(0);
+    await expect(column(page, "new").locator('[data-ticket="T1"]')).toHaveCount(1);
+    await expect(column(page, "preparing").locator('[data-ticket="T1"]')).toHaveCount(0);
+    // It asked the Hub for its board again.
+    expect(stub.sent.filter((f) => f.kind === "kitchen.board").length).toBeGreaterThanOrEqual(2);
+    await page.clock.runFor(5_500);
+    await expect(toast).toHaveCount(0);
+  });
+}
+
+test("an Undo the Hub refuses as EXPIRED keeps the Hub's state and says it is too late", async ({
+  page,
+}) => {
+  const stub = await connectDisplay(page, board([ticket(1, "new")]));
+  await page.goto("/kitchen/");
+  await page.locator('[data-ticket="T1"]').click();
+  stub.refuse("kitchen.advance.reverted", "EXPIRED");
+  stub.push({
+    kind: "kitchen.board",
+    ...board([ticket(1, "preparing", { rev: 2, stage_at: HUB_NOW })]),
+  });
+  await page.getByRole("button", { name: "Undo" }).click();
+  await expect(page.getByTestId("undo-notice")).toContainText("Too late to undo");
+  await expect(column(page, "preparing").locator('[data-ticket="T1"]')).toHaveCount(1);
+});
+
+test("with the Hub lost a tap is refused with a note and the ticket stays", async ({ page }) => {
+  const stub = await connectDisplay(page, board([ticket(1, "new")]));
+  await page.goto("/kitchen/");
+  await expect(page.getByTestId("kitchen-top-bar").getByText("Connected")).toBeVisible();
+  stub.drop();
+  await expect(page.getByTestId("kitchen-top-bar").getByText("Offline")).toBeVisible();
+  await page.locator('[data-ticket="T1"]').click();
+  await expect(page.getByTestId("undo-notice")).toContainText("Offline");
+  await expect(column(page, "new").locator('[data-ticket="T1"]')).toHaveCount(1);
+});
+
+test("a board push about another ticket does not undo a move that is still waiting", async ({
+  page,
+}) => {
+  const stub = await connectDisplay(page, board([ticket(1, "new"), ticket(2, "new")]));
+  await page.goto("/kitchen/");
+  await page.locator('[data-ticket="T1"]').click();
+  stub.push({ kind: "kitchen.board", ...board([ticket(1, "new"), ticket(2, "preparing")]) });
+  await expect(column(page, "preparing").locator('[data-ticket="T2"]')).toHaveCount(1);
+  await expect(column(page, "preparing").locator('[data-ticket="T1"]')).toHaveCount(1);
+});
+
+test("the board with a toast has no accessibility violations", async ({ page }) => {
+  await connectDisplay(page, board([ticket(2, "new"), ticket(1, "ready")]));
+  await page.goto("/kitchen/");
+  await page.locator('[data-ticket="T2"]').click();
+  await expect(page.getByTestId("undo-toast")).toBeVisible();
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations).toEqual([]);
 });

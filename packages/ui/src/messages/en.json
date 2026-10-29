@@ -42,6 +42,13 @@
   "kitchen.announce.new": "New ticket {number} for {seat}",
   "kitchen.announce.stage": "Ticket {number} is now {stage}",
   "kitchen.announce.cancelled": "Ticket {number} was cancelled",
+  "kitchen.ticket.advance_hint": "Press Enter to move it to {stage}.",
+  "kitchen.toast.moved": "{seat} · #{number} moved to {stage}",
+  "kitchen.toast.stale": "Already moved at the counter",
+  "kitchen.toast.offline": "Offline — the ticket was not moved",
+  "kitchen.toast.failed": "The Hub could not move that ticket",
+  "kitchen.toast.undo_late": "Too late to undo",
+  "kitchen.toast.undo_failed": "Could not undo. Try again.",
 
   "common.retry": "Retry",
   "common.dismiss": "Dismiss",

@@ -3,13 +3,19 @@ import type { KitchenBoard, KitchenBoardTicket } from "@arena/ui/generated";
 import {
   CANCELLED_KEEP_MS,
   SERVED_KEEP_MS,
+  UNDO_MS,
+  applyPending,
   changes,
   elapsed,
   hubNow,
+  nextStage,
   openSummary,
   placeTickets,
   rememberColumns,
+  secondsLeft,
+  stillPending,
   ticketLabel,
+  undoRev,
   visibleTickets,
   type Column,
 } from "../../../kitchen/src/lib/board";
@@ -125,4 +131,49 @@ test("a new ticket, a stage change and a cancel are announced; the first board i
 
 test("the ticket number is printed as K-n", () => {
   expect(ticketLabel(12)).toBe("K-12");
+});
+
+test("only New, Preparing and Ready have a next stage", () => {
+  expect(["new", "preparing", "ready", "served", "cancelled", "x"].map(nextStage)).toEqual([
+    "preparing",
+    "ready",
+    "served",
+    null,
+    null,
+    null,
+  ]);
+});
+
+test("a pending move shows the ticket in its next stage until the Hub shows it off the old one", () => {
+  const tickets = [ticket(1, "new"), ticket(2, "new")];
+  const pending = new Map([["T1", { from: "new", to: "preparing" }]]);
+  const shown = applyPending(tickets, pending, NOW);
+  expect(shown.map((t) => t.stage)).toEqual(["preparing", "new"]);
+  expect(shown[0].stage_at).toBe(NOW);
+  expect(applyPending(tickets, new Map(), NOW)).toBe(tickets);
+
+  // A board that still has T1 in New keeps the move; one that moved it (or lost it) drops it.
+  expect([...stillPending(tickets, pending).keys()]).toEqual(["T1"]);
+  expect(stillPending([ticket(1, "preparing")], pending).size).toBe(0);
+  expect(stillPending([ticket(2, "new")], pending).size).toBe(0);
+});
+
+test("the ticket just moved is pinned to the top of its column", () => {
+  const tickets = visibleTickets([ticket(1, "preparing"), ticket(2, "preparing")], NOW);
+  expect(placeTickets(tickets, new Map()).preparing.map((t) => t.number)).toEqual([1, 2]);
+  expect(placeTickets(tickets, new Map(), "T2").preparing.map((t) => t.number)).toEqual([2, 1]);
+  expect(placeTickets(tickets, new Map(), "NOPE").preparing.map((t) => t.number)).toEqual([1, 2]);
+});
+
+test("an Undo is based on the rev the board shows at the new stage, else the tapped rev plus one", () => {
+  expect(undoRev([ticket(1, "preparing", { rev: 4 })], "T1", "preparing", 3)).toBe(4);
+  expect(undoRev([ticket(1, "new", { rev: 3 })], "T1", "preparing", 3)).toBe(4);
+  expect(undoRev([], "T1", "preparing", 3)).toBe(4);
+});
+
+test("the Undo seconds count down from 8 and stop at 0", () => {
+  expect(secondsLeft(NOW + UNDO_MS, NOW)).toBe(8);
+  expect(secondsLeft(NOW + UNDO_MS, NOW + 1)).toBe(8);
+  expect(secondsLeft(NOW + UNDO_MS, NOW + 7_001)).toBe(1);
+  expect(secondsLeft(NOW + UNDO_MS, NOW + 9_000)).toBe(0);
 });

@@ -72,6 +72,7 @@ export function visibleTickets(tickets: KitchenBoardTicket[], now: number): Kitc
 export function placeTickets(
   tickets: KitchenBoardTicket[],
   lastColumn: ReadonlyMap<string, Column>,
+  pinned: string | null = null,
 ): Record<Column, KitchenBoardTicket[]> {
   const columns: Record<Column, KitchenBoardTicket[]> = {
     new: [],
@@ -83,7 +84,70 @@ export function placeTickets(
     const column = columnOf(ticket.stage) ?? lastColumn.get(ticket.id) ?? "new";
     columns[column].push(ticket);
   }
+  // The ticket just moved on sits at the top of its column (Story 7.8).
+  if (pinned !== null) {
+    for (const list of Object.values(columns)) {
+      const at = list.findIndex((t) => t.id === pinned);
+      if (at > 0) list.unshift(...list.splice(at, 1));
+    }
+  }
   return columns;
+}
+
+/** The stage a ticket moves to next, or `null` for Served and Cancelled (nothing to tap). */
+export function nextStage(stage: string): Column | null {
+  const at = COLUMNS.indexOf(stage as Column);
+  return at >= 0 && at < COLUMNS.length - 1 ? COLUMNS[at + 1] : null;
+}
+
+/** A move this display sent and the Hub has not yet shown back: the ticket is shown in `to`. */
+export type Pending = { from: string; to: string };
+
+/**
+ * The board with this display's moves applied, so a tapped ticket changes column at once. A move
+ * stays until the Hub's board shows the ticket off `from` (it moved, here or elsewhere).
+ */
+export function applyPending(
+  tickets: KitchenBoardTicket[],
+  pending: ReadonlyMap<string, Pending>,
+  now: number,
+): KitchenBoardTicket[] {
+  if (pending.size === 0) return tickets;
+  return tickets.map((t) => {
+    const move = pending.get(t.id);
+    return move && t.stage === move.from ? { ...t, stage: move.to, stage_at: now } : t;
+  });
+}
+
+/** The moves still waiting: those whose ticket the Hub's `tickets` still show on `from`. */
+export function stillPending(
+  tickets: KitchenBoardTicket[],
+  pending: ReadonlyMap<string, Pending>,
+): Map<string, Pending> {
+  const next = new Map<string, Pending>();
+  for (const [id, move] of pending) {
+    if (tickets.find((t) => t.id === id)?.stage === move.from) next.set(id, move);
+  }
+  return next;
+}
+
+/** The rev an Undo is based on: the board's, once it shows the new stage, else the tapped rev + 1. */
+export function undoRev(
+  tickets: KitchenBoardTicket[],
+  ticketId: string,
+  to: string,
+  tappedRev: number,
+): number {
+  const shown = tickets.find((t) => t.id === ticketId);
+  return shown && shown.stage === to ? shown.rev : tappedRev + 1;
+}
+
+/** How long an advance can be taken back, in milliseconds (the Hub's window). */
+export const UNDO_MS = 8000;
+
+/** Whole seconds left in the Undo window at `now` (never negative). */
+export function secondsLeft(expiresAt: number, now: number): number {
+  return Math.max(0, Math.ceil((expiresAt - now) / 1000));
 }
 
 /** The column each live ticket is in now, kept so a cancelled ticket can stay put. */

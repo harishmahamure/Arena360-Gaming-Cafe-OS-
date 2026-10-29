@@ -473,7 +473,10 @@ pub(super) fn validate_advance_reverted(intent: &Intent, t: &RevertTarget) -> Re
         return Err(undo_denied("only who moved the ticket can undo it"));
     }
     if !in_window(t.now, ticket.advanced_at) {
-        return Err(undo_denied("the undo window has closed"));
+        return Err(AppError::new(
+            ErrorCode::Expired,
+            "the undo window has closed",
+        ));
     }
     if ticket.stage == STAGE_SERVED {
         let open = t

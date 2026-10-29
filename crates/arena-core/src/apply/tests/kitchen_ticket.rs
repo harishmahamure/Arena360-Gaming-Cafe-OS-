@@ -371,7 +371,7 @@ async fn an_undo_needs_the_same_actor_the_window_and_a_step_to_take_back() {
         ErrorCode::UndoNotAllowed
     );
     f.clock.advance(20_000);
-    assert_eq!(code(undo(&f, &id).await), ErrorCode::UndoNotAllowed);
+    assert_eq!(code(undo(&f, &id).await), ErrorCode::Expired);
     assert_eq!(stage(&f, &id), "preparing");
 }
 

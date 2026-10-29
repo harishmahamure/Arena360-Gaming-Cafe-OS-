@@ -895,3 +895,12 @@ Each entry gives the story, the decision point, the choice taken (the recommende
 - **Cancelled tickets.** Story 7.3 drops their lines, so a real one has no lines to strike; the display strikes them when present and keeps a cancelled ticket in the column it was last seen in (New if unseen).
 - **Tests in the Hub package.** The Kitchen app has no test runner; the browser and unit specs live in `apps/hub/tests/kitchen-board/` with `playwright.kitchen.config.ts` (`pnpm --filter @arena/hub test:kitchen`), excluded from the Hub's default Playwright run. Adding Playwright to the Kitchen app would change the lockfile.
 - **Verification.** See the spec's Auto Run Result.
+
+## Story 7.8: one tap advances a ticket, with Undo
+
+- **Hub side already existed.** Story 7.3 built `kitchen.advance` and `kitchen.advance.reverted` and put both in the `kds` scope, so this story is the display plus one Hub change: an Undo after its 8 s window is `EXPIRED` (the story names it) instead of `UNDO_NOT_ALLOWED`. A wrong actor still gets `UNDO_NOT_ALLOWED`; a wrong rev is `STALE`.
+- **Resulting rev.** `intent.result` carries no ticket rev, so the Undo takes its `base_rev` from the board push that shows the ticket at the new stage, else the tapped rev + 1.
+- **Optimistic move.** Moves stay pending until the Hub board shows the ticket off its old stage, so a push about another ticket cannot undo them; a refused move snaps and asks for the board again. The moved ticket is pinned first in its column on this display.
+- **Accessibility.** A tappable ticket is `role="button"` named by its content with the move as its description (an aria-label tripped axe `label-content-name-mismatch`); other tickets keep the label.
+- **Offline.** A tap with no link is refused with a note; queueing is Story 7.10.
+- **Verification.** See the spec's Auto Run Result.

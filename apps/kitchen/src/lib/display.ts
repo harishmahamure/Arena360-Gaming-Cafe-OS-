@@ -2,7 +2,8 @@
 // `kds` token and the `/ws` connection. The page keeps the token in `localStorage` (never in a
 // URL) and sends it only in the `hello` frame. Once connected it asks the Hub for the board
 // (`kitchen.board`) and takes every whole board the Hub pushes after a ticket changes (Story 7.7).
-// There is no chime or ticket control here yet (Stories 7.8 to 7.10).
+// A tap moves a ticket on with `kitchen.advance` and Undo takes it back with
+// `kitchen.advance.reverted` (Story 7.8). There is no chime or queueing yet (Stories 7.9, 7.10).
 
 import type {
   Frame,
@@ -11,6 +12,7 @@ import type {
   KitchenBoard,
   SettingEntry,
 } from "@arena/ui/generated";
+import { ulid } from "./ulid";
 
 /** Where the Hub serves this app (the build's `paths.base`). */
 const BASE = "/kitchen";
@@ -114,6 +116,20 @@ export async function pairDisplay(code: string, name: string): Promise<PairOutco
   }
 }
 
+/** How a ticket move ended: the Hub applied it, or refused it with an error code (`OFFLINE` when no link). */
+export type Move = { ok: true } | { ok: false; code: string };
+
+/** What a connected display can ask of the Hub. */
+export type Connection = {
+  close: () => void;
+  /** Moves a ticket to `to` (the next stage) as the ticket stood at `baseRev`. `key` is minted at the tap. */
+  advance: (ticketId: string, to: string, baseRev: number, key: string) => Promise<Move>;
+  /** Takes the latest advance of a ticket back; `baseRev` is the rev that advance left. */
+  revert: (ticketId: string, baseRev: number) => Promise<Move>;
+  /** Asks the Hub for the whole board again, to snap to its state. */
+  refresh: () => void;
+};
+
 export type Link = {
   /** The Hub accepted the token. */
   onReady: () => void;
@@ -144,16 +160,50 @@ function socketUrl(): string {
  * it. A `TOKEN_REVOKED` or `TOKEN_INVALID` error ends the link for good (`onRevoked`); any
  * other loss reconnects after a growing pause.
  */
-export function connect(token: string, link: Link): () => void {
+export function connect(token: string, link: Link): Connection {
   const displayId = displayIdOf(token);
   let socket: WebSocket | null = null;
   let stopped = false;
   let retryMs = RETRY_MIN_MS;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  const send = (frame: Record<string, unknown>) => {
-    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ v: 1, ...frame }));
+  const send = (frame: Record<string, unknown>): boolean => {
+    if (socket?.readyState !== WebSocket.OPEN) return false;
+    socket.send(JSON.stringify({ v: 1, ...frame }));
+    return true;
   };
+
+  // Replies to the intents this link submitted, by request id.
+  const waiting = new Map<string, (move: Move) => void>();
+  const settleAll = (move: Move) => {
+    for (const resolve of waiting.values()) resolve(move);
+    waiting.clear();
+  };
+
+  function submit(kind: string, payload: Record<string, unknown>, baseRev: number, key: string) {
+    return new Promise<Move>((resolve) => {
+      const rid = ulid();
+      waiting.set(rid, resolve);
+      const sent = send({
+        rid,
+        kind: "intent.submit",
+        intent: {
+          intent_id: ulid(),
+          kind,
+          idempotency_key: key,
+          issued_at: Date.now(),
+          base_rev: baseRev,
+          // The Hub overwrites the actor with this session's.
+          actor: { kind: "device", id: displayId ?? "" },
+          payload: { kind, ...payload },
+        },
+      });
+      if (!sent) {
+        waiting.delete(rid);
+        resolve({ ok: false, code: "OFFLINE" });
+      }
+    });
+  }
 
   function takeValues(values: SettingEntry[] | undefined) {
     const mine = values?.find((v) => displayId !== null && v.key === hcKey(displayId));
@@ -190,6 +240,12 @@ export function connect(token: string, link: Link): () => void {
           if (displayId) send({ rid: "hc", kind: "settings.get", keys: [hcKey(displayId)] });
           send({ rid: "board", kind: "kitchen.board" });
           break;
+        case "intent.result": {
+          const resolve = waiting.get(frame.rid);
+          waiting.delete(frame.rid);
+          resolve?.({ ok: true });
+          break;
+        }
         case "kitchen.board_result":
           link.onBoard(boardOf(frame));
           break;
@@ -204,6 +260,12 @@ export function connect(token: string, link: Link): () => void {
           else if (frame.event.kind === "kitchen.board") link.onBoard(boardOf(frame.event));
           break;
         case "error":
+          if (waiting.has(frame.rid)) {
+            const resolve = waiting.get(frame.rid);
+            waiting.delete(frame.rid);
+            resolve?.({ ok: false, code: frame.error.code });
+            break;
+          }
           if (frame.error.code === "TOKEN_REVOKED" || frame.error.code === "TOKEN_INVALID") {
             stopped = true;
             ws.close();
@@ -214,6 +276,7 @@ export function connect(token: string, link: Link): () => void {
     };
     ws.onclose = () => {
       if (socket === ws) socket = null;
+      settleAll({ ok: false, code: "OFFLINE" });
       if (stopped) return;
       if (ready) link.onLost();
       timer = setTimeout(open, retryMs);
@@ -223,9 +286,16 @@ export function connect(token: string, link: Link): () => void {
   }
 
   open();
-  return () => {
-    stopped = true;
-    clearTimeout(timer);
-    socket?.close();
+  return {
+    close: () => {
+      stopped = true;
+      clearTimeout(timer);
+      socket?.close();
+    },
+    advance: (ticketId, to, baseRev, key) =>
+      submit("kitchen.advance", { ticket_id: ticketId, to }, baseRev, key),
+    revert: (ticketId, baseRev) =>
+      submit("kitchen.advance.reverted", { ticket_id: ticketId }, baseRev, ulid()),
+    refresh: () => void send({ rid: ulid(), kind: "kitchen.board" }),
   };
 }

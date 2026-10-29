@@ -1,17 +1,25 @@
 <script lang="ts">
-  import { CodeField, TextField, t } from "@arena/ui";
-  import type { KitchenBoard as BoardFeed } from "@arena/ui/generated";
+  import { CodeField, TextField, UndoToast, t } from "@arena/ui";
+  import type { KitchenBoard as BoardFeed, KitchenBoardTicket } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, tick as settled } from "svelte";
   import {
+    COLUMN_LABELS,
+    UNDO_MS,
+    applyPending,
     changes,
     hubNow,
+    nextStage,
     placeTickets,
     rememberColumns,
+    secondsLeft,
     stageLabel,
+    stillPending,
     ticketLabel,
+    undoRev,
     visibleTickets,
     type Column,
+    type Pending,
   } from "../lib/board";
   import {
     DEFAULT_NAME,
@@ -21,14 +29,19 @@
     pairDisplay,
     readToken,
     storeToken,
+    type Connection,
   } from "../lib/display";
+  import { ulid } from "../lib/ulid";
   import BoardScreen from "../lib/BoardScreen.svelte";
 
   // The kitchen tablet (Story 7.6): it pairs by the 6-digit code from the Hub, keeps the `kds`
   // token in `localStorage` and connects to the Hub with `hello{class: kds}`. A missing or
   // refused token shows the pairing screen again; on a Free branch the page says the kitchen
   // display is available on Basic. Once connected it shows the kitchen board (Story 7.7): the
-  // Hub's tickets in four columns, with every elapsed time counted on the Hub's clock.
+  // Hub's tickets in four columns, with every elapsed time counted on the Hub's clock. A tap on
+  // a ticket moves it to the next stage at once and shows an Undo toast for 8 s (Story 7.8).
+
+  const NOTICE_MS = 5000;
 
   type Mode = "checking" | "locked" | "pairing" | "connecting" | "connected" | "lost";
 
@@ -46,7 +59,7 @@
   let busy = $state(false);
   let error: MessageKey | null = $state(null);
   let field: CodeField | undefined = $state();
-  let stop: (() => void) | null = null;
+  let conn: Connection | null = null;
 
   let feed: BoardFeed | null = $state(null);
   let receivedAt = $state(0);
@@ -55,10 +68,34 @@
   let announcement = $state("");
   let ticker: ReturnType<typeof setInterval> | undefined;
 
+  // Moves sent and not yet shown back by the Hub, the ticket pinned to the top of its column and
+  // the one toast (the last advance, until its 8 s are up or another advance replaces it).
+  type Toast = {
+    key: string;
+    ticketId: string;
+    seat: string;
+    number: string;
+    from: string;
+    to: string;
+    tappedRev: number;
+    expiresAt: number;
+    undoing: boolean;
+    notice?: MessageKey;
+    error?: MessageKey;
+  };
+  let pending: Map<string, Pending> = $state(new Map());
+  let pinned: string | null = $state(null);
+  let toast: Toast | null = $state(null);
+  let toastTimer: ReturnType<typeof setTimeout> | undefined;
+
   /** The Hub's clock now; `tick` makes it follow the page's own second hand. */
   const now = $derived.by(() => (feed ? hubNow(feed, receivedAt, tick) : 0));
   const columns = $derived.by(() =>
-    placeTickets(feed ? visibleTickets(feed.tickets, now) : [], lastColumn),
+    placeTickets(
+      feed ? visibleTickets(applyPending(feed.tickets, pending, now), now) : [],
+      lastColumn,
+      pinned,
+    ),
   );
   const boardShowing = $derived.by(
     () => feed !== null && (mode === "connected" || mode === "lost"),
@@ -78,22 +115,111 @@
     });
     if (said.length > 0) announcement = said.join(". ");
     lastColumn = rememberColumns(board.tickets, lastColumn);
+    pending = stillPending(board.tickets, pending);
     receivedAt = performance.now();
     tick = receivedAt;
     feed = board;
   }
 
+  function showToast(next: Toast, lastsMs: number) {
+    clearTimeout(toastTimer);
+    toast = next;
+    toastTimer = setTimeout(() => {
+      if (toast?.key === next.key) toast = null;
+    }, lastsMs);
+  }
+
+  /** Puts a ticket back to the Hub's state and asks the Hub for its board. */
+  function snap(ticketId: string) {
+    const rest = new Map(pending);
+    rest.delete(ticketId);
+    pending = rest;
+    if (pinned === ticketId) pinned = null;
+    conn?.refresh();
+  }
+
+  async function focusTicket(ticketId: string) {
+    await settled();
+    document.querySelector<HTMLElement>(`[data-ticket="${ticketId}"]`)?.focus();
+  }
+
+  const MOVE_NOTICES: Record<string, MessageKey> = {
+    STALE: "kitchen.toast.stale",
+    BAD_STAGE: "kitchen.toast.stale",
+    NOT_FOUND: "kitchen.toast.stale",
+    OFFLINE: "kitchen.toast.offline",
+  };
+
+  async function advance(ticket: KitchenBoardTicket) {
+    const to = nextStage(ticket.stage);
+    if (!to || !conn || pending.has(ticket.id)) return;
+    const key = ulid();
+    tick = performance.now();
+    pending = new Map(pending).set(ticket.id, { from: ticket.stage, to });
+    pinned = ticket.id;
+    showToast(
+      {
+        key,
+        ticketId: ticket.id,
+        seat: ticket.seat,
+        number: ticketLabel(ticket.number),
+        from: ticket.stage,
+        to,
+        tappedRev: ticket.rev,
+        expiresAt: tick + UNDO_MS,
+        undoing: false,
+      },
+      UNDO_MS,
+    );
+    void focusTicket(ticket.id);
+    const result = await conn.advance(ticket.id, to, ticket.rev, key);
+    if (result.ok) return;
+    snap(ticket.id);
+    if (toast?.key === key) {
+      showToast(
+        { ...toast, notice: MOVE_NOTICES[result.code] ?? "kitchen.toast.failed" },
+        NOTICE_MS,
+      );
+    }
+  }
+
+  async function undo() {
+    const cur = toast;
+    if (!cur || cur.notice || cur.undoing || !conn) return;
+    const rev = undoRev(feed?.tickets ?? [], cur.ticketId, cur.to, cur.tappedRev);
+    toast = { ...cur, undoing: true, error: undefined };
+    pending = new Map(pending).set(cur.ticketId, { from: cur.to, to: cur.from });
+    pinned = cur.ticketId;
+    void focusTicket(cur.ticketId);
+    const result = await conn.revert(cur.ticketId, rev);
+    if (result.ok) {
+      if (toast?.key === cur.key) toast = null;
+      return;
+    }
+    snap(cur.ticketId);
+    if (toast?.key !== cur.key) return;
+    if (result.code === "OFFLINE" || result.code === "INTERNAL") {
+      toast = { ...cur, undoing: false, error: "kitchen.toast.undo_failed" };
+    } else {
+      showToast({ ...cur, notice: "kitchen.toast.undo_late", undoing: false }, NOTICE_MS);
+    }
+  }
+
   function start(token: string) {
-    stop?.();
+    conn?.close();
     mode = "connecting";
-    stop = connect(token, {
+    conn = connect(token, {
       onReady: () => (mode = "connected"),
       onLost: () => (mode = "lost"),
       onHighContrast: setTheme,
       onBoard: takeBoard,
       onRevoked: () => {
-        stop = null;
+        conn = null;
         feed = null;
+        pending = new Map();
+        pinned = null;
+        toast = null;
+        clearTimeout(toastTimer);
         lastColumn = new Map();
         announcement = "";
         clearToken();
@@ -140,7 +266,8 @@
 
   onDestroy(() => {
     clearInterval(ticker);
-    stop?.();
+    clearTimeout(toastTimer);
+    conn?.close();
   });
 </script>
 
@@ -150,7 +277,31 @@
 
 <main class="screen" class:board={boardShowing} data-testid="kitchen-screen" data-mode={mode}>
   {#if boardShowing && feed}
-    <BoardScreen branch={feed.branch_name} {columns} {now} connected={mode === "connected"} />
+    <BoardScreen
+      branch={feed.branch_name}
+      {columns}
+      {now}
+      connected={mode === "connected"}
+      onadvance={advance}
+    />
+    {#if toast}
+      <div class="toast" data-testid="kitchen-toast">
+        <UndoToast
+          message="kitchen.toast.moved"
+          params={{
+            seat: toast.seat,
+            number: toast.number,
+            stage: t(COLUMN_LABELS[toast.to as Column]),
+          }}
+          seconds={secondsLeft(toast.expiresAt, tick)}
+          onundo={() => void undo()}
+          busy={toast.undoing}
+          notice={toast.notice}
+          refused={toast.notice !== undefined}
+          error={toast.error}
+        />
+      </div>
+    {/if}
     <p class="visually-hidden" role="status" aria-live="polite" data-testid="board-announce">
       {announcement}
     </p>
@@ -220,6 +371,16 @@
 
   .note {
     font-size: var(--type-hub-body-size);
+  }
+
+  .toast {
+    position: fixed;
+    right: 0;
+    bottom: var(--space-5);
+    left: 0;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
   }
 
   .pair {

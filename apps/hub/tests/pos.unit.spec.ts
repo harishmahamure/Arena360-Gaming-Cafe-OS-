@@ -14,7 +14,10 @@ import {
   lineRate,
   saleLines,
   findByBarcode,
+  lineKey,
   lineShortage,
+  normNotes,
+  renote,
   step,
   unavailableTag,
   visibleProducts,
@@ -38,6 +41,7 @@ const product = (id: string, extra: Partial<Product> = {}): Product => ({
   active: true,
   bundle: false,
   components: [],
+  kitchen_notes: [],
   rev: 1,
   quantity: 5,
   avg_cost_minor: 0,
@@ -311,4 +315,30 @@ test("an order adds each line at the product price with no tax", () => {
       index(cola, chips),
     ),
   ).toBe(11000);
+});
+
+test("cart lines of one product are apart by kitchen notes and merge when the notes match", () => {
+  const tea = product("tea", { price_minor: 4000, kitchen: true, kitchen_notes: ["No ice"] });
+  const byId = index(tea);
+  const one = step([], tea, 1, byId, ["No ice"]);
+  const two = step(one.cart, tea, 1, byId);
+  expect(two.cart).toEqual([
+    { productId: "tea", qty: 1, notes: ["No ice"] },
+    { productId: "tea", qty: 1 },
+  ]);
+  expect(lineKey(two.cart[0])).not.toBe(lineKey(two.cart[1]));
+  expect(saleLines(two.cart)).toEqual([
+    { product_id: "tea", qty: 1, kitchen_notes: ["No ice"] },
+    { product_id: "tea", qty: 1 },
+  ]);
+  // No kitchen on the plan: notes stay out of the intent.
+  expect(saleLines(two.cart, false)).toEqual([
+    { product_id: "tea", qty: 1 },
+    { product_id: "tea", qty: 1 },
+  ]);
+  expect(renote(two.cart, "tea", [], ["No ice"])).toEqual([
+    { productId: "tea", qty: 2, notes: ["No ice"] },
+  ]);
+  expect(withQty(two.cart, "tea", 0, ["No ice"])).toEqual([{ productId: "tea", qty: 1 }]);
+  expect(normNotes([" b ", "a", "b", ""])).toEqual(["a", "b"]);
 });

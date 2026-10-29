@@ -19,6 +19,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
             StatusCode::BAD_REQUEST
         }
         ErrorCode::ValidationFailed
+        | ErrorCode::FieldTooLong
         | ErrorCode::ReasonRequired
         | ErrorCode::Expired
         | ErrorCode::HsnRequired

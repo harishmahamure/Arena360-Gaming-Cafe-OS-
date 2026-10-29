@@ -25,6 +25,7 @@ type Item = {
   has_image: boolean;
   popular: boolean;
   components: Part[];
+  kitchen_notes: string[];
 };
 type Menu = { enabled: boolean; items: Item[] };
 type Options = { menu?: Menu | null };
@@ -55,6 +56,7 @@ const item = (id: string, name: string, category: string, extra: Partial<Item> =
   has_image: false,
   popular: false,
   components: [],
+  kitchen_notes: [],
   ...extra,
 });
 

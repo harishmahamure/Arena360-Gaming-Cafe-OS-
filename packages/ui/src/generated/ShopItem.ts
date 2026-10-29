@@ -35,4 +35,9 @@ export type ShopItem = {
    * A bundle's parts; empty for a product.
    */
   components: Array<ShopComponent>;
+  /**
+   * Story 7.2: the preset kitchen notes the player may toggle; empty unless the item is a
+   * kitchen product on a branch with the `kitchen` flag.
+   */
+  kitchen_notes: Array<string>;
 };

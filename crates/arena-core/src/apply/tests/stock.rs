@@ -38,6 +38,7 @@ pub(super) fn up(name: &str) -> ProductUpsert {
         active: true,
         bundle: false,
         components: Vec::new(),
+        kitchen_notes: None,
     }
 }
 

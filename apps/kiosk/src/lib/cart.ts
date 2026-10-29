@@ -15,7 +15,15 @@ export const MAX_LINE_QTY = 99;
 export const MAX_CART_LINES = 50;
 
 /** One line of the cart: the item as the Hub last priced it and how many. */
-export type CartLine = { item: ShopItem; qty: number };
+export type CartLine = { item: ShopItem; qty: number; notes?: string[] };
+
+/** A line's kitchen notes (Story 7.2) as it keeps them: no blanks or repeats, sorted. */
+export const normNotes = (notes: readonly string[] = []): string[] =>
+  [...new Set(notes.map((n) => n.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+
+/** Two lines of one product are one line only when their notes are the same. */
+export const lineKey = (l: { item: { id: string }; notes?: readonly string[] }): string =>
+  JSON.stringify([l.item.id, normNotes(l.notes)]);
 
 /** Why a line cannot have the quantity it has or is asked for. */
 export type StockProblem =
@@ -94,9 +102,13 @@ export function stepCart(
   id: string,
   delta: 1 | -1,
   fresh: ShopItem | undefined,
+  notes: readonly string[] = [],
 ): StepResult {
-  const at = lines.findIndex((l) => l.item.id === id);
+  const key = lineKey({ item: { id }, notes });
+  const at = lines.findIndex((l) => lineKey(l) === key);
   const qty = at < 0 ? 0 : lines[at].qty;
+  // Lines of one product with different notes draw on the same stock.
+  const held = lines.filter((l) => l.item.id === id).reduce((n, l) => n + l.qty, 0);
   if (delta < 0) {
     if (at < 0) return { lines, problem: null };
     return {
@@ -109,15 +121,43 @@ export function stepCart(
   }
   // The Hub takes at most MAX_CART_LINES distinct products in one order.
   if (at < 0 && lines.length >= MAX_CART_LINES) return { lines, problem: { kind: "limit" } };
-  const problem = stockProblem(fresh, qty + 1);
+  const problem =
+    stockProblem(fresh, held + 1) ?? (qty + 1 > MAX_LINE_QTY ? { kind: "limit" as const } : null);
   if (problem !== null || fresh === undefined) return { lines, problem };
+  const kept = normNotes(notes);
+  const line: CartLine = kept.length
+    ? { item: fresh, qty: qty + 1, notes: kept }
+    : { item: fresh, qty: qty + 1 };
   return {
-    lines:
-      at < 0
-        ? [...lines, { item: fresh, qty: 1 }]
-        : lines.map((l, i) => (i === at ? { item: fresh, qty: qty + 1 } : l)),
+    lines: at < 0 ? [...lines, line] : lines.map((l, i) => (i === at ? line : l)),
     problem: null,
   };
+}
+
+/**
+ * Gives the line `from` of product `id` new kitchen notes. A line that already has them takes
+ * its units (up to the line cap); the stock drawn is unchanged either way.
+ */
+export function renote(
+  lines: CartLine[],
+  id: string,
+  from: readonly string[],
+  to: readonly string[],
+): CartLine[] {
+  const fromKey = lineKey({ item: { id }, notes: from });
+  const toKey = lineKey({ item: { id }, notes: to });
+  const line = lines.find((l) => lineKey(l) === fromKey);
+  if (!line || fromKey === toKey) return lines;
+  const twin = lines.find((l) => lineKey(l) === toKey);
+  const qty = Math.min(line.qty + (twin?.qty ?? 0), MAX_LINE_QTY);
+  const kept = normNotes(to);
+  const next: CartLine = kept.length
+    ? { item: line.item, qty, notes: kept }
+    : { item: line.item, qty };
+  const at = lines.indexOf(twin ?? line);
+  return lines
+    .map((l, i) => (i === at ? next : l))
+    .filter((l) => l === next || (lineKey(l) !== fromKey && lineKey(l) !== toKey));
 }
 
 /** The units in the cart, for the Shop's cart button. */
@@ -127,9 +167,15 @@ export const cartCount = (lines: CartLine[]): number => lines.reduce((n, l) => n
 export const cartTotal = (lines: CartLine[]): number =>
   lines.reduce((sum, l) => sum + l.item.price_minor * l.qty, 0);
 
-/** The body of `shop_place`: product ids and units, nothing else (the Hub finds the session). */
-export const placeLines = (lines: CartLine[]): { product_id: string; qty: number }[] =>
-  lines.map((l) => ({ product_id: l.item.id, qty: l.qty }));
+/** The body of `shop_place`: product ids, units and chosen kitchen notes (the Hub finds the session). */
+export const placeLines = (
+  lines: CartLine[],
+): { product_id: string; qty: number; kitchen_notes?: string[] }[] =>
+  lines.map((l) =>
+    l.notes?.length
+      ? { product_id: l.item.id, qty: l.qty, kitchen_notes: l.notes }
+      : { product_id: l.item.id, qty: l.qty },
+  );
 
 /**
  * Brings each line up to the Hub's latest listing: the price and the stock. A line whose item has

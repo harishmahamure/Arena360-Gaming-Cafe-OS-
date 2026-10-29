@@ -137,6 +137,9 @@ pub(super) fn validate_upsert(u: &ProductUpsert, t: &ProductTarget) -> Result<()
     if u.id.is_some() && t.product.is_none() {
         return Err(invalid("id", "no such product"));
     }
+    if let Some(notes) = &u.kitchen_notes {
+        super::kitchen_notes::check_presets(notes, u.kitchen)?;
+    }
     validate_components(u, t)
 }
 
@@ -218,6 +221,16 @@ pub(super) fn mutate_upsert(
         favourite: u.favourite,
         active: u.active,
         bundle: u.bundle,
+        // Absent keeps the stored list; a product that is not for the kitchen holds none.
+        kitchen_notes: match &u.kitchen_notes {
+            _ if !u.kitchen => Vec::new(),
+            Some(n) => super::kitchen_notes::clean(n),
+            None => t
+                .product
+                .as_ref()
+                .map(|o| o.kitchen_notes.clone())
+                .unwrap_or_default(),
+        },
         rev: 0,
         deleted_at: None,
     };
@@ -337,6 +350,7 @@ pub(crate) fn upsert_from_import(
         active: old.is_none_or(|o| o.active),
         bundle: false,
         components: Vec::new(),
+        kitchen_notes: None,
     }
 }
 

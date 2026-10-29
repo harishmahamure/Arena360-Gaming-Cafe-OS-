@@ -217,10 +217,12 @@ mod tests {
             PosSaleLine {
                 product_id: "A".into(),
                 qty: 1,
+                kitchen_notes: Vec::new(),
             },
             PosSaleLine {
                 product_id: "B".into(),
                 qty: 2,
+                kitchen_notes: Vec::new(),
             },
         ];
         assert_eq!(

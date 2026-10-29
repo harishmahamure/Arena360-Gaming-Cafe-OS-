@@ -379,6 +379,7 @@ pub(crate) fn product_upsert(p: &SetupProduct) -> ProductUpsert {
         active: p.active,
         bundle: false,
         components: Vec::new(),
+        kitchen_notes: None,
     }
 }
 
@@ -407,6 +408,7 @@ pub(crate) fn bundle_upsert(b: &SetupBundle, ids: &[String]) -> ProductUpsert {
                 qty: c.qty,
             })
             .collect(),
+        kitchen_notes: None,
     }
 }
 
@@ -486,6 +488,7 @@ fn product_row(id: String, name: &str, active: bool, bundle: bool, barcode: &str
         bundle,
         rev: 0,
         deleted_at: None,
+        kitchen_notes: Vec::new(),
     }
 }
 

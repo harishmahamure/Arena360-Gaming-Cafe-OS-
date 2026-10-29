@@ -93,6 +93,7 @@ fn sale(lines: &[(&str, i64)], payments: Vec<PaymentRow>, code: Option<&str>) ->
             .map(|(id, qty)| PosSaleLine {
                 product_id: (*id).into(),
                 qty: *qty,
+                kitchen_notes: Vec::new(),
             })
             .collect(),
         payments,
@@ -970,6 +971,7 @@ async fn the_preview_prices_a_code_on_a_cart_a_bill_and_a_plan_without_writing()
         lines: Some(vec![PosSaleLine {
             product_id: cola.clone(),
             qty: 2,
+            kitchen_notes: Vec::new(),
         }]),
         plan_id: None,
     })

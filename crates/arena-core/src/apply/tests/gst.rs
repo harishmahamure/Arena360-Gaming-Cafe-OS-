@@ -47,6 +47,7 @@ async fn sell(
                 .map(|(id, qty)| PosSaleLine {
                     product_id: (*id).into(),
                     qty: *qty,
+                    kitchen_notes: Vec::new(),
                 })
                 .collect(),
             payments: vec![pay(Cash, cash, None)],

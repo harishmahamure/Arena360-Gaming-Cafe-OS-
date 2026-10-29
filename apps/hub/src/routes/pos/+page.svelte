@@ -40,12 +40,16 @@
     ALL,
     DEFAULT_TAX,
     FAVOURITES,
+    MAX_FREE_NOTE,
     ScanBurst,
     cartBill,
     cartCount,
     categoriesOf,
     findByBarcode,
+    lineKey,
     lineShortage,
+    normNotes,
+    renote,
     saleLines,
     step,
     unavailableTag,
@@ -57,6 +61,7 @@
   import { cartAmount, orderSessions } from "../../lib/pos-session";
   import { loadProducts, priceText } from "../../lib/products";
   import SettleBar from "../../lib/SettleBar.svelte";
+  import { KEY_LICENCE_FLAGS } from "../../lib/printer";
   import { KEY_TAX, parseTax, type Tax } from "../../lib/tax";
   import UndoDock from "../../lib/UndoDock.svelte";
   import { offerUndo, posRestore } from "../../lib/undo.svelte";
@@ -83,6 +88,12 @@
 
   // Settling (Story 5.11).
   let tax: Tax = $state(DEFAULT_TAX);
+  // Kitchen notes (Story 7.2) are offered only on a branch with the `kitchen` flag.
+  let kitchenOn = $state(false);
+  // The line whose notes are open, with its draft: the preset chips on and the free-text note.
+  let noting: { key: string; productId: string; from: string[] } | null = $state(null);
+  let draftChips: string[] = $state([]);
+  let draftFree = $state("");
   let walletMinor: number | null = $state(null);
   let credit: CreditView | null = $state(null);
   let busy = $state(false);
@@ -193,6 +204,31 @@
     const row = outcome.settings.find((s) => s.key === KEY_TAX);
     const parsed = row ? parseTax(row.value) : null;
     if (parsed) tax = parsed;
+    kitchenOn = (outcome.settings.find((s) => s.key === KEY_LICENCE_FLAGS)?.value ?? "")
+      .split(",")
+      .some((f) => f.trim() === "kitchen");
+  }
+
+  /** Opens the notes of one cart line: its presets switch on or off, plus one free-text note. */
+  function openNotes(line: CartLine, product: Product) {
+    const notes = line.notes ?? [];
+    noting = { key: lineKey(line), productId: product.id, from: notes };
+    draftChips = notes.filter((n) => product.kitchen_notes.includes(n));
+    draftFree = notes.find((n) => !product.kitchen_notes.includes(n)) ?? "";
+  }
+
+  function toggleChip(note: string) {
+    draftChips = draftChips.includes(note)
+      ? draftChips.filter((n) => n !== note)
+      : [...draftChips, note];
+  }
+
+  function saveNotes() {
+    const open = noting;
+    if (!open) return;
+    const to = normNotes([...draftChips, draftFree.slice(0, MAX_FREE_NOTE)]);
+    cart = renote(cart, open.productId, open.from, to);
+    noting = null;
   }
 
   async function loadSales() {
@@ -311,7 +347,7 @@
   }
 
   /** The ± steppers: a step up past what is on hand is refused under that line. */
-  function nudge(product: Product, delta: number) {
+  function nudge(product: Product, delta: number, notes: string[] = []) {
     const tag = delta > 0 ? unavailableTag(product) : null;
     if (tag) {
       refusals = {
@@ -322,7 +358,7 @@
       };
       return;
     }
-    const moved = step(cart, product, delta, byId);
+    const moved = step(cart, product, delta, byId, notes);
     if (moved.refusal) {
       refusals = { [product.id]: refusalText(moved.refusal) };
       return;
@@ -376,6 +412,8 @@
     PERMISSION_DENIED: "hub.refusal.permission",
     NOT_FOUND: "hub.pos.err.player",
     VALIDATION_FAILED: "hub.pos.err.lines",
+    FIELD_TOO_LONG: "hub.pos.err.lines",
+    TIER_LOCKED: "hub.pos.err.lines",
   };
 
   /** Adds the cart to the attached session's bill. `over` orders a short bundle anyway. */
@@ -387,7 +425,7 @@
     const payload: IntentPayload = {
       kind: "order.place",
       session_id: target.session.id,
-      lines: saleLines(cart),
+      lines: saleLines(cart, kitchenOn),
       stock_override: over ? true : undefined,
     };
     const body = JSON.stringify(payload);
@@ -472,7 +510,7 @@
     error = null;
     const payload: IntentPayload = {
       kind: "pos.sale",
-      lines: saleLines(cart),
+      lines: saleLines(cart, kitchenOn),
       payments,
       player_id: attached?.player_id,
       stock_override: over ? true : undefined,
@@ -666,7 +704,7 @@
       <p class="empty type-hub-body" data-testid="cart-empty">{t("hub.pos.cart.empty")}</p>
     {:else}
       <ul class="lines" aria-label={t("hub.pos.cart.lines")} data-testid="cart-lines">
-        {#each lines as { line, product, short } (product.id)}
+        {#each lines as { line, product, short } (lineKey(line))}
           <li class="line" data-testid="cart-line" data-product-id={product.id}>
             <div class="line-main">
               <span class="line-name type-hub-body">{product.name}</span>
@@ -680,7 +718,7 @@
                 class="ui-interactive step"
                 aria-label={t("hub.pos.cart.fewer", { name: product.name })}
                 data-testid="line-dec"
-                onclick={() => nudge(product, -1)}>−</button
+                onclick={() => nudge(product, -1, line.notes)}>−</button
               >
               <span class="qty type-hub-numeric tabular-nums" data-testid="line-qty"
                 >{line.qty}</span
@@ -690,9 +728,61 @@
                 class="ui-interactive step"
                 aria-label={t("hub.pos.cart.more", { name: product.name })}
                 data-testid="line-inc"
-                onclick={() => nudge(product, 1)}>+</button
+                onclick={() => nudge(product, 1, line.notes)}>+</button
               >
+              {#if kitchenOn && product.kitchen}
+                <button
+                  type="button"
+                  class="ui-interactive note-btn type-hub-label"
+                  data-testid="line-notes-edit"
+                  aria-expanded={noting?.key === lineKey(line)}
+                  aria-label={t("hub.pos.notes.edit", { name: product.name })}
+                  onclick={() =>
+                    noting?.key === lineKey(line) ? (noting = null) : openNotes(line, product)}
+                  >{t("hub.pos.notes.button")}</button
+                >
+              {/if}
             </div>
+            {#if line.notes?.length}
+              <ul class="line-notes type-hub-label" data-testid="line-notes">
+                {#each line.notes as note (note)}<li>{note}</li>{/each}
+              </ul>
+            {/if}
+            {#if noting?.key === lineKey(line)}
+              <div class="notes-panel" data-testid="notes-panel">
+                {#if product.kitchen_notes.length}
+                  <div class="chips" role="group" aria-label={t("hub.pos.notes.presets")}>
+                    {#each product.kitchen_notes as note (note)}
+                      <button
+                        type="button"
+                        class="ui-interactive chip type-hub-label"
+                        aria-pressed={draftChips.includes(note)}
+                        data-testid="notes-chip"
+                        onclick={() => toggleChip(note)}>{note}</button
+                      >
+                    {/each}
+                  </div>
+                {/if}
+                <label class="free type-hub-label"
+                  >{t("hub.pos.notes.free")}
+                  <input
+                    class="ui-interactive free-input"
+                    maxlength={MAX_FREE_NOTE}
+                    data-testid="notes-free"
+                    bind:value={draftFree}
+                  />
+                </label>
+                <span class="count type-hub-label tabular-nums" aria-hidden="true"
+                  >{draftFree.length}/{MAX_FREE_NOTE}</span
+                >
+                <button
+                  type="button"
+                  class="ui-interactive note-btn type-hub-label"
+                  data-testid="notes-done"
+                  onclick={saveNotes}>{t("hub.pos.notes.done")}</button
+                >
+              </div>
+            {/if}
             {#if product.bundle && product.components.length}
               <ul class="parts type-hub-label" data-testid="line-parts">
                 {#each product.components as part (part.product_id)}
@@ -766,7 +856,7 @@
       prefillCash
       hotkey
       receiptChoice
-      couponSource={{ lines: saleLines(cart) }}
+      couponSource={{ lines: saleLines(cart, kitchenOn) }}
       discountDirect={hasPermission(staff, "discount.manual")}
     />
   {:else}
@@ -1471,6 +1561,59 @@
     gap: var(--space-1);
     padding-inline-start: var(--space-5);
     color: var(--text-muted);
+  }
+
+  .line-notes {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0;
+    padding-inline-start: var(--space-5);
+    color: var(--text-muted);
+    list-style: none;
+  }
+
+  .notes-panel {
+    display: grid;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .chip,
+  .note-btn {
+    min-height: var(--space-touch-min);
+    padding: var(--space-2) var(--space-4);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-full);
+    background-color: var(--surface-2);
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .chip[aria-pressed="true"] {
+    border-color: var(--text);
+    font-weight: 600;
+  }
+
+  .free {
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  .free-input {
+    min-height: var(--space-touch-min);
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    background-color: var(--surface-2);
+    color: var(--text);
   }
 
   .settle {

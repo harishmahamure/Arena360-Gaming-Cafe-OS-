@@ -555,6 +555,7 @@ mod tests {
             bundle: false,
             rev: 1,
             deleted_at: None,
+            kitchen_notes: Vec::new(),
         }
     }
 

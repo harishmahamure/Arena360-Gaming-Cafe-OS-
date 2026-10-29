@@ -190,8 +190,11 @@ pub(super) fn check_lines(lines: &[PosSaleLine], t: &Basket) -> Result<(), AppEr
         if !(1..=MAX_SALE_QTY).contains(&line.qty) {
             return Err(invalid(&field, "quantity must be 1 to 999"));
         }
-        if !seen.insert(line.product_id.as_str()) {
-            return Err(invalid(&field, "each product appears once"));
+        if !seen.insert((line.product_id.as_str(), &line.kitchen_notes)) {
+            return Err(invalid(
+                &field,
+                "a product repeats only with different kitchen notes",
+            ));
         }
         if !sellable(&item.product) {
             return Err(invalid(&field, "this product cannot be sold"));
@@ -432,6 +435,7 @@ pub(super) fn validate_sale(intent: &Intent, s: &PosSale, t: &SaleTarget) -> Res
         check_kiosk(s, t)?;
     }
     check_lines(&s.lines, &t.basket)?;
+    super::kitchen_notes::check_lines(intent.actor.kind, &s.lines, &t.basket)?;
     if s.player_id.is_some() && !t.player {
         return Err(AppError::with_field(
             ErrorCode::NotFound,
@@ -517,6 +521,7 @@ pub(super) fn mutate_sale(
                 at: now_ms,
                 placement: None,
                 served: true,
+                kitchen_notes: &super::kitchen_notes::clean(&line.kitchen_notes),
             },
         )?;
         written.push(Written {

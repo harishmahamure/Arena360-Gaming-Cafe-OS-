@@ -56,6 +56,7 @@ fn sale(
             .map(|(id, qty)| PosSaleLine {
                 product_id: (*id).into(),
                 qty: *qty,
+                kitchen_notes: Vec::new(),
             })
             .collect(),
         payments,
@@ -558,6 +559,7 @@ async fn the_preview_prices_the_discount_after_the_coupon_without_writing() {
         lines: Some(vec![PosSaleLine {
             product_id: cola.clone(),
             qty: 2,
+            kitchen_notes: Vec::new(),
         }]),
         ..base(percent(1_000), Some("ten"))
     })
@@ -579,6 +581,7 @@ async fn the_preview_prices_the_discount_after_the_coupon_without_writing() {
         lines: Some(vec![PosSaleLine {
             product_id: cola,
             qty: 1,
+            kitchen_notes: Vec::new(),
         }]),
         ..base(amount(5_000), None)
     })

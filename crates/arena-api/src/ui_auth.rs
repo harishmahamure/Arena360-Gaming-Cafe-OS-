@@ -888,6 +888,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         }
         ErrorCode::NotFound | ErrorCode::InvoiceNotFound => StatusCode::NOT_FOUND,
         ErrorCode::ValidationFailed
+        | ErrorCode::FieldTooLong
         | ErrorCode::Expired
         | ErrorCode::HsnRequired
         | ErrorCode::ReferenceRequired
@@ -4449,6 +4450,7 @@ pub(crate) mod tests {
                 active: true,
                 bundle: false,
                 components: Vec::new(),
+                kitchen_notes: None,
             }),
             None,
         )
@@ -4476,6 +4478,7 @@ pub(crate) mod tests {
             lines: vec![PosSaleLine {
                 product_id: chips.clone(),
                 qty: 2,
+                kitchen_notes: Vec::new(),
             }],
             stock_override: None,
         });
@@ -4592,6 +4595,7 @@ pub(crate) mod tests {
                 active: true,
                 bundle: false,
                 components: Vec::new(),
+                kitchen_notes: None,
             }),
             None,
         )
@@ -4619,6 +4623,7 @@ pub(crate) mod tests {
                 lines: vec![PosSaleLine {
                     product_id: burger.clone(),
                     qty,
+                    kitchen_notes: Vec::new(),
                 }],
                 stock_override: None,
             })
@@ -5782,7 +5787,7 @@ pub(crate) mod tests {
                 favourite: false,
                 active: true,
                 bundle: false,
-                components: Vec::new(),
+                components: Vec::new(), kitchen_notes: None,
             }),
             None,
         ) });
@@ -5983,6 +5988,7 @@ pub(crate) mod tests {
                     active: true,
                     bundle: false,
                     components: Vec::new(),
+                    kitchen_notes: None,
                 }),
                 None,
             ))
@@ -6070,6 +6076,7 @@ pub(crate) mod tests {
                     active: true,
                     bundle: false,
                     components: Vec::new(),
+                    kitchen_notes: None,
                 }),
                 None,
             ))
@@ -6133,6 +6140,7 @@ pub(crate) mod tests {
             lines: vec![arena_proto::PosSaleLine {
                 product_id: product.clone(),
                 qty: 2,
+                kitchen_notes: Vec::new(),
             }],
             payments: vec![arena_proto::PaymentRow {
                 method: arena_proto::PaymentMethod::Cash,
@@ -6322,7 +6330,7 @@ pub(crate) mod tests {
                 favourite: false,
                 active: true,
                 bundle: false,
-                components: Vec::new(),
+                components: Vec::new(), kitchen_notes: None,
             }),
             None,
         ) });
@@ -6379,7 +6387,7 @@ pub(crate) mod tests {
                 favourite: false,
                 active: true,
                 bundle: true,
-                components: vec![arena_proto::BundleComponent { product_id: cola.clone(), qty: 2 }],
+                components: vec![arena_proto::BundleComponent { product_id: cola.clone(), qty: 2 }], kitchen_notes: None,
             }),
             None,
         ) });
@@ -7804,6 +7812,7 @@ pub(crate) mod tests {
                 active: true,
                 bundle: false,
                 components: Vec::new(),
+                kitchen_notes: None,
             })
         };
 
@@ -7870,6 +7879,7 @@ pub(crate) mod tests {
                         qty: 1,
                     },
                 ],
+                kitchen_notes: None,
             }),
         )
         .await;
@@ -8652,6 +8662,7 @@ pub(crate) mod tests {
                         }]
                     })
                     .unwrap_or_default(),
+                kitchen_notes: None,
             })
         };
         let (status, made) = post(manager.clone(), product("Chips", 1_000, None), None).await;
@@ -8699,6 +8710,7 @@ pub(crate) mod tests {
                     .map(|(id, qty)| PosSaleLine {
                         product_id: (*id).into(),
                         qty: *qty,
+                        kitchen_notes: Vec::new(),
                     })
                     .collect(),
                 payments: vec![PaymentRow {

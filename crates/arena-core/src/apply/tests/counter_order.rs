@@ -32,6 +32,7 @@ fn lines(product: &str, qty: i64) -> Vec<PosSaleLine> {
     vec![PosSaleLine {
         product_id: product.into(),
         qty,
+        kitchen_notes: Vec::new(),
     }]
 }
 

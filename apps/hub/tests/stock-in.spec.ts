@@ -39,6 +39,7 @@ const product = (over: Partial<Product>): Product => ({
   active: true,
   bundle: false,
   components: [],
+  kitchen_notes: [],
   rev: 1,
   quantity: 0,
   avg_cost_minor: 0,

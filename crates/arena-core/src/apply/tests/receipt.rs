@@ -47,6 +47,7 @@ async fn sale_with(
             lines: vec![PosSaleLine {
                 product_id: product.into(),
                 qty: 1,
+                kitchen_notes: Vec::new(),
             }],
             payments: vec![pay(Cash, 4_000, None)],
             player_id: None,
@@ -518,6 +519,7 @@ async fn the_drawer_off_or_no_cash_row_sends_no_kick() {
             lines: vec![PosSaleLine {
                 product_id: id.clone(),
                 qty: 1,
+                kitchen_notes: Vec::new(),
             }],
             payments: vec![pay(arena_proto::PaymentMethod::Upi, 4_000, Some("1234"))],
             player_id: None,
@@ -690,6 +692,7 @@ async fn whatsapp_sale(
             lines: vec![PosSaleLine {
                 product_id: product.into(),
                 qty: 1,
+                kitchen_notes: Vec::new(),
             }],
             payments: vec![pay(Cash, 4_000, None)],
             player_id: player.map(str::to_owned),
@@ -965,6 +968,7 @@ async fn business_sale(
             lines: vec![PosSaleLine {
                 product_id: product.into(),
                 qty: 1,
+                kitchen_notes: Vec::new(),
             }],
             payments: vec![pay(Cash, 4_000, None)],
             player_id: None,

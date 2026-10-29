@@ -454,6 +454,7 @@ mod tests {
                         active: true,
                         bundle: false,
                         components: Vec::new(),
+                        kitchen_notes: None,
                     }),
                     None,
                 ))
@@ -482,6 +483,7 @@ mod tests {
                             product_id: cola.clone(),
                             qty: 2,
                         }],
+                        kitchen_notes: None,
                     }),
                     None,
                 ))
@@ -510,6 +512,7 @@ mod tests {
                             product_id: cola.clone(),
                             qty: 3,
                         }],
+                        kitchen_notes: None,
                     }),
                     Some(1),
                 ))
@@ -926,6 +929,7 @@ mod tests {
                         active: true,
                         bundle: false,
                         components: Vec::new(),
+                        kitchen_notes: None,
                     }),
                     None,
                 ))
@@ -957,6 +961,7 @@ mod tests {
                         lines: vec![arena_proto::PosSaleLine {
                             product_id: cola.clone(),
                             qty: 2,
+                            kitchen_notes: Vec::new(),
                         }],
                         payments: vec![arena_proto::PaymentRow {
                             method: arena_proto::PaymentMethod::Cash,
@@ -1193,6 +1198,7 @@ mod tests {
                         lines: vec![arena_proto::PosSaleLine {
                             product_id: cola.clone(),
                             qty,
+                            kitchen_notes: Vec::new(),
                         }],
                         stock_override: None,
                     }),
@@ -1237,6 +1243,7 @@ mod tests {
                         active: true,
                         bundle: false,
                         components: Vec::new(),
+                        kitchen_notes: None,
                     }),
                     None,
                 ))
@@ -1267,6 +1274,7 @@ mod tests {
                             lines: vec![arena_proto::PosSaleLine {
                                 product_id: burger.clone(),
                                 qty,
+                                kitchen_notes: Vec::new(),
                             }],
                             stock_override: None,
                         }),

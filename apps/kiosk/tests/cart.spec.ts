@@ -7,7 +7,9 @@ import {
   cartTotal,
   chosenPay,
   payOffer,
+  placeLines,
   placeOf,
+  renote,
   refreshLines,
   stockProblem,
   stepCart,
@@ -30,6 +32,7 @@ type Item = {
   has_image: boolean;
   popular: boolean;
   components: { name: string; qty: number }[];
+  kitchen_notes: string[];
 };
 type Menu = {
   enabled: boolean;
@@ -59,6 +62,7 @@ const item = (id: string, name: string, extra: Partial<Item> = {}): Item => ({
   has_image: false,
   popular: false,
   components: [],
+  kitchen_notes: [],
   ...extra,
 });
 
@@ -578,4 +582,82 @@ test("payOffer and chosenPay follow what the Hub offers", () => {
   expect(chosenPay(offer, "counter", 4_000)).toBe("counter");
   // A pick the Hub no longer offers falls back.
   expect(chosenPay(offer, "bill", 4_000)).toBe("wallet");
+});
+
+test("lines of one product stay apart by their kitchen notes and share the stock", () => {
+  const tea = item("P9", "Tea", { max_qty: 2, kitchen_notes: ["No ice", "Less sugar"] });
+  const first = stepCart([], "P9", 1, tea, ["No ice"]);
+  expect(first.lines).toEqual([{ item: tea, qty: 1, notes: ["No ice"] }]);
+  const second = stepCart(first.lines, "P9", 1, tea, []);
+  expect(second.lines.map((l) => [l.qty, l.notes])).toEqual([
+    [1, ["No ice"]],
+    [1, undefined],
+  ]);
+  // Both lines draw on the same two units.
+  expect(stepCart(second.lines, "P9", 1, tea, []).problem).toEqual({ kind: "only", left: 2 });
+  expect(stepCart(second.lines, "P9", -1, tea, ["No ice"]).lines).toHaveLength(1);
+  expect(placeLines(second.lines)).toEqual([
+    { product_id: "P9", qty: 1, kitchen_notes: ["No ice"] },
+    { product_id: "P9", qty: 1 },
+  ]);
+});
+
+test("toggling a preset moves the line and merges it with a line that has the same notes", () => {
+  const tea = item("P9", "Tea", { kitchen_notes: ["No ice", "Less sugar"] });
+  const lines: CartLine[] = [
+    { item: tea, qty: 1, notes: ["No ice"] },
+    { item: tea, qty: 2 },
+  ];
+  const merged = renote(lines, "P9", [], ["No ice"]);
+  expect(merged).toEqual([{ item: tea, qty: 3, notes: ["No ice"] }]);
+  const added = renote(merged, "P9", ["No ice"], ["No ice", "Less sugar"]);
+  expect(added[0].notes).toEqual(["Less sugar", "No ice"]);
+  expect(renote(added, "P9", ["Less sugar", "No ice"], [])).toEqual([{ item: tea, qty: 3 }]);
+});
+
+// ---- kitchen notes (Story 7.2) ----
+
+const WITH_NOTES: Menu = {
+  enabled: true,
+  items: [
+    item("K1", "Masala tea", { kitchen_notes: ["Less sugar", "No ginger"] }),
+    item("P4", "Chips"),
+  ],
+};
+
+test("a kitchen line offers only its preset notes as toggles, shown under the line and sent", async ({
+  page,
+}) => {
+  await openShop(page, WITH_NOTES);
+  await add(page, "Masala tea");
+  const tea = line(page, "Masala tea");
+  await expect(tea.getByTestId("cart-notes")).toBeVisible();
+  await tea.getByTestId("cart-notes").click();
+  const chips = tea.getByTestId("cart-note-chip");
+  await expect(chips).toHaveText(["Less sugar", "No ginger"]);
+  // Presets only: there is no text field to type a note into.
+  await expect(tea.getByRole("textbox")).toHaveCount(0);
+  await chips.filter({ hasText: "Less sugar" }).click();
+  await expect(chips.filter({ hasText: "Less sugar" })).toHaveAttribute("aria-pressed", "true");
+  await expect(tea.getByTestId("cart-line-notes").getByRole("listitem")).toHaveText(["Less sugar"]);
+  // The same tea without notes is a second line, and the notes line merges back when matched.
+  await add(page, "Masala tea");
+  await expect(line(page, "Masala tea")).toHaveCount(2);
+  await page.getByTestId("cart-place").click();
+  await expect(page.getByTestId("cart-placed")).toBeVisible();
+  expect(await calls(page)).toEqual([
+    [
+      "shop_place",
+      [
+        { product_id: "K1", qty: 1, kitchen_notes: ["Less sugar"] },
+        { product_id: "K1", qty: 1 },
+      ],
+    ],
+  ]);
+});
+
+test("a line without preset notes shows no Notes control", async ({ page }) => {
+  await openShop(page, WITH_NOTES);
+  await add(page, "Chips");
+  await expect(line(page, "Chips").getByTestId("cart-notes")).toHaveCount(0);
 });

@@ -138,6 +138,7 @@ async fn the_account_page_holds_details_wallet_packs_and_orders() {
             lines: vec![PosSaleLine {
                 product_id: cola,
                 qty: 2,
+                kitchen_notes: Vec::new(),
             }],
             stock_override: None,
         }),

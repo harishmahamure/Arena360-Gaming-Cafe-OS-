@@ -3,4 +3,12 @@
 /**
  * One line of a counter sale: `qty` of a product.
  */
-export type PosSaleLine = { product_id: string; qty: number };
+export type PosSaleLine = {
+  product_id: string;
+  qty: number;
+  /**
+   * Story 7.2: kitchen notes for a kitchen-flagged product ("Less sugar"); they never change
+   * price, tax or stock. Two lines of one product stay apart when their notes differ.
+   */
+  kitchen_notes?: Array<string>;
+};

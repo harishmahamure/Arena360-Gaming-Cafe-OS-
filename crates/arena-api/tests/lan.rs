@@ -4344,6 +4344,7 @@ async fn shop_product(hub: &TestHub, name: &str, photo: &str, active: bool) -> S
                 active,
                 bundle: false,
                 components: Vec::new(),
+                kitchen_notes: None,
             }),
             None,
         ))
@@ -4434,6 +4435,7 @@ async fn a_basic_branch_serves_the_shop_menu_and_one_photo_at_a_time_and_a_chang
                 active: false,
                 bundle: false,
                 components: Vec::new(),
+                kitchen_notes: None,
             }),
             None,
         ))
@@ -4520,6 +4522,7 @@ async fn tracked_cola(hub: &TestHub, qty: i64) -> String {
                 active: true,
                 bundle: false,
                 components: Vec::new(),
+                kitchen_notes: None,
             }),
             None,
         ))

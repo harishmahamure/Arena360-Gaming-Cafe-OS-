@@ -39,6 +39,7 @@ fn order(session: &str, product: &str, qty: i64, over: Option<bool>) -> IntentPa
         lines: vec![PosSaleLine {
             product_id: product.into(),
             qty,
+            kitchen_notes: Vec::new(),
         }],
         stock_override: over,
     })

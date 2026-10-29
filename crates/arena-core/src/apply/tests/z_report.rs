@@ -55,6 +55,7 @@ async fn sell(f: &Fixture, id: &str, qty: i64, payments: Vec<PaymentRow>) -> Str
             lines: vec![PosSaleLine {
                 product_id: id.into(),
                 qty,
+                kitchen_notes: Vec::new(),
             }],
             payments,
             player_id: None,
@@ -251,6 +252,7 @@ async fn fixture_shift(f: &Fixture) -> Fixture28 {
             lines: vec![PosSaleLine {
                 product_id: cola,
                 qty: 1,
+                kitchen_notes: Vec::new(),
             }],
             stock_override: None,
         }),

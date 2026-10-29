@@ -66,6 +66,11 @@ pub struct ProductUpsert {
     pub bundle: bool,
     #[serde(default)]
     pub components: Vec<BundleComponent>,
+    /// Story 7.2: the preset kitchen notes (up to 8 of up to 40 characters); `None` leaves the
+    /// stored list as it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub kitchen_notes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -92,6 +97,9 @@ pub struct Product {
     pub active: bool,
     pub bundle: bool,
     pub components: Vec<ComponentView>,
+    /// Story 7.2: the preset kitchen notes of a kitchen product.
+    #[serde(default)]
+    pub kitchen_notes: Vec<String>,
     #[ts(type = "number")]
     pub rev: i64,
     #[ts(type = "number")]

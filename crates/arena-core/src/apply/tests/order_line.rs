@@ -20,6 +20,7 @@ pub(super) fn place_of(session: &str, lines: &[(&str, i64)]) -> OrderPlace {
             .map(|(id, qty)| PosSaleLine {
                 product_id: (*id).into(),
                 qty: *qty,
+                kitchen_notes: Vec::new(),
             })
             .collect(),
         stock_override: None,
@@ -663,6 +664,7 @@ async fn available_stock_is_on_hand_less_open_holds_for_sales_and_the_catalogue(
         lines: vec![PosSaleLine {
             product_id: id.clone(),
             qty,
+            kitchen_notes: Vec::new(),
         }],
         payments: vec![pay(Cash, 9_000 * qty, None)],
         player_id: None,
@@ -707,6 +709,7 @@ async fn counter_sale_lines_are_served_in_both_modes() {
                 lines: vec![PosSaleLine {
                     product_id: id.clone(),
                     qty: 2,
+                    kitchen_notes: Vec::new(),
                 }],
                 payments: vec![PaymentRow {
                     method: Cash,

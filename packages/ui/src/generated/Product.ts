@@ -16,6 +16,10 @@ export type Product = {
   active: boolean;
   bundle: boolean;
   components: Array<ComponentView>;
+  /**
+   * Story 7.2: the preset kitchen notes of a kitchen product.
+   */
+  kitchen_notes: Array<string>;
   rev: number;
   quantity: number;
   avg_cost_minor: number;

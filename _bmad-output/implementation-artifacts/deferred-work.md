@@ -536,3 +536,10 @@
 - Linked entries: `kiosk.library` keeps stored catalogue name/launcher/age rating while the Hub list shows current catalogue values; refresh on catalogue change.
 - `MAX_LIBRARY_VALUE_CHARS` (900k chars) vs `MAX_FRAME_BYTES` (1 MiB bytes): multibyte/escaped content could exceed a frame near the cap.
 - No tests for the cap refusals or catalogue-missing paths; "library is full/too large" errors use field `name`, which the Hub shows as a name-length message.
+
+## Deferred from: Story 7.2 (kitchen notes)
+
+- Notes are not shown on the placed bill lines (tile sheet order section, receipts) yet; Story 7.3 reads `order_lines.kitchen_notes` for the ticket.
+- A cart restored by Undo keeps its notes, but a preset renamed meanwhile shows as a free-text note and may trip the one-free-note rule on re-send.
+- Preset notes are compared case-sensitively; "no ice" and "No ice" are two notes.
+- No Playwright test for the Counter PIN path on a product save with notes, or for the `FIELD_TOO_LONG` message on the product form.

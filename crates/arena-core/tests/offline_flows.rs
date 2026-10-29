@@ -439,6 +439,7 @@ async fn run_epic_5_flow(state: ConnectivityState) -> Outcome5 {
             active: true,
             bundle: false,
             components: Vec::new(),
+            kitchen_notes: None,
         })
     };
     let cola = send(&w, product("Cola", 4_000), None).await;
@@ -490,6 +491,7 @@ async fn run_epic_5_flow(state: ConnectivityState) -> Outcome5 {
             .map(|(id, qty)| arena_proto::PosSaleLine {
                 product_id: (*id).clone(),
                 qty: *qty,
+                kitchen_notes: Vec::new(),
             })
             .collect()
     };

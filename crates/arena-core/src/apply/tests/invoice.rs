@@ -41,6 +41,7 @@ async fn sale(f: &Fixture, by: &Actor, product: &str) -> String {
             lines: vec![PosSaleLine {
                 product_id: product.into(),
                 qty: 1,
+                kitchen_notes: Vec::new(),
             }],
             payments: vec![pay(Cash, 4_000, None)],
             player_id: None,

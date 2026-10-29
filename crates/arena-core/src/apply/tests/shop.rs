@@ -46,6 +46,7 @@ fn place() -> IntentPayload {
         lines: vec![PosSaleLine {
             product_id: "P1".into(),
             qty: 1,
+            kitchen_notes: Vec::new(),
         }],
         stock_override: None,
     })
@@ -71,6 +72,7 @@ async fn sell(f: &Fixture, id: &str, qty: i64) {
             lines: vec![PosSaleLine {
                 product_id: id.into(),
                 qty,
+                kitchen_notes: Vec::new(),
             }],
             payments: vec![pay(Cash, 100 * qty, None)],
             player_id: None,

@@ -40,6 +40,7 @@ mod import_setup;
 mod invoice;
 mod kiosk_order;
 mod kiosk_scan;
+mod kitchen_notes;
 mod library;
 mod login;
 mod order_line;
@@ -8406,6 +8407,7 @@ mod products {
             active: true,
             bundle: false,
             components: Vec::new(),
+            kitchen_notes: None,
         }
     }
 
@@ -8883,6 +8885,7 @@ mod products {
             active: false,
             bundle: false,
             components: Vec::new(),
+            kitchen_notes: None,
         };
         run(&f, edited.clone(), Some(1)).await.unwrap();
         let r = row(&f, &id);

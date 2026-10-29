@@ -33,6 +33,7 @@
     chosenPay,
     payOffer,
     refreshLines,
+    renote,
     stepCart,
     type CartLine,
     type PayChoice,
@@ -129,7 +130,7 @@
    * first, so the stock it is checked against is live; a refusal leaves the cart as it was and
    * says why on the line. The Hub not answering says the counter is reconnecting.
    */
-  async function stepLine(id: string, delta: 1 | -1) {
+  async function stepLine(id: string, delta: 1 | -1, notes: string[] = []) {
     // A placement in flight owns the cart: a step now would be cleared with the placed lines.
     if (cartBusy) return;
     cartPlaced = null;
@@ -147,7 +148,7 @@
       shop = view;
       fresh = view.items.find((i) => i.id === id);
     }
-    const result = stepCart(cart, id, delta, fresh);
+    const result = stepCart(cart, id, delta, fresh, notes);
     cart = result.lines;
     if (result.problem !== null) cartProblems = { ...cartProblems, [id]: result.problem };
   }
@@ -500,7 +501,10 @@
         picked={cartPick}
         balance={cartBalance}
         onpick={(pay) => (cartPick = pay)}
-        onstep={(id, delta) => void stepLine(id, delta)}
+        onstep={(id, delta, notes) => void stepLine(id, delta, notes)}
+        onnotes={(id, from, to) => {
+          if (!cartBusy) cart = renote(cart, id, from, to);
+        }}
         onplace={(pay) => void place(pay)}
         onclose={closeCart}
       />

@@ -47,6 +47,7 @@ async fn sell(
                 .map(|(id, qty)| PosSaleLine {
                     product_id: (*id).into(),
                     qty: *qty,
+                    kitchen_notes: Vec::new(),
                 })
                 .collect(),
             payments,
@@ -752,10 +753,12 @@ async fn a_manual_discount_is_refunded_pro_rata_and_every_line_back_is_exactly_w
                 PosSaleLine {
                     product_id: cola.clone(),
                     qty: 1,
+                    kitchen_notes: Vec::new(),
                 },
                 PosSaleLine {
                     product_id: chips.clone(),
                     qty: 1,
+                    kitchen_notes: Vec::new(),
                 },
             ],
             payments: vec![pay(Cash, 9_000, None)],

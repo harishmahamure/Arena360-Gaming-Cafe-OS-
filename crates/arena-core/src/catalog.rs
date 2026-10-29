@@ -121,6 +121,7 @@ pub(crate) fn products(store: &Store, now_ms: i64) -> Result<Vec<Product>, AppEr
                 active: p.active,
                 bundle: p.bundle,
                 components: s.components,
+                kitchen_notes: p.kitchen_notes,
                 rev: p.rev,
                 quantity: s.quantity,
                 avg_cost_minor: s.avg_cost_minor,

@@ -21,6 +21,7 @@ fn place_of(session: &str, lines: &[(&str, i64)]) -> OrderPlace {
             .map(|(id, qty)| PosSaleLine {
                 product_id: (*id).into(),
                 qty: *qty,
+                kitchen_notes: Vec::new(),
             })
             .collect(),
         stock_override: None,

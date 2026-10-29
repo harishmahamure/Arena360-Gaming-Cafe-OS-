@@ -4,6 +4,7 @@
   import {
     cartTotal,
     chosenPay,
+    lineKey,
     payOffer,
     stockProblem,
     walletShort,
@@ -34,6 +35,7 @@
     balance = null,
     onpick = () => {},
     onstep = () => {},
+    onnotes = () => {},
     onplace = () => {},
     onclose = () => {},
   }: {
@@ -60,7 +62,9 @@
     /** The wallet balance a refused wallet payment found (INSUFFICIENT_BALANCE). */
     balance?: number | null;
     onpick?: (pay: PayChoice) => void;
-    onstep?: (id: string, delta: 1 | -1) => void;
+    onstep?: (id: string, delta: 1 | -1, notes?: string[]) => void;
+    /** Story 7.2: the line with these notes now has those (preset toggles only). */
+    onnotes?: (id: string, from: string[], to: string[]) => void;
     onplace?: (pay: PayChoice) => void;
     onclose?: () => void;
   } = $props();
@@ -86,6 +90,17 @@
   /** The mark on a line: the Hub's reason first, then what the live menu says about it now. */
   const problemOf = (line: CartLine): LineProblem | null =>
     problems[line.item.id] ?? stockProblem(line.item, line.qty);
+
+  /** The line whose preset notes are open. */
+  let noting: string | null = $state(null);
+
+  function toggle(line: CartLine, note: string) {
+    const have = line.notes ?? [];
+    const to = have.includes(note) ? have.filter((n) => n !== note) : [...have, note];
+    onnotes(line.item.id, have, to);
+    // The line may merge into another or change key: keep its panel open under the new key.
+    noting = lineKey({ item: line.item, notes: to });
+  }
 
   let panel: HTMLElement | undefined = $state();
   $effect(() => panel?.focus());
@@ -149,7 +164,7 @@
     {/if}
   {:else}
     <ul class="lines" aria-label={t("player.cart.lines_label")} data-testid="cart-lines">
-      {#each lines as line (line.item.id)}
+      {#each lines as line (lineKey(line))}
         {@const problem = problemOf(line)}
         <li class="line" data-testid="cart-line" data-item-id={line.item.id}>
           <div class="row">
@@ -175,7 +190,7 @@
               class="step type-kiosk-title"
               aria-label={t("player.cart.fewer", { name: line.item.name })}
               data-testid="cart-less"
-              onclick={() => onstep(line.item.id, -1)}
+              onclick={() => onstep(line.item.id, -1, line.notes)}
             >
               <span aria-hidden="true">−</span>
             </button>
@@ -185,11 +200,48 @@
               class="step type-kiosk-title"
               aria-label={t("player.cart.more", { name: line.item.name })}
               data-testid="cart-more"
-              onclick={() => onstep(line.item.id, 1)}
+              onclick={() => onstep(line.item.id, 1, line.notes)}
             >
               <span aria-hidden="true">+</span>
             </button>
+            {#if line.item.kitchen_notes.length > 0}
+              <button
+                type="button"
+                class="notes-btn type-kiosk-label"
+                aria-expanded={noting === lineKey(line)}
+                aria-label={t("player.cart.notes.edit", { name: line.item.name })}
+                data-testid="cart-notes"
+                onclick={() => (noting = noting === lineKey(line) ? null : lineKey(line))}
+              >
+                {t("player.cart.notes.button")}
+              </button>
+            {/if}
           </div>
+          {#if line.notes?.length}
+            <ul class="line-notes type-kiosk-label" data-testid="cart-line-notes">
+              {#each line.notes as note (note)}<li>{note}</li>{/each}
+            </ul>
+          {/if}
+          {#if noting === lineKey(line)}
+            <div
+              class="chips"
+              role="group"
+              aria-label={t("player.cart.notes.presets")}
+              data-testid="cart-note-chips"
+            >
+              {#each line.item.kitchen_notes as note (note)}
+                <button
+                  type="button"
+                  class="chip type-kiosk-label"
+                  aria-pressed={line.notes?.includes(note) ?? false}
+                  data-testid="cart-note-chip"
+                  onclick={() => toggle(line, note)}
+                >
+                  {note}
+                </button>
+              {/each}
+            </div>
+          {/if}
           {#if problem !== null}
             <p class="problem type-kiosk-label" role="alert" data-testid="cart-line-problem">
               <span aria-hidden="true">⚠</span>
@@ -392,6 +444,36 @@
     margin: 0;
     padding: 0 0 0 var(--space-5);
     list-style: none;
+  }
+
+  .line-notes {
+    margin: 0;
+    padding: 0 0 0 var(--space-5);
+    list-style: none;
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .chip,
+  .notes-btn {
+    min-height: var(--space-touch-min);
+    padding: 0 var(--space-3);
+    border: var(--text-field-border);
+    border-color: var(--border-strong);
+    border-radius: var(--radius-full);
+    background-color: transparent;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .chip[aria-pressed="true"] {
+    background-color: var(--cart-foreground);
+    color: var(--cart-background);
+    font-weight: 700;
   }
 
   .stepper {

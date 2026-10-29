@@ -1023,6 +1023,7 @@ mod tests {
             bundle: false,
             rev: 0,
             deleted_at: None,
+            kitchen_notes: Vec::new(),
         };
         store
             .write_tx(|tx| {

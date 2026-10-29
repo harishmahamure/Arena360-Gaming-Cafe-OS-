@@ -26,6 +26,11 @@ pub struct PosSaleLine {
     pub product_id: String,
     #[ts(type = "number")]
     pub qty: i64,
+    /// Story 7.2: kitchen notes for a kitchen-flagged product ("Less sugar"); they never change
+    /// price, tax or stock. Two lines of one product stay apart when their notes differ.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<String>>")]
+    pub kitchen_notes: Vec<String>,
 }
 
 /// The payload of `pos.sale`: a walk-up sale settled in the same intent. The payments sum to the

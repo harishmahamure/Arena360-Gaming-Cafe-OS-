@@ -34,6 +34,7 @@ const product = (id: string, name: string, extra: Partial<Product> = {}): Produc
   active: true,
   bundle: false,
   components: [],
+  kitchen_notes: [],
   rev: 1,
   quantity: 10,
   avg_cost_minor: 0,

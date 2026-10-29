@@ -25,6 +25,7 @@ fn sale_of(lines: &[(&str, i64)], payments: Vec<PaymentRow>) -> PosSale {
             .map(|(id, qty)| PosSaleLine {
                 product_id: (*id).into(),
                 qty: *qty,
+                kitchen_notes: Vec::new(),
             })
             .collect(),
         payments,

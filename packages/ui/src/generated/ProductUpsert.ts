@@ -16,4 +16,9 @@ export type ProductUpsert = {
   active: boolean;
   bundle: boolean;
   components: Array<BundleComponent>;
+  /**
+   * Story 7.2: the preset kitchen notes (up to 8 of up to 40 characters); `None` leaves the
+   * stored list as it is.
+   */
+  kitchen_notes?: Array<string>;
 };

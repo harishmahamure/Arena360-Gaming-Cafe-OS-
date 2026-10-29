@@ -24,6 +24,7 @@ async fn sell(f: &Fixture, actor: Actor, product: &str, qty: i64, player: Option
             lines: vec![PosSaleLine {
                 product_id: product.into(),
                 qty,
+                kitchen_notes: Vec::new(),
             }],
             payments: vec![pay(Cash, 5_000 * qty, None)],
             player_id: player.map(Into::into),

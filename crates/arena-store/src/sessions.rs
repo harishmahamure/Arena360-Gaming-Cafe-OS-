@@ -1637,6 +1637,8 @@ pub struct NewProductLine<'a> {
     /// Whether the line is served when written: a counter sale's always is, a placed kitchen line
     /// is not until staff mark it.
     pub served: bool,
+    /// The kitchen notes chosen for the line (Story 7.2); none for a non-kitchen line.
+    pub kitchen_notes: &'a [String],
 }
 
 /// Where the first product line of a session bill sits: after every session (time) line.
@@ -1648,9 +1650,9 @@ pub fn insert_product_line(conn: &Connection, l: &NewProductLine<'_>) -> Result<
                                   minutes, rate_minor_per_hour, amount_minor, position, rev,
                                   created_at, updated_at, label, product_id, qty,
                                   unit_price_minor, tax_rate_bp, placement_id, placed_by,
-                                  placed_at, served, served_at, served_by)
+                                  placed_at, served, served_at, served_by, kitchen_notes)
          VALUES (?1, ?2, NULL, NULL, ?3, ?3, 0, 0, ?4, ?5, 0, 0, 0, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                 ?13, ?14, ?15, ?16)",
+                 ?13, ?14, ?15, ?16, ?17)",
         params![
             l.id,
             l.order_id,
@@ -1667,7 +1669,8 @@ pub fn insert_product_line(conn: &Connection, l: &NewProductLine<'_>) -> Result<
             l.placement.map(|_| l.at),
             i64::from(l.served),
             l.placement.filter(|_| l.served).map(|_| l.at),
-            l.placement.filter(|_| l.served).map(|p| p.1)
+            l.placement.filter(|_| l.served).map(|p| p.1),
+            crate::products::notes_json(l.kitchen_notes)
         ],
     )
     .map_err(db_error)?;

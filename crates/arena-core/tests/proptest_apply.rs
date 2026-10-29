@@ -1532,6 +1532,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                             qty: 1,
                         })
                         .collect(),
+                    kitchen_notes: None,
                 }),
                 None,
             );
@@ -2125,6 +2126,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                             .map(|(p, q)| arena_proto::PosSaleLine {
                                 product_id: p.product_id.clone(),
                                 qty: *q,
+                                kitchen_notes: Vec::new(),
                             })
                             .collect(),
                         payments: if bill.total_minor > 0 {
@@ -2852,6 +2854,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                         active: true,
                         bundle: false,
                         components: Vec::new(),
+                        kitchen_notes: None,
                     }),
                     None,
                 ));
@@ -2865,6 +2868,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let lines = vec![arena_proto::PosSaleLine {
                 product_id: product.product_id.clone(),
                 qty: 1,
+                kitchen_notes: Vec::new(),
             }];
             let applied = if *unknown { "NOSUCH" } else { upper.as_str() };
             let request = arena_proto::CouponPreviewRequest {
@@ -2995,6 +2999,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                         active: true,
                         bundle: false,
                         components: Vec::new(),
+                        kitchen_notes: None,
                     }),
                     None,
                 ));
@@ -3008,6 +3013,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let lines = vec![arena_proto::PosSaleLine {
                 product_id: product.product_id.clone(),
                 qty: 1,
+                kitchen_notes: Vec::new(),
             }];
             let discount = arena_proto::ManualDiscount {
                 percent_bp: (!fixed).then_some(*percent),
@@ -3160,6 +3166,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     lines: vec![arena_proto::PosSaleLine {
                         product_id: product.product_id.clone(),
                         qty: i64::from(*qty),
+                        kitchen_notes: Vec::new(),
                     }],
                     stock_override: None,
                 }),
@@ -3248,6 +3255,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     lines: vec![arena_proto::PosSaleLine {
                         product_id: product.product_id.clone(),
                         qty: i64::from(*qty),
+                        kitchen_notes: Vec::new(),
                     }],
                     stock_override: None,
                 }),

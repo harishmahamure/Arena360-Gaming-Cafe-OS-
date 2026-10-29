@@ -50,6 +50,7 @@ mod import_setup;
 mod invoice_issue;
 mod kiosk_log;
 mod kiosk_scan;
+mod kitchen_notes;
 mod library;
 mod library_dismiss;
 mod licence;

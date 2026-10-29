@@ -17,6 +17,7 @@
   import { branchLocale } from "../../lib/locale.svelte";
   import { sessionStaff } from "../../lib/operating";
   import { loadProducts, parsePrice, priceText, shrinkImage } from "../../lib/products";
+  import { KEY_LICENCE_FLAGS } from "../../lib/printer";
   import { KEY_TAX, parsePct, parseTax, pct, type Tax } from "../../lib/tax";
 
   type Job = { payload: IntentPayload; rev?: number; key: string };
@@ -31,7 +32,10 @@
     image: "hub.products.invalid.image",
     components: "hub.products.invalid.components",
     bundle: "hub.products.invalid.bundle",
+    kitchen_notes: "hub.products.invalid.kitchen_notes",
   };
+  const MAX_PRESETS = 8;
+  const MAX_PRESET_CHARS = 40;
   const BLANK = {
     name: "",
     category: "",
@@ -46,10 +50,12 @@
     active: true,
     bundle: false,
     parts: [] as { id: string; qty: string }[],
+    notes: [] as string[],
   };
 
   let products: Product[] = $state([]);
   let tax = $state<Tax | null>(null);
+  let kitchenOn = $state(false);
   let loading = $state(true);
   let loadFailed = $state(false);
   let editing: Product | null = $state(null);
@@ -105,6 +111,9 @@
     if (settings.kind === "ok") {
       const row = settings.settings.find((s) => s.key === KEY_TAX);
       tax = row ? parseTax(row.value) : null;
+      kitchenOn = (settings.settings.find((s) => s.key === KEY_LICENCE_FLAGS)?.value ?? "")
+        .split(",")
+        .some((f) => f.trim() === "kitchen");
     }
   }
 
@@ -135,8 +144,9 @@
           active: product.active,
           bundle: product.bundle,
           parts: product.components.map((c) => ({ id: c.product_id, qty: String(c.qty) })),
+          notes: [...product.kitchen_notes],
         }
-      : { ...BLANK, parts: [] };
+      : { ...BLANK, parts: [], notes: [] };
     if (product) void tick().then(() => formEl?.querySelector("input")?.focus());
   }
 
@@ -187,7 +197,11 @@
     if (err?.code === "BARCODE_TAKEN")
       return void (errors = { barcode: "hub.products.barcode_taken" });
     if (err?.code === "HSN_REQUIRED") return void (errors = { hsn: INVALID.hsn });
-    if (err?.code === "VALIDATION_FAILED" && err.field && INVALID[err.field]) {
+    if (
+      (err?.code === "VALIDATION_FAILED" || err?.code === "FIELD_TOO_LONG") &&
+      err.field &&
+      INVALID[err.field]
+    ) {
       return void (errors = { [err.field]: INVALID[err.field] });
     }
     const stale =
@@ -240,6 +254,8 @@
     }
     if (price === null) bad.price_minor = INVALID.price_minor;
     if (rate === null) bad.tax_rate_bp = INVALID.tax_rate_bp;
+    const presets = form.notes.map((n) => n.trim()).filter(Boolean);
+    if (new Set(presets).size !== presets.length) bad.kitchen_notes = INVALID.kitchen_notes;
     if (Object.keys(bad).length) {
       errors = bad;
       return void tick().then(() =>
@@ -262,6 +278,8 @@
       active: form.active,
       bundle: form.bundle,
       components,
+      // Without the kitchen flag the stored list stays as it is.
+      kitchen_notes: kitchenOn && form.kitchen ? presets : undefined,
     };
     void run({ payload, rev: editing?.rev, key: keyFor(payload) });
   }
@@ -382,6 +400,37 @@
     <label class="check type-hub-label"
       ><input type="checkbox" bind:checked={form.kitchen} />{t("hub.products.kitchen")}</label
     >
+    {#if kitchenOn && form.kitchen}
+      <fieldset class="field type-hub-label" data-testid="kitchen-notes">
+        <legend>{t("hub.products.notes")}</legend>
+        <p class="hint">{t("hub.products.notes_hint")}</p>
+        {#each form.notes as _, i (i)}
+          <div class="part">
+            <input
+              class="ui-interactive note"
+              maxlength={MAX_PRESET_CHARS}
+              aria-label={t("hub.products.note", { n: i + 1 })}
+              aria-invalid={errors.kitchen_notes ? "true" : undefined}
+              bind:value={form.notes[i]}
+            />
+            <span class="count" aria-hidden="true">{form.notes[i].length}/{MAX_PRESET_CHARS}</span>
+            <button
+              type="button"
+              class="ui-interactive btn type-hub-label"
+              onclick={() => (form.notes = form.notes.filter((_, j) => j !== i))}
+              >{t("hub.products.note_remove", { n: i + 1 })}</button
+            >
+          </div>
+        {/each}
+        {#if errors.kitchen_notes}<p class="error" role="alert">{t(errors.kitchen_notes)}</p>{/if}
+        <button
+          type="button"
+          class="ui-interactive btn type-hub-label"
+          disabled={form.notes.length >= MAX_PRESETS}
+          onclick={() => (form.notes = [...form.notes, ""])}>{t("hub.products.note_add")}</button
+        >
+      </fieldset>
+    {/if}
     <label class="check type-hub-label"
       ><input type="checkbox" bind:checked={form.favourite} />{t("hub.products.favourite")}</label
     >
@@ -556,6 +605,20 @@
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
+  }
+
+  .note {
+    inline-size: min(20rem, 100%);
+    min-height: var(--space-touch-min);
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    background-color: var(--surface-2);
+    color: var(--text);
+  }
+
+  .count {
+    align-self: center;
   }
 
   .qty {

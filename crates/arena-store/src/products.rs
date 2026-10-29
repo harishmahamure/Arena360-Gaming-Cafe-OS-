@@ -18,12 +18,25 @@ pub struct ProductRow {
     pub favourite: bool,
     pub active: bool,
     pub bundle: bool,
+    /// The preset kitchen notes (Story 7.2); stored as a JSON array.
+    pub kitchen_notes: Vec<String>,
     pub rev: i64,
     pub deleted_at: Option<i64>,
 }
 
+/// The preset notes of a stored JSON array; an unreadable value reads as none.
+pub fn parse_notes(json: Option<String>) -> Vec<String> {
+    json.and_then(|j| serde_json::from_str(&j).ok())
+        .unwrap_or_default()
+}
+
+/// The stored form of a note list: `None` for none.
+pub fn notes_json(notes: &[String]) -> Option<String> {
+    (!notes.is_empty()).then(|| serde_json::to_string(notes).unwrap_or_default())
+}
+
 const COLUMNS: &str = "product_id, name, category, price_minor, tax_rate_bp, hsn, track_stock, \
-                       image, barcode, kitchen, favourite, active, bundle, rev, deleted_at";
+                       image, barcode, kitchen, favourite, active, bundle, rev, deleted_at,                        kitchen_notes";
 
 fn from(r: &rusqlite::Row<'_>) -> rusqlite::Result<ProductRow> {
     Ok(ProductRow {
@@ -42,6 +55,7 @@ fn from(r: &rusqlite::Row<'_>) -> rusqlite::Result<ProductRow> {
         bundle: r.get(12)?,
         rev: r.get(13)?,
         deleted_at: r.get(14)?,
+        kitchen_notes: parse_notes(r.get(15)?),
     })
 }
 
@@ -112,13 +126,13 @@ pub fn list_menu_products(conn: &Connection) -> Result<Vec<(ProductRow, bool)>, 
         .prepare(
             "SELECT product_id, name, category, price_minor, tax_rate_bp, hsn, track_stock,
                     '' AS image, barcode, kitchen, favourite, active, bundle, rev, deleted_at,
-                    image <> '' AS has_image
+                    kitchen_notes, image <> '' AS has_image
              FROM products WHERE active = 1 AND deleted_at IS NULL
              ORDER BY category COLLATE NOCASE, name COLLATE NOCASE, product_id",
         )
         .map_err(db_error)?;
     let rows = stmt
-        .query_map([], |r| Ok((from(r)?, r.get(15)?)))
+        .query_map([], |r| Ok((from(r)?, r.get(16)?)))
         .map_err(db_error)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
 }
@@ -136,8 +150,8 @@ pub fn insert_product(conn: &Connection, p: &ProductRow) -> Result<(), AppError>
     conn.execute(
         "INSERT INTO products (product_id, name, category, price_minor, tax_rate_bp, hsn,
                                track_stock, image, barcode, kitchen, favourite, active, bundle,
-                               rev, deleted_at, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 0, NULL, 0, 0)",
+                               kitchen_notes, rev, deleted_at, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 0, NULL, 0, 0)",
         params![
             p.product_id,
             p.name,
@@ -151,7 +165,8 @@ pub fn insert_product(conn: &Connection, p: &ProductRow) -> Result<(), AppError>
             p.kitchen,
             p.favourite,
             p.active,
-            p.bundle
+            p.bundle,
+            serde_json::to_string(&p.kitchen_notes).unwrap_or_else(|_| "[]".to_owned())
         ],
     )
     .map_err(db_error)?;
@@ -174,7 +189,7 @@ pub fn update_product(conn: &Connection, p: &ProductRow) -> Result<(), AppError>
         .execute(
             "UPDATE products SET name = ?2, category = ?3, price_minor = ?4, tax_rate_bp = ?5,
                     hsn = ?6, track_stock = ?7, image = ?8, barcode = ?9, kitchen = ?10,
-                    favourite = ?11, active = ?12, bundle = ?13
+                    favourite = ?11, active = ?12, bundle = ?13, kitchen_notes = ?14
              WHERE product_id = ?1",
             params![
                 p.product_id,
@@ -189,7 +204,8 @@ pub fn update_product(conn: &Connection, p: &ProductRow) -> Result<(), AppError>
                 p.kitchen,
                 p.favourite,
                 p.active,
-                p.bundle
+                p.bundle,
+                serde_json::to_string(&p.kitchen_notes).unwrap_or_else(|_| "[]".to_owned())
             ],
         )
         .map_err(db_error)?;
@@ -266,6 +282,7 @@ mod tests {
             bundle: false,
             rev: 0,
             deleted_at: None,
+            kitchen_notes: Vec::new(),
         }
     }
 

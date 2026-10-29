@@ -16,7 +16,11 @@ export const SCAN_GAP_MS = 50;
 /** The shortest burst taken as a barcode. */
 export const SCAN_MIN_CHARS = 3;
 
-export type CartLine = { productId: string; qty: number };
+/** The most characters a free-text kitchen note holds (Story 7.2). */
+export const MAX_FREE_NOTE = 60;
+
+/** `notes` are a kitchen line's chosen kitchen notes, kept sorted so equal sets read equal. */
+export type CartLine = { productId: string; qty: number; notes?: string[] };
 /** Why a step up was refused: `left` of `name` on hand, or (`cap`) the most one line holds. */
 export type Refusal = { name: string; left: number; cap?: boolean };
 
@@ -53,6 +57,14 @@ export function findByBarcode(products: Product[], code: string): Product | unde
   return wanted ? products.find((p) => p.barcode === wanted) : undefined;
 }
 
+/** Kitchen notes as a line keeps them: trimmed, without blanks or repeats, sorted. */
+export const normNotes = (notes: readonly string[] = []): string[] =>
+  [...new Set(notes.map((n) => n.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+
+/** Two lines of one product are one line only when their notes are the same. */
+export const lineKey = (l: { productId: string; notes?: readonly string[] }): string =>
+  JSON.stringify([l.productId, normNotes(l.notes)]);
+
 /** How much of each tracked product the cart takes: plain lines directly, bundles by part. */
 function demand(cart: CartLine[], byId: Map<string, Product>): Map<string, number> {
   const out = new Map<string, number>();
@@ -82,13 +94,44 @@ function shortOf(cart: CartLine[], product: Product, byId: Map<string, Product>)
   return null;
 }
 
-/** The cart with this product's line moved to `qty` (zero removes it). */
-export function withQty(cart: CartLine[], productId: string, qty: number): CartLine[] {
-  const rest = cart.filter((l) => l.productId !== productId);
+/** The cart with this product's line (the one with these notes) moved to `qty` (zero removes it). */
+export function withQty(
+  cart: CartLine[],
+  productId: string,
+  qty: number,
+  notes: readonly string[] = [],
+): CartLine[] {
+  const key = lineKey({ productId, notes });
+  const rest = cart.filter((l) => lineKey(l) !== key);
   if (qty <= 0) return rest;
-  const at = cart.findIndex((l) => l.productId === productId);
-  const line = { productId, qty };
+  const at = cart.findIndex((l) => lineKey(l) === key);
+  const kept = normNotes(notes);
+  const line: CartLine = kept.length ? { productId, qty, notes: kept } : { productId, qty };
   return at < 0 ? [...rest, line] : [...rest.slice(0, at), line, ...rest.slice(at)];
+}
+
+/**
+ * Gives the line `from` new kitchen notes. When another line of the product already has them
+ * the two merge and their quantities add (up to the line cap).
+ */
+export function renote(
+  cart: CartLine[],
+  productId: string,
+  from: readonly string[],
+  to: readonly string[],
+): CartLine[] {
+  const fromKey = lineKey({ productId, notes: from });
+  const toKey = lineKey({ productId, notes: to });
+  const line = cart.find((l) => lineKey(l) === fromKey);
+  if (!line || fromKey === toKey) return cart;
+  const twin = cart.find((l) => lineKey(l) === toKey);
+  const qty = Math.min(line.qty + (twin?.qty ?? 0), MAX_LINE_QTY);
+  const kept = normNotes(to);
+  const next: CartLine = kept.length ? { productId, qty, notes: kept } : { productId, qty };
+  const at = cart.indexOf(twin ?? line);
+  return cart
+    .map((l, i) => (i === at ? next : l))
+    .filter((l) => l === next || (lineKey(l) !== fromKey && lineKey(l) !== toKey));
 }
 
 /**
@@ -101,10 +144,12 @@ export function step(
   product: Product,
   delta: number,
   byId: Map<string, Product>,
+  notes: readonly string[] = [],
 ): { cart: CartLine[]; refusal: Refusal | null } {
-  const current = cart.find((l) => l.productId === product.id)?.qty ?? 0;
+  const key = lineKey({ productId: product.id, notes });
+  const current = cart.find((l) => lineKey(l) === key)?.qty ?? 0;
   const next = Math.min(current + delta, MAX_LINE_QTY);
-  const moved = withQty(cart, product.id, next);
+  const moved = withQty(cart, product.id, next, notes);
   if (delta > 0) {
     if (current + delta > MAX_LINE_QTY) {
       return { cart, refusal: { name: product.name, left: MAX_LINE_QTY, cap: true } };
@@ -208,9 +253,13 @@ export const cartTotal = (
   tax: Tax = DEFAULT_TAX,
 ): number => cartBill(cart, byId, tax).total_minor;
 
-/** The cart as the lines of `pos.sale`. */
-export const saleLines = (cart: CartLine[]): PosSaleLine[] =>
-  cart.map((l) => ({ product_id: l.productId, qty: l.qty }));
+/** The cart as the lines of `pos.sale`; `withNotes` off (no kitchen on the plan) leaves notes out. */
+export const saleLines = (cart: CartLine[], withNotes = true): PosSaleLine[] =>
+  cart.map((l) =>
+    withNotes && l.notes?.length
+      ? { product_id: l.productId, qty: l.qty, kitchen_notes: l.notes }
+      : { product_id: l.productId, qty: l.qty },
+  );
 
 /**
  * Tells a barcode scanner (a keyboard wedge) from a person: printable keys under

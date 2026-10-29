@@ -1555,6 +1555,7 @@ mod tests {
                 active: true,
                 bundle: false,
                 components: Vec::new(),
+                kitchen_notes: None,
             })
         };
         let owner = || Actor {
@@ -1708,6 +1709,7 @@ mod tests {
                         qty: 2,
                     })
                     .collect(),
+                kitchen_notes: None,
             })
         };
         let owner = || Actor {

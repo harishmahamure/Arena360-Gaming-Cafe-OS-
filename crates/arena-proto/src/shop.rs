@@ -67,6 +67,10 @@ pub struct ShopItem {
     pub popular: bool,
     /// A bundle's parts; empty for a product.
     pub components: Vec<ShopComponent>,
+    /// Story 7.2: the preset kitchen notes the player may toggle; empty unless the item is a
+    /// kitchen product on a branch with the `kitchen` flag.
+    #[serde(default)]
+    pub kitchen_notes: Vec<String>,
 }
 
 /// `shop.menu_result`: whether orders are enabled here and, if so, the menu.
@@ -127,8 +131,8 @@ pub struct ShopPlace {
 }
 
 impl ShopPlace {
-    /// A cart of 1 to [`MAX_CART_LINES`] lines, each a sane product id once with 1 to
-    /// [`MAX_CART_QTY`] units.
+    /// A cart of 1 to [`MAX_CART_LINES`] lines, each a sane product id with 1 to
+    /// [`MAX_CART_QTY`] units; a product repeats only with different kitchen notes.
     pub fn validate(&self) -> Result<(), AppError> {
         let bad = |m: &str| Err(AppError::new(ErrorCode::BadFrame, m));
         if self.lines.is_empty() || self.lines.len() > MAX_CART_LINES {
@@ -138,7 +142,7 @@ impl ShopPlace {
         for l in &self.lines {
             if !(1..=MAX_SHOP_ID_LEN).contains(&l.product_id.len())
                 || !(1..=MAX_CART_QTY).contains(&l.qty)
-                || !seen.insert(l.product_id.as_str())
+                || !seen.insert((l.product_id.as_str(), &l.kitchen_notes))
             {
                 return bad("malformed shop.place");
             }
@@ -224,6 +228,7 @@ mod tests {
                     name: "Cola".into(),
                     qty: 2,
                 }],
+                kitchen_notes: Vec::new(),
             }],
         };
         let reply = Frame::new("m", FrameBody::ShopMenuResult(menu));
@@ -260,7 +265,8 @@ mod tests {
                 pay: ShopPay::Bill,
                 lines: vec![PosSaleLine {
                     product_id: "P1".into(),
-                    qty: 2
+                    qty: 2,
+                    kitchen_notes: Vec::new(),
                 }]
             })
         );
@@ -285,6 +291,7 @@ mod tests {
         let line = |id: &str, qty| PosSaleLine {
             product_id: id.into(),
             qty,
+            kitchen_notes: Vec::new(),
         };
         let cart = |lines| ShopPlace {
             lines,

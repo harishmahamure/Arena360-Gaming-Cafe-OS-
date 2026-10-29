@@ -35,12 +35,22 @@ pub fn menu(store: &Store, now_ms: i64, device_id: &str) -> Result<ShopMenu, App
         .into_iter()
         .map(|(id, _)| id)
         .collect();
+    let kitchen_on = store
+        .settings()?
+        .into_iter()
+        .find(|s| s.key == KEY_LICENCE_FLAGS)
+        .is_some_and(|s| has_flag(&s.value, arena_proto::FLAG_KITCHEN));
     let items = store
         .menu_products()?
         .into_iter()
         .map(|(p, has_image)| {
             let status = crate::catalog::status(store, &p, today.as_deref())?;
             Ok(ShopItem {
+                kitchen_notes: if kitchen_on && p.kitchen {
+                    p.kitchen_notes.clone()
+                } else {
+                    Vec::new()
+                },
                 popular: popular.contains(&p.product_id),
                 id: p.product_id,
                 name: p.name,

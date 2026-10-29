@@ -108,6 +108,7 @@ pub(super) fn validate_place(
     if intent.base_rev.is_some() {
         return Err(invalid("base_rev", "order.place takes no base_rev"));
     }
+    super::kitchen_notes::check_lines(intent.actor.kind, &p.lines, &t.basket)?;
     if p.counter.is_some() {
         return validate_counter(p, t);
     }
@@ -289,6 +290,7 @@ pub(super) fn mutate_place(
                 at: now_ms,
                 placement: Some((placement_id, &intent.actor.id)),
                 served: !product.kitchen,
+                kitchen_notes: &super::kitchen_notes::clean(&line.kitchen_notes),
             },
         )?;
         written.push(Written {

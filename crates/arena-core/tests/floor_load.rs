@@ -245,6 +245,7 @@ async fn floor_at(path: std::path::PathBuf, dir: Option<tempfile::TempDir>) -> F
                 active: true,
                 bundle: false,
                 components: Vec::new(),
+                kitchen_notes: None,
             }),
         )
         .await
@@ -553,6 +554,7 @@ impl Picker {
             lines.push(arena_proto::PosSaleLine {
                 product_id: id.clone(),
                 qty,
+                kitchen_notes: Vec::new(),
             });
         }
         let upi = (55..70).contains(&roll);

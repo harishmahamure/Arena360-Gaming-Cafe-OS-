@@ -321,7 +321,26 @@ pub struct CloseReport {
 /// Ends every unprotected program of the player's session (the session-end cleanup's
 /// `programs` step, Story 6.11). Registered on [`Ctx::closer`] by the enforcer once it runs;
 /// it reuses the enforcer's safety rules and kill path.
-pub type Closer = Arc<dyn Fn() -> io::Result<CloseReport> + Send + Sync>;
+pub type Closer = Arc<dyn Fn(CloseScope<'_>) -> io::Result<CloseReport> + Send + Sync>;
+
+/// Which of the player's programs a [`Closer`] ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseScope<'a> {
+    /// Every unprotected program (the `programs` step).
+    All,
+    /// Only programs whose image file name is one of these (a launcher's or browser's
+    /// sign-out step, Story 6.12). The same safety rules apply.
+    Images(&'a [&'a str]),
+}
+
+impl CloseScope<'_> {
+    fn takes(&self, image: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Images(names) => names.iter().any(|n| n.eq_ignore_ascii_case(image)),
+        }
+    }
+}
 
 // ---- the lists ----
 
@@ -975,7 +994,11 @@ impl Inner {
     /// not the kiosk app, a WebView2 process descending from it, the service itself or a
     /// protected System32 image. With `kill` set each is ended; returns how many were found,
     /// ended and failed to end. The process mode (`report`) does not matter here.
-    fn unprotected_pass(&self, kill: bool) -> io::Result<(usize, usize, usize)> {
+    fn unprotected_pass(
+        &self,
+        kill: bool,
+        scope: CloseScope<'_>,
+    ) -> io::Result<(usize, usize, usize)> {
         self.refresh_app();
         let Some(player) = self.player() else {
             return Ok((0, 0, 0));
@@ -1004,6 +1027,9 @@ impl Inner {
             {
                 continue;
             }
+            if !scope.takes(file_name(&path)) {
+                continue;
+            }
             found += 1;
             if !kill {
                 failed += 1;
@@ -1023,18 +1049,18 @@ impl Inner {
 
     /// Ends every unprotected program of the player's session (Story 6.11), trying again a
     /// few times for ones that take a moment to go. `failed` counts what is still running.
-    fn close_all_unprotected(&self) -> io::Result<CloseReport> {
+    fn close_unprotected(&self, scope: CloseScope<'_>) -> io::Result<CloseReport> {
         const PASSES: usize = 3;
         let mut closed = 0;
         for _ in 0..PASSES {
-            let (found, killed, _) = self.unprotected_pass(true)?;
+            let (found, killed, _) = self.unprotected_pass(true, scope)?;
             closed += killed;
             if found == 0 {
                 return Ok(CloseReport { closed, failed: 0 });
             }
             std::thread::sleep(CLOSE_SETTLE);
         }
-        let (left, ..) = self.unprotected_pass(false)?;
+        let (left, ..) = self.unprotected_pass(false, scope)?;
         Ok(CloseReport {
             closed,
             failed: left,
@@ -1280,10 +1306,10 @@ pub(crate) async fn run(
     let inner = Arc::new(Inner::new(Arc::clone(&ctx), api, opts));
     {
         let weak = Arc::downgrade(&inner);
-        let closer: Closer = Arc::new(move || {
+        let closer: Closer = Arc::new(move |scope| {
             weak.upgrade()
                 .ok_or_else(|| io::Error::other("the process enforcer stopped"))?
-                .close_all_unprotected()
+                .close_unprotected(scope)
         });
         *lock(&ctx.closer) = Some(closer);
     }

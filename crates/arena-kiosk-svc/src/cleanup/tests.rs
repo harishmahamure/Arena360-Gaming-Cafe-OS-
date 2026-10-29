@@ -96,6 +96,15 @@ fn sys() -> Arc<FakeSystem> {
 
 /// Starts the worker on the fake host and the process enforcer on the fake table.
 async fn start_in(dir: tempfile::TempDir, retry: Duration, sys: Arc<FakeSystem>) -> T {
+    start_with(dir, retry, sys, Pipeline::standard()).await
+}
+
+async fn start_with(
+    dir: tempfile::TempDir,
+    retry: Duration,
+    sys: Arc<FakeSystem>,
+    pipeline: Pipeline,
+) -> T {
     let ctx = ctx_in(dir.path(), retry);
     let host = Arc::new(FakeHost::default());
     let (stop, stop_rx) = watch::channel(false);
@@ -115,7 +124,7 @@ async fn start_in(dir: tempfile::TempDir, retry: Duration, sys: Arc<FakeSystem>)
     tokio::spawn(run(
         Arc::clone(&ctx),
         Arc::clone(&host) as Arc<dyn CleanupHost>,
-        Pipeline::standard(),
+        pipeline,
         stop_rx,
     ));
     eventually("the closer", || ctx.closer.lock().unwrap().is_some()).await;
@@ -243,7 +252,20 @@ fn session_ends(t: &T, reason: LockReason) {
 fn the_standard_pipeline_names_its_steps_in_order() {
     assert_eq!(
         Pipeline::standard().names(),
-        ["programs", "clipboard", "temp_files", "volume"]
+        [
+            "programs",
+            "signout_steam",
+            "signout_epic",
+            "signout_riot",
+            "signout_discord",
+            "reset_chrome",
+            "reset_edge",
+            "reset_firefox",
+            "credentials",
+            "clipboard",
+            "temp_files",
+            "volume"
+        ]
     );
 }
 
@@ -300,7 +322,10 @@ async fn a_staff_end_cleans_every_program_before_the_bill_lock_shows() {
     for pid in [10, 11, 12, 13, 14] {
         assert!(sys.alive(pid), "pid {pid} was ended");
     }
-    assert_eq!(t.host.calls(), ["clipboard", "temp_files", "volume=50"]);
+    assert_eq!(
+        t.host.calls(),
+        ["credentials", "clipboard", "temp_files", "volume=50"]
+    );
     assert_eq!(t.done(), 1);
     assert!(t.failures().is_empty());
     assert!(!t.ctx.cleanup.dirty());
@@ -338,7 +363,7 @@ async fn a_local_and_a_hub_time_up_clean_once() {
     t.lock(LockReason::TimesUp);
     assert_eq!(t.reason(), Some(LockReason::TimesUp));
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_eq!(t.host.calls().len(), 3);
+    assert_eq!(t.host.calls().len(), 4);
     assert_eq!(t.done(), 1);
     t.stop();
 }
@@ -355,7 +380,7 @@ async fn staff_handles_grace_end_does_not_clean_until_staff_end() {
     t.lock(LockReason::PayAtCounter);
     assert_eq!(t.reason(), Some(LockReason::PreparingPc));
     t.shows(LockReason::PayAtCounter).await;
-    assert_eq!(t.host.calls().len(), 3);
+    assert_eq!(t.host.calls().len(), 4);
     t.stop();
 }
 
@@ -384,7 +409,13 @@ async fn a_step_that_fails_once_is_retried_and_nothing_is_reported() {
     t.shows(LockReason::PayAtCounter).await;
     assert_eq!(
         t.host.calls(),
-        ["clipboard", "temp_files", "temp_files", "volume=50"]
+        [
+            "credentials",
+            "clipboard",
+            "temp_files",
+            "temp_files",
+            "volume=50"
+        ]
     );
     assert!(t.failures().is_empty());
     assert_eq!(t.done(), 1);
@@ -423,7 +454,13 @@ async fn a_step_that_fails_twice_is_reported_the_others_run_and_the_lock_holds()
     // The steps after the failures still ran.
     assert_eq!(
         t.host.calls(),
-        ["clipboard", "temp_files", "temp_files", "volume=50"]
+        [
+            "credentials",
+            "clipboard",
+            "temp_files",
+            "temp_files",
+            "volume=50"
+        ]
     );
     // The screen holds the cleanup lock, with no result and no bill lock.
     assert!(t.locked());
@@ -547,7 +584,7 @@ async fn a_restart_mid_clean_runs_it_again_and_a_held_one_stays_held() {
     }
     let t = start_in(dir, Duration::from_millis(10), sys()).await;
     t.shows(LockReason::PayAtCounter).await;
-    assert_eq!(t.host.calls().len(), 3);
+    assert_eq!(t.host.calls().len(), 4);
     assert_eq!(t.done(), 1);
     t.stop();
 
@@ -642,4 +679,244 @@ fn a_reported_detail_is_one_short_clean_line() {
     assert_eq!(parse_reason("times_up"), Some(LockReason::TimesUp));
     assert_eq!(parse_reason("none"), None);
     assert_eq!(reason_key(None), "none");
+}
+
+// ---- launcher, Discord and browser sign-out (Story 6.12) ----
+
+const STEAM_EXE: &str = r"C:\Program Files (x86)\Steam\steam.exe";
+
+fn write(path: &std::path::Path) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, b"secret").unwrap();
+}
+
+/// A player profile and a Steam folder with a login in every place the sign-out clears, and
+/// files of each kind that must stay.
+fn logins(t: &T) -> (std::path::PathBuf, std::path::PathBuf) {
+    let profile = t.dir.path().join("profile");
+    let steam = t.dir.path().join("Steam");
+    let (local, roaming) = (
+        profile.join("AppData/Local"),
+        profile.join("AppData/Roaming"),
+    );
+    for f in [
+        steam.join("config/loginusers.vdf"),
+        steam.join("config/config.vdf"),
+        steam.join("ssfn123456"),
+        local.join("Steam/htmlcache/Cookies"),
+        local.join("EpicGamesLauncher/Saved/Config/Windows/GameUserSettings.ini"),
+        local.join("EpicGamesLauncher/Saved/webcache_4147/Cookies"),
+        local.join("Riot Games/Riot Client/Data/RiotGamesPrivateSettings.yaml"),
+        roaming.join("discord/Local Storage/leveldb/000003.log"),
+        roaming.join("discordptb/Local Storage/leveldb/000003.log"),
+        local.join("Google/Chrome/User Data/Default/Login Data"),
+        local.join("Microsoft/Edge/User Data/Default/Login Data"),
+        roaming.join("Mozilla/Firefox/profiles.ini"),
+        roaming.join("Mozilla/Firefox/Profiles/abc.default/logins.json"),
+        local.join("Mozilla/Firefox/Profiles/abc.default/cache2/entries/1"),
+    ] {
+        write(&f);
+    }
+    for f in [
+        steam.join("steam.exe"),
+        steam.join("steamapps/common/Game/game.exe"),
+        local.join("EpicGamesLauncher/Saved/keep.txt"),
+        local.join("Unrelated/keep.txt"),
+        roaming.join("Unrelated/keep.txt"),
+    ] {
+        write(&f);
+    }
+    t.host.set_profile(profile.clone());
+    t.host.set_steam(steam.clone());
+    (profile, steam)
+}
+
+#[tokio::test]
+async fn the_standard_cleanup_signs_every_launcher_and_browser_out() {
+    let sys = sys();
+    for (pid, image) in [
+        (30, STEAM_EXE),
+        (
+            31,
+            r"C:\Users\player\AppData\Local\Discord\app-1\Discord.exe",
+        ),
+        (32, r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+    ] {
+        sys.add_running(pid, proc(image, None));
+    }
+    let t = start_in(
+        tempfile::tempdir().unwrap(),
+        Duration::from_millis(10),
+        Arc::clone(&sys),
+    )
+    .await;
+    let (profile, steam) = logins(&t);
+    session_ends(&t, LockReason::PayAtCounter);
+    t.shows(LockReason::PayAtCounter).await;
+    assert!(t.failures().is_empty(), "{:?}", t.failures());
+    assert_eq!(t.done(), 1);
+    for pid in [30, 31, 32] {
+        assert!(!sys.alive(pid));
+    }
+    let (local, roaming) = (
+        profile.join("AppData/Local"),
+        profile.join("AppData/Roaming"),
+    );
+    for gone in [
+        steam.join("config/loginusers.vdf"),
+        steam.join("config/config.vdf"),
+        steam.join("ssfn123456"),
+        local.join("Steam/htmlcache"),
+        local.join("EpicGamesLauncher/Saved/Config/Windows/GameUserSettings.ini"),
+        local.join("EpicGamesLauncher/Saved/webcache_4147"),
+        local.join("Riot Games/Riot Client/Data"),
+        roaming.join("discord"),
+        roaming.join("discordptb"),
+        local.join("Google/Chrome/User Data"),
+        local.join("Microsoft/Edge/User Data"),
+        roaming.join("Mozilla/Firefox"),
+        local.join("Mozilla/Firefox"),
+    ] {
+        assert!(!gone.exists(), "{} is still there", gone.display());
+    }
+    for kept in [
+        steam.join("steam.exe"),
+        steam.join("steamapps/common/Game/game.exe"),
+        local.join("EpicGamesLauncher/Saved/keep.txt"),
+        local.join("Unrelated/keep.txt"),
+        roaming.join("Unrelated/keep.txt"),
+    ] {
+        assert!(kept.exists(), "{} was removed", kept.display());
+    }
+    assert_eq!(
+        t.host.calls(),
+        [
+            "steam_login",
+            "credentials",
+            "clipboard",
+            "temp_files",
+            "volume=50"
+        ]
+    );
+    t.stop();
+}
+
+#[tokio::test]
+async fn a_launcher_still_running_is_shut_down_before_its_files_are_removed() {
+    let sys = sys();
+    sys.add_running(30, proc(STEAM_EXE, None));
+    sys.add_running(31, proc(r"C:\Games\other.exe", None));
+    // Only the sign-out step runs: it has to end Steam itself, and only Steam.
+    let t = start_with(
+        tempfile::tempdir().unwrap(),
+        Duration::from_millis(10),
+        Arc::clone(&sys),
+        Pipeline::of(vec![Arc::new(signout::SignOut(signout::Target::Steam))]),
+    )
+    .await;
+    let (_, steam) = logins(&t);
+    session_ends(&t, LockReason::EndedByStaff);
+    t.shows(LockReason::EndedByStaff).await;
+    assert!(!sys.alive(30));
+    assert!(sys.alive(31));
+    assert_eq!(sys.killed(), [30]);
+    assert!(!steam.join("config/loginusers.vdf").exists());
+    t.stop();
+}
+
+#[tokio::test]
+async fn a_launcher_that_will_not_exit_keeps_its_files_and_is_named_in_the_report() {
+    let sys = sys();
+    sys.add_running(30, proc(STEAM_EXE, None));
+    sys.fail_kill(30);
+    let t = start_with(
+        tempfile::tempdir().unwrap(),
+        Duration::from_millis(10),
+        Arc::clone(&sys),
+        Pipeline::of(vec![
+            Arc::new(signout::SignOut(signout::Target::Steam)),
+            Arc::new(signout::SignOut(signout::Target::Discord)),
+        ]),
+    )
+    .await;
+    let (profile, steam) = logins(&t);
+    session_ends(&t, LockReason::PayAtCounter);
+    t.held().await;
+    assert_eq!(
+        t.failures(),
+        [(
+            "signout_steam".to_owned(),
+            "Steam is still running".to_owned()
+        )]
+    );
+    // Its files stay until it has exited; the next target still ran.
+    assert!(steam.join("config/loginusers.vdf").exists());
+    assert!(!profile.join("AppData/Roaming/discord").exists());
+    assert_eq!(t.reason(), Some(LockReason::PreparingPc));
+    assert!(t.host.calls().is_empty());
+    t.stop();
+}
+
+#[tokio::test]
+async fn a_sign_out_that_fails_after_its_retry_names_the_step_and_the_others_run() {
+    let t = start().await;
+    t.host.fail("steam_login", 9);
+    t.host.fail("credentials", 9);
+    logins(&t);
+    session_ends(&t, LockReason::PayAtCounter);
+    t.held().await;
+    let mut failures = t.failures();
+    failures.sort();
+    assert_eq!(
+        failures,
+        [
+            (
+                "credentials".to_owned(),
+                "fake: credentials failed".to_owned()
+            ),
+            (
+                "signout_steam".to_owned(),
+                "Steam: fake: steam_login failed".to_owned()
+            ),
+        ]
+    );
+    assert_eq!(t.done(), 0);
+    t.stop();
+}
+
+#[tokio::test]
+async fn launchers_and_browsers_that_are_not_installed_are_skipped_without_error() {
+    let t = start().await;
+    // A profile with none of them, and no Steam.
+    t.host.set_profile(t.dir.path().join("empty-profile"));
+    std::fs::create_dir_all(t.dir.path().join("empty-profile")).unwrap();
+    session_ends(&t, LockReason::PayAtCounter);
+    t.shows(LockReason::PayAtCounter).await;
+    assert!(t.failures().is_empty());
+    assert_eq!(t.done(), 1);
+    t.stop();
+}
+
+#[tokio::test]
+async fn a_browser_is_reset_to_the_branch_template_when_there_is_one() {
+    let t = start().await;
+    let (profile, _) = logins(&t);
+    let templates = t.dir.path().join("templates");
+    write(&templates.join("chrome/Local/Google/Chrome/User Data/First Run"));
+    write(&templates.join("chrome/Local/Google/Chrome/User Data/Default/Preferences"));
+    t.host.set_templates(templates);
+    session_ends(&t, LockReason::PayAtCounter);
+    t.shows(LockReason::PayAtCounter).await;
+    assert!(t.failures().is_empty(), "{:?}", t.failures());
+    let chrome = profile.join("AppData/Local/Google/Chrome/User Data");
+    assert!(chrome.join("First Run").exists());
+    assert!(chrome.join("Default/Preferences").exists());
+    assert!(!chrome.join("Default/Login Data").exists());
+    // Edge has no template folder: it is simply cleared.
+    assert!(
+        !profile
+            .join("AppData/Local/Microsoft/Edge/User Data")
+            .exists()
+    );
+    t.stop();
 }

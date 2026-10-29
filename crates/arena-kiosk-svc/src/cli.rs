@@ -65,6 +65,10 @@ pub enum HelperTask {
     Clipboard,
     /// Set the system volume to this percent and unmute.
     Volume(u8),
+    /// Forget the remembered Steam account in the player's registry (Story 6.12).
+    SteamLogin,
+    /// Remove the player's Credential Manager entries (Story 6.12).
+    Credentials,
 }
 
 /// What `lockdown` does.
@@ -121,6 +125,8 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
         }
         "cleanup-helper" => match (args.get(1).and_then(|a| a.to_str()), args.get(2)) {
             (Some("--clipboard"), None) => Ok(Command::CleanupHelper(HelperTask::Clipboard)),
+            (Some("--steam-login"), None) => Ok(Command::CleanupHelper(HelperTask::SteamLogin)),
+            (Some("--credentials"), None) => Ok(Command::CleanupHelper(HelperTask::Credentials)),
             (Some("--volume"), Some(v)) if args.len() == 3 => v
                 .to_str()
                 .filter(|s| s.bytes().all(|b| b.is_ascii_digit()))
@@ -128,7 +134,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, String
                 .filter(|p| *p <= 100)
                 .map(|p| Command::CleanupHelper(HelperTask::Volume(p)))
                 .ok_or_else(|| "--volume takes a whole number from 0 to 100".into()),
-            _ => Err("cleanup-helper takes --clipboard or --volume <0-100>".into()),
+            _ => Err("cleanup-helper takes --clipboard, --volume <0-100>, --steam-login or --credentials".into()),
         },
         #[cfg(feature = "dev-fixtures")]
         "dev" => {
@@ -256,6 +262,14 @@ mod tests {
         assert_eq!(
             p(&["cleanup-helper", "--volume", "40"]).unwrap(),
             Command::CleanupHelper(HelperTask::Volume(40))
+        );
+        assert_eq!(
+            p(&["cleanup-helper", "--steam-login"]).unwrap(),
+            Command::CleanupHelper(HelperTask::SteamLogin)
+        );
+        assert_eq!(
+            p(&["cleanup-helper", "--credentials"]).unwrap(),
+            Command::CleanupHelper(HelperTask::Credentials)
         );
         assert_eq!(p(&["--help"]).unwrap(), Command::Help);
         assert_eq!(p(&["--version"]).unwrap(), Command::Version);

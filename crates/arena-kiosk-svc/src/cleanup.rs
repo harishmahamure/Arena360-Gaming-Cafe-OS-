@@ -21,10 +21,17 @@
 //!   (`cleanup.hold`) until a `cleanup_retry` pc command runs the pipeline again or a
 //!   `cleanup_checked` releases it. Success queues `kiosk.log` info `cleanup.done`.
 //!
+//! - **Sign-out (Story 6.12).** After `programs`, one [`signout::SignOut`] step per launcher or
+//!   browser (`signout_steam`, `signout_epic`, `signout_riot`, `signout_discord`,
+//!   `reset_chrome`, `reset_edge`, `reset_firefox`) ends the target's programs, checks they are
+//!   gone, and only then removes its saved logins; then `credentials` clears the player's
+//!   Credential Manager. A failure uses the path above and names the step.
+//!
 //! The OS parts sit behind [`CleanupHost`] (Windows: [`cleanup_windows`](crate::cleanup_windows);
 //! tests: [`fake::FakeHost`]). The `programs` step uses the process enforcer's kill path through
 //! [`Ctx::closer`](crate::Ctx).
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
@@ -34,10 +41,12 @@ use arena_proto::{
 };
 use tokio::sync::{Notify, watch};
 
+use crate::procs::{CloseReport, CloseScope};
 use crate::queue::QueueDb;
 use crate::runtime::Ctx;
 
 pub mod fake;
+pub mod signout;
 
 /// The step names (also the `step` of a `kiosk.cleanup_failed`).
 pub const STEP_PROGRAMS: &str = "programs";
@@ -65,6 +74,18 @@ pub trait CleanupHost: Send + Sync {
     fn clear_temp_files(&self) -> Result<(), String>;
     /// Sets the system volume to `percent` (0 to 100) and unmutes.
     fn set_volume(&self, percent: u8) -> Result<(), String>;
+    /// The player account's profile folder (`None` when it has none yet).
+    fn profile_dir(&self) -> Result<Option<PathBuf>, String>;
+    /// The Steam install folder (`None` when Steam is not installed).
+    fn steam_dir(&self) -> Option<PathBuf>;
+    /// The branch's folder of clean browser templates (`None` when it keeps none): a browser's
+    /// is `<folder>/chrome|edge|firefox`, with `Local` and `Roaming` inside, laid out like the
+    /// player's `AppData\Local` and `AppData\Roaming`.
+    fn browser_templates(&self) -> Option<PathBuf>;
+    /// Forgets the remembered Steam account in the player's registry.
+    fn clear_steam_login(&self) -> Result<(), String>;
+    /// Removes the player's Windows Credential Manager entries.
+    fn clear_credentials(&self) -> Result<(), String>;
 }
 
 /// What a step is given.
@@ -96,16 +117,7 @@ impl CleanupStep for Programs {
     }
 
     fn run(&self, env: &StepEnv<'_>) -> Result<(), String> {
-        let closer = env
-            .ctx
-            .closer
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone();
-        let Some(closer) = closer else {
-            return Err("process control is not running".into());
-        };
-        let report = closer().map_err(|e| format!("could not list the programs: {e}"))?;
+        let report = close(env.ctx, CloseScope::All)?;
         tracing::info!(
             closed = report.closed,
             failed = report.failed,
@@ -152,6 +164,16 @@ impl CleanupStep for Volume {
     }
 }
 
+/// Ends the player's programs that match `scope` through the process enforcer's kill path
+/// (the app, the service and protected images are never touched).
+pub(crate) fn close(ctx: &Ctx, scope: CloseScope<'_>) -> Result<CloseReport, String> {
+    let closer = ctx.closer.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    let Some(closer) = closer else {
+        return Err("process control is not running".into());
+    };
+    closer(scope).map_err(|e| format!("could not list the programs: {e}"))
+}
+
 /// The ordered steps.
 #[derive(Clone)]
 pub struct Pipeline {
@@ -159,17 +181,20 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
-    /// The standard cleanup. Later stories add steps here (6.12: launcher and browser
-    /// sign-out).
+    /// The standard cleanup: the programs go first, so launchers are shut down before their
+    /// sign-out files are removed; the sign-outs and credentials follow, then the rest.
     pub fn standard() -> Self {
-        Self {
-            steps: vec![
-                Arc::new(Programs),
-                Arc::new(Clipboard),
-                Arc::new(TempFiles),
-                Arc::new(Volume),
-            ],
-        }
+        let mut steps: Vec<Arc<dyn CleanupStep>> = vec![Arc::new(Programs)];
+        steps.extend(
+            signout::Target::ALL
+                .into_iter()
+                .map(|t| Arc::new(signout::SignOut(t)) as Arc<dyn CleanupStep>),
+        );
+        steps.push(Arc::new(signout::Credentials));
+        steps.push(Arc::new(Clipboard));
+        steps.push(Arc::new(TempFiles));
+        steps.push(Arc::new(Volume));
+        Self { steps }
     }
 
     /// A pipeline of exactly these steps.

@@ -2830,7 +2830,10 @@ async fn a_staff_end_cleans_the_pc_before_the_bill_lock_shows_and_tells_the_hub(
     app.until(|m| screen_reason(m, LockReason::PayAtCounter))
         .await;
     assert!(!sys.alive(30), "the player's program is gone");
-    assert_eq!(host.calls(), ["clipboard", "temp_files", "volume=50"]);
+    assert_eq!(
+        host.calls(),
+        ["credentials", "clipboard", "temp_files", "volume=50"]
+    );
     eventually("cleanup.done at the hub", || {
         hub.logged_of(&["cleanup.done"]) == ["cleanup.done"]
     })

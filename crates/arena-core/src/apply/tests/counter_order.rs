@@ -448,3 +448,35 @@ async fn the_snapshot_lists_an_unpaid_counter_order_as_a_bill_of_its_pc_with_no_
     let snap = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
     assert!(snap.bills.is_empty());
 }
+
+#[tokio::test]
+async fn with_exclusive_tax_the_bill_and_the_unpaid_total_are_the_priced_total() {
+    let f = bootstrapped().await;
+    sql(&f, licence()).await;
+    let id = cola(&f, 5).await;
+    let d = pc(&f, DeviceKind::Pc, "pc", Some(10_000)).await;
+    sql(
+        &f,
+        r#"UPDATE settings SET value = '{"country":"IN","gst":false,"gstin":"","inclusive":false,"product_bp":500,"play_bp":1800,"sac":"","label":"Tax","rate_bp":500}' WHERE key = 'branch.tax'"#.to_owned(),
+    )
+    .await;
+    submit(&f, device(&d), counter(&d, None, &id, 2))
+        .await
+        .unwrap();
+    // 2 x 40.00 plus 5% tax: the PC owes it, the floor bill shows it and staff settle exactly it.
+    assert_eq!(unpaid(&f, &d), 8_400);
+    let snap = crate::snapshot::read_snapshot(&reopen(&f), f.clock.now_ms()).unwrap();
+    assert_eq!(snap.bills[0].remaining_minor, 8_400);
+    let o = orders(&f).pop().unwrap();
+    end(
+        &f,
+        settle_intent(
+            &text(&o, "id"),
+            Some(int(&o, "rev")),
+            vec![pay(PaymentMethod::Cash, 8_400, None)],
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(unpaid(&f, &d), 0);
+}

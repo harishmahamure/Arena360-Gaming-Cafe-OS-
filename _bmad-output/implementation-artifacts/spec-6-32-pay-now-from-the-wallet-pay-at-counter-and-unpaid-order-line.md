@@ -2,7 +2,7 @@
 title: 'Story 6.32: Pay now from the wallet, Pay at counter, and unpaid order lines at the end of a prepaid session'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: 'd99832e'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'
@@ -91,9 +91,13 @@ context:
 
 ## Auto Run Result
 
-Status: review
+Status: done
 
 - **Summary:** The cart offers the choices the Hub says the PC can take. Pay now settles a `pos.sale` by one derived wallet payment; Pay at counter opens an unpaid counter order (open `pos_sale`, no session) that the floor snapshot already shows as UNPAID and that staff settle, undo or void; the attract view carries `unpaid_minor` and holds the PC.
 - **Verification:** `arena-proto`, `arena-store`, `arena-core` (13 new `counter_order`, the proptest with its new `CounterOrder` op and invariant), `arena-api` `lan` (81, 2 new), `arena-kiosk-ui` and the kiosk `a_cart_is_a_sane` test pass; kiosk Playwright (337, incl. 6 new cart and 1 new attract), hub `pos` (86), `alerts`, `floor`, `kitchen` pass; fmt, clippy (`-D warnings`) on proto, store, core, api, kiosk-svc and kiosk-ui, svelte-check, strings, hex, blur, protocol, layers, pins, prettier pass.
 - **Residual risks:** `check:generated` reports the new types until they are committed; `arena-kiosk-svc` has the same 14 environmental failures as before (file ownership needs admin); kiosk `theme.spec` (4) fails on a doubled Windows drive path in the test fixture and `arena-e2e` does not build on Windows (both unchanged); `arena-cloud` (2), `arena-tasks` (2) and `arena-replay` (1, `library_entries has no row`) fail in tests this story does not touch; `proptest_apply` is flaky on sequences unrelated to this story (a Plan edit answering `STALE` before `GROUP_KIND_MISMATCH`, a Session start on an unassigned PC), seen before the new op ran; the real Tauri shell, a real Hub and a real kiosk hold were not exercised; no review pass has run.
 - **Deviations from the epic text:** no `order.settle` kind and no new status (see Design Notes); a cancelled line on a counter order lowers the total by its amount without recomputing tax; the hold lifts at the next attract push, not by a PC command.
+
+## Review Result
+
+Code review passed. One blocking finding fixed: with tax set exclusive, an unpaid counter order's floor bill (and so its UNPAID total and settle bar) showed the line sum without tax while `session.settle` needs the priced total, so staff could not settle it. The snapshot now uses the order's `total_minor` for counter orders (`OpenOrder.total_minor`), with a regression test. Known limitation kept: a cancelled line on a counter order lowers the total without recomputing its tax breakup.

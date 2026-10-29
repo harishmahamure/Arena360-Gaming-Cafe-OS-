@@ -121,6 +121,9 @@ pub struct OpenOrder {
     pub session_rev: Option<i64>,
     pub device_id: String,
     pub subtotal_minor: i64,
+    /// What settling the order takes; for an unpaid counter order (no session) this includes tax
+    /// whatever the tax mode.
+    pub total_minor: i64,
     pub group_bill_id: Option<String>,
 }
 
@@ -567,7 +570,7 @@ pub fn list_open_orders(conn: &Connection) -> Result<Vec<OpenOrder>, AppError> {
             "SELECT o.id, o.session_id, COALESCE(o.device_id, ''), o.subtotal_minor, o.rev, o.player_id,
                     w.balance_minor, s.rev,
                     c.player_id, c.limit_minor, c.outstanding_minor, c.reminder_days, c.credit_paused,
-                    c.last_override_day, c.rev, o.group_bill_id
+                    c.last_override_day, c.rev, o.group_bill_id, o.total_minor
              FROM orders o LEFT JOIN wallets w ON w.player_id = o.player_id
                   LEFT JOIN credit_balances c ON c.player_id = o.player_id
                   LEFT JOIN sessions s ON s.id = o.session_id
@@ -589,6 +592,7 @@ pub fn list_open_orders(conn: &Connection) -> Result<Vec<OpenOrder>, AppError> {
                 None => None,
             },
             group_bill_id: r.get(15)?,
+            total_minor: r.get(16)?,
         })
     })
     .map_err(db_error)?

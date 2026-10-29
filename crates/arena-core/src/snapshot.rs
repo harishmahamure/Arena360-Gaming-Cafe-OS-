@@ -248,7 +248,7 @@ fn bills(
                 rule_name: rule_name(l.rule_id.as_deref()),
             })
             .collect();
-        bill(
+        let mut open_bill = bill(
             o.session_id.clone().unwrap_or_default(),
             o.device_id.clone(),
             Some(o.id.clone()),
@@ -261,7 +261,13 @@ fn bills(
             o.group_bill_id.clone(),
             lines,
             items,
-        )
+        );
+        if o.session_id.is_none() {
+            // An unpaid counter order settles for its priced total, tax included (Story 6.32).
+            open_bill.subtotal_minor = o.total_minor;
+            open_bill.remaining_minor = o.total_minor;
+        }
+        open_bill
     });
     live.chain(open).collect()
 }

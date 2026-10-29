@@ -1,9 +1,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use arena_core::{HubStatus, PairGate, PairingState, Role, WriterHandle};
+use arena_core::{
+    BACKUP_NOW, HubStatus, PairGate, PairingState, Role, WriterHandle, backup_now_check,
+};
 use arena_proto::{
-    AppError, COMMANDS_PAGE, CommandResult, CommandWire, ErrorCode, HEARTBEAT_LIVE_INTERVAL_S,
+    AppError, COMMANDS_PAGE, CommandResult, CommandWire, ErrorCode, HEARTBEAT_LIVE_INTERVAL_S, Tier,
 };
 use arena_store::AppliedCommand;
 use tokio::sync::{Notify, watch};
@@ -11,6 +13,7 @@ use tokio::sync::{Notify, watch};
 use crate::cloud::{CloudClient, CloudFailure};
 use crate::heartbeat::{Presence, REVOKED_BACKOFF, backoff, unit};
 use crate::keystore::Keystore;
+use crate::upload::{BACKUP_NOW_WAIT, BackupRequester};
 
 pub const COMMAND_POLL_INTERVAL: Duration = Duration::from_secs(60);
 const REPORT_BATCH: usize = 50;
@@ -25,6 +28,8 @@ pub struct CommandTask {
     presence: Option<Presence>,
     interval: Duration,
     fails: u32,
+    backup: Option<BackupRequester>,
+    backup_wait: Duration,
 }
 
 enum Stop {
@@ -51,11 +56,25 @@ impl CommandTask {
             presence: None,
             interval: COMMAND_POLL_INTERVAL,
             fails: 0,
+            backup: None,
+            backup_wait: BACKUP_NOW_WAIT,
         }
     }
 
     pub fn with_presence(mut self, presence: Presence) -> Self {
         self.presence = Some(presence);
+        self
+    }
+
+    /// Where `backup.now` asks the upload task for an immediate cycle (Story 8.19).
+    pub fn with_backup(mut self, backup: BackupRequester) -> Self {
+        self.backup = Some(backup);
+        self
+    }
+
+    /// Tests: how long `backup.now` waits for its cycle.
+    pub fn with_backup_wait(mut self, wait: Duration) -> Self {
+        self.backup_wait = wait;
         self
     }
 
@@ -153,11 +172,42 @@ impl CommandTask {
         let offline = self.offline_target(&cmd);
         let row = match offline {
             Some(error) => writer.reject_command(cmd, error).await,
+            None if cmd.kind == BACKUP_NOW => self.backup_now(writer, cmd).await,
             None => writer.apply_command(cmd).await,
         }
         .map_err(|e| failed("apply a command", &e))?;
         tracing::info!(command_id = id, kind = %kind, applied = row.applied, "owner command resolved");
         self.report(writer, token, epoch, &row).await
+    }
+
+    /// `backup.now` runs outside `apply()`: an upload and summary cycle at once, answered `applied`
+    /// when its uploads succeeded and `rejected` with the transport error otherwise. It writes no
+    /// change rows. A command already answered is not run again.
+    async fn backup_now(
+        &self,
+        writer: &WriterHandle,
+        cmd: CommandWire,
+    ) -> Result<AppliedCommand, AppError> {
+        if let Some(done) = writer
+            .recorded_command(cmd.id, cmd.idempotency_key.clone())
+            .await?
+        {
+            return Ok(done);
+        }
+        let tier = self.status.borrow().tier;
+        let outcome = match backup_now_check(&cmd) {
+            Err(e) => Err(e),
+            Ok(()) => match (&self.backup, tier) {
+                (Some(backup), Some(tier)) if tier != Tier::Free => {
+                    backup.run(self.backup_wait).await
+                }
+                _ => Err(AppError::new(
+                    ErrorCode::FeatureNotEntitled,
+                    "this branch does not upload",
+                )),
+            },
+        };
+        writer.record_command(cmd, outcome.err()).await
     }
 
     fn offline_target(&self, cmd: &CommandWire) -> Option<AppError> {
@@ -540,5 +590,142 @@ mod tests {
         f.status.send_modify(|s| s.role = Role::Follower);
         assert_eq!(f.task.poll().await, COMMAND_POLL_INTERVAL);
         assert!(seen.lock().unwrap().is_empty());
+    }
+
+    fn backup_command(id: i64, payload: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "idempotency_key": ulid::Ulid::generate().to_string(),
+            "kind": "backup.now",
+            "schema_version": 1,
+            "payload": payload,
+            "issued_by": "owner-1",
+        })
+    }
+
+    /// A cloud that serves one `backup.now` command, then nothing.
+    async fn backup_cloud(payload: serde_json::Value) -> (u16, Seen) {
+        let mut served = false;
+        serve(Box::new(move |line, _| {
+            if line.starts_with("GET /v1/commands") && !served {
+                served = true;
+                return page(vec![backup_command(5, payload.clone())]);
+            }
+            if line.starts_with("GET") {
+                return page(vec![]);
+            }
+            ack()
+        }))
+        .await
+    }
+
+    /// Answers each `backup.now` ask with `answer`, and counts them.
+    fn answering(
+        mut responder: crate::upload::BackupResponder,
+        answer: Result<(), AppError>,
+    ) -> Arc<std::sync::atomic::AtomicUsize> {
+        let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = Arc::clone(&asked);
+        tokio::spawn(async move {
+            while let Some(reply) = responder.rx.recv().await {
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let _ = reply.send(answer.clone());
+            }
+        });
+        asked
+    }
+
+    fn with_uploader(f: Fx, tier: Tier) -> (Fx, crate::upload::BackupResponder) {
+        let (requester, responder) = crate::upload::backup_channel();
+        let Fx {
+            _dir,
+            path,
+            status,
+            task,
+            writer,
+        } = f;
+        status.send_modify(|s| s.tier = Some(tier));
+        let task = task
+            .with_backup(requester)
+            .with_backup_wait(Duration::from_millis(200));
+        (
+            Fx {
+                _dir,
+                path,
+                status,
+                task,
+                writer,
+            },
+            responder,
+        )
+    }
+
+    #[tokio::test]
+    async fn backup_now_is_applied_when_its_cycle_succeeds_and_writes_no_change_row() {
+        let (port, seen) = backup_cloud(serde_json::json!({})).await;
+        let (mut f, responder) = with_uploader(fx(port).await, Tier::Basic);
+        let asked = answering(responder, Ok(()));
+        let rows = Store::open(&f.path, T0).unwrap().changes().unwrap().len();
+        f.task.poll().await;
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let posts = calls(&seen, "POST");
+        assert_eq!(posts.len(), 1, "{posts:?}");
+        assert!(posts[0].0.contains("/v1/commands/5/result"), "{posts:?}");
+        assert!(!posts[0].1.contains("applied_seq"), "{posts:?}");
+        assert!(!posts[0].1.contains("error"), "{posts:?}");
+        assert_eq!(
+            Store::open(&f.path, T0).unwrap().changes().unwrap().len(),
+            rows
+        );
+        assert!(f.writer.unreported_commands(10).await.unwrap().is_empty());
+        assert_eq!(f.writer.command_cursor().await.unwrap(), 5);
+    }
+
+    #[tokio::test]
+    async fn backup_now_is_rejected_with_the_transport_error_of_its_cycle() {
+        let (port, seen) = backup_cloud(serde_json::json!({})).await;
+        let (mut f, responder) = with_uploader(fx(port).await, Tier::Premium);
+        answering(
+            responder,
+            Err(AppError::new(ErrorCode::CloudUnreachable, "no route")),
+        );
+        f.task.poll().await;
+        let posts = calls(&seen, "POST");
+        assert_eq!(posts.len(), 1, "{posts:?}");
+        assert!(posts[0].1.contains("CLOUD_UNREACHABLE"), "{posts:?}");
+    }
+
+    #[tokio::test]
+    async fn backup_now_is_refused_on_free_with_extra_fields_and_when_the_cycle_hangs() {
+        let (port, seen) = backup_cloud(serde_json::json!({})).await;
+        let (mut f, responder) = with_uploader(fx(port).await, Tier::Free);
+        let asked = answering(responder, Ok(()));
+        f.task.poll().await;
+        let posts = calls(&seen, "POST");
+        assert!(posts[0].1.contains("FEATURE_NOT_ENTITLED"), "{posts:?}");
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        let (port, seen) = backup_cloud(serde_json::json!({"path": "/tmp"})).await;
+        let (mut f, responder) = with_uploader(fx(port).await, Tier::Basic);
+        let asked = answering(responder, Ok(()));
+        f.task.poll().await;
+        let posts = calls(&seen, "POST");
+        assert!(posts[0].1.contains("VALIDATION_FAILED"), "{posts:?}");
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        let (port, seen) = backup_cloud(serde_json::json!({})).await;
+        let (mut f, responder) = with_uploader(fx(port).await, Tier::Basic);
+        let _held = responder;
+        f.task.poll().await;
+        let posts = calls(&seen, "POST");
+        assert!(posts[0].1.contains("HUB_SLOW"), "{posts:?}");
+
+        let (port, seen) = backup_cloud(serde_json::json!({})).await;
+        let f = fx(port).await;
+        f.status.send_modify(|s| s.tier = Some(Tier::Basic));
+        let mut f = f;
+        f.task.poll().await;
+        let posts = calls(&seen, "POST");
+        assert!(posts[0].1.contains("FEATURE_NOT_ENTITLED"), "{posts:?}");
     }
 }

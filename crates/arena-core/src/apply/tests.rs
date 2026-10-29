@@ -50,6 +50,7 @@ mod order_line;
 mod order_place;
 mod order_ready;
 mod order_void;
+mod owner_commands;
 mod pc_settings;
 mod people_reports;
 mod plans;

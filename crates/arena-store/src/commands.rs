@@ -103,10 +103,129 @@ pub fn mark_command_reported(conn: &Connection, command_id: i64, at: i64) -> Res
     Ok(())
 }
 
+/// The change an owner command overwrote (Story 8.19), keyed by the owner change's
+/// `(epoch, seq)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnerOverride {
+    pub epoch: String,
+    pub seq: i64,
+    pub tbl: String,
+    pub row_id: String,
+    /// The overwritten change's intent, actor and time (Hub clock, ms).
+    pub intent_id: String,
+    pub actor_kind: String,
+    pub actor_id: String,
+    pub at: i64,
+}
+
+pub fn insert_owner_override(conn: &Connection, o: &OwnerOverride) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO owner_overrides (epoch, seq, tbl, row_id, intent_id, actor_kind, actor_id, at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT DO NOTHING",
+        params![
+            o.epoch,
+            o.seq,
+            o.tbl,
+            o.row_id,
+            o.intent_id,
+            o.actor_kind,
+            o.actor_id,
+            o.at
+        ],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// The override recorded for the owner change `(epoch, seq)`. `None` also on a database not yet
+/// migrated to the table.
+pub fn find_owner_override(
+    conn: &Connection,
+    epoch: &str,
+    seq: i64,
+) -> Result<Option<OwnerOverride>, AppError> {
+    let exists: bool = conn
+        .query_row(
+            "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'owner_overrides')",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(db_error)?;
+    if !exists {
+        return Ok(None);
+    }
+    conn.query_row(
+        "SELECT epoch, seq, tbl, row_id, intent_id, actor_kind, actor_id, at \
+         FROM owner_overrides WHERE epoch = ?1 AND seq = ?2",
+        params![epoch, seq],
+        |r| {
+            Ok(OwnerOverride {
+                epoch: r.get(0)?,
+                seq: r.get(1)?,
+                tbl: r.get(2)?,
+                row_id: r.get(3)?,
+                intent_id: r.get(4)?,
+                actor_kind: r.get(5)?,
+                actor_id: r.get(6)?,
+                at: r.get(7)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+/// The newest change row of `tbl`/`row_id` (the later epoch counter, then the higher `seq`).
+pub fn newest_change_of(
+    conn: &Connection,
+    tbl: &str,
+    row_id: &str,
+) -> Result<Option<crate::ChangeRecord>, AppError> {
+    conn.query_row(
+        &format!(
+            "SELECT {} FROM changes WHERE tbl = ?1 AND row_id = ?2 \
+             ORDER BY CAST(substr(epoch, 1, instr(epoch, ':') - 1) AS INTEGER) DESC, epoch DESC, \
+             seq DESC LIMIT 1",
+            crate::branch::CHANGE_COLUMNS
+        ),
+        params![tbl, row_id],
+        crate::branch::change_from,
+    )
+    .optional()
+    .map_err(db_error)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::Store;
+
+    #[test]
+    fn an_override_is_stored_once_by_the_owner_change_and_found_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(dir.path().join("b.db"), 1).unwrap();
+        let o = OwnerOverride {
+            epoch: "1:abc".into(),
+            seq: 9,
+            tbl: "plans".into(),
+            row_id: "P1".into(),
+            intent_id: "I1".into(),
+            actor_kind: "staff".into(),
+            actor_id: "S1".into(),
+            at: 77,
+        };
+        store
+            .write_tx(|tx| {
+                assert_eq!(find_owner_override(tx, "1:abc", 9)?, None);
+                insert_owner_override(tx, &o)?;
+                insert_owner_override(tx, &OwnerOverride { at: 1, ..o.clone() })?;
+                assert_eq!(find_owner_override(tx, "1:abc", 9)?, Some(o.clone()));
+                assert_eq!(find_owner_override(tx, "1:abc", 10)?, None);
+                assert_eq!(newest_change_of(tx, "plans", "P1")?, None);
+                Ok(())
+            })
+            .unwrap();
+    }
 
     fn cmd(id: i64, key: &str, applied: bool) -> AppliedCommand {
         AppliedCommand {

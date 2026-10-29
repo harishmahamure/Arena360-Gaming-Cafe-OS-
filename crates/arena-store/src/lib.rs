@@ -81,8 +81,9 @@ pub use branch::{
     update_setting_value, upsert_row,
 };
 pub use commands::{
-    AppliedCommand, find_applied_command, insert_applied_command, mark_command_reported,
-    max_applied_command_id, unreported_commands,
+    AppliedCommand, OwnerOverride, find_applied_command, find_owner_override,
+    insert_applied_command, insert_owner_override, mark_command_reported, max_applied_command_id,
+    newest_change_of, unreported_commands,
 };
 pub use coupons::{
     CouponLineRow, CouponRow, CouponWithTargets, clear_order_coupon, clear_order_discount,
@@ -728,6 +729,11 @@ impl Store {
     /// The change `(epoch, seq)`, if it exists.
     pub fn change(&self, epoch: &str, seq: i64) -> Result<Option<ChangeRecord>, AppError> {
         find_change(&self.conn, epoch, seq)
+    }
+
+    /// The change the owner change `(epoch, seq)` overwrote, if it overwrote one (Story 8.19).
+    pub fn owner_override(&self, epoch: &str, seq: i64) -> Result<Option<OwnerOverride>, AppError> {
+        find_owner_override(&self.conn, epoch, seq)
     }
 
     /// The forward intent a `*.reverted` change undoes (see [`reverted_intent`]).

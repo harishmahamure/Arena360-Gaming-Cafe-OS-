@@ -31,6 +31,9 @@
 //!   the snapshot (which carries each device's `online`, the `lan` block and the open alerts).
 //! - `event: groups.changed`, data `{"by_owner": bool}`: a device group, floor zone or a device's
 //!   group or place changed (`by_owner`: an owner setup command wrote it); sent with `devices.changed`.
+//! - `event: updated_by_owner`, data [`UpdatedByOwnerEvent`](arena_proto::UpdatedByOwnerEvent): an owner
+//!   command of `rate.upsert`, `plan.upsert`, `rule.upsert`, `coupon.upsert` or `product.upsert`
+//!   committed (Story 8.19); `overwritten` names the change it replaced, when it replaced one.
 //! - `event: device.admin_unlock_ack`, data
 //!   [`AdminUnlockAckEvent`](arena_proto::AdminUnlockAckEvent): a kiosk granted a remote unlock
 //!   (the floor waits up to 5 s for it).
@@ -509,8 +512,36 @@ impl HubTask {
                                 reader.owner_wrote(&epoch, seq)
                             })
                             .await
-                            .unwrap_or(false);
+                            .unwrap_or(false)
+                                && arena_proto::owner_update_for_table(&c.tbl).is_none();
                             self.send("groups.changed", format!(r#"{{"by_owner":{owner}}}"#), false);
+                        }
+                        if let Some(c) = applied
+                            .changes
+                            .iter()
+                            .rfind(|c| arena_proto::owner_update_for_table(&c.tbl).is_some())
+                        {
+                            let (reader, epoch, seq) =
+                                (Arc::clone(&self.reader), c.epoch.clone(), c.seq);
+                            let update = tokio::task::spawn_blocking(move || {
+                                reader.owner_update(&epoch, seq)
+                            })
+                            .await
+                            .ok()
+                            .flatten();
+                            if let Some((kind, overwritten)) = update
+                                && let Some(u) = arena_proto::owner_update_for_table(&c.tbl)
+                                && u.kind == kind
+                            {
+                                let event = arena_proto::UpdatedByOwnerEvent {
+                                    kind,
+                                    entity: u.entity.to_owned(),
+                                    row_id: c.row_id.clone(),
+                                    overwritten,
+                                };
+                                let data = serde_json::to_string(&event).unwrap_or_default();
+                                self.send("updated_by_owner", data, false);
+                            }
                         }
                         if applied
                             .changes
@@ -2209,5 +2240,132 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         let (event, _) = next_event(&mut theirs).await.unwrap();
         assert_eq!(event, "settings.changed");
+    }
+
+    async fn updated_by_owner(frames: &mut Frames) -> Value {
+        loop {
+            let (event, data) = next_event(frames).await.unwrap();
+            if event == "updated_by_owner" {
+                return data;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn an_owner_command_pushes_updated_by_owner_and_names_what_it_overwrote() {
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let (_, mut frames) = open(&hub, Some(&token)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let owner = || Actor {
+            kind: ActorKind::Owner,
+            id: "owner".into(),
+        };
+        let command = |id: i64, kind: &str, payload: Value| arena_proto::CommandWire {
+            id,
+            idempotency_key: ulid::Ulid::generate().to_string(),
+            kind: kind.into(),
+            schema_version: 1,
+            payload,
+            issued_by: "owner-1".into(),
+        };
+        let group = hub
+            .writer
+            .submit_intent(intent_as(
+                owner(),
+                IntentPayload::GroupUpsert(arena_proto::GroupUpsert {
+                    id: None,
+                    name: "PCs".into(),
+                    group_kind: "pc".into(),
+                    colour: "teal".into(),
+                    sort_order: 1,
+                }),
+                None,
+            ))
+            .await
+            .unwrap()
+            .changes[0]
+            .row_id
+            .clone();
+        let plan = |name: &str, id: Option<&str>| {
+            let mut v = serde_json::json!({
+                "plan_kind": "pack", "name": name, "price_minor": 30000, "minutes": 300,
+                "validity_days": 7, "group_ids": [group],
+            });
+            if let Some(id) = id {
+                v["id"] = id.into();
+            }
+            v
+        };
+        let made = hub
+            .writer
+            .apply_command(command(1, "plan.upsert", plan("5 h", None)))
+            .await
+            .unwrap();
+        assert!(made.applied, "{:?}", made.error);
+        let first = updated_by_owner(&mut frames).await;
+        let plan_id = first["row_id"].as_str().unwrap().to_owned();
+        assert_eq!(
+            first,
+            serde_json::json!({"kind": "plan.upsert", "entity": "plan", "row_id": plan_id})
+        );
+
+        let edit: IntentPayload = {
+            let mut v = plan("Edited", Some(&plan_id));
+            v["kind"] = "plan.upsert".into();
+            serde_json::from_value(v).unwrap()
+        };
+        let edited = hub
+            .writer
+            .submit_intent(intent_as(owner(), edit, Some(1)))
+            .await
+            .unwrap();
+        updated_by_owner(&mut frames).await;
+
+        let mut stale = plan("Owner wins", Some(&plan_id));
+        stale["base_rev"] = 1.into();
+        let won = hub
+            .writer
+            .apply_command(command(2, "plan.upsert", stale))
+            .await
+            .unwrap();
+        assert!(won.applied, "{:?}", won.error);
+        let event = updated_by_owner(&mut frames).await;
+        assert_eq!(event["kind"], "plan.upsert");
+        assert_eq!(event["row_id"], plan_id.as_str());
+        assert_eq!(event["overwritten"]["intent_id"], edited.intent_id.as_str());
+        assert_eq!(event["overwritten"]["actor_kind"], "owner");
+        assert_eq!(event["overwritten"]["actor_id"], "owner");
+        assert!(event["overwritten"]["at"].as_i64().unwrap() > 0);
+
+        let rate = hub
+            .writer
+            .apply_command(command(
+                3,
+                "rate.upsert",
+                serde_json::json!({"group_id": group, "price_per_hour_minor": 9000}),
+            ))
+            .await
+            .unwrap();
+        assert!(rate.applied, "{:?}", rate.error);
+        let event = updated_by_owner(&mut frames).await;
+        assert_eq!(event["kind"], "rate.upsert");
+        assert_eq!(event["entity"], "rate");
+        assert!(event.get("overwritten").is_none(), "{event}");
+    }
+
+    #[test]
+    fn every_owner_update_has_a_distinct_table_kind_and_toast_key() {
+        let mut keys: Vec<&str> = arena_proto::OWNER_UPDATES
+            .iter()
+            .map(|u| u.copy_key)
+            .collect();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), arena_proto::OWNER_UPDATES.len());
+        for u in &arena_proto::OWNER_UPDATES {
+            assert!(arena_proto::owner_command_kind(u.kind).is_some_and(|k| k.handled));
+            assert_eq!(arena_proto::owner_update_for_table(u.tbl), Some(u));
+        }
     }
 }

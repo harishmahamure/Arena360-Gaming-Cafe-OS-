@@ -291,3 +291,52 @@ test("an owner's change toasts and refreshes the groups", async ({ page }) => {
     timeout: 5000,
   });
 });
+
+const UPDATED_BY_OWNER = [
+  ["rate.upsert", "rate", "hub.owner_update.rate"],
+  ["plan.upsert", "plan", "hub.owner_update.plan"],
+  ["rule.upsert", "rule", "hub.owner_update.rule"],
+  ["coupon.upsert", "coupon", "hub.owner_update.coupon"],
+  ["product.upsert", "product", "hub.owner_update.product"],
+] as const;
+
+test("an owner's remote update toasts the line of its kind", async ({ page }) => {
+  const hub = newHub();
+  await open(page, hub);
+  for (const [kind, entity, key] of UPDATED_BY_OWNER) {
+    const data = JSON.stringify({ kind, entity, row_id: "R1" });
+    for (const q of hub.queues) q.push(`event: updated_by_owner\ndata: ${data}\n\n`);
+    await expect(page.getByTestId("hub-toast")).toHaveText(en[key], { timeout: 5000 });
+    await expect(page.getByTestId("hub-toast-detail")).toHaveCount(0);
+  }
+  const unknown = JSON.stringify({ kind: "hub.revoke", entity: "hub", row_id: "R1" });
+  for (const q of hub.queues) q.push(`event: updated_by_owner\ndata: ${unknown}\n\n`);
+  await page.waitForTimeout(500);
+  await expect(page.getByTestId("hub-toast")).toHaveText(en["hub.owner_update.product"]);
+});
+
+test("an update that replaced a change lists it where the toast opens its detail", async ({
+  page,
+}) => {
+  const hub = newHub();
+  await open(page, hub);
+  const data = JSON.stringify({
+    kind: "plan.upsert",
+    entity: "plan",
+    row_id: "P1",
+    overwritten: {
+      intent_id: "01JINTENTAAAAAAAAAAAAAAAAA",
+      actor_kind: "staff",
+      actor_id: "01JMANAGER0000000000000000",
+      at: 1_800_000_000_000,
+    },
+  });
+  for (const q of hub.queues) q.push(`event: updated_by_owner\ndata: ${data}\n\n`);
+  await expect(page.getByTestId("hub-toast")).toHaveText(en["hub.owner_update.plan"], {
+    timeout: 5000,
+  });
+  const detail = page.getByTestId("hub-toast-detail");
+  await detail.getByText(en["hub.owner_update.details"]).click();
+  await expect(detail).toContainText("staff 01JMANAGER0000000000000000");
+  await expect(detail).toContainText("01JINTENTAAAAAAAAAAAAAAAAA");
+});

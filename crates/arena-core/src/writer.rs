@@ -20,9 +20,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use arena_proto::{AppError, CommandWire, ErrorCode, Intent};
 use arena_store::{
-    AppliedCommand, LeaseRow, Store, UploadCursor, find_applied_command, insert_applied_command,
-    mark_command_reported, max_applied_command_id, prune_applied_intents, read_lease,
-    read_upload_cursor, unreported_commands, write_lease, write_upload_cursor,
+    AppliedCommand, LeaseRow, OwnerOverride, Store, UploadCursor, find_applied_command,
+    insert_applied_command, insert_owner_override, mark_command_reported, max_applied_command_id,
+    prune_applied_intents, read_lease, read_upload_cursor, unreported_commands, write_lease,
+    write_upload_cursor,
 };
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
@@ -429,6 +430,17 @@ impl WriterHandle {
         cmd: CommandWire,
         error: AppError,
     ) -> Result<AppliedCommand, AppError> {
+        self.record_command(cmd, Some(error)).await
+    }
+
+    /// Records the answer of a command that ran outside `apply()` (`backup.now`, or one refused
+    /// before it): applied with no change rows (`applied_seq` null) when `error` is `None`,
+    /// otherwise rejected with it. A command already recorded by id or key returns its row.
+    pub async fn record_command(
+        &self,
+        cmd: CommandWire,
+        error: Option<AppError>,
+    ) -> Result<AppliedCommand, AppError> {
         let clock = Arc::clone(&self.clock);
         let status = self.status.clone();
         self.run(move |store| {
@@ -442,17 +454,33 @@ impl WriterHandle {
                     command_id: cmd.id,
                     idempotency_key: cmd.idempotency_key,
                     kind: cmd.kind,
-                    applied: false,
+                    applied: error.is_none(),
                     applied_seq: None,
-                    error: Some(serde_json::to_string(&error).map_err(|e| {
-                        AppError::new(ErrorCode::Internal, format!("encode error: {e}"))
-                    })?),
+                    error: error
+                        .map(|e| {
+                            serde_json::to_string(&e).map_err(|e| {
+                                AppError::new(ErrorCode::Internal, format!("encode error: {e}"))
+                            })
+                        })
+                        .transpose()?,
                     applied_at: clock.now_ms(),
                     reported_at: None,
                 };
                 insert_applied_command(tx, &row)?;
                 Ok(row)
             })
+        })
+        .await
+    }
+
+    /// The record of a command already answered, by id or key.
+    pub async fn recorded_command(
+        &self,
+        command_id: i64,
+        idempotency_key: String,
+    ) -> Result<Option<AppliedCommand>, AppError> {
+        self.run(move |store| {
+            store.write_tx(|tx| find_applied_command(tx, command_id, &idempotency_key))
         })
         .await
     }
@@ -483,11 +511,32 @@ impl WriterHandle {
                             return Ok((done, None));
                         }
                         let mut intent = command_intent(&cmd, now)?;
-                        owner_wins(tx, &mut intent)?;
+                        let overwrote = owner_wins(tx, &mut intent)?;
                         let (applied, fresh) = match run(tx, &ctx, &intent)? {
                             Outcome::Fresh(a) => (a, true),
                             Outcome::Replayed(stored) => (stored?, false),
                         };
+                        if fresh
+                            && let Some(o) = overwrote
+                            && let Some(c) = applied
+                                .changes
+                                .iter()
+                                .find(|c| c.tbl == o.tbl && c.row_id == o.row_id)
+                        {
+                            insert_owner_override(
+                                tx,
+                                &OwnerOverride {
+                                    epoch: c.epoch.clone(),
+                                    seq: c.seq,
+                                    tbl: o.tbl.to_owned(),
+                                    row_id: o.row_id,
+                                    intent_id: o.intent_id,
+                                    actor_kind: o.actor_kind,
+                                    actor_id: o.actor_id,
+                                    at: o.at,
+                                },
+                            )?;
+                        }
                         let row = record(applied.changes.last().map(|c| c.seq), None);
                         insert_applied_command(tx, &row)?;
                         Ok((row, fresh.then_some(applied)))

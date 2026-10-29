@@ -62,7 +62,13 @@
   import { effectRecorded } from "../lib/undo.svelte";
   import { applyBillReverted, applyWalletChanged } from "../lib/wallet.svelte";
   import { notePairingCode } from "../lib/pairing";
-  import type { Connectivity, ConnectivityState, UnlockOk } from "@arena/ui/generated";
+  import { ownerUpdateKey } from "../lib/owner-update";
+  import type {
+    Connectivity,
+    ConnectivityState,
+    OverwrittenChange,
+    UnlockOk,
+  } from "@arena/ui/generated";
   import { applySettingsChanged, setLocale } from "../lib/locale.svelte";
   import { setShift } from "../lib/shift.svelte";
   import type { LayoutData } from "./$types";
@@ -174,7 +180,24 @@
   /** Announced after an unlock that switched the member. */
   let announcement = $state("");
   let toast = $state("");
+  /** The change an owner's update replaced, listed where the toast opens its detail. */
+  let toastDetail: OverwrittenChange | null = $state(null);
   let toastTimer: ReturnType<typeof setTimeout> | undefined;
+  function showToast(text: string, detail: OverwrittenChange | null = null) {
+    toast = text;
+    toastDetail = detail;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(
+      () => {
+        toast = "";
+        toastDetail = null;
+      },
+      detail ? 15000 : 5000,
+    );
+  }
+  const actorOf = (c: OverwrittenChange) => [c.actor_kind, c.actor_id].join(" ");
+  const clockOf = (ms: number) =>
+    new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   /** Which WAN link is down (`online`: no chip), from the snapshot and `connectivity.changed`. */
   let link: ConnectivityState = $state("online");
   /** When the Hub's probe found `link` (UTC ms; `null`, before any probe, is the oldest). */
@@ -435,9 +458,11 @@
         onGroupsChanged: (byOwner) => {
           void refresh();
           if (!byOwner) return;
-          toast = t("hub.groups.owner_toast");
-          clearTimeout(toastTimer);
-          toastTimer = setTimeout(() => (toast = ""), 5000);
+          showToast(t("hub.groups.owner_toast"));
+        },
+        onUpdatedByOwner: (e) => {
+          const key = ownerUpdateKey(e.kind);
+          if (key) showToast(t(key), e.overwritten ?? null);
         },
         onCatalogChanged: () => {
           catalog.version++;
@@ -907,7 +932,23 @@
   {#each announcements as a (a.id)}<p>{a.text}</p>{/each}
 </div>
 {#if toast}
-  <p class="toast type-hub-label" role="status" data-testid="hub-toast">{toast}</p>
+  <div class="toast type-hub-label" role="status">
+    <p data-testid="hub-toast">{toast}</p>
+    {#if toastDetail}
+      <details data-testid="hub-toast-detail">
+        <summary>{t("hub.owner_update.details")}</summary>
+        <ul>
+          <li>
+            {t("hub.owner_update.replaced", {
+              actor: actorOf(toastDetail),
+              time: clockOf(toastDetail.at),
+            })}
+          </li>
+          <li>{t("hub.owner_update.change_id", { id: toastDetail.intent_id })}</li>
+        </ul>
+      </details>
+    {/if}
+  </div>
 {/if}
 
 <style>
@@ -960,6 +1001,21 @@
     border-radius: var(--radius-md);
     background-color: var(--hud-toast-bg);
     color: var(--hud-toast-text);
+  }
+
+  .toast p {
+    margin: 0;
+  }
+
+  .toast summary {
+    cursor: pointer;
+    margin-top: var(--space-2);
+  }
+
+  .toast ul {
+    margin: var(--space-2) 0 0;
+    padding-left: var(--space-4);
+    list-style: disc;
   }
 
   .shell {

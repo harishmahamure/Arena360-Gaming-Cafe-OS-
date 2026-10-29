@@ -3,11 +3,20 @@ use arena_proto::{
     IntentPayload, KEY_SETUP_LIVE, SETTINGS_COMMAND_KEYS,
 };
 
-use arena_store::{StoreTx, find_device_meta, find_setting, find_staff};
+use arena_store::{
+    StoreTx, find_coupon, find_device_meta, find_plan, find_pricing_rule, find_product,
+    find_setting, find_staff, newest_change_of,
+};
 
 use crate::apply::is_ulid;
 
-const HANDLED: [&str; 7] = [
+/// The command kind that runs outside `apply()`: an upload and summary cycle (Story 8.19).
+pub const BACKUP_NOW: &str = "backup.now";
+
+/// Every command kind this Hub runs, at [`COMMAND_SCHEMA_VERSION`]: the setup kinds (Story 2.15)
+/// and the owner kinds (Story 8.19). `arena_proto::OWNER_COMMAND_KINDS` lists the same owner kinds
+/// as handled; a test keeps the two in agreement.
+pub const HANDLED_COMMAND_KINDS: [&str; 13] = [
     "group.upsert",
     "device.assign",
     "device.register",
@@ -15,19 +24,31 @@ const HANDLED: [&str; 7] = [
     "settings.set",
     "setup.test_session",
     "branch.go_live",
+    "rate.upsert",
+    "plan.upsert",
+    "rule.upsert",
+    "coupon.upsert",
+    "product.upsert",
+    BACKUP_NOW,
 ];
 
 fn refused(code: ErrorCode, field: &str, message: &str) -> AppError {
     AppError::with_field(code, field, message)
 }
 
-pub fn command_intent(cmd: &CommandWire, now: i64) -> Result<Intent, AppError> {
-    if !HANDLED.contains(&cmd.kind.as_str()) || cmd.schema_version != COMMAND_SCHEMA_VERSION {
-        return Err(refused(
-            ErrorCode::Unsupported,
-            "kind",
-            "this hub does not run that command",
-        ));
+fn unsupported() -> AppError {
+    refused(
+        ErrorCode::Unsupported,
+        "kind",
+        "this hub does not run that command",
+    )
+}
+
+fn handled(cmd: &CommandWire) -> Result<(), AppError> {
+    if !HANDLED_COMMAND_KINDS.contains(&cmd.kind.as_str())
+        || cmd.schema_version != COMMAND_SCHEMA_VERSION
+    {
+        return Err(unsupported());
     }
     if !is_ulid(&cmd.idempotency_key) {
         return Err(refused(
@@ -35,6 +56,30 @@ pub fn command_intent(cmd: &CommandWire, now: i64) -> Result<Intent, AppError> {
             "idempotency_key",
             "idempotency_key must be a ULID",
         ));
+    }
+    Ok(())
+}
+
+/// Checks a `backup.now` command: it carries no fields (a `base_rev` is ignored).
+pub fn backup_now_check(cmd: &CommandWire) -> Result<(), AppError> {
+    handled(cmd)?;
+    if cmd.kind != BACKUP_NOW {
+        return Err(unsupported());
+    }
+    match cmd.payload.as_object() {
+        Some(fields) if fields.keys().all(|k| k == "base_rev") => Ok(()),
+        _ => Err(refused(
+            ErrorCode::ValidationFailed,
+            "payload",
+            "backup.now takes no fields",
+        )),
+    }
+}
+
+pub fn command_intent(cmd: &CommandWire, now: i64) -> Result<Intent, AppError> {
+    handled(cmd)?;
+    if cmd.kind == BACKUP_NOW {
+        return Err(unsupported());
     }
     let Some(fields) = cmd.payload.as_object() else {
         return Err(refused(
@@ -98,7 +143,52 @@ pub fn command_intent(cmd: &CommandWire, now: i64) -> Result<Intent, AppError> {
     })
 }
 
-pub(crate) fn owner_wins(tx: &StoreTx<'_>, intent: &mut Intent) -> Result<(), AppError> {
+/// The change an owner command is about to overwrite: the newest change of the row the owner's
+/// `base_rev` no longer matches (Story 8.19).
+pub(crate) struct Overwrote {
+    pub tbl: &'static str,
+    pub row_id: String,
+    pub intent_id: String,
+    pub actor_kind: String,
+    pub actor_id: String,
+    pub at: i64,
+}
+
+/// The row an owner edit of a versioned catalogue kind works on: its change-log table, id and
+/// current `rev`. `None` for a create, a row that is not there and every other kind.
+fn edited_row(
+    tx: &StoreTx<'_>,
+    payload: &IntentPayload,
+) -> Result<Option<(&'static str, String, i64)>, AppError> {
+    Ok(match payload {
+        IntentPayload::PlanUpsert(p) => match &p.id {
+            Some(id) => find_plan(tx, id)?.map(|r| ("plans", id.clone(), r.rev)),
+            None => None,
+        },
+        IntentPayload::RuleUpsert(p) => match &p.id {
+            Some(id) => find_pricing_rule(tx, id)?.map(|r| ("pricing_rules", id.clone(), r.rev)),
+            None => None,
+        },
+        IntentPayload::ProductUpsert(p) => match &p.id {
+            Some(id) => find_product(tx, id)?.map(|r| ("products", id.clone(), r.rev)),
+            None => None,
+        },
+        IntentPayload::CouponUpsert(p) => match &p.id {
+            Some(id) => find_coupon(tx, id)?.map(|r| ("coupons", id.clone(), r.rev)),
+            None => None,
+        },
+        _ => None,
+    })
+}
+
+/// Makes the owner's edit beat a newer row: `base_rev` becomes the row's current `rev` (a rate has
+/// none and always applies). When the command carried a `base_rev` below that `rev`, answers the
+/// change it is about to overwrite.
+pub(crate) fn owner_wins(
+    tx: &StoreTx<'_>,
+    intent: &mut Intent,
+) -> Result<Option<Overwrote>, AppError> {
+    let mut overwrote = None;
     let rev = match &intent.payload {
         IntentPayload::SettingsSet(s) => find_setting(tx, &s.key)?.map(|r| r.rev),
         IntentPayload::DeviceRegister(d) => match &d.device_id {
@@ -109,12 +199,29 @@ pub(crate) fn owner_wins(tx: &StoreTx<'_>, intent: &mut Intent) -> Result<(), Ap
             Some(id) => find_staff(tx, id)?.map(|r| r.rev),
             None => None,
         },
-        _ => None,
+        payload => match edited_row(tx, payload)? {
+            Some((tbl, row_id, rev)) => {
+                if intent.base_rev.is_some_and(|base| base < rev)
+                    && let Some(c) = newest_change_of(tx, tbl, &row_id)?
+                {
+                    overwrote = Some(Overwrote {
+                        tbl,
+                        row_id,
+                        intent_id: c.intent_id,
+                        actor_kind: c.actor_kind,
+                        actor_id: c.actor_id,
+                        at: c.at,
+                    });
+                }
+                Some(rev)
+            }
+            None => None,
+        },
     };
     if rev.is_some() {
         intent.base_rev = rev;
     }
-    Ok(())
+    Ok(overwrote)
 }
 
 #[cfg(test)]
@@ -148,8 +255,94 @@ mod tests {
     }
 
     #[test]
+    fn the_hubs_handled_kinds_are_the_setup_kinds_and_the_catalogues_handled_kinds() {
+        let mut ours: Vec<&str> = HANDLED_COMMAND_KINDS.to_vec();
+        ours.sort_unstable();
+        let mut theirs: Vec<&str> = arena_proto::SETUP_COMMAND_KINDS
+            .iter()
+            .copied()
+            .chain(
+                arena_proto::OWNER_COMMAND_KINDS
+                    .iter()
+                    .filter(|k| k.handled)
+                    .map(|k| k.kind),
+            )
+            .collect();
+        theirs.sort_unstable();
+        assert_eq!(ours, theirs);
+        for k in arena_proto::OWNER_COMMAND_KINDS
+            .iter()
+            .filter(|k| !k.handled)
+        {
+            assert!(!HANDLED_COMMAND_KINDS.contains(&k.kind), "{}", k.kind);
+        }
+    }
+
+    #[test]
+    fn the_owner_kinds_become_owner_intents_with_their_base_rev() {
+        let cases = [
+            (
+                "rate.upsert",
+                json!({"group_id": "g", "price_per_hour_minor": 5}),
+            ),
+            (
+                "plan.upsert",
+                json!({"plan_kind": "pack", "name": "x", "price_minor": 1, "group_ids": []}),
+            ),
+            (
+                "rule.upsert",
+                json!({"name": "x", "group_id": "g", "rule_kind": "weekly", "adjust_kind": "percent_bp", "adjust_value": 1}),
+            ),
+            ("coupon.upsert", json!({"code": "ABC", "percent_bp": 10})),
+        ];
+        for (kind, mut body) in cases {
+            body["base_rev"] = 4.into();
+            let i = command_intent(&cmd(kind, body), 5).unwrap();
+            assert_eq!(i.kind.as_str(), kind);
+            assert_eq!((i.actor.kind, i.base_rev), (ActorKind::Owner, Some(4)));
+        }
+        assert!(
+            command_intent(&cmd("rate.upsert", json!({"group_id": "g"})), 1)
+                .is_err_and(|e| e.code == ErrorCode::ValidationFailed)
+        );
+    }
+
+    #[test]
+    fn backup_now_takes_no_fields_and_never_becomes_an_intent() {
+        assert!(backup_now_check(&cmd(BACKUP_NOW, json!({}))).is_ok());
+        assert!(backup_now_check(&cmd(BACKUP_NOW, json!({"base_rev": 3}))).is_ok());
+        for bad in [json!({"x": 1}), json!([1]), json!(null)] {
+            let e = backup_now_check(&cmd(BACKUP_NOW, bad)).unwrap_err();
+            assert_eq!(e.code, ErrorCode::ValidationFailed);
+        }
+        let mut newer = cmd(BACKUP_NOW, json!({}));
+        newer.schema_version = 2;
+        assert_eq!(
+            backup_now_check(&newer).unwrap_err().code,
+            ErrorCode::Unsupported
+        );
+        assert_eq!(
+            backup_now_check(&cmd("group.upsert", json!({})))
+                .unwrap_err()
+                .code,
+            ErrorCode::Unsupported
+        );
+        assert_eq!(
+            command_intent(&cmd(BACKUP_NOW, json!({})), 1)
+                .unwrap_err()
+                .code,
+            ErrorCode::Unsupported
+        );
+    }
+
+    #[test]
     fn kinds_without_a_handler_or_outside_the_catalogue_are_unsupported() {
-        for kind in ["pricing.set", "branch.bootstrap"] {
+        for kind in [
+            "pricing.set",
+            "branch.bootstrap",
+            "rule.delete",
+            "hub.revoke",
+        ] {
             let e = command_intent(&cmd(kind, json!({})), 1).unwrap_err();
             assert_eq!(e.code, ErrorCode::Unsupported, "{kind}");
         }

@@ -31,7 +31,7 @@ use arena_proto::{
 use arena_store::{
     BATCH_MAX_ROWS, ChangedRow, ROLLUP_LEDGER_TABLES, RangeRead, SnapshotLogRow, encode_batch,
 };
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use crate::cloud::{CloudClient, CloudFailure};
 use crate::heartbeat::{REVOKED_BACKOFF, backoff, unit};
@@ -176,6 +176,59 @@ impl ResendInbox {
     }
 }
 
+/// The longest an owner's `backup.now` command waits for its upload cycle (Story 8.19).
+pub const BACKUP_NOW_WAIT: Duration = Duration::from_secs(30);
+
+pub(crate) type BackupReply = oneshot::Sender<Result<(), AppError>>;
+
+/// Asks the upload task for an immediate cycle and waits for its result. Cloneable; the command
+/// task holds one.
+#[derive(Clone)]
+pub struct BackupRequester {
+    tx: mpsc::UnboundedSender<BackupReply>,
+}
+
+/// The upload task's end of the `backup.now` channel.
+pub struct BackupResponder {
+    pub(crate) rx: mpsc::UnboundedReceiver<BackupReply>,
+}
+
+pub fn backup_channel() -> (BackupRequester, BackupResponder) {
+    let (tx, rx) = mpsc::unbounded_channel();
+    (BackupRequester { tx }, BackupResponder { rx })
+}
+
+impl BackupRequester {
+    /// Runs one upload and summary cycle at once and answers its outcome: `Ok` when its uploads
+    /// succeeded (nothing waiting counts), else the transport error. Gives up after `wait` with
+    /// `HUB_SLOW`, and answers `FEATURE_NOT_ENTITLED` when there is no upload task to ask.
+    pub async fn run(&self, wait: Duration) -> Result<(), AppError> {
+        let (reply, answer) = oneshot::channel();
+        if self.tx.send(reply).is_err() {
+            return Err(AppError::new(
+                ErrorCode::FeatureNotEntitled,
+                "this branch does not upload",
+            ));
+        }
+        match tokio::time::timeout(wait, answer).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(AppError::new(
+                ErrorCode::HubSlow,
+                "the upload stopped before it answered",
+            )),
+            Err(_) => Err(AppError::new(
+                ErrorCode::HubSlow,
+                "the upload did not finish in time",
+            )),
+        }
+    }
+}
+
+/// The result recorded for a cycle that did not run to its end until something says why.
+fn unfinished() -> AppError {
+    AppError::new(ErrorCode::Internal, "the upload did not finish")
+}
+
 /// A batch read and encoded, ready to presign and PUT.
 struct Built {
     epoch: String,
@@ -245,6 +298,10 @@ pub struct UploadTask {
     /// The day the "not enough disk space" alert was already raised for in this run, so a disk
     /// that stays full does not raise one every cycle.
     disk_alerted: Option<String>,
+    /// Where `backup.now` commands ask for an immediate cycle (Story 8.19).
+    backup: Option<BackupResponder>,
+    /// Why the last cycle did not finish; `None` when it ran to its end.
+    outcome: Option<AppError>,
 }
 
 impl UploadTask {
@@ -285,7 +342,15 @@ impl UploadTask {
             daily_snapshot: true,
             free_space: crate::disk::free_bytes,
             disk_alerted: None,
+            backup: None,
+            outcome: None,
         }
+    }
+
+    /// Where `backup.now` commands ask for an immediate cycle (Story 8.19).
+    pub fn with_backup(mut self, responder: BackupResponder) -> Self {
+        self.backup = Some(responder);
+        self
     }
 
     /// Where the heartbeat leaves the runs the cloud asked for again (Story 8.3).
@@ -357,8 +422,22 @@ impl UploadTask {
             return;
         };
         let mut events = writer.subscribe();
+        let mut backup = self.backup.take().map(|b| b.rx);
+        let mut waiting: Vec<BackupReply> = Vec::new();
         loop {
+            if let Some(rx) = backup.as_mut() {
+                while let Ok(reply) = rx.try_recv() {
+                    waiting.push(reply);
+                }
+            }
+            if !waiting.is_empty() {
+                self.last_summary = None;
+            }
             let next = self.cycle().await;
+            let result = self.outcome.take();
+            for reply in waiting.drain(..) {
+                let _ = reply.send(result.clone().map_or(Ok(()), Err));
+            }
             let ended = tokio::time::Instant::now();
             let deadline = ended + next.wait;
             let mut pending = self.status.borrow().upload.pending_rows;
@@ -373,6 +452,18 @@ impl UploadTask {
                 };
                 tokio::select! {
                     () = tokio::time::sleep_until(wake) => break,
+                    reply = async {
+                        match backup.as_mut() {
+                            Some(rx) => rx.recv().await,
+                            None => std::future::pending().await,
+                        }
+                    } => match reply {
+                        Some(reply) => {
+                            waiting.push(reply);
+                            break;
+                        }
+                        None => backup = None,
+                    },
                     event = events.recv() => {
                         match event {
                             Ok(applied) => {
@@ -411,17 +502,30 @@ impl UploadTask {
     /// One wake: uploads every waiting batch, one after another, until nothing is left or one
     /// fails. Answers what to do next.
     pub async fn cycle(&mut self) -> Next {
+        self.outcome = Some(unfinished());
         let (role, lease, pairing, tier, schema) = {
             let s = self.status.borrow();
             (s.role, s.lease.clone(), s.pairing, s.tier, s.schema_version)
         };
         let (Some(writer), Some(lease), Role::Primary) = (self.writer.clone(), lease, role) else {
+            self.outcome = Some(AppError::new(
+                ErrorCode::NotPrimary,
+                "this hub is not the primary",
+            ));
             return Next::idle(TIER_RECHECK);
         };
         if pairing == PairingState::Revoked {
+            self.outcome = Some(AppError::new(
+                ErrorCode::TokenRevoked,
+                "this hub is no longer paired",
+            ));
             return Next::idle(REVOKED_BACKOFF);
         }
         let Some(tier) = tier.filter(|t| *t != Tier::Free) else {
+            self.outcome = Some(AppError::new(
+                ErrorCode::FeatureNotEntitled,
+                "this branch does not upload",
+            ));
             return Next::idle(TIER_RECHECK);
         };
         let keystore = Arc::clone(&self.keystore);
@@ -499,6 +603,7 @@ impl UploadTask {
             return next;
         }
         self.refresh_progress().await;
+        self.outcome = None;
         Next {
             wait,
             active: true,
@@ -1130,6 +1235,13 @@ impl UploadTask {
 
     /// How the cloud's refusal changes the schedule.
     fn refused(&mut self, f: CloudFailure, interval: Duration) -> Next {
+        self.outcome = Some(match &f {
+            CloudFailure::Refused { error, .. } => error.clone(),
+            CloudFailure::Unreachable(_) => AppError::new(
+                ErrorCode::CloudUnreachable,
+                "the cloud could not be reached",
+            ),
+        });
         match f {
             CloudFailure::Refused { error, .. }
                 if matches!(
@@ -3140,5 +3252,105 @@ mod tests {
             slowest < Duration::from_secs(2),
             "a write waited {slowest:?} behind the copy"
         );
+    }
+
+    #[tokio::test]
+    async fn a_cycles_outcome_tells_why_it_did_not_finish() {
+        let (port, _seen) = serve(cloud).await;
+        let mut f = fx(port, Tier::Basic).await;
+        add_rows(&f.writer, EPOCH, 2).await;
+        f.task.cycle().await;
+        assert_eq!(f.task.outcome, None);
+
+        let (port, _seen) = serve(|_| Box::new(|_, _| refused(403, "FEATURE_NOT_ENTITLED"))).await;
+        let mut f = fx(port, Tier::Basic).await;
+        add_rows(&f.writer, EPOCH, 2).await;
+        f.task.cycle().await;
+        assert_eq!(
+            f.task.outcome.as_ref().map(|e| e.code),
+            Some(ErrorCode::FeatureNotEntitled)
+        );
+
+        let spare = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = spare.local_addr().unwrap().port();
+        drop(spare);
+        let mut f = fx(port, Tier::Basic).await;
+        add_rows(&f.writer, EPOCH, 2).await;
+        f.task.cycle().await;
+        assert_eq!(
+            f.task.outcome.as_ref().map(|e| e.code),
+            Some(ErrorCode::CloudUnreachable)
+        );
+
+        let (port, _seen) = serve(cloud).await;
+        let mut f = fx(port, Tier::Free).await;
+        f.task.cycle().await;
+        assert_eq!(
+            f.task.outcome.as_ref().map(|e| e.code),
+            Some(ErrorCode::FeatureNotEntitled)
+        );
+    }
+
+    #[tokio::test]
+    async fn backup_now_runs_a_cycle_at_once_and_answers_its_outcome() {
+        let (port, seen) = serve(cloud).await;
+        let mut f = fx(port, Tier::Basic).await;
+        let (requester, responder) = backup_channel();
+        f.task = f.task.with_backup(responder);
+        add_rows(&f.writer, EPOCH, 2).await;
+        let writer = f.writer.clone();
+        let job = tokio::spawn(f.task.run());
+        while puts(&seen).is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(puts(&seen).len(), 1);
+
+        add_rows(&writer, EPOCH, 1).await;
+        assert_eq!(
+            puts(&seen).len(),
+            1,
+            "a few rows alone wait for the interval"
+        );
+        requester.run(Duration::from_secs(10)).await.unwrap();
+        assert_eq!(puts(&seen).len(), 2, "the poke uploaded them at once");
+        requester.run(Duration::from_secs(10)).await.unwrap();
+        assert_eq!(puts(&seen).len(), 2, "nothing waiting counts as success");
+        job.abort();
+    }
+
+    #[tokio::test]
+    async fn backup_now_reports_the_transport_error_and_a_free_branch_is_refused() {
+        let spare = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = spare.local_addr().unwrap().port();
+        drop(spare);
+        let mut f = fx(port, Tier::Basic).await;
+        let (requester, responder) = backup_channel();
+        f.task = f.task.with_backup(responder);
+        add_rows(&f.writer, EPOCH, 2).await;
+        let job = tokio::spawn(f.task.run());
+        let err = requester.run(Duration::from_secs(10)).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::CloudUnreachable);
+        job.abort();
+
+        let (port, seen) = serve(cloud).await;
+        let mut f = fx(port, Tier::Free).await;
+        let (requester, responder) = backup_channel();
+        f.task = f.task.with_backup(responder);
+        let job = tokio::spawn(f.task.run());
+        let err = requester.run(Duration::from_secs(10)).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::FeatureNotEntitled);
+        assert!(seen.lock().unwrap().is_empty());
+        job.abort();
+    }
+
+    #[tokio::test]
+    async fn backup_now_gives_up_after_its_wait_and_without_an_uploader() {
+        let (requester, mut responder) = backup_channel();
+        let err = requester.run(Duration::from_millis(30)).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::HubSlow);
+        assert!(responder.rx.try_recv().is_ok(), "the ask was queued");
+        drop(responder);
+        let err = requester.run(Duration::from_secs(1)).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::FeatureNotEntitled);
     }
 }

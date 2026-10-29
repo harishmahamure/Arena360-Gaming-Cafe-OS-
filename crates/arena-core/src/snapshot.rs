@@ -1487,6 +1487,29 @@ impl SnapshotReader {
             .is_some_and(|k| k == "owner")
     }
 
+    /// When an owner wrote the change `(epoch, seq)`: the kind of its intent and the change it
+    /// overwrote, if it overwrote one (Story 8.19).
+    pub fn owner_update(
+        &self,
+        epoch: &str,
+        seq: i64,
+    ) -> Option<(String, Option<arena_proto::OverwrittenChange>)> {
+        let store = self.reader.lock().ok()?;
+        let change = store.change(epoch, seq).ok().flatten()?;
+        if change.actor_kind != "owner" {
+            return None;
+        }
+        let overwritten = store.owner_override(epoch, seq).ok().flatten().map(|o| {
+            arena_proto::OverwrittenChange {
+                intent_id: o.intent_id,
+                actor_kind: o.actor_kind,
+                actor_id: o.actor_id,
+                at: o.at,
+            }
+        });
+        Some((change.intent_kind, overwritten))
+    }
+
     pub fn player_revs(&self) -> Result<Vec<(String, i64)>, AppError> {
         self.reader
             .lock()

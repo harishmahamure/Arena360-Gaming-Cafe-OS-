@@ -496,6 +496,8 @@ async fn run(
         })
         .run(),
     );
+    // `backup.now` (Story 8.19) asks the upload task for an immediate cycle.
+    let (backup_requester, backup_responder) = arena_tasks::backup_channel();
     // The change-log upload (Story 8.2): primary and paid only, reads through the snapshot reader.
     let upload_job = tokio::spawn(
         arena_tasks::UploadTask::new(
@@ -508,6 +510,7 @@ async fn run(
             verify_keys,
         )
         .with_resend(resend)
+        .with_backup(backup_responder)
         .run(),
     );
     let command_job = tokio::spawn(
@@ -519,6 +522,7 @@ async fn run(
             status_tx.clone(),
             command_poke,
         )
+        .with_backup(backup_requester)
         .with_presence({
             let presence = lan_hub.presence();
             Arc::new(move |id| presence.status(id))

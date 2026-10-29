@@ -94,6 +94,19 @@ enum Op {
         bundle: bool,
         who: Index,
     },
+    /// An owner command (Story 8.19) of `plan.upsert`, `product.upsert`, `rule.upsert` or
+    /// `coupon.upsert` through `apply_command`: a create or an edit of the first row, optionally
+    /// after a staff edit of the same row, with a stale, correct or missing `base_rev`. It is
+    /// never `STALE`; when it applies the row equals the command's values and its `rev` grew by
+    /// one; an override is recorded exactly when `base_rev` was below the row's `rev`, naming the
+    /// newest change made before.
+    OwnerCommand {
+        kind: u8,
+        edit: bool,
+        staff_first: bool,
+        base: u8,
+        value: i64,
+    },
     /// `plan.upsert` of a pack, block or pass (valid or not) for a PC group, or for a PC and a
     /// console group together, by a staff member of a built-in role (or an admin); or an edit of
     /// the first plan with a fresh or stale `base_rev`.
@@ -668,6 +681,20 @@ fn op() -> impl Strategy<Value = Op> {
                 who,
             },
         ),
+        3 => (
+            0..4u8,
+            prop::bool::weighted(0.7),
+            prop::bool::weighted(0.6),
+            0..3u8,
+            1..=5_000i64,
+        )
+            .prop_map(|(kind, edit, staff_first, base, value)| Op::OwnerCommand {
+                kind,
+                edit,
+                staff_first,
+                base,
+                value,
+            }),
         2 => (
             0..3u8,
             prop_oneof![3 => 1..=100_000i64, 1 => -2..=2i64],
@@ -1040,6 +1067,8 @@ struct Hub {
     bootstrapped: bool,
     /// The staff ids seeded right after bootstrap, in [`STAFF_ROLES`] order.
     staff: Vec<String>,
+    /// The mailbox id of the next owner command.
+    commands: i64,
 }
 
 impl Hub {
@@ -1076,6 +1105,7 @@ impl Hub {
             history: Vec::new(),
             bootstrapped: false,
             staff: Vec::new(),
+            commands: 0,
         }
     }
 
@@ -1385,7 +1415,11 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     prop_assert_eq!(hub.rev(key), Some(rev + 1), "rev bumps by exactly 1");
                     prop_assert_eq!(
                         &hub.setting(key).unwrap()["value"],
-                        &RowValue::Text(value.clone())
+                        &RowValue::Text(if *key == "billing.warn_marks" {
+                            value.replace(' ', "")
+                        } else {
+                            value.clone()
+                        })
                     );
                     prop_assert_eq!(hub.change_count(), changes_before + 1);
                 }
@@ -1609,6 +1643,13 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 );
             }
         }
+        Op::OwnerCommand {
+            kind,
+            edit,
+            staff_first,
+            base,
+            value,
+        } => owner_command(hub, *kind, *edit, *staff_first, *base, *value)?,
         Op::Plan {
             kind,
             price,
@@ -1668,6 +1709,9 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             if !allowed {
                 prop_assert_eq!(code(&out), Some((ErrorCode::PermissionDenied, None)));
                 prop_assert_eq!(hub.change_count(), before);
+            } else if editing.is_some() && *stale {
+                prop_assert_eq!(code(&out).map(|c| c.0), Some(ErrorCode::Stale));
+                prop_assert_eq!(hub.change_count(), before);
             } else if bad_terms {
                 prop_assert_eq!(
                     code(&out).map(|c| c.0),
@@ -1681,9 +1725,6 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     code(&out),
                     Some((ErrorCode::GroupKindMismatch, Some("group_ids")))
                 );
-                prop_assert_eq!(hub.change_count(), before);
-            } else if editing.is_some() && *stale {
-                prop_assert_eq!(code(&out).map(|c| c.0), Some(ErrorCode::Stale));
                 prop_assert_eq!(hub.change_count(), before);
             } else {
                 prop_assert!(out.is_ok(), "{:?}", out);
@@ -1745,6 +1786,9 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             if !allowed {
                 prop_assert_eq!(code(&out), Some((ErrorCode::PermissionDenied, None)));
                 prop_assert_eq!(hub.change_count(), before);
+            } else if editing.is_some() && *stale {
+                prop_assert_eq!(code(&out).map(|c| c.0), Some(ErrorCode::Stale));
+                prop_assert_eq!(hub.change_count(), before);
             } else if bad_terms {
                 prop_assert_eq!(
                     code(&out).map(|c| c.0),
@@ -1752,9 +1796,6 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                     "{:?}",
                     out
                 );
-                prop_assert_eq!(hub.change_count(), before);
-            } else if editing.is_some() && *stale {
-                prop_assert_eq!(code(&out).map(|c| c.0), Some(ErrorCode::Stale));
                 prop_assert_eq!(hub.change_count(), before);
             } else {
                 prop_assert!(out.is_ok(), "{:?}", out);
@@ -6627,6 +6668,218 @@ fn int(row: &arena_store::Row, col: &str) -> i64 {
         RowValue::Integer(n) => *n,
         other => panic!("{col}: {other:?}"),
     }
+}
+
+/// The tables the owner command op works on: change-log table, intent kind, id column.
+const OWNER_TABLES: [(Table, &str, &str, &str); 4] = [
+    (Table::Plans, "plans", "plan.upsert", "plan_id"),
+    (Table::Products, "products", "product.upsert", "product_id"),
+    (
+        Table::PricingRules,
+        "pricing_rules",
+        "rule.upsert",
+        "rule_id",
+    ),
+    (Table::Coupons, "coupons", "coupon.upsert", "coupon_id"),
+];
+
+/// The payload of an owner command (and of the staff edit before it): the row's fields for
+/// `value`, a create without `id`.
+fn owner_body(
+    kind: u8,
+    existing: Option<&Row>,
+    value: i64,
+    pc: &str,
+    fresh_code: &str,
+) -> serde_json::Value {
+    use serde_json::json;
+    let id_col = OWNER_TABLES[usize::from(kind)].3;
+    let mut body = match kind {
+        0 => {
+            let plan = existing.map_or_else(|| "pack".to_owned(), |r| text(r, "kind"));
+            let window = plan != "pack";
+            json!({
+                "plan_kind": plan, "name": format!("O{value}"), "price_minor": value,
+                "minutes": (plan == "pack").then_some(60),
+                "validity_days": (plan != "block").then_some(7),
+                "window_start_min": window.then_some(1320),
+                "window_end_min": window.then_some(360),
+                "group_ids": [pc],
+            })
+        }
+        1 => json!({
+            "name": format!("O{value}"), "category": "", "price_minor": value, "hsn": "",
+            "image": "", "barcode": "", "kitchen": false, "favourite": false,
+        }),
+        2 => {
+            let weekly = existing.is_none_or(|r| text(r, "rule_kind") == "weekly");
+            json!({
+                "name": format!("O{value}"), "group_id": pc,
+                "rule_kind": if weekly { "weekly" } else { "date" },
+                "days_mask": weekly.then_some(31),
+                "start_min": weekly.then_some(1320),
+                "end_min": weekly.then_some(120),
+                "date_from": (!weekly).then_some("2027-03-10"),
+                "date_to": (!weekly).then_some("2027-03-12"),
+                "adjust_kind": "percent_bp", "adjust_value": -value,
+            })
+        }
+        _ => json!({
+            "code": existing.map_or_else(|| fresh_code.to_owned(), |r| text(r, "code")),
+            "percent_bp": value,
+        }),
+    };
+    if let Some(row) = existing {
+        body["id"] = text(row, id_col).into();
+    }
+    body
+}
+
+/// The values an applied owner command must leave in the row.
+fn owner_values_hold(kind: u8, row: &Row, value: i64) -> bool {
+    match kind {
+        0 | 1 => text(row, "name") == format!("O{value}") && int(row, "price_minor") == value,
+        2 => text(row, "name") == format!("O{value}") && int(row, "adjust_value") == -value,
+        _ => int(row, "percent_bp") == value,
+    }
+}
+
+fn owner_command(
+    hub: &mut Hub,
+    kind: u8,
+    edit: bool,
+    staff_first: bool,
+    base: u8,
+    value: i64,
+) -> Result<(), TestCaseError> {
+    if !hub.bootstrapped {
+        step(hub, &Op::Bootstrap)?;
+    }
+    let (table, tbl, name, id_col) = OWNER_TABLES[usize::from(kind)];
+    let pc = group_of(hub, "pc")?;
+    let bundles: Vec<String> = hub
+        .reader
+        .products()
+        .unwrap()
+        .into_iter()
+        .filter(|p| p.bundle)
+        .map(|p| p.product_id)
+        .collect();
+    let pick = |hub: &Hub| {
+        hub.reader.rows(table).unwrap().into_iter().find(|r| {
+            r.get("deleted_at").is_none_or(|d| *d == RowValue::Null)
+                && !bundles.contains(&text(r, id_col))
+        })
+    };
+    if edit && pick(hub).is_none() {
+        owner_command(hub, kind, false, false, 2, value % 5_000 + 1)?;
+    }
+    let existing = pick(hub).filter(|_| edit);
+    let fresh_code = format!("CP{}", hub.change_count());
+    if let (Some(row), true) = (&existing, staff_first) {
+        let manager = hub.staff.get(1).cloned().unwrap();
+        let mut staff_value = value % 4_999 + 1;
+        if staff_value == value {
+            staff_value += 1;
+        }
+        let body = owner_body(kind, Some(row), staff_value, &pc, &fresh_code);
+        let mut tagged = body.clone();
+        tagged["kind"] = name.into();
+        let payload: IntentPayload = serde_json::from_value(tagged).unwrap();
+        let mut intent = hub.intent(payload, Some(int(row, "rev")));
+        intent.actor = Actor {
+            kind: ActorKind::Staff,
+            id: manager,
+        };
+        let _ = hub.submit_new(intent);
+    }
+    let existing = existing.and_then(|_| pick(hub));
+    let before_rev = existing.as_ref().map(|r| int(r, "rev"));
+    let id = existing.as_ref().map(|r| text(r, id_col));
+    let newest = id.as_ref().and_then(|id| {
+        hub.reader
+            .changes()
+            .unwrap()
+            .into_iter()
+            .rfind(|c| c.tbl == tbl && &c.row_id == id)
+    });
+    let base_rev = match (base, before_rev) {
+        (0, Some(rev)) => Some(rev - 1),
+        (1, Some(rev)) => Some(rev),
+        _ => None,
+    };
+    let mut body = owner_body(kind, existing.as_ref(), value, &pc, &fresh_code);
+    if let Some(b) = base_rev {
+        body["base_rev"] = b.into();
+    }
+    hub.commands += 1;
+    let cmd = arena_proto::CommandWire {
+        id: hub.commands,
+        idempotency_key: ulid::Ulid::generate().to_string(),
+        kind: name.into(),
+        schema_version: 1,
+        payload: body,
+        issued_by: "owner-px".into(),
+    };
+    let changes_before = hub.change_count();
+    let row = hub.rt.block_on(hub.writer.apply_command(cmd)).unwrap();
+    if let Some(error) = &row.error {
+        let error: AppError = serde_json::from_str(error).unwrap();
+        prop_assert!(
+            error.code != ErrorCode::Stale,
+            "an owner command is never stale: {error:?}"
+        );
+        prop_assert_eq!(hub.change_count(), changes_before);
+        prop_assert!(row.applied_seq.is_none());
+        prop_assert!(kind == 1, "a valid {name} command was refused: {error:?}");
+        return Ok(());
+    }
+    prop_assert!(row.applied && row.applied_seq.is_some());
+    let owner_change = hub
+        .reader
+        .changes()
+        .unwrap()
+        .into_iter()
+        .rfind(|c| c.tbl == tbl)
+        .unwrap();
+    let after = hub
+        .reader
+        .rows(table)
+        .unwrap()
+        .into_iter()
+        .find(|r| text(r, id_col) == owner_change.row_id)
+        .unwrap();
+    prop_assert!(owner_values_hold(kind, &after, value), "{after:?}");
+    if let Some(id) = &id {
+        prop_assert_eq!(&owner_change.row_id, id);
+    }
+    prop_assert_eq!(owner_change.actor_kind.as_str(), "owner");
+    prop_assert_eq!(owner_change.intent_kind.as_str(), name);
+    let recorded = hub
+        .reader
+        .owner_override(&owner_change.epoch, owner_change.seq)
+        .unwrap();
+    match (before_rev, base_rev) {
+        (Some(rev), Some(b)) => {
+            prop_assert_eq!(int(&after, "rev"), rev + 1);
+            if b < rev {
+                let o = recorded.expect("an override for a stale base_rev");
+                let newest = newest.expect("the row had a change");
+                prop_assert_eq!(o.intent_id, newest.intent_id);
+                prop_assert_eq!(o.actor_kind, newest.actor_kind);
+                prop_assert_eq!(o.actor_id, newest.actor_id);
+                prop_assert_eq!(o.at, newest.at);
+            } else {
+                prop_assert!(recorded.is_none());
+            }
+        }
+        (Some(rev), None) => {
+            prop_assert_eq!(int(&after, "rev"), rev + 1);
+            prop_assert!(recorded.is_none(), "no base_rev means no override");
+        }
+        (None, _) => prop_assert!(recorded.is_none(), "a create overrides nothing"),
+    }
+    Ok(())
 }
 
 fn group_of(hub: &mut Hub, kind: &str) -> Result<String, TestCaseError> {

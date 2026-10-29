@@ -68,3 +68,10 @@ The café owner sees every branch and changes it from a phone or laptop, without
 - **List.** `GET /v1/commands?status=&branch=&group=&before=&limit=` with an owner session returns `{commands, next_before}` newest first with `status`, `error`, `queued_at`, `done_at`. A request with `Authorization` or an `epoch` query is the Hub's mailbox fetch, unchanged.
 - **Limit.** 60 posts a minute per tenant (`RATE_LIMITED`).
 - **Until 8.19** a Hub that fetches one of the new kinds records it `rejected` `UNSUPPORTED`.
+
+## Story 8.19: The Hub applies owner commands exactly once, and the owner's change wins
+
+- **Handled kinds.** The Hub runs the seven setup kinds plus `rate|plan|rule|coupon|product.upsert` and `backup.now` (`HANDLED_COMMAND_KINDS`, checked against `OWNER_COMMAND_KINDS`). Anything else is `rejected` `UNSUPPORTED`.
+- **Owner wins.** `owner_wins` sets `base_rev` to the row's current `rev` for plan, rule, product and coupon; a rate always applies. When the command's `base_rev` was lower than the row's `rev`, the same transaction stores the overwritten change (intent id, actor, time) in `owner_overrides` keyed by the owner change's `(epoch, seq)` (migration 0077).
+- **Toast.** The UI stream sends `updated_by_owner {kind, entity, row_id, overwritten?}`; copy is keyed by kind (`OWNER_UPDATES`, `apps/hub/src/lib/owner-update.ts`). For rates and rules `groups.changed` carries `by_owner:false` so toasts do not stack.
+- **backup.now.** `BackupRequester`/`BackupResponder` link `CommandTask` to `UploadTask`; it forces a cycle and waits up to 30 s (`HUB_SLOW` on timeout), reporting the cycle's transport error code; a Free branch rejects `FEATURE_NOT_ENTITLED`.

@@ -1,7 +1,7 @@
 //! The owner command catalogue (Story 8.18, AD-5): the kinds an owner may send to a branch, the
 //! payload each one carries, the tier and flag it needs and whether it is sensitive. The cloud
-//! checks a post against this list before it queues a row; the Hub handlers arrive with Story 8.19
-//! and the later stories that add kinds.
+//! checks a post against this list before it queues a row; the Hub runs the `handled` kinds (Story
+//! 8.19, `arena_core::HANDLED_COMMAND_KINDS`) and the later stories add kinds.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -116,6 +116,81 @@ pub fn validate_owner_payload(kind: &str, payload: &serde_json::Value) -> Result
             "The payload does not match this kind of change.",
         ))
     }
+}
+
+/// The kinds whose owner command raises `updated_by_owner` on the Hub's UI event stream (Story
+/// 8.19), with the entity the event names, the change-log table of the row and the key of the toast
+/// line in the Hub's strings catalogue. Later kinds add a row here and a line to the catalogue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OwnerUpdate {
+    pub kind: &'static str,
+    pub entity: &'static str,
+    pub tbl: &'static str,
+    pub copy_key: &'static str,
+}
+
+pub const OWNER_UPDATES: [OwnerUpdate; 5] = [
+    OwnerUpdate {
+        kind: "rate.upsert",
+        entity: "rate",
+        tbl: "rates",
+        copy_key: "hub.owner_update.rate",
+    },
+    OwnerUpdate {
+        kind: "plan.upsert",
+        entity: "plan",
+        tbl: "plans",
+        copy_key: "hub.owner_update.plan",
+    },
+    OwnerUpdate {
+        kind: "rule.upsert",
+        entity: "rule",
+        tbl: "pricing_rules",
+        copy_key: "hub.owner_update.rule",
+    },
+    OwnerUpdate {
+        kind: "coupon.upsert",
+        entity: "coupon",
+        tbl: "coupons",
+        copy_key: "hub.owner_update.coupon",
+    },
+    OwnerUpdate {
+        kind: "product.upsert",
+        entity: "product",
+        tbl: "products",
+        copy_key: "hub.owner_update.product",
+    },
+];
+
+pub fn owner_update_for_table(tbl: &str) -> Option<&'static OwnerUpdate> {
+    OWNER_UPDATES.iter().find(|u| u.tbl == tbl)
+}
+
+/// The change an owner command overwrote.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OverwrittenChange {
+    pub intent_id: String,
+    /// `staff`, `owner`, `admin`, `system` or `device`.
+    pub actor_kind: String,
+    pub actor_id: String,
+    /// When it was made (Hub clock, ms).
+    #[ts(type = "number")]
+    pub at: i64,
+}
+
+/// `event: updated_by_owner` on `GET /ui/events`: an owner command of one of [`OWNER_UPDATES`]
+/// committed. `overwritten` is present only when it replaced a change made after the owner's
+/// `base_rev`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct UpdatedByOwnerEvent {
+    pub kind: String,
+    pub entity: String,
+    pub row_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub overwritten: Option<OverwrittenChange>,
 }
 
 /// `POST /v1/commands`.

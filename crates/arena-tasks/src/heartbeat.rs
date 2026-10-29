@@ -691,6 +691,7 @@ mod tests {
                 "epoch": format!("1:{}", OWN.to_ascii_lowercase()),
                 "version": "0.2.0",
                 "schema_version": 12,
+                "command_schema": arena_proto::COMMAND_SCHEMA_VERSION,
                 "last_seq_uploaded": 0,
                 "setup": {"devices": [], "groups": [], "status": {
                     "opening_hours_set": false,

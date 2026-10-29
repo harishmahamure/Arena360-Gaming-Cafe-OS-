@@ -8,7 +8,9 @@ import type {
   PcAckEvent,
   SettingsChangedEvent,
   UnlockOk,
+  UpdatedByOwnerEvent,
 } from "@arena/ui/generated";
+import { isUpdatedByOwner } from "./owner-update";
 import { pairingChangeOf, type PairingChange } from "./pairing";
 import { isConnectivity, isSnapshotLocale, normalizeUi } from "./snapshot";
 
@@ -27,6 +29,8 @@ export type EventHandlers = {
   onDevicesChanged?: () => void;
   /** `groups.changed`: a group or a device's group changed; `byOwner` for an owner command. */
   onGroupsChanged?: (byOwner: boolean) => void;
+  /** `updated_by_owner`: an owner's remote change of a rate, plan, rule, coupon or product applied. */
+  onUpdatedByOwner?: (event: UpdatedByOwnerEvent) => void;
   /** `catalog.changed`: a product was written; reload the product list. */
   onCatalogChanged?: () => void;
   /** `library.changed`: the branch game library was written; reload the Games screen. */
@@ -149,6 +153,14 @@ export function connectEvents(token: string, handlers: EventHandlers): () => voi
         handlers.onGroupsChanged?.(isObject(data) && data.by_owner === true);
       } catch {
         handlers.onGroupsChanged?.(false);
+      }
+    });
+    es.addEventListener("updated_by_owner", (ev) => {
+      try {
+        const data: unknown = JSON.parse((ev as MessageEvent<string>).data);
+        if (isUpdatedByOwner(data)) handlers.onUpdatedByOwner?.(data);
+      } catch {
+        // A malformed event is ignored: the screens already reloaded from their own events.
       }
     });
     es.addEventListener("catalog.changed", () => handlers.onCatalogChanged?.());

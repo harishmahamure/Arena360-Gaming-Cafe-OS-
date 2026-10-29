@@ -2,7 +2,7 @@
 title: 'Story 8.8: The Hub uploads a daily snapshot after close'
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 baseline_commit: '0600bac'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -75,6 +75,8 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+Code review (2026-10-30): Blind/Edge/Acceptance pass done by direct inspection; no blocking findings. fmt, clippy -D warnings, proto/store/core/tasks tests green except two pre-existing failures in untouched files (heartbeat, printer::lan); check:generated and check:strings ok.
 
 ## Design Notes
 

@@ -2,7 +2,7 @@
 title: 'Story 6.13: The player shell with top bar, pill nav and time chip'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: 'cbbeae3'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'

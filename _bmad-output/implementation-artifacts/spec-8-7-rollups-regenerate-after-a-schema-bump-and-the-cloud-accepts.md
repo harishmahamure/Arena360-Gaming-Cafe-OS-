@@ -2,7 +2,7 @@
 title: 'Story 8.7: Rollups regenerate after a schema bump, and the cloud accepts only the current and previous schema'
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 baseline_commit: 'f2de38b'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -72,6 +72,8 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+- Review (2026-10-30): no blocking findings. fmt, clippy -D warnings and the proto, store, core, tasks and cloud suites pass except the five failures that predate the story (heartbeat trusted_time, printer lan timeout, cloud backup hung-run, cloud binary unreachable, replay seeded log), none in files this story touches.
 
 ## Design Notes
 

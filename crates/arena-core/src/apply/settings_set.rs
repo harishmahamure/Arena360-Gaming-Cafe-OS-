@@ -158,11 +158,18 @@ pub(super) fn mutate(
     let tax = (row.key == KEY_TAX)
         .then(|| TaxSettings::parse(&s.value))
         .flatten();
+    // The marks are stored longest first, one canonical string whoever wrote them.
+    let marks = (row.key == arena_proto::KEY_BILLING_WARN_MARKS)
+        .then(|| arena_proto::parse_warn_marks(&s.value).ok())
+        .flatten();
     let value = match (&opening_hours, &printer, &tax) {
         (Some(week), _, _) => arena_proto::opening_hours_json(week),
         (None, Some(p), _) => p.to_json(),
         (None, None, Some(t)) => t.to_json(),
-        _ => s.value.clone(),
+        _ => marks.map_or_else(
+            || s.value.clone(),
+            |m| m.iter().map(u8::to_string).collect::<Vec<_>>().join(","),
+        ),
     };
     update_setting(
         tx,

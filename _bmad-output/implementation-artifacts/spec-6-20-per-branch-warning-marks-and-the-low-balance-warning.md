@@ -2,7 +2,7 @@
 title: 'Story 6.20: Per-branch warning marks and the low-balance warning'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '4f7c6fc'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'
@@ -79,3 +79,11 @@ deferred:
 - `pnpm check:strings check:hex check:no-blur check:layers check:pins check:protocol format:check` -- pass; `check:generated` reports `SessionScreen.ts` only because it is uncommitted
 
 Not run: a real Hub-to-kiosk round trip, the Tauri shell.
+
+## Code Review (2026-10-29)
+
+Layers: Blind Hunter, Edge Case Hunter, Verification Gap, Acceptance Auditor. Outcome: approved.
+
+- **Fixed:** `settings.set` kept `billing.warn_marks` as typed ("2, 20 ,7"), so only the Hub form stored `20,7,2`. `settings_set::mutate` now stores the canonical longest-first form for any writer; test added in `warning_marks_and_the_low_balance_amount_are_seeded_and_validated`.
+- **Deferred (not blocking):** the kiosk-svc reads its operating settings from the cache on every tick (perf); a HUD that restarts while the balance is already low raises no toast until the next crossing (same rule as the 6.19 time warning); no unit test for `screen_message` mapping `low_balance_minor` or for the `touches` settings arm; `Top up at the counter.` is fixed text for every venue.
+- **Dismissed:** Hub form leniency on "10,,5" (normalised before save, the server still rejects raw malformed input); currency exponent loading late (the form follows `branchLocale`); `wallet_left_minor` with no `ends_at` (wallet sessions are always timed).

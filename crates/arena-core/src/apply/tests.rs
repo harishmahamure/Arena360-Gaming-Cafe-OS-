@@ -7117,6 +7117,11 @@ mod billing {
         for ok in ["30", "1", "20,3", "15, 10, 5", "3,2,1"] {
             save(&f, "billing.warn_marks", ok).await.unwrap();
         }
+        save(&f, "billing.warn_marks", "2, 20 ,7").await.unwrap();
+        assert_eq!(
+            setting(&reopen(&f), arena_proto::KEY_BILLING_WARN_MARKS)["value"],
+            RowValue::Text("20,7,2".into())
+        );
         for ok in ["0", "1", "12000", "100000000"] {
             save(&f, "billing.low_balance_minor", ok).await.unwrap();
         }

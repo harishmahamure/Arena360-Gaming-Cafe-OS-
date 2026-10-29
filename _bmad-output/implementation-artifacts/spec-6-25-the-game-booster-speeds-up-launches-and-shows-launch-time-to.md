@@ -2,7 +2,7 @@
 title: 'Story 6.25: The game booster speeds up launches and shows launch time to staff'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '07d303f'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'

@@ -39,6 +39,7 @@ mod pc_command;
 mod permission;
 mod plans;
 mod player_login;
+mod player_session;
 mod players;
 mod pos;
 mod pricing;
@@ -237,6 +238,10 @@ pub use plans::{
 pub use player_login::{
     LOGIN_LOCK_SECONDS, LOGIN_MAX_FAILURES, MAX_LOGIN_PASSWORD_BYTES, MAX_LOGIN_USERNAME_BYTES,
     PLAYER_LOGIN_CODE, PlayerAuthResult, PlayerAuthenticate, PlayerContext,
+};
+pub use player_session::{
+    MAX_PLAN_OPTIONS, PLAYER_LOGIN_RECORD_SECONDS, PLAYER_LOGIN_REQUIRED, PlanOption, PlanTag,
+    PlayerChoice, PlayerPlansResult, PlayerStartResult, PlayerStartSession, PlayerWallet,
 };
 pub use players::{
     CONSENT_TRANSACTIONAL, PLAYER_EMAIL_MAX_CHARS, PLAYER_NAME_MAX_CHARS, PLAYER_NOTES_MAX_CHARS,

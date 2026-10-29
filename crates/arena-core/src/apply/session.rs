@@ -195,6 +195,7 @@ pub(super) fn mutate(
     s: &SessionStart,
     t: &SessionTarget,
     epoch: &Epoch,
+    actor_id: &str,
     now_ms: i64,
 ) -> Result<Vec<Written>, AppError> {
     let (Some(d), Some(group_id)) = (
@@ -290,6 +291,7 @@ pub(super) fn mutate(
                 business_day: &business_day,
                 fy: &fy,
                 ends_at,
+                wallet_payer: s.pay_from_wallet.then_some(actor_id),
             },
             now_ms,
         )?);

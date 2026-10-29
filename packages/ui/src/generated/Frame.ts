@@ -10,6 +10,9 @@ import type { IntentSubmit } from "./IntentSubmit";
 import type { PcAck } from "./PcAck";
 import type { PlayerAuthResult } from "./PlayerAuthResult";
 import type { PlayerAuthenticate } from "./PlayerAuthenticate";
+import type { PlayerPlansResult } from "./PlayerPlansResult";
+import type { PlayerStartResult } from "./PlayerStartResult";
+import type { PlayerStartSession } from "./PlayerStartSession";
 import type { SettingsGet } from "./SettingsGet";
 import type { SettingsValues } from "./SettingsValues";
 import type { VerifyAdminPin } from "./VerifyAdminPin";
@@ -43,5 +46,10 @@ export type Frame = {
   | ({ kind: "kiosk.pc_ack" } & PcAck)
   | ({ kind: "player.authenticate" } & PlayerAuthenticate)
   | ({ kind: "player.auth_result" } & PlayerAuthResult)
+  | { kind: "player.plans" }
+  | ({ kind: "player.plans_result" } & PlayerPlansResult)
+  | ({ kind: "player.start_session" } & PlayerStartSession)
+  | ({ kind: "player.start_result" } & PlayerStartResult)
+  | { kind: "player.logout" }
   | { kind: "ack" }
 );

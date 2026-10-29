@@ -25,6 +25,9 @@
 //! - `player_login{username, password}` (the login panel, Story 6.8) is forwarded to the Hub by
 //!   [`crate::player_login`] on its own task and answered with `reply` (the Hub's outcome as the
 //!   body). The service keeps no player context.
+//! - `player_plans`, `player_start{choice}` and `player_logout` (the plan picker, Story 6.9) are
+//!   forwarded by [`crate::player_session`] the same way. The app never names a player: the Hub
+//!   remembers who logged in on this PC.
 
 use std::sync::Arc;
 
@@ -455,6 +458,22 @@ fn handle_request(ctx: &Ctx, kind: &str, body: Value) -> Result<Value, AppError>
     }
 }
 
+/// The `reply` to `rid`: the body on success, else the error.
+fn reply_of(rid: String, result: Result<Value, arena_proto::AppError>) -> IpcMsg {
+    match result {
+        Ok(body) => IpcMsg::Reply {
+            rid,
+            body,
+            error: None,
+        },
+        Err(error) => IpcMsg::Reply {
+            rid,
+            body: Value::Null,
+            error: Some(error),
+        },
+    }
+}
+
 async fn serve(
     ctx: Arc<Ctx>,
     id: u64,
@@ -528,6 +547,30 @@ async fn serve(
                             error: Some(error),
                         },
                     };
+                    let _ = out.send(reply).await;
+                });
+            }
+            Ok(IpcMsg::PlayerPlans { rid }) => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(rid, crate::player_session::plans(&ctx).await);
+                    let _ = out.send(reply).await;
+                });
+            }
+            Ok(IpcMsg::PlayerStart { rid, choice }) => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(rid, crate::player_session::start(&ctx, choice).await);
+                    let _ = out.send(reply).await;
+                });
+            }
+            Ok(IpcMsg::PlayerLogout { rid }) => {
+                let ctx = Arc::clone(&ctx);
+                let out = out_tx.clone();
+                tokio::spawn(async move {
+                    let reply = reply_of(rid, crate::player_session::logout(&ctx).await);
                     let _ = out.send(reply).await;
                 });
             }

@@ -452,6 +452,7 @@ async fn start_with(
             pack_id: pack.map(Into::into),
             plan_id: None,
             group_with: Some(host.into()),
+            pay_from_wallet: false,
         }),
     );
     i.issued_at = f.clock.now_ms();

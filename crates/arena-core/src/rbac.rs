@@ -98,6 +98,26 @@ pub fn is_pairing(intent: &Intent) -> bool {
         )
 }
 
+/// Whether a paired device may apply `intent` itself (Story 6.9): the one thing a device actor may do
+/// under a staff permission is start a prepaid session for a player on its own PC (pack, pass,
+/// wallet or block). The Hub builds that intent from its login record; a kiosk cannot send
+/// `session.start` (it is outside the paired scope), and a postpaid or another PC's start is
+/// denied here too.
+fn device_starts_own_session(p: Permission, intent: &Intent) -> bool {
+    use arena_proto::{IntentPayload, SessionMode};
+    p == Permission::SessionStart
+        && matches!(
+            &intent.payload,
+            IntentPayload::SessionStart(s)
+                if s.device_id == intent.actor.id
+                    && s.player_id.is_some()
+                    && matches!(
+                        s.mode,
+                        SessionMode::Pack | SessionMode::Pass | SessionMode::Wallet | SessionMode::Block
+                    )
+        )
+}
+
 /// **permission.** Checks the intent's [`Requirement`] against its actor. The kind is taken
 /// from the payload, so a mislabelled envelope cannot borrow another kind's requirement.
 pub fn check(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
@@ -129,7 +149,8 @@ pub fn check(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
             ActorKind::Owner => true,
             ActorKind::Staff => staff_allows(tx, &actor.id, p)?,
             ActorKind::System => is_pairing(intent),
-            ActorKind::Admin | ActorKind::Device => false,
+            ActorKind::Admin => false,
+            ActorKind::Device => device_starts_own_session(p, intent),
         },
     };
     if ok { Ok(()) } else { Err(denied()) }

@@ -65,7 +65,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// The Tauri commands the webview calls: the `generate_handler!` list in `main.rs`, pinned
 /// against `ipc-names.json` (the list the webview reads) by a test.
 #[cfg(test)]
-const COMMANDS: [&str; 17] = [
+const COMMANDS: [&str; 20] = [
     "report_app_state",
     "hub_status",
     "take_restore_state",
@@ -83,6 +83,9 @@ const COMMANDS: [&str; 17] = [
     "pc_dismiss",
     "attract",
     "player_login",
+    "player_plans",
+    "player_start",
+    "player_logout",
 ];
 /// How recent the webview's last heartbeat must be for a `ping` to be answered.
 pub const HEARTBEAT_FRESH: Duration = Duration::from_secs(3);
@@ -770,6 +773,97 @@ mod tests {
         assert!(answer.ok);
         assert_eq!(answer.body["outcome"], "locked");
         assert_eq!(answer.body["retry_s"], 60);
+        drop(sw);
+        drop(sr);
+        let _ = tokio::time::timeout(Duration::from_secs(2), served).await;
+    }
+
+    #[tokio::test]
+    async fn the_plan_picker_messages_go_to_the_service_and_the_answers_come_back() {
+        let b = Arc::new(Bridge::default());
+        let (app, svc) = tokio::io::duplex(4096);
+        let (ar, aw) = tokio::io::split(app);
+        let (sr, mut sw) = tokio::io::split(svc);
+        let served = {
+            let b = Arc::clone(&b);
+            tokio::spawn(async move { b.serve(ar, aw, &|_| {}).await })
+        };
+        let mut sr = BufReader::new(sr);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let asking = {
+            let b = Arc::clone(&b);
+            tokio::spawn(async move {
+                let plans = b.request(|rid| IpcMsg::PlayerPlans { rid }).await;
+                let start = b
+                    .request(|rid| IpcMsg::PlayerStart {
+                        rid,
+                        choice: arena_proto::PlayerChoice::Pack {
+                            pack_id: "K1".into(),
+                        },
+                    })
+                    .await;
+                let logout = b.request(|rid| IpcMsg::PlayerLogout { rid }).await;
+                (plans, start, logout)
+            })
+        };
+        let msg = read_msg(&mut sr).await.unwrap();
+        let IpcMsg::PlayerPlans { rid } = msg else {
+            panic!("expected player_plans")
+        };
+        let options = serde_json::json!({"options": [], "wallet": {"balance_minor": 4000, "rate_minor": 6000}});
+        write_msg(
+            &mut sw,
+            &IpcMsg::Reply {
+                rid,
+                body: options.clone(),
+                error: None,
+            },
+        )
+        .await
+        .unwrap();
+        let msg = read_msg(&mut sr).await.unwrap();
+        let IpcMsg::PlayerStart { rid, choice } = msg else {
+            panic!("expected player_start")
+        };
+        assert_eq!(
+            choice,
+            arena_proto::PlayerChoice::Pack {
+                pack_id: "K1".into()
+            }
+        );
+        write_msg(
+            &mut sw,
+            &IpcMsg::Reply {
+                rid,
+                body: serde_json::json!({"outcome": "ok"}),
+                error: None,
+            },
+        )
+        .await
+        .unwrap();
+        let msg = read_msg(&mut sr).await.unwrap();
+        let IpcMsg::PlayerLogout { rid } = msg else {
+            panic!("expected player_logout")
+        };
+        write_msg(
+            &mut sw,
+            &IpcMsg::Reply {
+                rid,
+                body: Value::Null,
+                error: Some(arena_proto::AppError::new(
+                    arena_proto::ErrorCode::HubSlow,
+                    "down",
+                )),
+            },
+        )
+        .await
+        .unwrap();
+        let (plans, start, logout) = asking.await.unwrap();
+        assert_eq!(plans.unwrap().body, options);
+        assert_eq!(start.unwrap().body["outcome"], "ok");
+        let logout = logout.unwrap();
+        assert!(!logout.ok);
+        assert_eq!(logout.code.as_deref(), Some("HUB_SLOW"));
         drop(sw);
         drop(sr);
         let _ = tokio::time::timeout(Duration::from_secs(2), served).await;

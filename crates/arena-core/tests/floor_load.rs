@@ -314,6 +314,7 @@ fn next_intent(f: &Floor, rng: &mut Rng) -> Option<Intent> {
         return Some(intent(
             IntentPayload::SessionStart(SessionStart {
                 group_with: None,
+                pay_from_wallet: false,
                 device_id: device,
                 mode: if wallet {
                     SessionMode::Wallet

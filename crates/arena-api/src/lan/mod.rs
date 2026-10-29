@@ -14,6 +14,7 @@ pub mod listener;
 mod media;
 mod pair;
 mod player_login;
+mod player_session;
 pub(crate) mod registry;
 mod scan_match;
 mod session;
@@ -152,6 +153,44 @@ impl Presence {
     }
 }
 
+/// Reads the live session screens at `now_ms` on a blocking thread with `read`, finds `device_id`'s
+/// and pushes `session.started` to that PC (the staff start of `/ui/intents` and the player's
+/// start from the kiosk share this). Returns how many kiosk sessions got it; a failed read or no
+/// live session is logged and counts none.
+pub(crate) async fn push_session_started_after<F>(
+    presence: &Presence,
+    device_id: &str,
+    cmd_id: &str,
+    now_ms: i64,
+    read: F,
+) -> usize
+where
+    F: FnOnce(i64) -> Result<Vec<(String, arena_proto::SessionScreen)>, arena_proto::AppError>
+        + Send
+        + 'static,
+{
+    match tokio::task::spawn_blocking(move || read(now_ms)).await {
+        Ok(Ok(screens)) => {
+            if let Some((_, screen)) = screens.into_iter().find(|(d, _)| d == device_id) {
+                let sent = presence.push_session_started(device_id, cmd_id, screen);
+                tracing::info!(device_id = %device_id, cmd_id = %cmd_id, sessions = sent, "session start pushed");
+                sent
+            } else {
+                tracing::warn!(device_id = %device_id, cmd_id = %cmd_id, "no live session to push");
+                0
+            }
+        }
+        Ok(Err(e)) => {
+            tracing::warn!(device_id = %device_id, error = %e, "could not read the session screen");
+            0
+        }
+        Err(e) => {
+            tracing::warn!(device_id = %device_id, error = %e, "the session screen read failed");
+            0
+        }
+    }
+}
+
 pub struct HubInfoSource {
     pub reader: Arc<SnapshotReader>,
     pub hub_name: String,
@@ -187,6 +226,10 @@ pub struct LanHub {
     admin_pin: throttle::AdminPinThrottle,
     /// Per-device throttle on wrong player logins (the admin-PIN type, a second instance).
     login_throttle: throttle::AdminPinThrottle,
+    /// Who logged in on each device (Story 6.9).
+    player_logins: player_login::LoginRecords,
+    /// Hands each LAN connection a number, so a login record is good for its connection only.
+    next_conn: std::sync::atomic::AtomicU64,
 }
 
 impl LanHub {
@@ -216,6 +259,8 @@ impl LanHub {
             kiosk_log_rate: throttle::KioskLogRate::default(),
             admin_pin: throttle::AdminPinThrottle::default(),
             login_throttle: throttle::AdminPinThrottle::default(),
+            player_logins: player_login::LoginRecords::default(),
+            next_conn: std::sync::atomic::AtomicU64::new(1),
         }
     }
 

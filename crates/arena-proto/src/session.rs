@@ -45,6 +45,12 @@ pub struct SessionStart {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub group_with: Option<String>,
+    /// A block with a player: pay the block price from the player's wallet in this same intent
+    /// (refused `INSUFFICIENT_BALANCE` when the available wallet is short). The Hub sets it for a
+    /// block a player starts at the kiosk; a staff-started block leaves it off.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(optional, type = "boolean")]
+    pub pay_from_wallet: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

@@ -358,7 +358,7 @@ pub(super) fn mutate(
             }
         }
         IntentPayload::SessionStart(s) => match target {
-            Target::Session(t) => super::session::mutate(tx, s, t, epoch, now_ms),
+            Target::Session(t) => super::session::mutate(tx, s, t, epoch, &intent.actor.id, now_ms),
             _ => Err(mismatch()),
         },
         IntentPayload::SessionEnd(_) => match target {

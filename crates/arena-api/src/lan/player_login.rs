@@ -21,12 +21,15 @@
 //! credentials are never logged. The checks run on a blocking thread under the Hub's verify
 //! permits.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use arena_proto::{
     Actor, ActorKind, AlertKind, AlertRaise, AppError, ErrorCode, Intent, IntentKind,
     IntentPayload, KioskLog, KioskLogLevel, LOGIN_LOCK_SECONDS, PLAYER_LOGIN_CODE,
-    PlayerAuthResult, PlayerAuthenticate, PlayerContext, normalize_username,
+    PLAYER_LOGIN_RECORD_SECONDS, PlayerAuthResult, PlayerAuthenticate, PlayerContext,
+    normalize_username,
 };
 use tokio::time::Instant;
 
@@ -58,11 +61,72 @@ impl Drop for Reservation<'_> {
     }
 }
 
+/// Who logged in on each device, and on which LAN connection (Story 6.9). In `LanHub` memory only: not
+/// branch state, not in the change log. A record lasts [`PLAYER_LOGIN_RECORD_SECONDS`] from its last
+/// use and is good for the connection that logged in only, so it dies with that session.
+#[derive(Default)]
+pub(super) struct LoginRecords {
+    by_device: Mutex<HashMap<String, LoginRecord>>,
+}
+
+struct LoginRecord {
+    player_id: String,
+    conn: u64,
+    expires_at: Instant,
+}
+
+impl LoginRecords {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, LoginRecord>> {
+        self.by_device.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Remembers `player_id` on `device` for `conn`, replacing any earlier login there.
+    pub(super) fn set(&self, device: &str, player_id: &str, conn: u64, now: Instant) {
+        self.lock().insert(
+            device.to_owned(),
+            LoginRecord {
+                player_id: player_id.to_owned(),
+                conn,
+                expires_at: now + Duration::from_secs(PLAYER_LOGIN_RECORD_SECONDS),
+            },
+        );
+    }
+
+    /// The player logged in on `device` through `conn`, with the record refreshed; `None` when
+    /// there is none, it has expired or it belongs to another connection.
+    pub(super) fn touch(&self, device: &str, conn: u64, now: Instant) -> Option<String> {
+        let mut map = self.lock();
+        let live = map
+            .get_mut(device)
+            .filter(|r| r.conn == conn && r.expires_at > now)?;
+        live.expires_at = now + Duration::from_secs(PLAYER_LOGIN_RECORD_SECONDS);
+        Some(live.player_id.clone())
+    }
+
+    /// Forgets the login on `device` made through `conn`.
+    pub(super) fn clear(&self, device: &str, conn: u64) {
+        let mut map = self.lock();
+        if map.get(device).is_some_and(|r| r.conn == conn) {
+            map.remove(device);
+        }
+    }
+
+    /// Forgets every login made through `conn` (its session closed).
+    pub(super) fn clear_conn(&self, conn: u64) {
+        self.lock().retain(|_, r| r.conn != conn);
+    }
+}
+
 fn app(code: ErrorCode, message: impl Into<String>) -> AppError {
     AppError::new(code, message)
 }
 
-fn intent(now_ms: i64, actor: Actor, kind: IntentKind, payload: IntentPayload) -> Intent {
+pub(super) fn intent(
+    now_ms: i64,
+    actor: Actor,
+    kind: IntentKind,
+    payload: IntentPayload,
+) -> Intent {
     Intent {
         intent_id: ulid::Ulid::generate().to_string(),
         kind,
@@ -80,6 +144,7 @@ fn intent(now_ms: i64, actor: Actor, kind: IntentKind, payload: IntentPayload) -
 pub(super) async fn authenticate_player(
     hub: &LanHub,
     device: &str,
+    conn: u64,
     request: PlayerAuthenticate,
 ) -> Result<PlayerAuthResult, AppError> {
     if !hub.is_primary() {
@@ -158,6 +223,8 @@ pub(super) async fn authenticate_player(
     .await
     .map_err(|e| app(ErrorCode::Internal, format!("name read failed: {e}")))??;
     record_login(hub, device, &candidate.player_id).await?;
+    hub.player_logins
+        .set(device, &candidate.player_id, conn, Instant::now());
     tracing::info!(device_id = %device, player_id = %candidate.player_id, "player logged in");
     Ok(PlayerAuthResult::Ok {
         player: PlayerContext {
@@ -221,6 +288,46 @@ async fn raise_lockout(hub: &LanHub, device: &str) {
 #[cfg(test)]
 mod tests {
     use super::super::throttle::{ADMIN_PIN_MAX_FAILURES, ADMIN_PIN_PAUSE};
+    use super::*;
+
+    #[test]
+    fn a_login_record_lasts_120_s_from_its_last_use_and_is_good_for_its_connection_only() {
+        let records = LoginRecords::default();
+        let t0 = Instant::now();
+        records.set("D1", "P1", 7, t0);
+        let secs = Duration::from_secs;
+        assert_eq!(
+            records.touch("D1", 7, t0 + secs(100)).as_deref(),
+            Some("P1")
+        );
+        // The use at 100 s refreshed it: 219 s is within 120 s of that.
+        assert_eq!(
+            records.touch("D1", 7, t0 + secs(219)).as_deref(),
+            Some("P1")
+        );
+        assert_eq!(
+            records.touch("D1", 8, t0 + secs(220)),
+            None,
+            "another connection"
+        );
+        assert_eq!(
+            records.touch("D2", 7, t0 + secs(220)),
+            None,
+            "another device"
+        );
+        assert_eq!(records.touch("D1", 7, t0 + secs(340)), None, "expired");
+        records.set("D1", "P1", 7, t0);
+        records.set("D1", "P2", 9, t0);
+        assert_eq!(
+            records.touch("D1", 7, t0),
+            None,
+            "a new login replaces the old"
+        );
+        records.clear("D1", 7);
+        assert_eq!(records.touch("D1", 9, t0).as_deref(), Some("P2"));
+        records.clear_conn(9);
+        assert_eq!(records.touch("D1", 9, t0), None);
+    }
 
     #[test]
     fn the_shared_throttle_has_the_protocol_s_limits() {

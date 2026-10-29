@@ -5,7 +5,7 @@ import en from "../../../packages/ui/src/messages/en.json" with { type: "json" }
 import names from "../src-tauri/ipc-names.json" with { type: "json" };
 
 // The player login (Story 6.8): the form in the attract screen's login panel, its outcomes, the
-// lock countdown, the holding step and the Hub link gating. The Tauri shell is stubbed in the
+// lock countdown, the hand-over to the plan picker (Story 6.9) and the Hub link gating. The Tauri shell is stubbed in the
 // page: `player_login` answers from a queue the test fills, and every call is recorded.
 
 const INR = {
@@ -78,6 +78,9 @@ async function open(page: Page, opts: Opts = {}) {
               const answers = w.__answers as unknown[];
               return answers.length > 0 ? answers.shift() : null;
             }
+            case commands.playerPlans:
+            case commands.playerLogout:
+              return null;
             case commands.takeRestoreState:
             case commands.reportAppState:
             case commands.heartbeat:
@@ -212,15 +215,16 @@ test("the password can be shown, hidden and pasted", async ({ page }) => {
   expect(pasted).toBe(false);
 });
 
-test("a correct login sends the credentials once and holds for the counter", async ({ page }) => {
+test("a correct login sends the credentials once and opens the plan picker", async ({ page }) => {
   await open(page);
   await openPanel(page);
   await answer(page, ASHA);
   await logIn(page, " asha ", "sample secret phrase");
-  const holding = page.getByTestId("login-holding");
+  const holding = page.getByTestId("plan-picker");
   await expect(holding).toBeVisible();
-  await expect(page.getByTestId("login-holding-title")).toHaveText("Logged in as Asha Rao");
-  await expect(holding).toContainText("Ask at the counter to start your time.");
+  await expect(page.getByTestId("picker-player")).toHaveText("Logged in as Asha Rao");
+  // The holding step is gone: the player picks their own time (Story 6.9).
+  await expect(holding).not.toContainText("Ask at the counter to start your time.");
   await expect(holding.getByRole("button", { name: "Not you? Log out" })).toBeVisible();
   await expect(page.getByTestId("login-form")).toHaveCount(0);
   expect(await logins(page)).toEqual([{ username: "asha", password: "sample secret phrase" }]);
@@ -269,7 +273,7 @@ test("Enter and the Log in button both submit; an empty field just takes focus",
   await expect(page.getByTestId("login-error")).toHaveText(/./);
   await password(page).fill("two");
   await submit(page).click();
-  await expect(page.getByTestId("login-holding")).toBeVisible();
+  await expect(page.getByTestId("plan-picker")).toBeVisible();
   expect((await logins(page)).length).toBe(2);
 });
 
@@ -299,7 +303,7 @@ test("a wrong username or password marks both fields, says one thing and refocus
   await answer(page, ASHA);
   await password(page).fill("right");
   await password(page).press("Enter");
-  await expect(page.getByTestId("login-holding")).toBeVisible();
+  await expect(page.getByTestId("plan-picker")).toBeVisible();
 });
 
 test("five wrong tries lock the form with a counting-down message, then it opens again", async ({
@@ -373,7 +377,7 @@ test("a correct login clears the count of wrong tries", async ({ page }) => {
     await password(page).press("Enter");
     if (i < 4) await expect(page.getByTestId("login-error")).toContainText("didn't match");
   }
-  await expect(page.getByTestId("login-holding")).toBeVisible();
+  await expect(page.getByTestId("plan-picker")).toBeVisible();
   await page.getByTestId("login-logout").click();
   await page.keyboard.press("x");
   await expect(username(page)).toBeEnabled();
@@ -390,7 +394,7 @@ test("a player already playing elsewhere is told which PC", async ({ page }) => 
   await logIn(page);
   const error = page.getByTestId("login-error");
   await expect(error).toContainText("You're already playing on PC 3. Ask at the counter.");
-  await expect(page.getByTestId("login-holding")).toHaveCount(0);
+  await expect(page.getByTestId("plan-picker")).toHaveCount(0);
   await expect(password(page)).toHaveValue("");
   await expect(username(page)).toBeFocused();
   // Not a wrong try: the form stays open for more.
@@ -434,7 +438,7 @@ test("with the Hub unreachable Log in is disabled with its reason and wakes on r
   await expect(submit(page)).toBeEnabled();
   await answer(page, ASHA);
   await submit(page).click();
-  await expect(page.getByTestId("login-holding")).toBeVisible();
+  await expect(page.getByTestId("plan-picker")).toBeVisible();
   // And away again: the link going down while the form shows disables it at once.
   await page.getByTestId("login-logout").click();
   await page.keyboard.press("x");
@@ -462,17 +466,17 @@ test("no answer in time says the counter is reconnecting and lets the player try
   await expect(submit(page)).toBeEnabled();
   await password(page).fill("again");
   await password(page).press("Enter");
-  await expect(page.getByTestId("login-holding")).toBeVisible();
+  await expect(page.getByTestId("plan-picker")).toBeVisible();
 });
 
-test("the holding step goes back to attract on Not you, and on 60 s without input", async ({
+test("the plan picker goes back to attract on Not you, and on 60 s without input", async ({
   page,
 }) => {
   await open(page, { clock: true });
   await openPanel(page);
   await answer(page, ASHA, ASHA);
   await logIn(page);
-  const holding = page.getByTestId("login-holding");
+  const holding = page.getByTestId("plan-picker");
   await expect(holding).toBeVisible();
   // Esc closes the form, not the holding step.
   await page.keyboard.press("Escape");
@@ -497,17 +501,17 @@ test("the holding step goes back to attract on Not you, and on 60 s without inpu
   await expect(page.getByTestId("attract")).toBeVisible();
   await page.keyboard.press("x");
   await expect(page.getByTestId("login-form")).toBeVisible();
-  await expect(page.getByTestId("login-holding")).toHaveCount(0);
+  await expect(page.getByTestId("plan-picker")).toHaveCount(0);
 });
 
-test("a session starting leaves the holding step for the session screen, forgetting the player", async ({
+test("a session starting leaves the plan picker for the session screen, forgetting the player", async ({
   page,
 }) => {
   await open(page);
   await openPanel(page);
   await answer(page, ASHA);
   await logIn(page);
-  await expect(page.getByTestId("login-holding")).toBeVisible();
+  await expect(page.getByTestId("plan-picker")).toBeVisible();
   await emit(page, "pc-screen", {
     locked: false,
     reason: null,
@@ -523,13 +527,13 @@ test("a session starting leaves the holding step for the session screen, forgett
   });
   await expect(page.getByTestId("session")).toBeVisible();
   await expect(page.getByTestId("attract")).toHaveCount(0);
-  await expect(page.getByTestId("login-holding")).toHaveCount(0);
+  await expect(page.getByTestId("plan-picker")).toHaveCount(0);
   // Back to idle: the player was forgotten with the screen.
   await emit(page, "pc-screen", { locked: false, reason: null, message: null, session: null });
   await expect(page.getByTestId("attract")).toBeVisible();
   await page.keyboard.press("x");
   await expect(page.getByTestId("login-form")).toBeVisible();
-  await expect(page.getByTestId("login-holding")).toHaveCount(0);
+  await expect(page.getByTestId("plan-picker")).toHaveCount(0);
 });
 
 test("the form is keyboard-only friendly and uses no blur", async ({ page }) => {

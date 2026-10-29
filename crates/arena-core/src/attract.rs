@@ -54,6 +54,30 @@ fn media_of(store: &Store, lookup: MediaLookup<'_>) -> Result<Vec<AttractMedia>,
     Ok(out)
 }
 
+/// A group's hourly rate at `now_ms` and the pricing rule in effect, if any (what the attract screen
+/// and the plan picker's wallet card show).
+pub(crate) fn live_rate(
+    rules: &[arena_store::PricingRuleRow],
+    group_id: &str,
+    base_minor: i64,
+    tz: chrono_tz::Tz,
+    now_ms: i64,
+) -> (i64, Option<SnapshotActiveRule>) {
+    let resolved = crate::pricing::resolve(rules, group_id, base_minor, tz, now_ms);
+    let rule = resolved
+        .rule_id
+        .and_then(|rid| rules.iter().find(|r| r.rule_id == rid))
+        .map(|r| SnapshotActiveRule {
+            rule_id: r.rule_id.clone(),
+            name: r.name.clone(),
+            adjust_kind: r.adjust_kind.clone(),
+            adjust_value: r.adjust_value,
+            rate_minor: resolved.rate_minor,
+            until: resolved.until,
+        });
+    (resolved.rate_minor, rule)
+}
+
 /// The attract view of each of `device_ids` at `now_ms`, in the order given. Nothing is
 /// returned before the branch has a locale (not bootstrapped).
 pub fn attract_views(
@@ -103,25 +127,9 @@ pub fn attract_views(
             let base = group.and_then(|g| rates.iter().find(|r| r.group_id == g.group_id));
             let (state, rate_minor, rule) = match (group, base, tz) {
                 (Some(g), Some(base), Some(tz)) => {
-                    let resolved = crate::pricing::resolve(
-                        &rules,
-                        &g.group_id,
-                        base.price_per_hour_minor,
-                        tz,
-                        now_ms,
-                    );
-                    let rule = resolved
-                        .rule_id
-                        .and_then(|rid| rules.iter().find(|r| r.rule_id == rid))
-                        .map(|r| SnapshotActiveRule {
-                            rule_id: r.rule_id.clone(),
-                            name: r.name.clone(),
-                            adjust_kind: r.adjust_kind.clone(),
-                            adjust_value: r.adjust_value,
-                            rate_minor: resolved.rate_minor,
-                            until: resolved.until,
-                        });
-                    (AttractState::Ready, Some(resolved.rate_minor), rule)
+                    let (rate, rule) =
+                        live_rate(&rules, &g.group_id, base.price_per_hour_minor, tz, now_ms);
+                    (AttractState::Ready, Some(rate), rule)
                 }
                 _ => (AttractState::AskCounter, None, None),
             };

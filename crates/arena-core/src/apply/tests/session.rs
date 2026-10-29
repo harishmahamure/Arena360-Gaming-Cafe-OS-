@@ -93,6 +93,7 @@ pub(super) async fn pc(
 pub(super) fn start_of(device: &str, player: Option<&str>) -> IntentPayload {
     IntentPayload::SessionStart(SessionStart {
         group_with: None,
+        pay_from_wallet: false,
         device_id: device.into(),
         mode: SessionMode::Postpaid,
         player_id: player.map(Into::into),
@@ -270,6 +271,7 @@ async fn refusals_name_the_code_and_write_nothing() {
     );
     let pass = IntentPayload::SessionStart(SessionStart {
         group_with: None,
+        pay_from_wallet: false,
         device_id: ok.clone(),
         mode: SessionMode::Pass,
         player_id: None,

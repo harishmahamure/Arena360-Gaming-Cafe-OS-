@@ -12,7 +12,9 @@
     rateText,
     ruleChipText,
   } from "./attract";
+  import { playerLogout } from "./bridge";
   import Login from "./Login.svelte";
+  import PlanPicker from "./PlanPicker.svelte";
 
   let {
     view,
@@ -32,9 +34,9 @@
   /** The login panel is open over the media. */
   let panel = $state(false);
   /**
-   * The player who logged in, while the panel holds for the counter to start their time (Story
-   * 6.8). Memory only: it is never saved, and it goes with the panel or when a session starts
-   * (the session screen replaces this whole screen).
+   * The player who logged in, while the plan picker is open (Stories 6.8 and 6.9). Memory only: it
+   * is never saved, and it goes with the panel or when a session starts (the session screen
+   * replaces this whole screen). The Hub holds the login; this is only who to greet.
    */
   let player: PlayerContext | null = $state(null);
   /** The logo could not be decoded: the Arena 360 mark shows instead. */
@@ -67,14 +69,15 @@
     return () => clearTimeout(timer);
   });
 
-  /** Closes the panel; a held player is forgotten with it. */
+  /** Closes the panel; a logged-in player is forgotten with it, here and at the Hub. */
   function close() {
     clearTimeout(idle);
+    if (player !== null) playerLogout();
     panel = false;
     player = null;
   }
 
-  /** A correct login: the panel holds for this player, with its own 60 s without input. */
+  /** A correct login: the plan picker opens for this player, with its own 60 s without input. */
   function hold(who: PlayerContext) {
     // The panel closed while the Hub was still checking: nobody is waiting for this answer.
     if (!panel) return;
@@ -112,7 +115,7 @@
   function onKeyDown(e: KeyboardEvent) {
     if (!mine(e.target)) return;
     if (panel) {
-      // Esc closes the form; the holding step is left with "Not you? Log out" or the idle 60 s.
+      // Esc closes the form; the picker is left with "Not you? Log out" or the idle 60 s.
       if (e.key === "Escape" && player === null) {
         e.preventDefault();
         close();
@@ -224,20 +227,7 @@
         bind:this={dialog}
       >
         {#if player}
-          <div class="holding" data-testid="login-holding">
-            <h2 class="type-kiosk-title" id="login-title" data-testid="login-holding-title">
-              {t("player.login.holding.title", { name: player.name })}
-            </h2>
-            <p class="type-kiosk-body">{t("player.attract.login.hint")}</p>
-            <button
-              type="button"
-              class="close type-kiosk-label"
-              data-testid="login-logout"
-              onclick={close}
-            >
-              {t("player.login.holding.logout")}
-            </button>
-          </div>
+          <PlanPicker {view} {hub} {player} onlogout={close} />
         {:else}
           <Login {view} {hub} onplayer={hold} onclose={close} />
         {/if}
@@ -334,39 +324,7 @@
     text-align: center;
   }
 
-  .login-panel > * {
-    margin: 0;
-  }
-
-  .holding {
-    display: grid;
-    gap: var(--space-4);
-    justify-items: center;
-    max-width: min(32rem, 80vw);
-  }
-
-  .holding > * {
-    margin: 0;
-    overflow-wrap: anywhere;
-  }
-
   .login-panel:focus {
     outline: none;
-  }
-
-  .close {
-    min-width: var(--space-touch-min);
-    min-height: var(--space-touch-min);
-    padding: var(--space-2) var(--space-5);
-    border: 2px solid var(--border-strong);
-    border-radius: var(--radius-full);
-    background: transparent;
-    color: var(--text);
-    cursor: pointer;
-  }
-
-  .close:focus-visible {
-    outline: 4px solid var(--focus-ring);
-    outline-offset: 2px;
   }
 </style>

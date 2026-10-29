@@ -1061,6 +1061,14 @@ impl Store {
         wallet_balance(&self.conn, player_id)
     }
 
+    /// What the player's running wallet sessions have set aside (Story 6.9).
+    pub fn reserved_minor(&self, player_id: &str) -> Result<i64, AppError> {
+        if !self.table_exists("sessions")? {
+            return Ok(0);
+        }
+        sum_reserved_minor(&self.conn, player_id)
+    }
+
     /// An order's `rev` and total, and when `placement_id` put its lines on it (`None` when the
     /// placement left no lines).
     pub fn placement(

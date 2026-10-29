@@ -628,6 +628,7 @@ mod tests {
                 .submit_intent(submit(
                     IntentPayload::SessionStart(arena_proto::SessionStart {
                         group_with: None,
+                        pay_from_wallet: false,
                         device_id: kiosk.clone(),
                         mode: arena_proto::SessionMode::Postpaid,
                         player_id: Some(player_id.clone()),
@@ -766,6 +767,7 @@ mod tests {
                 .submit_intent(submit(
                     IntentPayload::SessionStart(arena_proto::SessionStart {
                         group_with: None,
+                        pay_from_wallet: false,
                         device_id: kiosk.clone(),
                         mode: arena_proto::SessionMode::Postpaid,
                         player_id: None,
@@ -1086,6 +1088,7 @@ mod tests {
                     .submit_intent(submit(
                         IntentPayload::SessionStart(arena_proto::SessionStart {
                             group_with: None,
+                            pay_from_wallet: false,
                             device_id: kiosk.clone(),
                             mode,
                             player_id: Some(player_id.clone()),
@@ -1138,6 +1141,7 @@ mod tests {
                 submit(
                     IntentPayload::SessionStart(arena_proto::SessionStart {
                         group_with,
+                        pay_from_wallet: false,
                         device_id: device_id.to_owned(),
                         mode: arena_proto::SessionMode::Postpaid,
                         player_id: None,

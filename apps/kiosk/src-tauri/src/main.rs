@@ -116,6 +116,35 @@ async fn player_login(
         .await)
 }
 
+/// The plan picker's options for the logged-in player (Story 6.9): IPC `player_plans`, answered with
+/// the Hub's `player_plans_result` as the body. `None` when the service did not answer.
+#[tauri::command]
+async fn player_plans(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
+    Ok(bridge
+        .request(|rid| arena_kiosk_core::ipc::IpcMsg::PlayerPlans { rid })
+        .await)
+}
+
+/// Starts the player's choice (Story 6.9): IPC `player_start`. The choice is `{mode, pack_id | plan_id}`
+/// and never names a player; an unknown mode (postpaid) is refused here without asking the service.
+#[tauri::command]
+async fn player_start(
+    choice: arena_proto::PlayerChoice,
+    bridge: tauri::State<'_, Arc<Bridge>>,
+) -> Result<Option<Answer>, ()> {
+    Ok(bridge
+        .request(move |rid| arena_kiosk_core::ipc::IpcMsg::PlayerStart { rid, choice })
+        .await)
+}
+
+/// Forgets the player at the Hub (Story 6.9): IPC `player_logout`.
+#[tauri::command]
+async fn player_logout(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
+    Ok(bridge
+        .request(|rid| arena_kiosk_core::ipc::IpcMsg::PlayerLogout { rid })
+        .await)
+}
+
 /// Whether the admin-exit prompt is paused (`retry_after_s`) and whether an exit runs (`until`).
 #[tauri::command]
 async fn admin_exit_status(bridge: tauri::State<'_, Arc<Bridge>>) -> Result<Option<Answer>, ()> {
@@ -274,7 +303,10 @@ fn main() {
             pc_screen,
             pc_dismiss,
             attract,
-            player_login
+            player_login,
+            player_plans,
+            player_start,
+            player_logout
         ])
         .on_window_event(|_window, event| {
             // The kiosk is the shell: nothing closes it (admin exit comes in Story 1.20).

@@ -235,6 +235,20 @@ impl DeviceDirectory {
         crate::attract::attract_views(&store, device_ids, now_ms, lookup)
     }
 
+    /// The plan picker's options for `player_id` on `device_id` (Story 6.9), read in one snapshot.
+    pub fn player_options(
+        &self,
+        player_id: &str,
+        device_id: &str,
+        now_ms: i64,
+    ) -> Result<arena_proto::PlayerPlansResult, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?;
+        crate::player_plans::player_options(&store, player_id, device_id, now_ms)
+    }
+
     /// The live player with this username (normalised by the caller), for a kiosk login: their
     /// stored hash and sealed name, and the label of the PC where they have a live session
     /// (`active`, `paused`, `grace` or unended `expired`), read in one snapshot. `None` for an

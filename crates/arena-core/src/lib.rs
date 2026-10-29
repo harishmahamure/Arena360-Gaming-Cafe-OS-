@@ -24,6 +24,7 @@ pub mod locale;
 pub mod media_cache;
 pub mod pairing;
 mod pdf;
+pub mod player_plans;
 pub mod players;
 mod pricing;
 pub mod printer;

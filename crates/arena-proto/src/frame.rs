@@ -16,6 +16,7 @@ use crate::error::{AppError, ErrorCode};
 use crate::intent::Intent;
 use crate::pc_command::{LockReason, PcAck, PcAction};
 use crate::player_login::{PlayerAuthResult, PlayerAuthenticate};
+use crate::player_session::{PlayerPlansResult, PlayerStartResult, PlayerStartSession};
 use crate::scope::ClientClass;
 use crate::session::SessionScreen;
 use crate::ui_auth::SettingEntry;
@@ -79,13 +80,29 @@ pub enum FrameBody {
     /// The Hub's typed answer to `player.authenticate`.
     #[serde(rename = "player.auth_result")]
     PlayerAuthResult(PlayerAuthResult),
+    /// A logged-in player's kiosk asks for the options valid for its PC (paired sessions only;
+    /// Story 6.9).
+    #[serde(rename = "player.plans")]
+    PlayerPlans,
+    /// The options for this PC's group, then the wallet.
+    #[serde(rename = "player.plans_result")]
+    PlayerPlansResult(PlayerPlansResult),
+    /// The player picked an option: start it (paired sessions only).
+    #[serde(rename = "player.start_session")]
+    PlayerStartSession(PlayerStartSession),
+    /// Whether the Hub started the session, or why it refused.
+    #[serde(rename = "player.start_result")]
+    PlayerStartResult(PlayerStartResult),
+    /// The kiosk forgets the player (paired sessions only); the Hub drops its login record.
+    #[serde(rename = "player.logout")]
+    PlayerLogout,
     /// The Hub's empty reply to a request that has nothing to return.
     #[serde(rename = "ack")]
     Ack,
 }
 
 /// Every known `kind`.
-pub const FRAME_KINDS: [&str; 17] = [
+pub const FRAME_KINDS: [&str; 22] = [
     "hello",
     "hello.ok",
     "intent.submit",
@@ -102,6 +119,11 @@ pub const FRAME_KINDS: [&str; 17] = [
     "kiosk.pc_ack",
     "player.authenticate",
     "player.auth_result",
+    "player.plans",
+    "player.plans_result",
+    "player.start_session",
+    "player.start_result",
+    "player.logout",
     "ack",
 ];
 
@@ -125,6 +147,11 @@ impl FrameBody {
             Self::PcAck(_) => "kiosk.pc_ack",
             Self::PlayerAuthenticate(_) => "player.authenticate",
             Self::PlayerAuthResult(_) => "player.auth_result",
+            Self::PlayerPlans => "player.plans",
+            Self::PlayerPlansResult(_) => "player.plans_result",
+            Self::PlayerStartSession(_) => "player.start_session",
+            Self::PlayerStartResult(_) => "player.start_result",
+            Self::PlayerLogout => "player.logout",
             Self::Ack => "ack",
         }
     }

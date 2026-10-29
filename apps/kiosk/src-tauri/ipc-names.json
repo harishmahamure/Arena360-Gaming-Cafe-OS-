@@ -30,6 +30,9 @@
     "pcScreen": "pc_screen",
     "pcDismiss": "pc_dismiss",
     "attract": "attract",
-    "playerLogin": "player_login"
+    "playerLogin": "player_login",
+    "playerPlans": "player_plans",
+    "playerStart": "player_start",
+    "playerLogout": "player_logout"
   }
 }

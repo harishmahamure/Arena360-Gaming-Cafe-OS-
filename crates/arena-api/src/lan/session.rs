@@ -458,6 +458,9 @@ pub(crate) async fn run<S>(
         }
     }
 
+    let conn = hub
+        .next_conn
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut writer = tokio::spawn(write_loop(sink, out_rx, writer_kill));
     let permits = Arc::new(Semaphore::new(MAX_IN_FLIGHT));
     let mut tasks = JoinSet::new();
@@ -465,6 +468,7 @@ pub(crate) async fn run<S>(
         hub: &hub,
         authed: &authed,
         out: &out_tx,
+        conn,
     };
     let mut keepalive = tokio::time::interval_at(Instant::now() + PING_INTERVAL, PING_INTERVAL);
     keepalive.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -511,6 +515,7 @@ pub(crate) async fn run<S>(
     })
     .await;
     tasks.abort_all();
+    hub.player_logins.clear_conn(conn);
     if !writer.is_finished() {
         // A reason already set (e.g. TOKEN_REVOKED) is kept: the writer task sends its frame.
         set_kill(&kill_tx, Kill::Drop);
@@ -541,6 +546,8 @@ struct Ctx<'a> {
     hub: &'a Arc<LanHub>,
     authed: &'a Authed,
     out: &'a mpsc::Sender<Message>,
+    /// This connection's number (a player login is good for it only).
+    conn: u64,
 }
 
 impl Ctx<'_> {
@@ -594,6 +601,27 @@ impl Ctx<'_> {
                 }
                 Err(e) => self.reply(Frame::error(rid, e)).await,
             },
+            "player.plans" => match self.paired_device("player.plans") {
+                Ok(device) => self.spawn_player_plans(rid, device, permits, tasks).await,
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
+            "player.start_session" => match self.check_player_start(value) {
+                Ok((device, choice)) => {
+                    self.spawn_player_start(rid, device, choice, permits, tasks)
+                        .await
+                }
+                Err(e) => self.reply(Frame::error(rid, e)).await,
+            },
+            "player.logout" => {
+                let reply = match self.paired_device("player.logout") {
+                    Ok(device) => {
+                        super::player_session::logout(self.hub, &device, self.conn);
+                        Frame::new(rid, FrameBody::Ack)
+                    }
+                    Err(e) => Frame::error(rid, e),
+                };
+                self.reply(reply).await;
+            }
             "kiosk.pc_ack" => {
                 let reply = match self.check_pc_ack(value) {
                     Ok(()) => Frame::new(rid, FrameBody::Ack),
@@ -788,6 +816,64 @@ impl Ctx<'_> {
         Ok((device, request))
     }
 
+    fn check_player_start(
+        &self,
+        value: Value,
+    ) -> Result<(String, arena_proto::PlayerChoice), AppError> {
+        let device = self.paired_device("player.start_session")?;
+        let frame = parse_frame_value(value).map_err(|e| e.error)?;
+        let FrameBody::PlayerStartSession(request) = frame.body else {
+            return Err(app(ErrorCode::BadFrame, "malformed player.start_session"));
+        };
+        Ok((device, request.choice))
+    }
+
+    async fn spawn_player_plans(
+        &self,
+        rid: String,
+        device: String,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let (hub, out, conn) = (Arc::clone(self.hub), self.out.clone(), self.conn);
+        tasks.spawn(async move {
+            let _permit = permit;
+            let reply = match super::player_session::plans(&hub, &device, conn).await {
+                Ok(result) => Frame::new(rid, FrameBody::PlayerPlansResult(result)),
+                Err(e) => Frame::error(rid, e),
+            };
+            let _ = out.send(text(&reply)).await;
+        });
+    }
+
+    async fn spawn_player_start(
+        &self,
+        rid: String,
+        device: String,
+        choice: arena_proto::PlayerChoice,
+        permits: &Arc<Semaphore>,
+        tasks: &mut JoinSet<()>,
+    ) {
+        let permit = match try_permit(permits) {
+            Ok(p) => p,
+            Err(e) => return self.reply(Frame::error(rid, e)).await,
+        };
+        let (hub, out, conn) = (Arc::clone(self.hub), self.out.clone(), self.conn);
+        tasks.spawn(async move {
+            let _permit = permit;
+            let reply =
+                match super::player_session::start_session(&hub, &device, conn, choice).await {
+                    Ok(result) => Frame::new(rid, FrameBody::PlayerStartResult(result)),
+                    Err(e) => Frame::error(rid, e),
+                };
+            let _ = out.send(text(&reply)).await;
+        });
+    }
+
     async fn spawn_player_authenticate(
         &self,
         rid: String,
@@ -800,11 +886,13 @@ impl Ctx<'_> {
             Ok(p) => p,
             Err(e) => return self.reply(Frame::error(rid, e)).await,
         };
+        let conn = self.conn;
         let hub = Arc::clone(self.hub);
         let out = self.out.clone();
         tasks.spawn(async move {
             let _permit = permit;
-            let reply = match super::player_login::authenticate_player(&hub, &device, request).await
+            let reply = match super::player_login::authenticate_player(&hub, &device, conn, request)
+                .await
             {
                 Ok(result) => Frame::new(rid, FrameBody::PlayerAuthResult(result)),
                 Err(e) => Frame::error(rid, e),

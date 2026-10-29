@@ -525,6 +525,7 @@ fn next_intent(snapshot: &Value, floor: &Floor, rng: &mut Rng) -> Option<Intent>
         return Some(intent(
             IntentPayload::SessionStart(SessionStart {
                 group_with: None,
+                pay_from_wallet: false,
                 device_id: device,
                 mode: if wallet {
                     SessionMode::Wallet
@@ -651,6 +652,7 @@ async fn start_probe(ui: &Ui, floor: &Floor, minutes: u64, started_s: f64) -> Op
         .submit(&intent(
             IntentPayload::SessionStart(SessionStart {
                 group_with: None,
+                pay_from_wallet: false,
                 device_id: floor.probe_device.clone(),
                 mode: SessionMode::Wallet,
                 player_id: Some(floor.probe_player_id.clone()),

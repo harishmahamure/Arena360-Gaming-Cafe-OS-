@@ -1318,6 +1318,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let applied = submit(IntentPayload::SessionStart(arena_proto::SessionStart {
             group_with: None,
+            pay_from_wallet: false,
             device_id: device.clone(),
             mode: arena_proto::SessionMode::Postpaid,
             player_id: None,
@@ -1474,6 +1475,7 @@ mod tests {
         let started = submit(
             IntentPayload::SessionStart(arena_proto::SessionStart {
                 group_with: None,
+                pay_from_wallet: false,
                 device_id: device,
                 mode: arena_proto::SessionMode::Postpaid,
                 player_id: None,

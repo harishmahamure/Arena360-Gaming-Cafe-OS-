@@ -12,4 +12,10 @@ export type SessionStart = {
    * is made when it has none).
    */
   group_with?: string;
+  /**
+   * A block with a player: pay the block price from the player's wallet in this same intent
+   * (refused `INSUFFICIENT_BALANCE` when the available wallet is short). The Hub sets it for a
+   * block a player starts at the kiosk; a staff-started block leaves it off.
+   */
+  pay_from_wallet?: boolean;
 };

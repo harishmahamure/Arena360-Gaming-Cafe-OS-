@@ -2269,29 +2269,15 @@ async fn run_intent(
                     .map(|c| c.row_id.clone())
             });
             if let Some(device_id) = started {
-                let (reader, now) = (Arc::clone(&auth.reader), auth.clock.now_ms());
-                let screens =
-                    tokio::task::spawn_blocking(move || reader.session_screens(now)).await;
-                match screens {
-                    Ok(Ok(screens)) => {
-                        if let Some((_, screen)) =
-                            screens.into_iter().find(|(d, _)| *d == device_id)
-                        {
-                            let sent = auth
-                                .presence
-                                .push_session_started(&device_id, &cmd_id, screen);
-                            tracing::info!(device_id = %device_id, cmd_id = %cmd_id, sessions = sent, "session start pushed");
-                        } else {
-                            tracing::warn!(device_id = %device_id, cmd_id = %cmd_id, "no live session to push");
-                        }
-                    }
-                    Ok(Err(e)) => {
-                        tracing::warn!(device_id = %device_id, error = %e, "could not read the session screen");
-                    }
-                    Err(e) => {
-                        tracing::warn!(device_id = %device_id, error = %e, "the session screen read failed");
-                    }
-                }
+                let reader = Arc::clone(&auth.reader);
+                crate::lan::push_session_started_after(
+                    &auth.presence,
+                    &device_id,
+                    &cmd_id,
+                    auth.clock.now_ms(),
+                    move |now| reader.session_screens(now),
+                )
+                .await;
             }
             if let Some((device_id, action, text)) = command {
                 let sent = auth.presence.push_pc_command(
@@ -4112,6 +4098,7 @@ pub(crate) mod tests {
             Actor { kind: ActorKind::Staff, id: "x".into() },
             IntentPayload::SessionStart(arena_proto::SessionStart {
         group_with: None,
+        pay_from_wallet: false,
                 device_id: device.into(),
                 mode: arena_proto::SessionMode::Postpaid,
                 player_id: None,

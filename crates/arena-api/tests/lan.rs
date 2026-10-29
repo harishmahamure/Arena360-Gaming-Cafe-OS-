@@ -2363,6 +2363,7 @@ async fn a_player_with_a_live_session_on_another_pc_is_busy_and_nothing_is_recor
         owner(),
         IntentPayload::SessionStart(SessionStart {
             group_with: None,
+            pay_from_wallet: false,
             device_id: other,
             mode: SessionMode::Postpaid,
             player_id: Some(id),
@@ -2448,6 +2449,445 @@ async fn only_a_paired_session_may_authenticate_a_player() {
     .await;
     let frame = recv(&mut ws).await.unwrap();
     assert_eq!(error_of(&frame).1, ErrorCode::Forbidden);
+}
+
+// ---- Story 6.9: the plan picker ----
+
+/// Puts the hub's paired PC in a rated group; returns the group id.
+async fn rated_pc(hub: &TestHub, rate: i64) -> String {
+    use arena_proto::{DeviceAssign, GroupUpsert, RateUpsert};
+    let w = hub.writer.as_ref().unwrap();
+    let group = w
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::GroupUpsert(GroupUpsert {
+                id: None,
+                name: "PC".into(),
+                group_kind: "pc".into(),
+                colour: "teal".into(),
+                sort_order: 1,
+            }),
+            None,
+        ))
+        .await
+        .unwrap()
+        .changes[0]
+        .row_id
+        .clone();
+    w.submit_intent(intent(
+        owner(),
+        IntentPayload::RateUpsert(RateUpsert {
+            group_id: group.clone(),
+            price_per_hour_minor: rate,
+        }),
+        None,
+    ))
+    .await
+    .unwrap();
+    w.submit_intent(intent(
+        owner(),
+        IntentPayload::DeviceAssign(DeviceAssign {
+            device_id: hub.paired_id.clone(),
+            group_id: Some(group.clone()),
+        }),
+        None,
+    ))
+    .await
+    .unwrap();
+    group
+}
+
+fn upi(amount: i64) -> Vec<arena_proto::PaymentRow> {
+    vec![arena_proto::PaymentRow {
+        method: arena_proto::PaymentMethod::Upi,
+        amount_minor: amount,
+        reference: Some("1234".into()),
+    }]
+}
+
+async fn top_up(hub: &TestHub, player: &str, amount: i64) {
+    hub.writer
+        .as_ref()
+        .unwrap()
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::WalletTopup(arena_proto::WalletTopup {
+                player_id: player.into(),
+                amount_minor: amount,
+                payments: upi(amount),
+            }),
+            None,
+        ))
+        .await
+        .unwrap();
+}
+
+/// Sells the player a 5 h pack for `group`; returns the owned pack id.
+async fn own_pack(hub: &TestHub, player: &str, group: &str) -> String {
+    use arena_proto::PlanUpsert;
+    let w = hub.writer.as_ref().unwrap();
+    let plan = w
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::PlanUpsert(PlanUpsert {
+                id: None,
+                plan_kind: "pack".into(),
+                name: "5 h".into(),
+                price_minor: 30_000,
+                minutes: Some(300),
+                validity_days: Some(7),
+                window_start_min: None,
+                window_end_min: None,
+                group_ids: vec![group.to_owned()],
+                active: true,
+            }),
+            None,
+        ))
+        .await
+        .unwrap()
+        .changes
+        .iter()
+        .find(|c| c.tbl == "plans")
+        .unwrap()
+        .row_id
+        .clone();
+    w.submit_intent(intent(
+        owner(),
+        IntentPayload::PlanSell(arena_proto::PlanSell {
+            player_id: player.into(),
+            plan_id: plan,
+            payments: upi(30_000),
+            credit_override: None,
+            receipt: None,
+            business: None,
+            coupon: None,
+            discount: None,
+        }),
+        None,
+    ))
+    .await
+    .unwrap();
+    Store::open_reader(&hub.path)
+        .unwrap()
+        .player_packs(player)
+        .unwrap()[0]
+        .id
+        .clone()
+}
+
+async fn plans(client: &HubClient) -> Result<arena_proto::PlayerPlansResult, ClientError> {
+    match client
+        .request("player.plans", serde_json::Value::Null)
+        .await?
+        .body
+    {
+        FrameBody::PlayerPlansResult(r) => Ok(r),
+        other => panic!("{other:?}"),
+    }
+}
+
+async fn start_choice(
+    client: &HubClient,
+    choice: serde_json::Value,
+) -> Result<arena_proto::PlayerStartResult, ClientError> {
+    match client
+        .request(
+            "player.start_session",
+            serde_json::json!({ "choice": choice }),
+        )
+        .await?
+        .body
+    {
+        FrameBody::PlayerStartResult(r) => Ok(r),
+        other => panic!("{other:?}"),
+    }
+}
+
+fn login_required(e: ClientError) -> bool {
+    matches!(e, ClientError::Hub(e) if e.message == arena_proto::PLAYER_LOGIN_REQUIRED)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn without_a_login_the_picker_frames_answer_login_required() {
+    let hub = start("0.1.0", true).await;
+    rated_pc(&hub, 6_000).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    assert!(login_required(plans(&client).await.unwrap_err()));
+    assert!(login_required(
+        start_choice(&client, serde_json::json!({"mode": "wallet"}))
+            .await
+            .unwrap_err()
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_logged_in_player_sees_the_options_and_starts_a_pack_and_the_pc_is_told() {
+    use arena_proto::{PlayerAuthResult, PlayerChoice, PlayerStartResult};
+    let hub = start("0.1.0", true).await;
+    let group = rated_pc(&hub, 6_000).await;
+    let player = add_player(&hub, "asha", "right-password", "Asha").await;
+    top_up(&hub, &player, 4_000).await;
+    let pack = own_pack(&hub, &player, &group).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let mut events = client.events().unwrap();
+    assert!(matches!(
+        login(&client, "asha", "right-password").await,
+        PlayerAuthResult::Ok { .. }
+    ));
+    let r = plans(&client).await.unwrap();
+    assert_eq!(
+        r.options
+            .iter()
+            .map(|o| o.choice.clone())
+            .collect::<Vec<_>>(),
+        [
+            PlayerChoice::Pack {
+                pack_id: pack.clone()
+            },
+            PlayerChoice::Wallet
+        ]
+    );
+    let wallet = r.wallet.unwrap();
+    assert_eq!((wallet.balance_minor, wallet.rate_minor), (4_000, 6_000));
+    assert_eq!(r.options[0].minutes_left, Some(300));
+    assert_eq!(
+        start_choice(
+            &client,
+            serde_json::json!({"mode": "pack", "pack_id": pack})
+        )
+        .await
+        .unwrap(),
+        PlayerStartResult::Ok
+    );
+    // The PC is unlocked: session.started reaches it.
+    let started = loop {
+        let ev = tokio::time::timeout(Duration::from_secs(3), events.next_event())
+            .await
+            .expect("session.started within 3 s")
+            .unwrap();
+        if let HubEvent::SessionStarted { session, .. } = ev {
+            break session;
+        }
+    };
+    assert!(!started.session_id.is_empty());
+    let reader = Store::open_reader(&hub.path).unwrap();
+    let sessions = reader.live_sessions().unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].player_id.as_deref(), Some(player.as_str()));
+    assert_eq!(sessions[0].mode, "pack");
+    // The login is spent: another start needs a new login.
+    assert!(login_required(plans(&client).await.unwrap_err()));
+    let changes = reader.changes().unwrap();
+    let change = changes.iter().rev().find(|c| c.tbl == "sessions").unwrap();
+    assert_eq!(
+        (change.actor_kind.as_str(), change.actor_id.as_str()),
+        ("device", hub.paired_id.as_str())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_refused_start_keeps_the_player_on_the_picker_with_the_typed_reason() {
+    use arena_proto::PlayerStartResult;
+    let hub = start("0.1.0", true).await;
+    let group = rated_pc(&hub, 6_000).await;
+    let player = add_player(&hub, "asha", "right-password", "Asha").await;
+    top_up(&hub, &player, 100).await;
+    let _ = own_pack(&hub, &player, &group).await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    login(&client, "asha", "right-password").await;
+    match start_choice(&client, serde_json::json!({"mode": "wallet"}))
+        .await
+        .unwrap()
+    {
+        PlayerStartResult::Refused { code, message } => {
+            assert_eq!(code, ErrorCode::InsufficientBalance);
+            assert!(message.contains("Balance"), "{message}");
+        }
+        other => panic!("{other:?}"),
+    }
+    match start_choice(
+        &client,
+        serde_json::json!({"mode": "pack", "pack_id": "NOPE"}),
+    )
+    .await
+    .unwrap()
+    {
+        PlayerStartResult::Refused { code, .. } => assert_eq!(code, ErrorCode::NotFound),
+        other => panic!("{other:?}"),
+    }
+    // Still logged in, nothing started.
+    assert_eq!(plans(&client).await.unwrap().options.len(), 2);
+    assert!(
+        Store::open_reader(&hub.path)
+            .unwrap()
+            .live_sessions()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_block_is_paid_from_the_wallet_when_the_player_starts_it() {
+    use arena_proto::{PlanUpsert, PlayerStartResult};
+    let hub = start("0.1.0", true).await;
+    let group = rated_pc(&hub, 6_000).await;
+    let player = add_player(&hub, "asha", "right-password", "Asha").await;
+    top_up(&hub, &player, 25_000).await;
+    let plan = hub
+        .writer
+        .as_ref()
+        .unwrap()
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::PlanUpsert(PlanUpsert {
+                id: None,
+                plan_kind: "block".into(),
+                name: "All day".into(),
+                price_minor: 20_000,
+                minutes: None,
+                validity_days: None,
+                window_start_min: Some(0),
+                window_end_min: Some(1_439),
+                group_ids: vec![group],
+                active: true,
+            }),
+            None,
+        ))
+        .await
+        .unwrap()
+        .changes
+        .iter()
+        .find(|c| c.tbl == "plans")
+        .unwrap()
+        .row_id
+        .clone();
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    login(&client, "asha", "right-password").await;
+    let r = plans(&client).await.unwrap();
+    let block = r
+        .options
+        .iter()
+        .find(|o| o.price_minor == Some(20_000))
+        .unwrap();
+    assert!(block.selectable);
+    assert_eq!(
+        start_choice(
+            &client,
+            serde_json::json!({"mode": "block", "plan_id": plan})
+        )
+        .await
+        .unwrap(),
+        PlayerStartResult::Ok
+    );
+    let reader = Store::open_reader(&hub.path).unwrap();
+    assert_eq!(reader.wallet_balance(&player).unwrap(), 5_000);
+    assert_eq!(reader.live_sessions().unwrap()[0].mode, "block");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn logout_forgets_the_player_and_a_login_is_good_for_its_connection_only() {
+    let hub = start("0.1.0", true).await;
+    rated_pc(&hub, 6_000).await;
+    add_player(&hub, "asha", "right-password", "Asha").await;
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    login(&client, "asha", "right-password").await;
+    assert!(plans(&client).await.is_ok());
+    // Another connection of the same device cannot use the record.
+    let other = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    assert!(login_required(plans(&other).await.unwrap_err()));
+    // Logging out on the other connection leaves the first one's record alone.
+    let ack = other
+        .request("player.logout", serde_json::Value::Null)
+        .await
+        .unwrap();
+    assert_eq!(ack.body, FrameBody::Ack);
+    assert!(plans(&client).await.is_ok());
+    let ack = client
+        .request("player.logout", serde_json::Value::Null)
+        .await
+        .unwrap();
+    assert_eq!(ack.body, FrameBody::Ack);
+    assert!(login_required(plans(&client).await.unwrap_err()));
+    // A new login brings it back; closing the connection drops it for good.
+    login(&client, "asha", "right-password").await;
+    assert!(plans(&client).await.is_ok());
+    drop(client);
+    let again = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    assert!(login_required(plans(&again).await.unwrap_err()));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_picker_frames_are_for_paired_sessions_only_and_session_start_is_out_of_scope() {
+    let hub = start("0.1.0", true).await;
+    let mut ws = hub.plain().await;
+    let hello = Frame::new(
+        "h",
+        FrameBody::Hello(hub.hello(ClientClass::Kds, &hub.kds_token, "0.1.0")),
+    );
+    send_frame(&mut ws, &hello).await;
+    assert!(matches!(
+        recv(&mut ws).await.unwrap().body,
+        FrameBody::HelloOk(_)
+    ));
+    for body in [
+        r#"{"v":1,"kind":"player.plans","rid":"a"}"#,
+        r#"{"v":1,"kind":"player.start_session","rid":"b","choice":{"mode":"wallet"}}"#,
+        r#"{"v":1,"kind":"player.logout","rid":"c"}"#,
+    ] {
+        send(&mut ws, body).await;
+        let frame = recv(&mut ws).await.unwrap();
+        assert_eq!(error_of(&frame).1, ErrorCode::Forbidden, "{body}");
+    }
+    // A paired kiosk cannot send session.start itself.
+    let client = HubClient::connect(&hub.url(), &hub.fingerprint, hub.paired())
+        .await
+        .unwrap();
+    let start = intent(
+        Actor {
+            kind: ActorKind::Device,
+            id: hub.paired_id.clone(),
+        },
+        IntentPayload::SessionStart(arena_proto::SessionStart {
+            device_id: hub.paired_id.clone(),
+            mode: arena_proto::SessionMode::Wallet,
+            player_id: Some("P".into()),
+            pack_id: None,
+            plan_id: None,
+            group_with: None,
+            pay_from_wallet: false,
+        }),
+        None,
+    );
+    match client.submit(start).await {
+        Err(ClientError::Hub(e)) => assert_eq!(e.code, ErrorCode::Forbidden),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_follower_answers_the_picker_frames_with_an_error() {
+    let follower = start("0.1.0", false).await;
+    let client = HubClient::connect(&follower.url(), &follower.fingerprint, follower.paired())
+        .await
+        .unwrap();
+    match plans(&client).await {
+        Err(ClientError::Hub(e)) => assert_eq!(e.code, ErrorCode::NotPrimary),
+        other => panic!("{other:?}"),
+    }
 }
 
 fn http_body(resp: &str) -> serde_json::Value {

@@ -5,7 +5,8 @@
 //! `admin_exit_ended`, `test_session_started`, `test_session_ended`, `pc_screen`, `attract` and
 //! `reply`; the app sends `pong`, `app_state`, `request` and `admin_exit` (a manager PIN,
 //! answered with `reply`; the [`SecretPin`] never prints) and `player_login` (a player's
-//! username and password, answered with `reply`; the password is a [`SecretPin`] too). The app
+//! username and password, answered with `reply`; the password is a [`SecretPin`] too) and, for the
+//! plan picker, `player_plans`, `player_start` and `player_logout` (answered with `reply`). The app
 //! never talks to the Hub:
 //! everything it needs from the Hub goes through a `request` the service answers. A line longer
 //! than the reader's limit ([`MAX_LINE_BYTES`] for the service, [`MAX_APP_LINE_BYTES`] for the
@@ -175,6 +176,23 @@ pub enum IpcMsg {
         rid: String,
         username: String,
         password: SecretPin,
+    },
+    /// App → service: the logged-in player asks for the options valid for this PC (Story 6.9). The
+    /// answer is `reply` `rid`: the Hub's `player.plans_result` as the body, or an `error` (a login
+    /// the Hub no longer holds is `AUTH_FAILED` with the message `player login required`).
+    PlayerPlans {
+        rid: String,
+    },
+    /// App → service: start the chosen option for the logged-in player (Story 6.9). The answer is
+    /// `reply` `rid`: the Hub's `player.start_result` as the body (`{outcome, ...}`), or an `error`.
+    /// The app never names the player.
+    PlayerStart {
+        rid: String,
+        choice: arena_proto::PlayerChoice,
+    },
+    /// App → service: forget the player (Story 6.9). Answered with `reply` `rid` (an empty body).
+    PlayerLogout {
+        rid: String,
     },
     /// Service → app: an admin exit runs until `until` (UTC ms): drop topmost and the keyboard
     /// lockdown and show the countdown badge. Also sent on every connection while one runs.
@@ -425,6 +443,38 @@ mod tests {
 "
         );
         assert_eq!(IpcMsg::parse(&msg.to_line()).unwrap(), msg);
+    }
+
+    #[test]
+    fn the_plan_picker_messages_are_tagged_lines_and_name_no_player() {
+        let plans = IpcMsg::PlayerPlans { rid: "p".into() };
+        assert_eq!(
+            plans.to_line(),
+            "{\"type\":\"player_plans\",\"rid\":\"p\"}
+"
+        );
+        let start = IpcMsg::PlayerStart {
+            rid: "s".into(),
+            choice: arena_proto::PlayerChoice::Block {
+                plan_id: "B1".into(),
+            },
+        };
+        assert_eq!(
+            start.to_line(),
+            "{\"type\":\"player_start\",\"rid\":\"s\",\"choice\":{\"mode\":\"block\",\"plan_id\":\"B1\"}}
+"
+        );
+        let logout = IpcMsg::PlayerLogout { rid: "o".into() };
+        for msg in [plans, start, logout] {
+            assert_eq!(IpcMsg::parse(&msg.to_line()).unwrap(), msg);
+        }
+        // Postpaid is not a choice the app can make.
+        assert!(
+            IpcMsg::parse(
+                "{\"type\":\"player_start\",\"rid\":\"s\",\"choice\":{\"mode\":\"postpaid\"}}"
+            )
+            .is_err()
+        );
     }
 
     #[test]

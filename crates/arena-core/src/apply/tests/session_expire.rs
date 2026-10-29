@@ -41,6 +41,7 @@ async fn timed_with(f: &Fixture, ends_in_ms: i64, grace_min: u32, mode: &str) ->
         owner(),
         IntentPayload::SessionStart(SessionStart {
             group_with: None,
+            pay_from_wallet: false,
             device_id: d.clone(),
             mode: SessionMode::Postpaid,
             player_id: Some(player),
@@ -183,6 +184,7 @@ async fn an_expired_session_lets_the_device_start_another() {
         owner(),
         IntentPayload::SessionStart(SessionStart {
             group_with: None,
+            pay_from_wallet: false,
             device_id: d,
             mode: SessionMode::Postpaid,
             player_id: None,
@@ -310,6 +312,7 @@ async fn staff_handles_holds_the_session_expired_with_a_time_up_alert_until_staf
         owner(),
         IntentPayload::SessionStart(SessionStart {
             group_with: None,
+            pay_from_wallet: false,
             device_id: d.clone(),
             mode: SessionMode::Postpaid,
             player_id: None,

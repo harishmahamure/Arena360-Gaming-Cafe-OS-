@@ -31,6 +31,9 @@ pub(super) struct StartExtras {
     window_ends_at: Option<i64>,
     no_zone: bool,
     now: i64,
+    /// A block paid from the wallet: the available wallet (balance less what running wallet
+    /// sessions set aside).
+    block_wallet: Option<i64>,
 }
 
 /// The end time and set-aside amount a started prepaid session gets.
@@ -65,6 +68,20 @@ pub(super) fn load_start(
             if let Some(p) = extras.plan.clone() {
                 extras.plan_groups = list_plan_groups(tx, &p.plan_id)?;
                 open_window(&mut extras, p.window_start_min, p.window_end_min);
+            }
+        }
+        if let (true, Some(player_id), Some(p)) =
+            (s.pay_from_wallet, s.player_id.as_deref(), &extras.plan)
+        {
+            let available = super::session::available_wallet(tx, player_id)?;
+            extras.block_wallet = Some(available);
+            if available < p.price_minor {
+                let money = |minor| crate::locale::format_money(tx, now_ms, minor);
+                extras.short = Some(format!(
+                    "Balance {}. Top up at counter. This block costs {}.",
+                    money(available)?,
+                    money(p.price_minor)?,
+                ));
             }
         }
         return Ok(extras);
@@ -117,6 +134,12 @@ pub(super) fn check_start(
 ) -> Result<(), AppError> {
     if s.plan_id.is_some() && s.mode != SessionMode::Block {
         return Err(invalid("plan_id", "only a block session takes a plan"));
+    }
+    if s.pay_from_wallet && (s.mode != SessionMode::Block || s.player_id.is_none()) {
+        return Err(invalid(
+            "pay_from_wallet",
+            "only a block session with a player pays from the wallet",
+        ));
     }
     match s.mode {
         SessionMode::Postpaid => match s.pack_id {
@@ -214,7 +237,19 @@ fn check_block(s: &SessionStart, group_id: &str, x: &StartExtras) -> Result<(), 
             "This block is not for this PC's group.",
         ));
     }
-    window_open("plan_id", "This block starts", x)
+    window_open("plan_id", "This block starts", x)?;
+    if let (true, Some(available), Some(plan)) = (s.pay_from_wallet, x.block_wallet, &x.plan)
+        && available < plan.price_minor
+    {
+        return Err(AppError::with_field(
+            ErrorCode::InsufficientBalance,
+            "player_id",
+            x.short
+                .clone()
+                .unwrap_or_else(|| "The wallet balance is too low. Top up at counter.".to_owned()),
+        ));
+    }
+    Ok(())
 }
 
 /// Refuses `PASS_OUTSIDE_WINDOW`, naming the window, when now is outside it.
@@ -488,10 +523,14 @@ pub(super) struct BlockBill<'a> {
     pub business_day: &'a str,
     pub fy: &'a str,
     pub ends_at: i64,
+    /// Set when the block is paid from the player's wallet in the same intent (Story 6.9): the
+    /// actor the payment and the settlement are stamped with.
+    pub wallet_payer: Option<&'a str>,
 }
 
 /// Opens the bill of a block session at its start: one line at the block price, unpaid until
-/// staff settle it (now or at the end).
+/// staff settle it (now or at the end), or paid from the player's wallet and settled at once when
+/// `wallet_payer` is set.
 pub(super) fn open_block_bill(
     tx: &StoreTx<'_>,
     x: &StartExtras,
@@ -532,9 +571,11 @@ pub(super) fn open_block_bill(
             position: 0,
         },
     )?;
-    Ok(vec![
+    let mut written = vec![
         Written {
-            key: RowKey::Orders { id: order_id },
+            key: RowKey::Orders {
+                id: order_id.clone(),
+            },
             op: ChangeOp::Insert,
             before: None,
         },
@@ -543,7 +584,26 @@ pub(super) fn open_block_bill(
             op: ChangeOp::Insert,
             before: None,
         },
-    ])
+    ];
+    if let (Some(payer), Some(player_id), true) =
+        (b.wallet_payer, b.player_id, plan.price_minor > 0)
+    {
+        let stamp = Stamp {
+            staff_id: payer,
+            order_id: &order_id,
+            business_day: b.business_day,
+            fy: b.fy,
+        };
+        let payments = [PaymentRow {
+            method: PaymentMethod::Wallet,
+            amount_minor: plan.price_minor,
+            reference: None,
+        }];
+        insert_payments(tx, &stamp, &payments, &mut written)?;
+        record_payer_txns(tx, &stamp, &payments, Some(player_id), None, &mut written)?;
+        settle_order(tx, &order_id, now_ms, payer)?;
+    }
+    Ok(written)
 }
 
 /// Ends a block session: the block price was billed at the start, so ending early charges

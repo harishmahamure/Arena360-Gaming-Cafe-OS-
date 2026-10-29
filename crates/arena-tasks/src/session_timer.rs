@@ -443,6 +443,7 @@ mod tests {
             owner(),
             IntentPayload::SessionStart(SessionStart {
                 group_with: None,
+                pay_from_wallet: false,
                 device_id: f.device.clone(),
                 mode: SessionMode::Postpaid,
                 player_id: None,

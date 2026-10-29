@@ -976,6 +976,7 @@ async fn ending_a_wallet_session_settles_at_once_and_offers_no_undo() {
             actor(),
             IntentPayload::SessionStart(SessionStart {
         group_with: None,
+        pay_from_wallet: false,
                 device_id: device.clone(),
                 mode: SessionMode::Wallet,
                 player_id: Some(player.clone()),

@@ -230,6 +230,7 @@ async fn run_flow(state: ConnectivityState) -> Outcome {
     let start = |device: &String, mode, player: Option<&String>| {
         IntentPayload::SessionStart(SessionStart {
             group_with: None,
+            pay_from_wallet: false,
             device_id: device.clone(),
             mode,
             player_id: player.cloned(),
@@ -560,6 +561,7 @@ async fn run_epic_5_flow(state: ConnectivityState) -> Outcome5 {
         &w,
         IntentPayload::SessionStart(SessionStart {
             group_with: None,
+            pay_from_wallet: false,
             device_id: device.clone(),
             mode: SessionMode::Postpaid,
             player_id: None,

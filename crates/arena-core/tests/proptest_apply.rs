@@ -285,6 +285,12 @@ enum Op {
         pass: bool,
         guest: bool,
     },
+    /// A `session.start` by a device actor that Story 6.9 does not allow (postpaid, a guest, or
+    /// another PC's device id): always `PERMISSION_DENIED`, writing nothing.
+    DeviceStartDenied {
+        slot: u8,
+        kind: u8,
+    },
     /// An extend of the live session on an existing PC from the wallet, a pack or credit: it
     /// either moves the end out by exactly the minutes and writes its own settled order, or
     /// writes nothing.
@@ -689,6 +695,7 @@ fn op() -> impl Strategy<Value = Op> {
             wallet,
             guest
         }),
+        1 => (0..3u8, 0..3u8).prop_map(|(slot, kind)| Op::DeviceStartDenied { slot, kind }),
         2 => (0..3u8, 0..3u8, 0..3u8).prop_map(|(slot, source, minutes)| Op::SessionExtend {
             slot,
             source,
@@ -3899,6 +3906,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let out = hub.submit_new(hub.intent(
                 IntentPayload::SessionStart(arena_proto::SessionStart {
                     group_with: None,
+                    pay_from_wallet: false,
                     device_id: device.clone(),
                     mode: arena_proto::SessionMode::Postpaid,
                     player_id: player,
@@ -3915,6 +3923,61 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 prop_assert_eq!(hub.change_count(), before + 3);
             }
             prop_assert_eq!(live(hub), 1);
+        }
+        Op::DeviceStartDenied { slot, kind } => {
+            let devices = hub.reader.rows(Table::DevicesMeta).unwrap();
+            let Some(device) = devices
+                .get(usize::from(*slot))
+                .map(|d| text(d, "device_id"))
+            else {
+                return Ok(());
+            };
+            let other = devices
+                .iter()
+                .map(|d| text(d, "device_id"))
+                .find(|id| *id != device)
+                .unwrap_or_else(|| "OTHER".into());
+            let player = hub
+                .reader
+                .rows(Table::Players)
+                .unwrap()
+                .first()
+                .map(|p| text(p, "player_id"))
+                .unwrap_or_else(|| "P".into());
+            let (target, mode, player) = match kind {
+                0 => (
+                    device.clone(),
+                    arena_proto::SessionMode::Postpaid,
+                    Some(player),
+                ),
+                1 => (other, arena_proto::SessionMode::Wallet, Some(player)),
+                _ => (device.clone(), arena_proto::SessionMode::Wallet, None),
+            };
+            let mut intent = hub.intent(
+                IntentPayload::SessionStart(arena_proto::SessionStart {
+                    group_with: None,
+                    pay_from_wallet: false,
+                    device_id: target,
+                    mode,
+                    player_id: player,
+                    pack_id: None,
+                    plan_id: None,
+                }),
+                None,
+            );
+            intent.actor = Actor {
+                kind: ActorKind::Device,
+                id: device,
+            };
+            let before = hub.change_count();
+            let out = hub.submit_new(intent);
+            prop_assert_eq!(
+                code(&out).map(|c| c.0),
+                Some(ErrorCode::PermissionDenied),
+                "{:?}",
+                out
+            );
+            prop_assert_eq!(hub.change_count(), before);
         }
         Op::WindowStart { slot, pass, guest } => {
             let Some(device) = hub
@@ -3952,6 +4015,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let out = hub.submit_new(hub.intent(
                 IntentPayload::SessionStart(arena_proto::SessionStart {
                     group_with: None,
+                    pay_from_wallet: false,
                     device_id: device.clone(),
                     mode: if *pass {
                         arena_proto::SessionMode::Pass
@@ -4028,6 +4092,7 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             let out = hub.submit_new(hub.intent(
                 IntentPayload::SessionStart(arena_proto::SessionStart {
                     group_with: None,
+                    pay_from_wallet: false,
                     device_id: device.clone(),
                     mode: if *wallet {
                         arena_proto::SessionMode::Wallet

@@ -284,7 +284,6 @@ test("any key, click or tap opens the login panel over the media; Esc closes it"
     panel.getByRole("heading", { name: en["player.attract.login.title"] }),
   ).toBeVisible();
   // The form is the panel body (Story 6.8); it opens with the cursor on the username.
-  expect(en["player.attract.login.hint"]).toBe("Ask at the counter to start your time.");
   await expect(panel.getByTestId("login-username")).toBeFocused();
   // The media screen stays behind the panel.
   await expect(screen(page)).toBeVisible();

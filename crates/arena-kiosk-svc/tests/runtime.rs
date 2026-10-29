@@ -1986,6 +1986,65 @@ async fn a_player_login_with_the_hub_down_is_hub_slow() {
     assert_eq!(reply_code(&reply), Some(arena_proto::ErrorCode::HubSlow));
 }
 
+impl App {
+    /// Sends a plan picker message and returns the reply to `rid`.
+    async fn picker(&mut self, msg: IpcMsg, rid: &str) -> IpcMsg {
+        self.send(&msg).await;
+        let rid = rid.to_owned();
+        self.until(move |m| matches!(m, IpcMsg::Reply { rid: r, .. } if *r == rid))
+            .await
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_plan_picker_messages_are_forwarded_and_a_missing_login_is_login_required() {
+    let mut hub = Hub::seeded().await;
+    hub.up().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.start();
+    kiosk.wait_state(KioskHubState::Connected).await;
+    let mut app = kiosk.app().await;
+    let reply = app
+        .picker(IpcMsg::PlayerPlans { rid: "pl".into() }, "pl")
+        .await;
+    let IpcMsg::Reply { error, .. } = &reply else {
+        unreachable!()
+    };
+    let error = error.as_ref().expect("no login on the hub");
+    assert_eq!(error.code, arena_proto::ErrorCode::AuthFailed);
+    assert_eq!(error.message, arena_proto::PLAYER_LOGIN_REQUIRED);
+    let reply = app
+        .picker(
+            IpcMsg::PlayerStart {
+                rid: "st".into(),
+                choice: arena_proto::PlayerChoice::Wallet,
+            },
+            "st",
+        )
+        .await;
+    assert_eq!(reply_code(&reply), Some(arena_proto::ErrorCode::AuthFailed));
+    let reply = app
+        .picker(IpcMsg::PlayerLogout { rid: "lo".into() }, "lo")
+        .await;
+    assert_eq!(reply_code(&reply), None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_plan_picker_with_the_hub_down_is_hub_slow() {
+    let mut hub = Hub::seeded().await;
+    hub.up().await;
+    let mut kiosk = Kiosk::new(&hub);
+    kiosk.start();
+    kiosk.wait_state(KioskHubState::Connected).await;
+    let mut app = kiosk.app().await;
+    hub.down().await;
+    kiosk.wait_state(KioskHubState::Reconnecting).await;
+    let reply = app
+        .picker(IpcMsg::PlayerPlans { rid: "pl".into() }, "pl")
+        .await;
+    assert_eq!(reply_code(&reply), Some(arena_proto::ErrorCode::HubSlow));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_end_of_an_exit_closes_explorer_and_resumes_enforcement() {
     let mut hub = Hub::seeded().await;

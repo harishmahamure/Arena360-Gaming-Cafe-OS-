@@ -12,10 +12,12 @@ import type {
   DiscoveredHub,
   KioskHubState,
   KioskHubStatus,
+  PlayerChoice,
 } from "@arena/ui/generated";
 // The event and command names, shared with the Rust shell (its tests read the same file).
 import names from "../../src-tauri/ipc-names.json" with { type: "json" };
 import { LOGIN_TIMEOUT_MS, outcomeOf, type LoginOutcome } from "./login";
+import { PICKER_TIMEOUT_MS, plansOf, startOf, type PlansOutcome, type StartOutcome } from "./plans";
 
 export const HUB_STATUS_EVENT = names.events.hubStatus;
 export const RESTORE_STATE_EVENT = names.events.restoreState;
@@ -389,6 +391,45 @@ export async function playerLogin(username: string, password: string): Promise<L
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** Calls the shell command `cmd`, giving up after PICKER_TIMEOUT_MS (`null`: no answer). */
+async function ask(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      invoke<unknown>(cmd, args),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), PICKER_TIMEOUT_MS);
+      }),
+    ]);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * The options valid for this PC for the player who just logged in (Story 6.9). The Hub knows who
+ * that is; the kiosk names nobody. Outside Tauri, on an error or with no answer in time it is
+ * `unreachable`; `login` means the Hub no longer holds the login.
+ */
+export async function playerPlans(): Promise<PlansOutcome> {
+  if (!inTauri()) return { kind: "unreachable" };
+  return plansOf(await ask(CMD.playerPlans));
+}
+
+/** Starts the chosen option for the logged-in player (Story 6.9); the Hub answers ok or a refusal. */
+export async function playerStart(choice: PlayerChoice): Promise<StartOutcome> {
+  if (!inTauri()) return { kind: "unreachable" };
+  return startOf(await ask(CMD.playerStart, { choice }));
+}
+
+/** Tells the Hub to forget the logged-in player (best effort: the Hub also forgets after 120 s). */
+export function playerLogout(): void {
+  if (!inTauri()) return;
+  void invoke(CMD.playerLogout).catch(() => {});
 }
 
 export function dismissPcMessage(): void {

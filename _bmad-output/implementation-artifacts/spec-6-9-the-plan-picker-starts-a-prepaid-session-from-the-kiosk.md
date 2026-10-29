@@ -2,7 +2,7 @@
 title: 'Story 6.9: The plan picker starts a prepaid session from the kiosk'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '9b11e017ec6a9e487beda343949084f03b876706'
 review_loop_iteration: 0
 followup_review_recommended: false

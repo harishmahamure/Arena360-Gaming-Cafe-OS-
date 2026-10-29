@@ -14,8 +14,6 @@ import type {
   SnapshotLocale,
 } from "@arena/ui/generated";
 
-/** The picker forgets the player after this long without input. */
-export const PICKER_IDLE_MS = 60_000;
 /** After the Hub accepted a start, how long the picker waits for the session screen. */
 export const START_WAIT_MS = 10_000;
 /** How long the app waits for the service's answer before it calls the counter unreachable. */

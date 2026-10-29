@@ -175,7 +175,7 @@ development_status:
   6-6-game-media-on-the-kiosk-falls-back-from-video-to-cover-to-so: done
   6-7-the-attract-screen-shows-branding-rates-and-the-active-rule: done
   6-8-a-player-logs-in-at-the-kiosk-with-username-and-password: done
-  6-9-the-plan-picker-starts-a-prepaid-session-from-the-kiosk: review
+  6-9-the-plan-picker-starts-a-prepaid-session-from-the-kiosk: done
   6-10-a-new-player-signs-up-at-the-kiosk-with-one-consent-box: backlog
   6-11-session-end-cleanup-ends-the-player-s-programs-and-clears-th: backlog
   6-12-session-end-cleanup-signs-out-launchers-discord-and-browsers: backlog

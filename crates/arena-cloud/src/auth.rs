@@ -44,6 +44,10 @@ pub struct AuthState {
     pub templates: std::sync::OnceLock<crate::templates::TemplateStore>,
     /// The CDN base URL catalogue media are served from (Story 6.1); set once by `serve`.
     pub catalog_cdn: std::sync::OnceLock<String>,
+    /// Signs the upload links of `POST /v1/presign` (Story 8.1); set once by `serve`.
+    pub presigner: std::sync::OnceLock<crate::presign::Presigner>,
+    /// R2 PUT links issued per tenant and branch.
+    pub put_metrics: crate::presign::PutMetrics,
 }
 
 impl AuthState {
@@ -63,6 +67,8 @@ impl AuthState {
             wizard_tx: tokio::sync::broadcast::channel(64).0,
             templates: std::sync::OnceLock::new(),
             catalog_cdn: std::sync::OnceLock::new(),
+            presigner: std::sync::OnceLock::new(),
+            put_metrics: crate::presign::PutMetrics::default(),
         }
     }
 

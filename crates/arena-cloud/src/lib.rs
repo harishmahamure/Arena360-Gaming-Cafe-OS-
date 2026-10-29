@@ -29,6 +29,7 @@ pub mod messaging;
 pub mod ops;
 pub mod pairing_code;
 pub mod passwords;
+pub mod presign;
 pub mod store;
 pub mod templates;
 pub mod totp;
@@ -267,6 +268,14 @@ pub async fn serve(
                 let _ = st.templates.set(store);
             }
             None => tracing::warn!("no object store configured: setup templates are not kept"),
+        }
+        match presign::Presigner::from_env(dev, &|k| std::env::var_os(k))
+            .map_err(|e| std::io::Error::other(format!("data bucket: {e}")))?
+        {
+            Some(presigner) => {
+                let _ = st.presigner.set(presigner);
+            }
+            None => tracing::warn!("no data bucket configured: /v1/presign answers 503"),
         }
         match config::catalog_cdn_from_env(dev, &|k| std::env::var_os(k)) {
             Some(base) => {

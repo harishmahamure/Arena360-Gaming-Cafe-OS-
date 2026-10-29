@@ -100,6 +100,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         }
         ErrorCode::HubIncompatible => StatusCode::CONFLICT,
         ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+        ErrorCode::Fenced => StatusCode::CONFLICT,
         ErrorCode::PairPinPaused => StatusCode::TOO_MANY_REQUESTS,
         ErrorCode::SchemaTooNew | ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     }
@@ -327,6 +328,7 @@ mod tests {
             (ErrorCode::PairCodeExpired, 401),
             (ErrorCode::FeatureNotEntitled, 403),
             (ErrorCode::PayloadTooLarge, 413),
+            (ErrorCode::Fenced, 409),
         ] {
             assert_eq!(status_of(code).as_u16(), status, "{code:?}");
         }

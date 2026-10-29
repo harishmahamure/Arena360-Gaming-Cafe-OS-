@@ -182,6 +182,21 @@ impl ControlDb {
             .transpose()
     }
 
+    /// The branch's fence epoch (the first epoch a Hub of the branch reported since it was last
+    /// paired), or `None` before any heartbeat.
+    pub async fn branch_fence_epoch(
+        &self,
+        branch_id: &str,
+    ) -> Result<Option<String>, ControlError> {
+        let rows = self
+            .query(
+                "SELECT epoch FROM branch_fence WHERE branch_id = ?",
+                vec![text(branch_id)],
+            )
+            .await?;
+        rows.first().map(|r| col_text(r, 0)).transpose()
+    }
+
     pub async fn hub(&self, hub_id: &str) -> Result<Option<HubRow>, ControlError> {
         let sql = format!("SELECT {HUB_COLUMNS} FROM hubs WHERE id = ?");
         let rows = self.query(&sql, vec![text(hub_id)]).await?;

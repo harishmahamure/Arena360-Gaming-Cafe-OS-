@@ -45,6 +45,7 @@ mod player_session;
 mod player_signup;
 mod players;
 mod pos;
+mod presign;
 mod pricing;
 mod printer;
 mod process;
@@ -300,6 +301,10 @@ pub use pos::{
     OrderLineEvent, OrderLineServed, OrderPlace, OrderPlaceReverted, OrderPlacedEvent, OrderReady,
     OrderVoid, OrderVoidEvent, PlaceOutcome, PosSale, PosSaleLine, PosSaleLineView,
     PosSalePaymentView, PosSaleReverted, PosSaleView, PosSalesView, VOID_NOTE_MAX_CHARS,
+};
+pub use presign::{
+    PRESIGN_KIND_ROLLUP, PRESIGN_KIND_SNAPSHOT, PRESIGN_TTL_S, PresignBatch, PresignRequest,
+    PresignResponse,
 };
 pub use pricing::{
     RULE_ADJUST_KINDS, RULE_ALL_DAYS, RULE_KINDS, RULE_MAX_DATE_SPAN_DAYS, RULE_MAX_PERCENT_BP,

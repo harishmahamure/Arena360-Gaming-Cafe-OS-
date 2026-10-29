@@ -367,6 +367,14 @@ stringData:
   ARENA_ALERT_WEBHOOK_URL: https://hooks.slack.com/services/…
   ARENA_BACKUP_HEARTBEAT_URL: https://hc-ping.com/<uuid>
 ---
+# Story 8.1 (not wired into the manifests yet): `POST /v1/presign` signs upload links for the
+# data bucket from these four variables on the control Deployment. Without them it answers 503.
+# apiVersion: v1 / kind: Secret / name: arena-cloud-data
+#   ARENA_DATA_S3_ENDPOINT: https://<account id>.r2.cloudflarestorage.com
+#   ARENA_DATA_S3_BUCKET: <the environment's data bucket>
+#   ARENA_DATA_S3_ACCESS_KEY_ID: <R2 token with write access to that bucket>
+#   ARENA_DATA_S3_SECRET_ACCESS_KEY: <its secret>
+---
 apiVersion: v1
 kind: Secret
 metadata:

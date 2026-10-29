@@ -100,6 +100,7 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::VarianceOverThreshold
         | ErrorCode::BundleShort
         | ErrorCode::PayloadTooLarge
+        | ErrorCode::Fenced
         | ErrorCode::ControllersUnchecked
         | ErrorCode::DeviceUnassigned => true,
         ErrorCode::BadFrame

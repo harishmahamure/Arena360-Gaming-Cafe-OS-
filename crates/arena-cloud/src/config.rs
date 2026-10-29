@@ -54,6 +54,9 @@ environment (not with --dev):
   ARENA_LICENCE_KID       the kid of that key, as listed in LICENCE_VERIFY_KEYS
   ARENA_CATALOG_CDN_URL   the CDN base URL game media are served from, `<base>/catalog/<sha256>.<ext>`
                           (--dev default: http://127.0.0.1:9000); unset: the manifest answers 503
+  ARENA_DATA_S3_ENDPOINT, ARENA_DATA_S3_BUCKET, ARENA_DATA_S3_ACCESS_KEY_ID,
+  ARENA_DATA_S3_SECRET_ACCESS_KEY  the data bucket POST /v1/presign signs upload links for (R2;
+                          --dev: the dev MinIO, bucket arena-dev); none set outside --dev: 503
   ARENA_BILLING_ENABLED   unset or false: billing is not available in this build (true exits 64)
   ARENA_GUPSHUP_ENDPOINT, ARENA_GUPSHUP_USERID, ARENA_GUPSHUP_PASSWORD, ARENA_GUPSHUP_SENDER,
   ARENA_GUPSHUP_DLT_TEMPLATE_ID  the Gupshup Enterprise SMS account (gupshup only)

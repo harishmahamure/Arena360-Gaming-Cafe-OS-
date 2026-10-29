@@ -27,6 +27,7 @@ pub mod mfa;
 pub mod owned;
 mod pair;
 mod panic;
+pub mod presign;
 pub mod security;
 pub mod session;
 mod setup_start;
@@ -79,6 +80,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>, commands_only: bool) -> Router {
             .merge(catalog::router(Arc::clone(st)))
             .merge(pair::router(Arc::clone(st)))
             .merge(heartbeat::router(Arc::clone(st)))
+            .merge(presign::router(Arc::clone(st)))
             .merge(setup_template::router(Arc::clone(st)))
             .merge(setup_start::router(Arc::clone(st)))
             .merge(commands::router(Arc::clone(st)))

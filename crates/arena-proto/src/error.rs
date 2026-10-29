@@ -175,6 +175,8 @@ pub enum ErrorCode {
     BundleShort,
     /// A request body over the limit of its route, such as a setup template over 1 MB (Story 5.37).
     PayloadTooLarge,
+    /// The caller's epoch is below the branch fence: a newer Hub took over (Story 8.1).
+    Fenced,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -283,6 +285,7 @@ impl ErrorCode {
             Self::VarianceOverThreshold => "VARIANCE_OVER_THRESHOLD",
             Self::BundleShort => "BUNDLE_SHORT",
             Self::PayloadTooLarge => "PAYLOAD_TOO_LARGE",
+            Self::Fenced => "FENCED",
         }
     }
 }
@@ -452,6 +455,7 @@ mod tests {
             (ErrorCode::VarianceOverThreshold, "VARIANCE_OVER_THRESHOLD"),
             (ErrorCode::BundleShort, "BUNDLE_SHORT"),
             (ErrorCode::PayloadTooLarge, "PAYLOAD_TOO_LARGE"),
+            (ErrorCode::Fenced, "FENCED"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

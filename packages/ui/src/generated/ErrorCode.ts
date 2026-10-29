@@ -94,4 +94,5 @@ export type ErrorCode =
   | "DRAWER_SHORT"
   | "VARIANCE_OVER_THRESHOLD"
   | "BUNDLE_SHORT"
-  | "PAYLOAD_TOO_LARGE";
+  | "PAYLOAD_TOO_LARGE"
+  | "FENCED";

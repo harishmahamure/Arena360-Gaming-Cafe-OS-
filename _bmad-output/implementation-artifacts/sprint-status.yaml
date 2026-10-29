@@ -221,8 +221,8 @@ development_status:
   7-11-the-kitchen-flow-proven-on-reference-hardware: done
   epic-7-retrospective: optional
 
-  epic-8: backlog
-  8-1-presign-issues-batch-and-summary-upload-urls-under-the-branc: backlog
+  epic-8: in-progress
+  8-1-presign-issues-batch-and-summary-upload-urls-under-the-branc: review
   8-2-the-hub-uploads-gap-free-change-log-batches-at-its-tier-cade: backlog
   8-3-the-heartbeat-detects-upload-gaps-and-the-hub-resends-them: backlog
   8-4-the-hub-publishes-a-branch-summary-every-cadence: backlog

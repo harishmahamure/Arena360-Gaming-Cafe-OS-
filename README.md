@@ -1248,6 +1248,33 @@ ARENA_CONTROL_DB_URL=http://127.0.0.1:8081 cargo run -p arena-cloud -- --role co
 WhenRequired`, the smithy client on rustls + ring, so no aws-lc-rs) and static credentials (no
   `aws-config`); the alert through `reqwest` on the workspace rustls + ring with webpki-roots.
 
+- **Presigned uploads** (Story 8.1). `POST /v1/presign` (control role, device-token auth like the
+  heartbeat) gives a paid Hub 600-second presigned PUT URLs for keys under its own branch prefix
+  `tenants/<tenant>/branches/<branch>/` of the data bucket: `{epoch, batch: {first, last},
+summary: true}` answers `{batch_url, summary_url}` (`changes/<epoch>/<first:012>-<last:012>.zst`,
+  `state/latest.json`); `{epoch, kind: "rollup"|"snapshot", date}` answers `{url}`
+  (`rollups/<yyyy-mm-dd>.json`, `snapshots/<yyyy-mm-dd>.db.zst`). The tenant and branch come from
+  the token only. Free: `FEATURE_NOT_ENTITLED`. An epoch (`<counter>:<instance>`, compared by
+  counter numerically, then instance) below the branch fence still gets the batch URL
+  (`summary_fenced: true` when the summary was asked too); a summary, rollup or snapshot alone is
+  `FENCED` (409). An epoch or date with `/`, `\` or `..` is `FORBIDDEN` and writes an
+  `admin_audit` row (`presign.forbidden`) naming the Hub; other bad shapes are
+  `VALIDATION_FAILED`, another `kind` is `UNSUPPORTED`. Each issuing call is one hit of
+  `presign:<tenant>:<branch>`, limit `4 × 3600 / max(upload_interval_s, 30)` an hour, else
+  `RATE_LIMITED` with `Retry-After`. Links issued (and rate refusals) are counted per tenant and
+  branch in process and logged; the OpenTelemetry/Grafana export is deferred with Story 2.3's
+  exporter. No data bucket configured outside `--dev` answers 503 (`--dev` uses the dev MinIO,
+  bucket `arena-dev`).
+
+  | Variable                          | Meaning                                                              |
+  | --------------------------------- | -------------------------------------------------------------------- |
+  | `ARENA_DATA_S3_ENDPOINT`          | `https://<account>.r2.cloudflarestorage.com` (`http://` on loopback) |
+  | `ARENA_DATA_S3_BUCKET`            | The environment's own data bucket                                    |
+  | `ARENA_DATA_S3_ACCESS_KEY_ID`     | R2 API token with write access to that bucket. Never logged          |
+  | `ARENA_DATA_S3_SECRET_ACCESS_KEY` | Its secret. Never logged                                             |
+
+  None set: no presigner (`--dev`: the dev MinIO); some set: start-up fails naming the missing one.
+
 - **Restore.** `arena-cloud ops restore-control (--from-key <key> | --from-file <path|->)
 (--identity <age identity file> | --plaintext) [--dev [--data-dir <dir>]]` restores a dump into
   the database in `ARENA_CONTROL_DB_URL`/`ARENA_CONTROL_DB_TOKEN` (or the `--dev` file). It

@@ -128,24 +128,68 @@ impl S3Config {
     /// Reads the four `ARENA_BACKUP_S3_*` variables. The endpoint must be `https://` (plain
     /// `http://` only on loopback, for MinIO). Errors name the variable, never its value.
     pub fn from_env(env: &impl Fn(&str) -> Option<OsString>) -> Result<Self, String> {
-        let need = |k: &str| {
-            get_env(env, k)
+        Self::from_env_prefixed(env, BACKUP_S3_PREFIX)
+    }
+
+    /// Reads `<prefix>_ENDPOINT`, `_BUCKET`, `_ACCESS_KEY_ID` and `_SECRET_ACCESS_KEY` (the
+    /// backup bucket's four are `ARENA_BACKUP_S3_*`, the data bucket's `ARENA_DATA_S3_*`), with
+    /// the checks of [`S3Config::from_env`].
+    pub fn from_env_prefixed(
+        env: &impl Fn(&str) -> Option<OsString>,
+        prefix: &str,
+    ) -> Result<Self, String> {
+        let need = |suffix: &str| {
+            let k = format!("{prefix}_{suffix}");
+            get_env(env, &k)
                 .filter(|v| !v.is_empty())
                 .ok_or_else(|| format!("{k} is not set"))
         };
-        let endpoint = need(S3_ENDPOINT_ENV)?;
+        let endpoint = need("ENDPOINT")?;
         if !(endpoint.starts_with("https://") || is_loopback_http(&endpoint)) {
             return Err(format!(
-                "{S3_ENDPOINT_ENV} must be an https:// URL (http:// only on loopback)"
+                "{prefix}_ENDPOINT must be an https:// URL (http:// only on loopback)"
             ));
         }
         Ok(Self {
             endpoint,
-            bucket: need(S3_BUCKET_ENV)?,
-            access_key_id: need(S3_ACCESS_KEY_ID_ENV)?,
-            secret_access_key: need(S3_SECRET_ACCESS_KEY_ENV)?,
+            bucket: need("BUCKET")?,
+            access_key_id: need("ACCESS_KEY_ID")?,
+            secret_access_key: need("SECRET_ACCESS_KEY")?,
         })
     }
+}
+
+const BACKUP_S3_PREFIX: &str = "ARENA_BACKUP_S3";
+
+/// The `aws-sdk-s3` client for `cfg`: region `auto`, path-style addressing (R2 and MinIO both
+/// accept it), checksums only when an operation requires them (R2 rejects the SDK's default
+/// CRC trailers), static credentials and the smithy HTTPS client on rustls + ring.
+pub(crate) fn s3_client(cfg: &S3Config) -> aws_sdk_s3::Client {
+    let http = aws_smithy_http_client::Builder::new()
+        .tls_provider(tls::Provider::Rustls(CryptoMode::Ring))
+        .build_https();
+    let conf = aws_sdk_s3::Config::builder()
+        .behavior_version(BehaviorVersion::latest())
+        .region(Region::new("auto"))
+        .endpoint_url(&cfg.endpoint)
+        .force_path_style(true)
+        .credentials_provider(Credentials::new(
+            &cfg.access_key_id,
+            &cfg.secret_access_key,
+            None,
+            None,
+            "arena-backup-env",
+        ))
+        .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
+        .response_checksum_validation(ResponseChecksumValidation::WhenRequired)
+        .timeout_config(
+            TimeoutConfig::builder()
+                .operation_timeout(OPERATION_TIMEOUT)
+                .build(),
+        )
+        .http_client(http)
+        .build();
+    aws_sdk_s3::Client::from_conf(conf)
 }
 
 /// S3 (R2) through `aws-sdk-s3`: region `auto`, path-style addressing (R2 and MinIO both
@@ -169,32 +213,8 @@ impl std::fmt::Debug for S3Store {
 
 impl S3Store {
     pub fn new(cfg: &S3Config) -> Self {
-        let http = aws_smithy_http_client::Builder::new()
-            .tls_provider(tls::Provider::Rustls(CryptoMode::Ring))
-            .build_https();
-        let conf = aws_sdk_s3::Config::builder()
-            .behavior_version(BehaviorVersion::latest())
-            .region(Region::new("auto"))
-            .endpoint_url(&cfg.endpoint)
-            .force_path_style(true)
-            .credentials_provider(Credentials::new(
-                &cfg.access_key_id,
-                &cfg.secret_access_key,
-                None,
-                None,
-                "arena-backup-env",
-            ))
-            .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
-            .response_checksum_validation(ResponseChecksumValidation::WhenRequired)
-            .timeout_config(
-                TimeoutConfig::builder()
-                    .operation_timeout(OPERATION_TIMEOUT)
-                    .build(),
-            )
-            .http_client(http)
-            .build();
         Self {
-            client: aws_sdk_s3::Client::from_conf(conf),
+            client: s3_client(cfg),
             bucket: cfg.bucket.clone(),
             redact: [cfg.access_key_id.clone(), cfg.secret_access_key.clone()],
         }

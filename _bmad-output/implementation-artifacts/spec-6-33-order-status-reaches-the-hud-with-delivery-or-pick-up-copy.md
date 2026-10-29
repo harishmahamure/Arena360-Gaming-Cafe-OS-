@@ -2,7 +2,7 @@
 title: 'Story 6.33: Order status reaches the HUD with delivery or pick-up copy'
 type: 'feature'
 created: '2026-10-29'
-status: 'in-review'
+status: 'done'
 baseline_commit: '0453fbd00cd587754943757c0db08a9f44f3650c'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -91,3 +91,8 @@ Status: review
 - **Summary:** `order.ready{order_id}` (Mark ready in the tile sheet's order section, `pos.sell`) stamps the open bill `orders.ready_at` (migration 0066); placing more lines clears it. The 5 s session tick carries each open order as `orders[{order_id, items, unserved, ready}]` (`ready` = the branch's `seat` or `counter` fulfilment), and a committed `order.line_cancel` pushes `order.line_cancelled{item}` to the PC. The kiosk service diffs each tick against the last one and raises coded notes (ordered, ready seat/counter, cancelled) as info HUD toasts kept in the messages bell; the HUD pill shows "Ordered" while any line is unserved.
 - **Verification:** `cargo test` for arena-proto, arena-store, arena-core (1189 + proptest), arena-kiosk-core, arena-api (291 + lan 81) pass; fmt and clippy `-D warnings` clean on touched crates; kiosk and hub svelte-check clean; strings, hex, no-blur, protocol, layers, pins, prettier pass; kiosk Playwright `hud`, `messages-bell` (65) and hub `tile-sheet` (75) pass.
 - **Residual risks:** `arena-kiosk-svc` has the same Windows-only test failures as before and `runtime.rs` (`cfg(unix)`) was updated by search-and-replace without compiling; Mark ready bumps the order `rev`, so a settle from a stale sheet answers `STALE` until the snapshot refreshes; a PC's unpaid counter orders reach the tick only while a session is on screen; a cancel event is not replayed after an outage; the real Tauri shell and a real Hub were not exercised; no review pass has run.
+
+## Review Triage Log (code review)
+
+- Fixed: a guest's session no longer picks up another guest's unpaid counter order (counter-order match requires a player id).
+- Accepted/deferred: ready push reuses `session.started` like the existing cancel push (same pattern); restart re-toasts per spec test; unknown-code blank copy (same-release apps); counter-order push with no live session waits for a tick; undo of place does not restore `ready_at`; end-to-end kiosk-svc runtime tests for order notes.

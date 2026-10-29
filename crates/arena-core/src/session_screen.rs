@@ -191,7 +191,12 @@ pub fn session_screens(
                     .iter()
                     .filter(|o| match &o.session_id {
                         Some(id) => *id == s.id,
-                        None => o.device_id == s.device_id && o.player_id == s.player_id,
+                        // A guest has no player id: two empty ids must not match another guest's order.
+                        None => {
+                            o.player_id.is_some()
+                                && o.device_id == s.device_id
+                                && o.player_id == s.player_id
+                        }
                     })
                     .map(|o| OrderStatus {
                         order_id: o.order_id.clone(),

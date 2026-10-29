@@ -88,6 +88,7 @@ mod staff_credentials;
 mod staff_deactivate;
 mod staff_roles;
 pub(crate) mod stock;
+mod summary;
 mod test_session;
 mod transfer;
 mod ttl_dedupe;
@@ -253,6 +254,8 @@ pub(crate) enum Target {
     CreditCollect(Box<credit_collect::CollectTarget>),
     CreditCollectReverted(Box<credit_collect::CollectRevertTarget>),
     CreditAutoPause(Box<credit_pause::PauseTarget>),
+    /// `summary.publish`: the `rollup_log` row `latest`, if it exists.
+    Summary(Box<summary::SummaryTarget>),
     SessionExpire(Box<session_expire::ExpireTarget>),
     SessionRateFlip(Box<rate_flip::FlipTarget>),
     InvoiceIssue(Box<invoice_issue::IssueTarget>),
@@ -394,6 +397,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
             credit_collect::load_collect_reverted(tx, r, now)?,
         )),
         P::CreditAutoPause(p) => Target::CreditAutoPause(Box::new(credit_pause::load(tx, p, now)?)),
+        P::SummaryPublish(_) => Target::Summary(Box::new(summary::load(tx)?)),
         P::SessionExpire(e) => Target::SessionExpire(Box::new(session_expire::load(tx, e)?)),
         P::SessionRateFlip(f) => Target::SessionRateFlip(Box::new(rate_flip::load(tx, f, now)?)),
         P::InvoiceIssue(p) => Target::InvoiceIssue(Box::new(invoice_issue::load(tx, p, now)?)),

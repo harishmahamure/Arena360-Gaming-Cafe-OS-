@@ -122,6 +122,9 @@ pub struct UploadStatus {
     pub last_seq_uploaded: i64,
     /// The `seq` the lease's epoch was forked from, if it was.
     pub fork_seq: Option<i64>,
+    /// When the branch summary was last built and published (Hub clock, ms; `rollup_log`
+    /// `latest`) (Story 8.4).
+    pub last_summary_at: Option<i64>,
 }
 
 impl HubStatus {

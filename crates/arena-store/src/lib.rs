@@ -42,6 +42,7 @@ mod shifts;
 mod staff;
 mod stock;
 mod stock_reports;
+mod summary;
 mod upload;
 mod wallet;
 mod zreport;
@@ -248,6 +249,10 @@ pub use stock::{
     update_stock,
 };
 pub use stock_reports::{StockLevelRow, StockMoveReportRow, StockMovesRows};
+pub use summary::{
+    ClosedShiftVariance, RollupLogRow, catalogue as summary_catalogue, closed_shift_variances,
+    count_live_sessions, find_rollup_log, insert_rollup_log, update_rollup_log,
+};
 pub use upload::{
     BATCH_MAX_ROWS, BatchFork, BatchHeader, DecodedBatch, EpochProgress, PendingBatch, RangeRead,
     UploadCursor, count_pending_rows, decode_batch, encode_batch, read_epoch_progress,

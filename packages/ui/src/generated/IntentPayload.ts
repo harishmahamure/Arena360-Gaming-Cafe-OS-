@@ -114,6 +114,7 @@ import type { StockThreshold } from "./StockThreshold";
 import type { StockWaste } from "./StockWaste";
 import type { StockWasteReverted } from "./StockWasteReverted";
 import type { StockWriteOff } from "./StockWriteOff";
+import type { SummaryPublish } from "./SummaryPublish";
 import type { WalletTopup } from "./WalletTopup";
 import type { WalletTopupReverted } from "./WalletTopupReverted";
 import type { ZReportReprint } from "./ZReportReprint";
@@ -189,6 +190,7 @@ export type IntentPayload =
   | ({ kind: "stock.waste.reverted" } & StockWasteReverted)
   | ({ kind: "stock.write_off" } & StockWriteOff)
   | ({ kind: "stock.expiry_check" } & StockExpiryCheck)
+  | ({ kind: "summary.publish" } & SummaryPublish)
   | ({ kind: "stock.threshold" } & StockThreshold)
   | ({ kind: "import.products" } & ImportProducts)
   | ({ kind: "import.players" } & ImportPlayers)

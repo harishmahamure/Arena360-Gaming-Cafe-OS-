@@ -225,6 +225,9 @@ pub enum IntentKind {
     StockWriteOff,
     #[serde(rename = "stock.expiry_check")]
     StockExpiryCheck,
+    /// The branch summary was published to the cloud (Story 8.4): writes the `rollup_log` row.
+    #[serde(rename = "summary.publish")]
+    SummaryPublish,
     #[serde(rename = "stock.threshold")]
     StockThreshold,
     /// A chunk of a product CSV import: creates or updates products and records opening stock
@@ -386,7 +389,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 121] = [
+    pub const ALL: [IntentKind; 122] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -453,6 +456,7 @@ impl IntentKind {
         Self::StockWasteReverted,
         Self::StockWriteOff,
         Self::StockExpiryCheck,
+        Self::SummaryPublish,
         Self::StockThreshold,
         Self::ImportProducts,
         Self::ImportPlayers,
@@ -579,6 +583,7 @@ impl IntentKind {
             Self::StockWasteReverted => "stock.waste.reverted",
             Self::StockWriteOff => "stock.write_off",
             Self::StockExpiryCheck => "stock.expiry_check",
+            Self::SummaryPublish => "summary.publish",
             Self::StockThreshold => "stock.threshold",
             Self::ImportProducts => "import.products",
             Self::ImportPlayers => "import.players",
@@ -708,6 +713,7 @@ impl IntentKind {
             | Self::StockWasteReverted
             | Self::StockWriteOff
             | Self::StockExpiryCheck
+            | Self::SummaryPublish
             | Self::StockThreshold
             | Self::ImportProducts
             | Self::ImportPlans
@@ -846,7 +852,7 @@ impl IntentKind {
             Self::StockWaste | Self::StockWasteReverted | Self::StockWriteOff => {
                 Requirement::Perm(Permission::StockAdjust)
             }
-            Self::StockExpiryCheck => Requirement::System,
+            Self::StockExpiryCheck | Self::SummaryPublish => Requirement::System,
             Self::PlayerCreate
             | Self::ImportPlayers
             | Self::PlayerUpdate
@@ -987,6 +993,7 @@ impl IntentKind {
             | Self::StockWasteReverted
             | Self::StockWriteOff
             | Self::StockExpiryCheck
+            | Self::SummaryPublish
             | Self::StockThreshold
             | Self::ImportProducts
             | Self::ShiftOpen
@@ -1595,6 +1602,8 @@ pub enum IntentPayload {
     StockWriteOff(crate::StockWriteOff),
     #[serde(rename = "stock.expiry_check")]
     StockExpiryCheck(crate::StockExpiryCheck),
+    #[serde(rename = "summary.publish")]
+    SummaryPublish(crate::SummaryPublish),
     #[serde(rename = "stock.threshold")]
     StockThreshold(crate::StockThreshold),
     #[serde(rename = "import.products")]
@@ -1776,6 +1785,7 @@ impl IntentPayload {
             Self::StockWasteReverted(_) => IntentKind::StockWasteReverted,
             Self::StockWriteOff(_) => IntentKind::StockWriteOff,
             Self::StockExpiryCheck(_) => IntentKind::StockExpiryCheck,
+            Self::SummaryPublish(_) => IntentKind::SummaryPublish,
             Self::StockThreshold(_) => IntentKind::StockThreshold,
             Self::ImportProducts(_) => IntentKind::ImportProducts,
             Self::ImportPlayers(_) => IntentKind::ImportPlayers,
@@ -2152,7 +2162,8 @@ mod tests {
                 | "kds.seen"
                 | "drawer.kicked"
                 | "drawer.kick_failed"
-                | "stock.expiry_check" => Requirement::System,
+                | "stock.expiry_check"
+                | "summary.publish" => Requirement::System,
                 "settings.set" | "ads.consent" | "printer.status" => {
                     Requirement::Perm(Permission::SettingsEdit)
                 }

@@ -1749,6 +1749,19 @@ impl SnapshotReader {
 
     /// How many change rows are not yet in an accepted batch, and when the cloud last accepted
     /// one (Story 8.2). Blocking (SQLite).
+    /// The branch summary as of `now_ms` (Story 8.4); `None` before the branch exists. Blocking
+    /// (SQLite), on the reader's own connection.
+    pub fn branch_summary(
+        &self,
+        now_ms: i64,
+    ) -> Result<Option<arena_proto::BranchSummary>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        crate::summary::build_summary(&store, now_ms)
+    }
+
     pub fn upload_progress(&self) -> Result<crate::UploadStatus, AppError> {
         let store = self
             .reader
@@ -1761,6 +1774,8 @@ impl SnapshotReader {
                 pending_rows: arena_store::count_pending_rows(conn)?,
                 last_seq_uploaded: progress.last_seq_uploaded,
                 fork_seq: progress.fork_seq,
+                last_summary_at: arena_store::find_rollup_log(conn, arena_proto::SUMMARY_LOG_DATE)?
+                    .map(|r| r.built_at),
             })
         })
     }

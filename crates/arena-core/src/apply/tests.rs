@@ -72,6 +72,7 @@ mod shift;
 mod shift_close;
 mod shop;
 mod stock;
+mod summary;
 mod test_session;
 mod transfer;
 mod z_report;

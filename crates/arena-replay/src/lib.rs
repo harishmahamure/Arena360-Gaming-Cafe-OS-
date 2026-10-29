@@ -1378,6 +1378,15 @@ mod tests {
                 })
                 .await
                 .unwrap();
+            // The branch summary was published (twice: the second only updates the row).
+            writer
+                .publish_summary(T0, "state/latest.json".into())
+                .await
+                .unwrap();
+            writer
+                .publish_summary(T0 + 1, "state/latest.json".into())
+                .await
+                .unwrap();
             // The counter sale kept above is long past its Undo window: the system numbers it.
             let mut number = submit(
                 IntentPayload::InvoiceIssue(arena_proto::InvoiceIssue {
@@ -1475,6 +1484,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("replica.db"), T0).unwrap();
         (dir, store)
+    }
+
+    #[tokio::test]
+    async fn a_published_summary_replays_into_its_rollup_log_row() {
+        let (_a, source) = seeded_with_device().await;
+        let (_b, mut dest) = empty();
+        dest.write_tx_mut(|tx| replay(source.changes().unwrap(), tx))
+            .unwrap();
+        let want = source.rows(Table::RollupLog).unwrap();
+        assert_eq!(want.len(), 1, "one row, published twice");
+        assert_eq!(dest.rows(Table::RollupLog).unwrap(), want);
     }
 
     #[tokio::test]

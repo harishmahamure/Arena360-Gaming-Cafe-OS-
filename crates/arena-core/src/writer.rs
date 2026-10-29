@@ -752,6 +752,32 @@ impl WriterHandle {
         .await
     }
 
+    /// Story 8.4: records that the branch summary was PUT to the cloud, by submitting
+    /// `summary.publish` (system actor) through `apply()`: it writes only the `rollup_log` row
+    /// `latest` and appears in the audit. `NOT_PRIMARY` on a follower.
+    pub async fn publish_summary(&self, built_at: i64, key: String) -> Result<Applied, AppError> {
+        let now = self.clock.now_ms();
+        self.submit_intent(Intent {
+            intent_id: ulid::Ulid::generate().to_string(),
+            kind: arena_proto::IntentKind::SummaryPublish,
+            idempotency_key: ulid::Ulid::generate().to_string(),
+            issued_at: now,
+            base_rev: None,
+            actor: arena_proto::Actor {
+                kind: arena_proto::ActorKind::System,
+                id: "hub-summary".into(),
+            },
+            elevated_by: None,
+            reason: None,
+            payload: arena_proto::IntentPayload::SummaryPublish(arena_proto::SummaryPublish {
+                schema: arena_proto::SUMMARY_SCHEMA,
+                built_at,
+                key,
+            }),
+        })
+        .await
+    }
+
     /// How many jobs this writer has been handed (for tests: a `BAD_FRAME` queues none).
     #[cfg(any(test, feature = "test-jobs"))]
     pub fn jobs_submitted(&self) -> u64 {

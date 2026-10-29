@@ -18,8 +18,8 @@ use arena_core::{
     HubStatus, PairGate, PairingState, Role, SnapshotReader, UploadStatus, WriterHandle,
 };
 use arena_proto::{
-    AppError, ErrorCode, PresignBatch, PresignRequest, ResendUnavailable, SeqRange, Tier,
-    VerifyKey, licence::verify_claims,
+    AppError, ErrorCode, PRESIGN_TTL_S, PresignBatch, PresignRequest, ResendUnavailable,
+    SUMMARY_OBJECT_KEY, SeqRange, Tier, VerifyKey, licence::verify_claims,
 };
 use arena_store::{BATCH_MAX_ROWS, RangeRead, encode_batch};
 use tokio::sync::{broadcast, watch};
@@ -33,6 +33,8 @@ use crate::template::{NOT_ENTITLED_RETRY, TIER_RECHECK};
 pub const MIN_UPLOAD_INTERVAL: Duration = Duration::from_secs(30);
 /// Waiting change rows that wake the task before its interval is up.
 pub const BACKLOG_TRIGGER_ROWS: i64 = 500;
+/// How much sooner than its expiry a summary link carried from a batch presign stops being used.
+const SUMMARY_LINK_MARGIN_S: u64 = 60;
 /// How long to wait when the cloud limits the calls but names no time.
 const RATE_LIMIT_WAIT: Duration = Duration::from_secs(60);
 /// The longest Retry-After honoured.
@@ -191,6 +193,13 @@ pub struct UploadTask {
     trigger_gap: Duration,
     fails: u32,
     resend: Arc<ResendInbox>,
+    /// The summary link a batch presign brought along, and when it stops being usable.
+    summary_link: Option<(String, tokio::time::Instant)>,
+    /// When the summary was last published (this run).
+    last_summary: Option<tokio::time::Instant>,
+    /// Whether the cycle also publishes the branch summary (Story 8.4); tests of the change-log
+    /// upload alone turn it off.
+    summary: bool,
 }
 
 impl UploadTask {
@@ -216,12 +225,21 @@ impl UploadTask {
             trigger_gap: MIN_UPLOAD_INTERVAL,
             fails: 0,
             resend: ResendInbox::new(),
+            summary_link: None,
+            last_summary: None,
+            summary: true,
         }
     }
 
     /// Where the heartbeat leaves the runs the cloud asked for again (Story 8.3).
     pub fn with_resend(mut self, inbox: Arc<ResendInbox>) -> Self {
         self.resend = inbox;
+        self
+    }
+
+    /// Tests: the cycle uploads the change log only.
+    pub fn without_summary(mut self) -> Self {
+        self.summary = false;
         self
     }
 
@@ -311,10 +329,10 @@ impl UploadTask {
             }
         };
         let interval = self.interval(&writer, tier).await;
-        if let Some(next) = self
-            .resend_pass(&token, &lease.epoch().to_string(), interval, schema)
-            .await
-        {
+        let summary_due =
+            self.summary && self.summary_due(self.summary_interval(&writer, tier).await);
+        let epoch = lease.epoch().to_string();
+        if let Some(next) = self.resend_pass(&token, &epoch, interval, schema).await {
             self.refresh_progress().await;
             return next;
         }
@@ -336,11 +354,22 @@ impl UploadTask {
                     return self.failed(interval);
                 }
             };
-            if let Some(next) = self.send(&writer, &token, built, interval).await {
+            if let Some(next) = self
+                .send(&writer, &token, built, interval, summary_due)
+                .await
+            {
                 self.refresh_progress().await;
                 return next;
             }
             self.refresh_progress().await;
+        }
+        if summary_due
+            && let Some(next) = self
+                .publish_summary(&writer, &token, &epoch, interval)
+                .await
+        {
+            self.refresh_progress().await;
+            return next;
         }
         self.refresh_progress().await;
         Next {
@@ -399,7 +428,7 @@ impl UploadTask {
                         bytes,
                     };
                     let (first, last, count) = (built.first, built.last, built.rows);
-                    if let Err(next) = self.put(token, built, interval).await {
+                    if let Err(next) = self.put(token, built, interval, false).await {
                         return Some(next);
                     }
                     tracing::info!(%epoch, first, last, rows = count, "change log batch resent");
@@ -419,20 +448,33 @@ impl UploadTask {
         None
     }
 
-    /// Presigns and PUTs one batch; the error is what to do instead of going on.
-    async fn put(&mut self, token: &str, batch: Built, interval: Duration) -> Result<(), Next> {
+    /// Presigns and PUTs one batch; the error is what to do instead of going on. With
+    /// `with_summary` the same presign also asks for the summary link, kept for this cycle's
+    /// summary publish (Story 8.4).
+    async fn put(
+        &mut self,
+        token: &str,
+        batch: Built,
+        interval: Duration,
+        with_summary: bool,
+    ) -> Result<(), Next> {
         let req = PresignRequest {
             epoch: batch.epoch.clone(),
             batch: Some(PresignBatch {
                 first: batch.first,
                 last: batch.last,
             }),
+            summary: with_summary,
             ..PresignRequest::default()
         };
         let links = match self.cloud.presign(token, &req).await {
             Ok(links) => links,
             Err(f) => return Err(self.refused(f, interval)),
         };
+        if with_summary && let Some(url) = links.summary_url {
+            let ttl = Duration::from_secs(PRESIGN_TTL_S.saturating_sub(SUMMARY_LINK_MARGIN_S));
+            self.summary_link = Some((url, tokio::time::Instant::now() + ttl));
+        }
         let Some(url) = links.batch_url else {
             tracing::warn!("upload: the cloud issued no batch link");
             return Err(self.failed(interval));
@@ -451,9 +493,10 @@ impl UploadTask {
         token: &str,
         batch: Built,
         interval: Duration,
+        with_summary: bool,
     ) -> Option<Next> {
         let (epoch, first, last, rows) = (batch.epoch.clone(), batch.first, batch.last, batch.rows);
-        if let Err(next) = self.put(token, batch, interval).await {
+        if let Err(next) = self.put(token, batch, interval, with_summary).await {
             return Some(next);
         }
         match writer.record_upload(epoch.clone(), last).await {
@@ -476,6 +519,96 @@ impl UploadTask {
                 // The cloud has the batch; the next cycle sends it again under the same key.
                 tracing::warn!(code = e.code.as_str(), "upload: could not move the cursor");
                 Some(self.failed(interval))
+            }
+        }
+    }
+
+    /// Whether the summary is due: never published in this run, or a summary interval ago.
+    fn summary_due(&self, every: Duration) -> bool {
+        self.last_summary
+            .is_none_or(|at| at.elapsed() + Duration::from_secs(1) >= every)
+    }
+
+    /// Builds the branch summary, PUTs it to `state/latest.json` (with the link a batch presign
+    /// brought, else a presign of its own) and records the publish with `summary.publish`
+    /// (Story 8.4). A summary that cannot be built or published is not queued: the next due cycle
+    /// builds a fresh one. `None` when the cycle goes on; otherwise what to do instead.
+    async fn publish_summary(
+        &mut self,
+        writer: &WriterHandle,
+        token: &str,
+        epoch: &str,
+        interval: Duration,
+    ) -> Option<Next> {
+        let as_of = writer.now_ms();
+        let snapshots = Arc::clone(&self.snapshots);
+        let summary =
+            match tokio::task::spawn_blocking(move || snapshots.branch_summary(as_of)).await {
+                Ok(Ok(Some(s))) => s,
+                Ok(Ok(None)) => return None,
+                Ok(Err(e)) => {
+                    tracing::warn!(code = e.code.as_str(), error = %e, "summary: could not build");
+                    return None;
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "summary: build task failed");
+                    return None;
+                }
+            };
+        let bytes = match serde_json::to_vec(&summary) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!(error = %e, "summary: could not encode");
+                return None;
+            }
+        };
+        let url = match self.summary_link.take() {
+            Some((url, until)) if tokio::time::Instant::now() < until => url,
+            _ => {
+                let req = PresignRequest {
+                    epoch: epoch.to_owned(),
+                    summary: true,
+                    ..PresignRequest::default()
+                };
+                let links = match self.cloud.presign(token, &req).await {
+                    Ok(l) => l,
+                    Err(f) => return Some(self.refused(f, interval)),
+                };
+                match links.summary_url {
+                    Some(url) => url,
+                    None => {
+                        tracing::info!(
+                            fenced = links.summary_fenced.unwrap_or(false),
+                            "summary: the cloud issued no summary link"
+                        );
+                        return None;
+                    }
+                }
+            }
+        };
+        if let Err(f) = self.cloud.put_object(&url, bytes).await {
+            return Some(self.refused(f, interval));
+        }
+        self.last_summary = Some(tokio::time::Instant::now());
+        self.fails = 0;
+        match writer
+            .publish_summary(summary.as_of, SUMMARY_OBJECT_KEY.to_owned())
+            .await
+        {
+            Ok(_) => {
+                tracing::info!(as_of = summary.as_of, "branch summary published");
+                None
+            }
+            Err(e) if e.code == ErrorCode::NotPrimary => {
+                tracing::info!("summary: this hub is no longer the primary");
+                Some(Next::idle(TIER_RECHECK))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    code = e.code.as_str(),
+                    "summary: could not record the publish"
+                );
+                None
             }
         }
     }
@@ -522,6 +655,19 @@ impl UploadTask {
     fn failed(&mut self, interval: Duration) -> Next {
         self.fails += 1;
         Next::backing_off(backoff(self.fails, interval, unit()))
+    }
+
+    /// `summary_interval_s` from the stored, verified licence (the tier's default when it cannot
+    /// be read), never under [`MIN_UPLOAD_INTERVAL`].
+    async fn summary_interval(&self, writer: &WriterHandle, tier: Tier) -> Duration {
+        let from_licence = match writer.licence_state().await {
+            Ok(state) => state
+                .jwt
+                .and_then(|jwt| verify_claims(&jwt, &self.keys).ok())
+                .map(|c| c.summary_interval_s),
+            Err(_) => None,
+        };
+        clamp_interval(from_licence.unwrap_or(tier.defaults().summary_interval_s))
     }
 
     /// `upload_interval_s` from the stored, verified licence (the tier's default when it cannot
@@ -797,7 +943,8 @@ mod tests {
             PairGate::new(true),
             status.clone(),
             DEV_LICENCE_VERIFY_KEYS.to_vec(),
-        );
+        )
+        .without_summary();
         Fx {
             _dir: dir,
             path,
@@ -918,6 +1065,7 @@ mod tests {
                 pending_rows: 0,
                 last_seq_uploaded: 3,
                 fork_seq: None,
+                last_summary_at: None,
             }
         );
 
@@ -925,6 +1073,163 @@ mod tests {
         f.task.cycle().await;
         assert_eq!(presigns(&seen).len(), 1);
         assert_eq!(puts(&seen).len(), 1);
+    }
+
+    /// A cloud that issues a batch link and/or a summary link as asked. `up` false: the bucket
+    /// refuses every PUT (the WAN is down).
+    fn cloud_with_summary(
+        up: Arc<std::sync::atomic::AtomicBool>,
+        fenced: bool,
+    ) -> impl FnOnce(u16) -> Handler {
+        move |port| {
+            Box::new(move |line, body| {
+                if line.starts_with("POST /v1/presign") {
+                    let req: serde_json::Value = serde_json::from_slice(body).unwrap();
+                    let mut links = serde_json::Map::new();
+                    if let Some(b) = req.get("batch").filter(|b| !b.is_null()) {
+                        links.insert(
+                            "batch_url".into(),
+                            format!(
+                                "http://127.0.0.1:{port}/put/{}/{}-{}",
+                                req["epoch"].as_str().unwrap(),
+                                b["first"],
+                                b["last"]
+                            )
+                            .into(),
+                        );
+                    }
+                    if req["summary"] == true {
+                        if fenced {
+                            links.insert("summary_fenced".into(), true.into());
+                        } else {
+                            links.insert(
+                                "summary_url".into(),
+                                format!("http://127.0.0.1:{port}/put/summary").into(),
+                            );
+                        }
+                    }
+                    (200, serde_json::Value::Object(links).to_string())
+                } else if line.starts_with("PUT /put/summary")
+                    && !up.load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    (503, "{}".into())
+                } else {
+                    (200, "{}".into())
+                }
+            })
+        }
+    }
+
+    fn summary_puts(seen: &Seen) -> Vec<arena_proto::BranchSummary> {
+        puts(seen)
+            .into_iter()
+            .filter(|(k, _)| k == "/put/summary")
+            .map(|(_, b)| serde_json::from_slice(&b).unwrap())
+            .collect()
+    }
+
+    fn latest(f: &Fx) -> Option<arena_store::RollupLogRow> {
+        Store::open_reader(&f.path)
+            .unwrap()
+            .rollup_log("latest")
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_summary_rides_the_batch_presign_and_is_recorded_after_its_put() {
+        let up = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let (port, seen) = serve(cloud_with_summary(Arc::clone(&up), false)).await;
+        let mut f = fx(port, Tier::Basic).await;
+        f.task.summary = true;
+        add_rows(&f.writer, EPOCH, 3).await;
+
+        let next = f.task.cycle().await;
+        assert!(next.active && next.early);
+        let asked = presigns(&seen);
+        assert_eq!(asked.len(), 1, "one presign serves both: {asked:?}");
+        assert_eq!(asked[0]["summary"], true);
+        assert_eq!(
+            asked[0]["batch"],
+            serde_json::json!({"first": 1, "last": 3})
+        );
+        let summaries = summary_puts(&seen);
+        assert_eq!(summaries.len(), 1);
+        let s = &summaries[0];
+        assert_eq!(
+            (s.schema, s.branch_id.as_str(), s.as_of),
+            (arena_proto::SUMMARY_SCHEMA, "B", T0)
+        );
+        let row = latest(&f).expect("summary.publish wrote the rollup_log row");
+        assert_eq!(
+            (row.schema, row.built_at, row.key.as_str()),
+            (1, T0, "state/latest.json")
+        );
+        assert_eq!(progress(&f).last_summary_at, Some(T0));
+
+        // Not due again within the interval; the publish itself is a row the next cycle ships.
+        f.task.cycle().await;
+        assert_eq!(summary_puts(&seen).len(), 1);
+        assert_eq!(puts(&seen).len(), 3, "batch, summary, then the publish row");
+    }
+
+    #[tokio::test]
+    async fn a_summary_is_published_with_no_rows_waiting_and_with_its_own_presign() {
+        let up = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let (port, seen) = serve(cloud_with_summary(up, false)).await;
+        let mut f = fx(port, Tier::Premium).await;
+        f.task.summary = true;
+        f.task.cycle().await;
+        let asked = presigns(&seen);
+        assert_eq!(asked.len(), 1);
+        assert!(asked[0].get("batch").is_none(), "{asked:?}");
+        assert_eq!(asked[0]["summary"], true);
+        assert_eq!(summary_puts(&seen).len(), 1);
+        assert!(latest(&f).is_some());
+    }
+
+    #[tokio::test]
+    async fn a_free_hub_builds_no_summary() {
+        let up = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let (port, seen) = serve(cloud_with_summary(up, false)).await;
+        let mut f = fx(port, Tier::Free).await;
+        f.task.summary = true;
+        f.task.cycle().await;
+        assert!(seen.lock().unwrap().is_empty());
+        assert!(latest(&f).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_failed_summary_put_is_not_queued_and_the_next_cycle_builds_a_fresh_one() {
+        let up = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (port, seen) = serve(cloud_with_summary(Arc::clone(&up), false)).await;
+        let mut f = fx(port, Tier::Basic).await;
+        f.task.summary = true;
+
+        let next = f.task.cycle().await;
+        assert!(!next.early, "a failed cycle backs off");
+        assert!(latest(&f).is_none(), "nothing is recorded for a lost PUT");
+        assert_eq!(progress(&f).last_summary_at, None);
+
+        up.store(true, std::sync::atomic::Ordering::SeqCst);
+        f.task.cycle().await;
+        let row = latest(&f).expect("the next cycle publishes");
+        assert_eq!(row.built_at, T0);
+        assert_eq!(
+            summary_puts(&seen).len(),
+            2,
+            "the first PUT reached the server and failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_fenced_epoch_gets_no_summary_link_and_publishes_nothing() {
+        let up = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let (port, seen) = serve(cloud_with_summary(up, true)).await;
+        let mut f = fx(port, Tier::Basic).await;
+        f.task.summary = true;
+        f.task.cycle().await;
+        assert!(summary_puts(&seen).is_empty());
+        assert!(latest(&f).is_none());
     }
 
     #[tokio::test]
@@ -1110,6 +1415,7 @@ mod tests {
                 pending_rows: 3,
                 last_seq_uploaded: 0,
                 fork_seq: None,
+                last_summary_at: None,
             }
         );
 

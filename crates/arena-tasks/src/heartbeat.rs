@@ -231,7 +231,7 @@ impl HeartbeatTask {
             schema_version,
             last_seq_uploaded: upload.last_seq_uploaded,
             last_upload_at: upload.last_upload_at,
-            last_summary_at: None,
+            last_summary_at: upload.last_summary_at,
             last_rollup_date: None,
             fork_seq: upload.fork_seq,
             resend_unavailable: self.resend.as_ref().and_then(|r| r.unavailable()),
@@ -1444,6 +1444,7 @@ mod tests {
                 pending_rows: 0,
                 last_seq_uploaded: 42,
                 fork_seq: Some(10),
+                last_summary_at: None,
             }
         });
         f.task.beat().await;
@@ -1454,6 +1455,17 @@ mod tests {
         for absent in ["last_summary_at", "last_rollup_date", "resend_unavailable"] {
             assert!(body.get(absent).is_none(), "{absent} in {body}");
         }
+    }
+
+    #[tokio::test]
+    async fn the_time_of_the_last_summary_rides_the_heartbeat() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let port = serve_with(vec![answer(true, Tier::Basic)], false, Arc::clone(&seen)).await;
+        let mut f = fx(port).await;
+        f.status
+            .send_modify(|s| s.upload.last_summary_at = Some(9_000));
+        f.task.beat().await;
+        assert_eq!(sent(&seen, 0)["last_summary_at"], 9_000);
     }
 
     #[tokio::test]

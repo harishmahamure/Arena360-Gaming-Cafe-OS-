@@ -70,6 +70,7 @@ export type IntentKind =
   | "stock.waste.reverted"
   | "stock.write_off"
   | "stock.expiry_check"
+  | "summary.publish"
   | "stock.threshold"
   | "import.products"
   | "import.players"

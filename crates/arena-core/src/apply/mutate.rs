@@ -559,6 +559,10 @@ pub(super) fn mutate(
             Target::CreditAutoPause(t) => super::credit_pause::mutate(tx, t),
             _ => Err(mismatch()),
         },
+        IntentPayload::SummaryPublish(p) => match target {
+            Target::Summary(t) => super::summary::mutate(tx, p, t),
+            _ => Err(mismatch()),
+        },
         IntentPayload::AlertRaise(_) | IntentPayload::AlertAck(_) => match target {
             Target::Alert(t) => super::alert::mutate(tx, intent, t, now_ms),
             _ => Err(mismatch()),

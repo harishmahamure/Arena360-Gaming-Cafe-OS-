@@ -2,7 +2,7 @@
 title: 'Story 6.36: The kiosk keeps the session running while the Hub is unreachable'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '673eef9958e90eaff7f18f7477a419ddc5b8fda2'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'
@@ -44,3 +44,8 @@ deferred: []
 - Hand-off: reconnecting to a promoted standby (Story 9.21) reuses `session::reconcile`.
 - A session the kiosk already ended on its own clock (time up) is gone from the screen, so a later Hub answer for it changes nothing.
 - The full "Hub process stopped for 30 minutes" run against a real Hub process is covered by the paused-clock service test plus the `session.sync` LAN test; the reference-hardware run is Story 6.38.
+
+## Review Findings (code review, 2026-10-29)
+
+- Fixed: `session_sync` returned `session: None, lock: None` when a live session ended between its two reads, which would have locked the PC as ended-by-staff; it now errors so the kiosk keeps its clock.
+- Deferred (by design / out of scope): a PC locked on its own time-up ignores a later Hub extension (documented in Notes); the Hub's time is not applied while the player has pressed Lock (same as existing tick handling); `Connected` is reported even if `session.sync` fails or times out (the Hub's ticks then bring its time); no integration test of `hub_link::serve` ordering and no unit tests for the paused/forced/expired Hub mappings; no older-Hub capability gate.

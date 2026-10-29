@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use arena_proto::{
-    AppError, DEFAULT_FULFILMENT, DEFAULT_OPENING_HOURS, KEY_FULFILMENT, KEY_OPENING_HOURS,
-    LockReason, OpeningDay, OrderStatus, SessionScreen, SessionSync, parse_opening_hours,
+    AppError, DEFAULT_FULFILMENT, DEFAULT_OPENING_HOURS, ErrorCode, KEY_FULFILMENT,
+    KEY_OPENING_HOURS, LockReason, OpeningDay, OrderStatus, SessionScreen, SessionSync,
+    parse_opening_hours,
 };
 use arena_store::Store;
 use chrono::{Datelike, Duration, NaiveDate, NaiveTime, TimeZone};
@@ -238,11 +239,19 @@ pub fn session_sync(store: &Store, device_id: &str, now_ms: i64) -> Result<Sessi
         .into_iter()
         .find(|s| s.device_id == device_id);
     if let Some(live) = live {
+        // The session can end between the two reads; an error keeps the kiosk's clock rather than
+        // locking a player the Hub has just lost track of.
         let session = session_screens(store, now_ms)?
             .into_iter()
-            .find_map(|(id, screen)| (id == device_id).then_some(screen));
+            .find_map(|(id, screen)| (id == device_id).then_some(screen))
+            .ok_or_else(|| {
+                AppError::new(ErrorCode::Internal, "the session ended while it was read")
+            })?;
         let lock = (live.state == "paused").then_some(LockReason::Paused);
-        return Ok(SessionSync { session, lock });
+        return Ok(SessionSync {
+            session: Some(session),
+            lock,
+        });
     }
     let lock = store
         .last_session_end(device_id)?

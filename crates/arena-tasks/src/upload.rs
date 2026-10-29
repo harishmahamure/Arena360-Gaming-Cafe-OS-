@@ -131,7 +131,12 @@ impl ResendInbox {
     }
 
     pub(crate) fn report_unavailable(&self, u: ResendUnavailable) {
-        self.with(|s| s.unavailable = Some(u));
+        self.with(|s| {
+            s.unavailable = Some(match s.unavailable.take() {
+                Some(held) => held.merged(&u),
+                None => u,
+            });
+        });
     }
 
     /// The run to tell the cloud about in the next heartbeat.

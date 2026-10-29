@@ -225,9 +225,15 @@ async fn check_upload(
         .resend_unavailable
         .as_ref()
         .filter(|u| u.epoch == body.epoch && u.range().valid() && u.to <= MAX_SEQ)
-        && view.unavailable.as_ref() != Some(u)
+        && view
+            .unavailable
+            .as_ref()
+            .is_none_or(|held| held.epoch != u.epoch || held.from > u.from || held.to < u.to)
     {
-        view.unavailable = Some(u.clone());
+        view.unavailable = Some(match view.unavailable.take() {
+            Some(held) => held.merged(u),
+            None => u.clone(),
+        });
         st.gap_metrics
             .unavailable(tenant_id, &hub.branch_id, &body.epoch, u.range());
     }
@@ -286,7 +292,12 @@ async fn find_gap(
         return None;
     };
     let asked = (epoch.as_str().to_owned(), gap);
-    if view.resend.as_ref() != Some(&asked) {
+    // A hole that only shrank because part of a resend landed is still the same gap.
+    let shrunk = view
+        .resend
+        .as_ref()
+        .is_some_and(|(e, r)| e == &asked.0 && r.from <= gap.from && gap.to <= r.to);
+    if view.resend.as_ref() != Some(&asked) && !shrunk {
         view.gaps_found += 1;
         st.gap_metrics
             .found(tenant_id, branch_id, epoch.as_str(), gap);

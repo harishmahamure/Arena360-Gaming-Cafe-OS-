@@ -358,6 +358,25 @@ impl ResendUnavailable {
             to: self.to,
         }
     }
+
+    /// `self` widened by a later report of the same epoch. Holes are handled in seq order, so a
+    /// run reported after this one means every seq between them is held or already reported:
+    /// the two are one run. A report that starts earlier is merged only when it touches this
+    /// one, and otherwise replaces it.
+    pub fn merged(&self, next: &Self) -> Self {
+        if self.epoch != next.epoch {
+            return next.clone();
+        }
+        if next.from >= self.from || next.to.saturating_add(1) >= self.from {
+            Self {
+                epoch: self.epoch.clone(),
+                from: self.from.min(next.from),
+                to: self.to.max(next.to),
+            }
+        } else {
+            next.clone()
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -411,6 +430,24 @@ impl std::fmt::Debug for HeartbeatResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn run(epoch: &str, from: i64, to: i64) -> ResendUnavailable {
+        ResendUnavailable {
+            epoch: epoch.to_owned(),
+            from,
+            to,
+        }
+    }
+
+    #[test]
+    fn two_pruned_runs_of_one_epoch_merge_into_one() {
+        let a = run("e1", 10, 20);
+        assert_eq!(a.merged(&run("e1", 30, 40)), run("e1", 10, 40));
+        assert_eq!(a.merged(&run("e1", 21, 25)), run("e1", 10, 25));
+        assert_eq!(a.merged(&run("e1", 1, 9)), run("e1", 1, 20));
+        assert_eq!(a.merged(&run("e1", 1, 5)), run("e1", 1, 5));
+        assert_eq!(a.merged(&run("e2", 30, 40)), run("e2", 30, 40));
+    }
 
     #[test]
     fn the_alphabet_has_no_ambiguous_characters() {

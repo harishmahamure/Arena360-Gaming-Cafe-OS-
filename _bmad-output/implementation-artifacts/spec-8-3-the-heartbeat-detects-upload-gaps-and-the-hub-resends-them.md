@@ -2,7 +2,7 @@
 title: 'Story 8.3: The heartbeat detects upload gaps and the Hub resends them'
 type: 'feature'
 created: '2026-10-29'
-status: 'in-review'
+status: 'done'
 baseline_commit: 'b9c1937e8c7598d6783273859d4e0adbb0e9e57f'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -100,3 +100,7 @@ Status: in-review (implemented and verified; the review pass is the next iterati
 - Failing before and after (not touched): `arena-tasks` `heartbeat::tests::trusted_time_is_cloud_time_plus_monotonic_elapsed` and `printer::lan::tests::a_printer_that_stops_reading_times_out`; `arena-cloud` `binary::unreachable_at_start_…` and `backup::a_hung_run_times_out_with_its_own_code`; `arena-kiosk-svc` and `arena-e2e` do not compile on this Windows machine.
 - Decisions: the epoch of a resend is the heartbeat's own (the answer is `{from, to}` as the story says); the Hub sends `fork_seq` so the cloud knows where an epoch starts; a run the Hub reported unavailable counts as held when looking for the next hole; the gap metric counts a hole once per distinct run, with a separate `unavailable` count, kept in process and logged (the Grafana exporter stays deferred with Story 2.3).
 - Residual risks: each upload that moves the Hub's position costs one bucket listing on the next heartbeat (by design, the cloud has no other view); a listing failure or a missing data bucket is logged and treated as no gap; the real R2 listing path (`list_objects_v2`) is not exercised here (tests use an in-memory listing); the resend is picked up at the uploader's next cycle (up to one `upload_interval_s`), not immediately.
+
+## Code Review (2026-10-30)
+
+Fixed: two separate pruned runs overwrote each other in the single stored `resend_unavailable` (cloud view and Hub inbox), so the cloud kept asking; they are now merged (`ResendUnavailable::merged`, holes are handled in seq order). A partly filled resend (a shorter hole inside the last issued range) no longer counts as a new gap. Accepted as is: the unavailable report is acknowledged on any 200; one listing per position change; the Hub's range is trusted for the held set (authenticated Hub).

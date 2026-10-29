@@ -2,7 +2,7 @@
 title: 'Story 6.17: The account menu with Lock and Log out'
 type: 'feature'
 created: '2026-10-29'
-status: 'review'
+status: 'done'
 baseline_commit: '23ceede0f8a05f4ea2f33aceb874e375f0a28ba7'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -82,6 +82,8 @@ deferred: []
 
 ## Review Triage Log
 
+Code review (unattended): no blocking findings. Hub-side throttle, device-scoped end right, lock/unlock gating and kiosk UI checked against the ACs; typecheck, tests and Playwright green.
+
 ## Verification
 
 **Commands:**
@@ -92,7 +94,7 @@ deferred: []
 
 ## Auto Run Result
 
-Status: review
+Status: done
 
 Verified: cargo tests for arena-proto, arena-core, arena-kiosk-core, arena-api and arena-kiosk-ui pass; the three new `arena-kiosk-svc` unit tests (player lock, password unlock gating, logged-out attract) pass; fmt and clippy clean on the changed crates; gen:types, check:strings|hex|no-blur|protocol|layers, format:check, kiosk and hub svelte-check pass; the kiosk Playwright suite passes (177) apart from the 4 `theme.spec.ts` tests (existing `C:\C:\` path bug).
 

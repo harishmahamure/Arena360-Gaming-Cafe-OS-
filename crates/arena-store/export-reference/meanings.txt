@@ -156,6 +156,14 @@ group_bills: A shared bill that several sessions are put on, so one person can p
 group_bills.id: Unique id of the group bill.
 group_bills.payer_guest_no: The guest number of the person paying, when the payer has no player account; empty otherwise.
 group_bills.state: Whether the group bill is open or closed.
+gst_archive_log: A log of the yearly GST archives the Hub has uploaded to the cloud, one per financial year.
+gst_archive_log.fy: The financial year the archive covers, for example FY2026-27.
+gst_archive_log.key: The storage name the archive was uploaded under.
+gst_archive_log.sha256: A fingerprint of the uploaded file, to check it was stored whole.
+gst_archive_log.bytes: The size of the uploaded file in bytes.
+gst_archive_log.invoices: How many invoices the archive holds.
+gst_archive_log.credit_notes: How many credit notes the archive holds.
+gst_archive_log.orphaned: A list of invoice numbers of that year that were set aside by a restore or a promote and are not in this database, in a text format.
 hub_identity: A single row saying which tenant, branch and Hub this installation is paired as.
 hub_identity.id: Always 1; the table has only one row.
 hub_identity.tenant_id: Unique id of the cafe business account in the cloud.

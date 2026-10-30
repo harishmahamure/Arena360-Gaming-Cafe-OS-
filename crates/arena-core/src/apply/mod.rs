@@ -43,6 +43,7 @@ mod frame;
 mod game_match;
 mod group_bill;
 pub(crate) mod groups;
+mod gst_archive;
 mod guards;
 mod import;
 mod import_plans;
@@ -264,6 +265,8 @@ pub(crate) enum Target {
     CreditAutoPause(Box<credit_pause::PauseTarget>),
     /// `summary.publish`: the `rollup_log` row `latest`, if it exists.
     Summary(Box<summary::SummaryTarget>),
+    /// `gst_archive.publish`: the `gst_archive_log` row of the year, if it exists.
+    GstArchive(Box<gst_archive::GstArchiveTarget>),
     SessionExpire(Box<session_expire::ExpireTarget>),
     SessionRateFlip(Box<rate_flip::FlipTarget>),
     InvoiceIssue(Box<invoice_issue::IssueTarget>),
@@ -412,6 +415,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
             Target::Summary(Box::new(summary::load(tx, arena_proto::SUMMARY_LOG_DATE)?))
         }
         P::RollupPublish(p) => Target::Summary(Box::new(summary::load(tx, &p.date)?)),
+        P::GstArchivePublish(p) => Target::GstArchive(Box::new(gst_archive::load(tx, p)?)),
         P::SessionExpire(e) => Target::SessionExpire(Box::new(session_expire::load(tx, e)?)),
         P::SessionRateFlip(f) => Target::SessionRateFlip(Box::new(rate_flip::load(tx, f, now)?)),
         P::InvoiceIssue(p) => Target::InvoiceIssue(Box::new(invoice_issue::load(tx, p, now)?)),

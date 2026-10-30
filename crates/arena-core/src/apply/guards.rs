@@ -373,6 +373,7 @@ pub(super) fn authorize(intent: &Intent, target: &Target) -> Result<(), AppError
             | Target::CreditCollectReverted(_)
             | Target::CreditAutoPause(_)
             | Target::Summary(_)
+            | Target::GstArchive(_)
             | Target::SessionExpire(_)
             | Target::SessionRateFlip(_)
             | Target::InvoiceIssue(_)
@@ -478,7 +479,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
         Target::PlanSellReverted(t) => super::plan_sales::base_rev_sell_reverted(intent, t),
         Target::CreditSetLimit(_) => Ok(()),
         Target::CreditCollect(_) => Ok(()),
-        Target::CreditAutoPause(_) | Target::Summary(_) => Ok(()),
+        Target::CreditAutoPause(_) | Target::Summary(_) | Target::GstArchive(_) => Ok(()),
         Target::SessionExpire(_) => Ok(()),
         Target::SessionRateFlip(_) => Ok(()),
         Target::InvoiceIssue(_) | Target::Receipt(_) | Target::Kot(_) | Target::Notify(_) => Ok(()),

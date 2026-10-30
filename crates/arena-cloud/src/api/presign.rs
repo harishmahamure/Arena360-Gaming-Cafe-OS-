@@ -1,6 +1,6 @@
 //! `POST /v1/presign` (Story 8.1): a paid Hub with a device token gets 10-minute presigned PUT
 //! URLs for keys under its own branch prefix of the data bucket: change-log batches, the branch
-//! summary, daily rollups and snapshots.
+//! summary, daily rollups, snapshots and yearly GST archives.
 //!
 //! The tenant and the branch come from the token (hub row, then branch row); nothing of the kind
 //! in the body is read. The cloud refuses Free branches, fences the summary, rollups and
@@ -10,8 +10,8 @@
 use std::sync::Arc;
 
 use arena_proto::{
-    AppError, ErrorCode, PRESIGN_KIND_KEYS, PRESIGN_KIND_ROLLUP, PRESIGN_KIND_SNAPSHOT,
-    PresignRequest, PresignResponse, Tier, valid_date,
+    AppError, ErrorCode, PRESIGN_KIND_GST_ARCHIVE, PRESIGN_KIND_KEYS, PRESIGN_KIND_ROLLUP,
+    PRESIGN_KIND_SNAPSHOT, PresignRequest, PresignResponse, Tier, valid_date, valid_fy,
 };
 use arena_store::control::{HubRow, NewAdminAudit, RateRule};
 use axum::extract::State;
@@ -25,8 +25,8 @@ use super::json::ApiJson;
 use super::signup::ceil_s;
 use crate::auth::AuthState;
 use crate::presign::{
-    Epoch, EpochError, MAX_SEQ, PutKind, batch_key, branch_prefix, has_path_chars, is_fenced,
-    keys_key, rollup_key, snapshot_key, summary_key,
+    Epoch, EpochError, MAX_SEQ, PutKind, batch_key, branch_prefix, gst_archive_key, has_path_chars,
+    is_fenced, keys_key, rollup_key, snapshot_key, summary_key,
 };
 
 const RATE_PREFIX: &str = "presign:";
@@ -54,6 +54,10 @@ enum Want {
     },
     /// The player key backup (Story 9.2): one fixed key, no date.
     Keys,
+    /// The yearly GST archive of a financial year (Story 9.14).
+    GstArchive {
+        fy: String,
+    },
 }
 
 /// Why a request was not understood.
@@ -81,9 +85,11 @@ fn plan(body: &PresignRequest) -> Result<(Epoch, Want), Refusal> {
     })?;
     if let Some(kind) = body.kind.as_deref() {
         if body.batch.is_some() || body.summary {
-            return Err(
-                ApiError::validation("kind", "Ask for a rollup or a snapshot on its own.").into(),
-            );
+            return Err(ApiError::validation(
+                "kind",
+                "Ask for a rollup, a snapshot or a GST archive on its own.",
+            )
+            .into());
         }
         let kind = match kind {
             PRESIGN_KIND_ROLLUP => PutKind::Rollup,
@@ -93,6 +99,23 @@ fn plan(body: &PresignRequest) -> Result<(Epoch, Want), Refusal> {
                     return Err(ApiError::validation("date", "A key backup has no date.").into());
                 }
                 return Ok((epoch, Want::Keys));
+            }
+            PRESIGN_KIND_GST_ARCHIVE => {
+                if body.date.is_some() {
+                    return Err(ApiError::validation("date", "A GST archive has no date.").into());
+                }
+                let fy = body.fy.as_deref().unwrap_or_default();
+                if has_path_chars(fy) {
+                    return Err(Refusal::Path("fy"));
+                }
+                if !valid_fy(fy) {
+                    return Err(ApiError::validation(
+                        "fy",
+                        "Send a financial year like FY2026-27.",
+                    )
+                    .into());
+                }
+                return Ok((epoch, Want::GstArchive { fy: fy.to_owned() }));
             }
             _ => {
                 return Err(ApiError::from(AppError::with_field(
@@ -267,6 +290,12 @@ async fn presign(
             }
             links.push((PutKind::Keys, keys_key(&prefix)));
         }
+        Want::GstArchive { fy } => {
+            if stale {
+                return Err(fenced());
+            }
+            links.push((PutKind::GstArchive, gst_archive_key(&prefix, fy)));
+        }
         Want::Dated { kind, date } => {
             if stale {
                 return Err(fenced());
@@ -317,7 +346,9 @@ async fn presign(
         match kind {
             PutKind::Batch => response.batch_url = Some(url),
             PutKind::Summary => response.summary_url = Some(url),
-            PutKind::Rollup | PutKind::Snapshot | PutKind::Keys => response.url = Some(url),
+            PutKind::Rollup | PutKind::Snapshot | PutKind::Keys | PutKind::GstArchive => {
+                response.url = Some(url);
+            }
         }
     }
     Ok(Json(response))
@@ -446,7 +477,44 @@ mod tests {
             }))),
             v("kind".into())
         );
+        assert_eq!(
+            plan(&req(|r| {
+                r.kind = Some("gst_archive".into());
+                r.fy = Some("FY2026-27".into());
+            }))
+            .ok()
+            .map(|(_, w)| w),
+            Some(Want::GstArchive {
+                fy: "FY2026-27".into()
+            })
+        );
+        for bad in [
+            None,
+            Some(""),
+            Some("FY2026-28"),
+            Some("2026-27"),
+            Some("FY26"),
+        ] {
+            assert_eq!(
+                api(plan(&req(|r| {
+                    r.kind = Some("gst_archive".into());
+                    r.fy = bad.map(str::to_owned);
+                }))),
+                v("fy".into()),
+                "{bad:?}"
+            );
+        }
         let forbidden = |f: &str| (ErrorCode::Forbidden, Some(f.to_owned()));
+        for bad in ["../FY2026-27", "FY2026-27/x", r"FY2026\27", ".."] {
+            assert_eq!(
+                api(plan(&req(|r| {
+                    r.kind = Some("gst_archive".into());
+                    r.fy = Some(bad.into());
+                }))),
+                forbidden("fy"),
+                "{bad:?}"
+            );
+        }
         for bad in ["../3:A", "3:A/B", "3:A\\B", "3:.."] {
             assert_eq!(
                 api(plan(&req(|r| {

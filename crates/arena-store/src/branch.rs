@@ -80,11 +80,12 @@ pub enum Table {
     KitchenTicketLines,
     PlayerPcSettings,
     RollupLog,
+    GstArchiveLog,
 }
 
 impl Table {
     /// Every change-log table.
-    pub const ALL: [Table; 53] = [
+    pub const ALL: [Table; 54] = [
         Table::Branch,
         Table::Settings,
         Table::Devices,
@@ -138,6 +139,7 @@ impl Table {
         Table::KitchenTicketLines,
         Table::PlayerPcSettings,
         Table::RollupLog,
+        Table::GstArchiveLog,
     ];
 
     /// The SQL table name.
@@ -196,6 +198,7 @@ impl Table {
             Self::KitchenTicketLines => "kitchen_ticket_lines",
             Self::PlayerPcSettings => "player_pc_settings",
             Self::RollupLog => "rollup_log",
+            Self::GstArchiveLog => "gst_archive_log",
         }
     }
 
@@ -244,6 +247,7 @@ impl Table {
             Self::PlanGroups => &["plan_id", "group_id"],
             Self::InvoiceSequences => &["fy", "segment"],
             Self::RollupLog => &["date"],
+            Self::GstArchiveLog => &["fy"],
             Self::Consents => &["consent_id"],
             Self::Sessions
             | Self::SessionSegments
@@ -304,6 +308,7 @@ impl Table {
             | Self::KitchenTicketLines
             | Self::PlayerPcSettings
             | Self::RollupLog
+            | Self::GstArchiveLog
             | Self::Plans => true,
             Self::Settings
             | Self::RolePerms
@@ -420,6 +425,9 @@ pub enum RowKey {
     },
     RollupLog {
         date: String,
+    },
+    GstArchiveLog {
+        fy: String,
     },
     WalletTxns {
         id: String,
@@ -556,6 +564,7 @@ impl RowKey {
             Self::CreditBalances { .. } => Table::CreditBalances,
             Self::PlayerPcSettings { .. } => Table::PlayerPcSettings,
             Self::RollupLog { .. } => Table::RollupLog,
+            Self::GstArchiveLog { .. } => Table::GstArchiveLog,
         }
     }
 
@@ -601,6 +610,7 @@ impl RowKey {
             Self::PlanGroups { plan_id, group_id } => format!("{plan_id}/{group_id}"),
             Self::InvoiceSequences { fy, segment } => format!("{fy}/{segment}"),
             Self::RollupLog { date } => date.clone(),
+            Self::GstArchiveLog { fy } => fy.clone(),
             Self::PricingRules { rule_id } => rule_id.clone(),
             Self::Coupons { coupon_id } => coupon_id.clone(),
             Self::CouponTargets {
@@ -766,6 +776,7 @@ impl RowKey {
             Table::RollupLog => Self::RollupLog {
                 date: text("date")?,
             },
+            Table::GstArchiveLog => Self::GstArchiveLog { fy: text("fy")? },
         })
     }
 
@@ -810,6 +821,7 @@ impl RowKey {
             Self::PlanGroups { plan_id, group_id } => vec![plan_id, group_id],
             Self::InvoiceSequences { fy, segment } => vec![fy, segment],
             Self::RollupLog { date } => vec![date],
+            Self::GstArchiveLog { fy } => vec![fy],
             Self::PricingRules { rule_id } => vec![rule_id],
             Self::Coupons { coupon_id } => vec![coupon_id],
             Self::CouponTargets {

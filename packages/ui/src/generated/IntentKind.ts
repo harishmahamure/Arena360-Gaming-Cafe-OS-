@@ -72,6 +72,7 @@ export type IntentKind =
   | "stock.expiry_check"
   | "summary.publish"
   | "rollup.publish"
+  | "gst_archive.publish"
   | "stock.threshold"
   | "import.products"
   | "import.players"

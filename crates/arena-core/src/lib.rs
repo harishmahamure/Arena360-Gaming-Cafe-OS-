@@ -17,6 +17,7 @@ mod export_everything;
 pub mod game_plays;
 pub mod game_proposals;
 pub mod gst;
+pub mod gst_archive;
 mod import_csv;
 mod import_file;
 pub mod import_plans;

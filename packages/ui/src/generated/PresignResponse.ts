@@ -13,7 +13,7 @@ export type PresignResponse = {
    */
   summary_url?: string;
   /**
-   * For the rollup or snapshot asked for.
+   * For the rollup, snapshot, key backup or GST archive asked for.
    */
   url?: string;
   /**

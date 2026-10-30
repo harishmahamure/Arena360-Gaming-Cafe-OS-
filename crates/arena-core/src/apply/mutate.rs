@@ -579,6 +579,10 @@ pub(super) fn mutate(
             Target::Summary(t) => super::summary::mutate_rollup(tx, p, t),
             _ => Err(mismatch()),
         },
+        IntentPayload::GstArchivePublish(p) => match target {
+            Target::GstArchive(t) => super::gst_archive::mutate(tx, p, t),
+            _ => Err(mismatch()),
+        },
         IntentPayload::AlertRaise(_) | IntentPayload::AlertAck(_) => match target {
             Target::Alert(t) => super::alert::mutate(tx, intent, t, now_ms),
             _ => Err(mismatch()),

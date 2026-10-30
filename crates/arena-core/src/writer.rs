@@ -1091,6 +1091,31 @@ impl WriterHandle {
         .await
     }
 
+    /// Story 9.14: records that the yearly GST archive of `publish.fy` was PUT to the cloud, by
+    /// submitting `gst_archive.publish` (system actor) through `apply()`: it upserts only that
+    /// year's `gst_archive_log` row and appears in the audit. `NOT_PRIMARY` on a follower.
+    pub async fn publish_gst_archive(
+        &self,
+        publish: arena_proto::GstArchivePublish,
+    ) -> Result<Applied, AppError> {
+        let now = self.clock.now_ms();
+        self.submit_intent(Intent {
+            intent_id: ulid::Ulid::generate().to_string(),
+            kind: arena_proto::IntentKind::GstArchivePublish,
+            idempotency_key: ulid::Ulid::generate().to_string(),
+            issued_at: now,
+            base_rev: None,
+            actor: arena_proto::Actor {
+                kind: arena_proto::ActorKind::System,
+                id: "hub-gst-archive".into(),
+            },
+            elevated_by: None,
+            reason: None,
+            payload: arena_proto::IntentPayload::GstArchivePublish(publish),
+        })
+        .await
+    }
+
     /// How many jobs this writer has been handed (for tests: a `BAD_FRAME` queues none).
     #[cfg(any(test, feature = "test-jobs"))]
     pub fn jobs_submitted(&self) -> u64 {

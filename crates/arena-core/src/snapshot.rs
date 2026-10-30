@@ -2042,6 +2042,44 @@ impl SnapshotReader {
         crate::rollup_plan::plan_rollups(&store, now_ms, changes, carried, rescan)
     }
 
+    /// The financial years whose GST archive is due (Story 9.14), oldest first: earlier than the
+    /// year of the latest published rollup day, with numbered invoices or credit notes, and never
+    /// archived or changed since. A rollup day equal to `checked` is not looked at again. Blocking
+    /// (SQLite); writes nothing.
+    pub fn gst_archive_due(
+        &self,
+        checked: Option<&str>,
+    ) -> Result<crate::gst_archive::GstArchiveDue, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        crate::gst_archive::due_years(&store, checked)
+    }
+
+    /// The GST archive of `fy` built as of `built_at` (Story 9.14); `None` before the branch
+    /// exists. Blocking (SQLite and disk); writes nothing.
+    pub fn gst_archive_file(
+        &self,
+        fy: &str,
+        built_at: i64,
+    ) -> Result<Option<crate::gst_archive::GstArchiveFile>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        crate::gst_archive::build_file(&store, fy, built_at)
+    }
+
+    /// The years archived, newest first (Story 9.14).
+    pub fn gst_archives(&self) -> Result<arena_proto::GstArchiveList, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        crate::gst_archive::list(&store)
+    }
+
     /// How many change rows are not yet in an accepted batch, and when the cloud last accepted
     /// one (Story 8.2). Blocking (SQLite).
     pub fn upload_progress(&self) -> Result<crate::UploadStatus, AppError> {

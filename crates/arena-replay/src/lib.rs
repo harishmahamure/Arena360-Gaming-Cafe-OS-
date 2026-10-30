@@ -1524,6 +1524,25 @@ mod tests {
                     .await
                     .unwrap();
             }
+            // A yearly GST archive was published, and then rebuilt (the second only updates it).
+            for (built_at, orphaned) in [
+                (T0, vec![]),
+                (T0 + 1, vec!["ARN/FY2026-27/E1/9".to_owned()]),
+            ] {
+                writer
+                    .publish_gst_archive(arena_proto::GstArchivePublish {
+                        fy: "FY2026-27".into(),
+                        key: "gst-archive/FY2026-27.zst".into(),
+                        sha256: "0f".repeat(32),
+                        bytes: 123,
+                        invoices: 4,
+                        credit_notes: 1,
+                        orphaned,
+                        built_at,
+                    })
+                    .await
+                    .unwrap();
+            }
             // The counter sale kept above is long past its Undo window: the system numbers it.
             let mut number = submit(
                 IntentPayload::InvoiceIssue(arena_proto::InvoiceIssue {
@@ -1621,6 +1640,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("replica.db"), T0).unwrap();
         (dir, store)
+    }
+
+    #[tokio::test]
+    async fn a_published_gst_archive_replays_into_its_log_row() {
+        let (_a, source) = seeded_with_device().await;
+        let (_b, mut dest) = empty();
+        dest.write_tx_mut(|tx| replay(source.changes().unwrap(), tx))
+            .unwrap();
+        let want = source.rows(Table::GstArchiveLog).unwrap();
+        assert_eq!(want.len(), 1, "one row, published twice");
+        assert_eq!(dest.rows(Table::GstArchiveLog).unwrap(), want);
     }
 
     #[tokio::test]

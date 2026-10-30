@@ -36,6 +36,7 @@ import type { GameMatched } from "./GameMatched";
 import type { GroupDelete } from "./GroupDelete";
 import type { GroupPayer } from "./GroupPayer";
 import type { GroupUpsert } from "./GroupUpsert";
+import type { GstArchivePublish } from "./GstArchivePublish";
 import type { ImportPlans } from "./ImportPlans";
 import type { ImportPlayers } from "./ImportPlayers";
 import type { ImportProducts } from "./ImportProducts";
@@ -202,6 +203,7 @@ export type IntentPayload =
   | ({ kind: "stock.expiry_check" } & StockExpiryCheck)
   | ({ kind: "summary.publish" } & SummaryPublish)
   | ({ kind: "rollup.publish" } & RollupPublish)
+  | ({ kind: "gst_archive.publish" } & GstArchivePublish)
   | ({ kind: "stock.threshold" } & StockThreshold)
   | ({ kind: "import.products" } & ImportProducts)
   | ({ kind: "import.players" } & ImportPlayers)

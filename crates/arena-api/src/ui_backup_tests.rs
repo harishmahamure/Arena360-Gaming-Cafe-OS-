@@ -472,3 +472,55 @@ async fn export_everything_needs_a_session() {
     let (status, _) = call(&hub, "POST", EVERYTHING, None, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
+
+const GST_URL: &str = "/ui/backup/gst-archive";
+
+#[tokio::test]
+async fn the_gst_archive_list_names_each_year_saved_newest_first() {
+    let hub = hub().await;
+    let token = token_for(&hub, "manager", "m-pass").await;
+    let (status, empty) = call(&hub, "GET", GST_URL, Some(&token), None).await;
+    assert_eq!((status, empty), (StatusCode::OK, json!({ "archives": [] })));
+
+    for (fy, invoices) in [("FY2025-26", 7), ("FY2026-27", 9)] {
+        hub.writer
+            .publish_gst_archive(arena_proto::GstArchivePublish {
+                fy: fy.into(),
+                key: format!("gst-archive/{fy}.zst"),
+                sha256: "ab".repeat(32),
+                bytes: 321,
+                invoices,
+                credit_notes: 2,
+                orphaned: vec!["A/1".into(), "A/2".into()],
+                built_at: T0,
+            })
+            .await
+            .unwrap();
+    }
+    let (status, list) = call(&hub, "GET", GST_URL, Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let years = list["archives"].as_array().unwrap();
+    assert_eq!(years.len(), 2);
+    assert_eq!(
+        (years[0]["fy"].as_str(), years[0]["label"].as_str()),
+        (Some("FY2026-27"), Some("26-27"))
+    );
+    assert_eq!(years[1]["label"], "25-26");
+    assert_eq!(
+        (
+            years[0]["invoices"].clone(),
+            years[0]["credit_notes"].clone(),
+            years[0]["orphaned"].clone()
+        ),
+        (json!(9), json!(2), json!(2)),
+        "the list carries counts, not the invoice numbers"
+    );
+    assert!(years[0].get("sha256").is_none());
+}
+
+#[tokio::test]
+async fn the_gst_archive_list_needs_a_session() {
+    let hub = hub().await;
+    let (status, _) = call(&hub, "GET", GST_URL, None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}

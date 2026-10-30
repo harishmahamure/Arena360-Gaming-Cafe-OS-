@@ -30,9 +30,10 @@ use arena_core::{
     HubStatus, PairGate, PairingState, Role, SnapshotReader, UploadStatus, WriterHandle,
 };
 use arena_proto::{
-    AlertKind, AppError, ErrorCode, PRESIGN_KIND_ROLLUP, PRESIGN_KIND_SNAPSHOT, PRESIGN_TTL_S,
-    PresignBatch, PresignRequest, ROLLUP_SCHEMA, ResendUnavailable, RollupV1, SUMMARY_OBJECT_KEY,
-    SeqRange, Tier, VerifyKey, emitted_rollup_schema, licence::verify_claims, rollup_object_key,
+    AlertKind, AppError, ErrorCode, GstArchivePublish, PRESIGN_KIND_GST_ARCHIVE,
+    PRESIGN_KIND_ROLLUP, PRESIGN_KIND_SNAPSHOT, PRESIGN_TTL_S, PresignBatch, PresignRequest,
+    ROLLUP_SCHEMA, ResendUnavailable, RollupV1, SUMMARY_OBJECT_KEY, SeqRange, Tier, VerifyKey,
+    emitted_rollup_schema, gst_archive_object_key, licence::verify_claims, rollup_object_key,
     snapshot_object_key,
 };
 use arena_store::{
@@ -304,6 +305,11 @@ pub struct UploadTask {
     unbuildable: BTreeSet<String>,
     /// Whether the cycle also stores the daily snapshot (Story 8.8).
     daily_snapshot: bool,
+    /// Whether the cycle also publishes the yearly GST archives (Story 9.14).
+    gst_archive: bool,
+    /// The latest rollup day the archives were last worked out for in this run, once every
+    /// archive due then went up; a day not yet checked, or an attempt that failed, is retried.
+    gst_checked: Option<String>,
     /// Whether a branch that has never uploaded stores its full snapshot first (Story 9.11).
     first_snapshot: bool,
     /// The lapse back to Free was already looked at (Story 9.11); a paid cycle resets it.
@@ -355,6 +361,8 @@ impl UploadTask {
             regenerated: VecDeque::new(),
             unbuildable: BTreeSet::new(),
             daily_snapshot: true,
+            gst_archive: true,
+            gst_checked: None,
             first_snapshot: true,
             lapse_seen: false,
             free_space: crate::disk::free_bytes,
@@ -381,7 +389,14 @@ impl UploadTask {
         self.summary = false;
         self.rollups = false;
         self.daily_snapshot = false;
+        self.gst_archive = false;
         self.first_snapshot = false;
+        self
+    }
+
+    /// Tests: the cycle does not publish the yearly GST archives.
+    pub fn without_gst_archive(mut self) -> Self {
+        self.gst_archive = false;
         self
     }
 
@@ -632,6 +647,15 @@ impl UploadTask {
         if self.daily_snapshot
             && let Err(next) = self
                 .publish_snapshot(&writer, &token, &epoch, interval)
+                .await
+        {
+            self.refresh_progress().await;
+            return next;
+        }
+        // The yearly GST archive follows the first close after the financial year ends.
+        if self.gst_archive
+            && let Err(next) = self
+                .publish_gst_archives(&writer, &token, &epoch, interval)
                 .await
         {
             self.refresh_progress().await;
@@ -1433,6 +1457,147 @@ impl UploadTask {
                     "snapshot: could not record the upload"
                 );
                 Ok(())
+            }
+        }
+    }
+
+    /// Uploads the yearly GST archives that are due (Story 9.14): each financial year earlier than
+    /// the year of the latest published rollup day whose invoices or credit notes were never
+    /// archived or have changed since. Looked at once per newly published rollup day in this run;
+    /// a day with an attempt that failed is looked at again next cycle. A year that cannot be
+    /// built is skipped. `Ok` when the cycle goes on; `Err` what to do instead.
+    async fn publish_gst_archives(
+        &mut self,
+        writer: &WriterHandle,
+        token: &str,
+        epoch: &str,
+        interval: Duration,
+    ) -> Result<(), Next> {
+        let snapshots = Arc::clone(&self.snapshots);
+        let checked = self.gst_checked.clone();
+        let due = match tokio::task::spawn_blocking(move || {
+            snapshots.gst_archive_due(checked.as_deref())
+        })
+        .await
+        {
+            Ok(Ok(due)) => due,
+            Ok(Err(e)) => {
+                tracing::warn!(code = e.code.as_str(), error = %e, "gst archive: could not plan");
+                return Ok(());
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "gst archive: plan task failed");
+                return Ok(());
+            }
+        };
+        let Some(day) = due.day else {
+            return Ok(());
+        };
+        let mut complete = true;
+        for fy in &due.years {
+            complete &= self
+                .publish_gst_archive(writer, token, epoch, interval, fy)
+                .await?;
+        }
+        if complete {
+            self.gst_checked = Some(day);
+        }
+        Ok(())
+    }
+
+    /// One yearly GST archive: build, presign `kind: gst_archive`, PUT, then
+    /// `gst_archive.publish`. `Ok(false)` when it could not be built or recorded (tried again
+    /// next cycle), `Ok(true)` when it is in the cloud and recorded; otherwise what to do
+    /// instead.
+    async fn publish_gst_archive(
+        &mut self,
+        writer: &WriterHandle,
+        token: &str,
+        epoch: &str,
+        interval: Duration,
+        fy: &str,
+    ) -> Result<bool, Next> {
+        let built_at = writer.now_ms();
+        let snapshots = Arc::clone(&self.snapshots);
+        let build_fy = fy.to_owned();
+        let file = match tokio::task::spawn_blocking(move || {
+            snapshots.gst_archive_file(&build_fy, built_at)
+        })
+        .await
+        {
+            Ok(Ok(Some(file))) => file,
+            Ok(Ok(None)) => return Ok(false),
+            Ok(Err(e)) => {
+                tracing::warn!(fy, code = e.code.as_str(), error = %e, "gst archive: could not build");
+                return Ok(false);
+            }
+            Err(e) => {
+                tracing::warn!(fy, error = %e, "gst archive: build task failed");
+                return Ok(false);
+            }
+        };
+        if file.unreadable_orphans > 0 {
+            tracing::warn!(
+                fy,
+                files = file.unreadable_orphans,
+                "gst archive: set-aside databases could not be read and were skipped"
+            );
+        }
+        let req = PresignRequest {
+            epoch: epoch.to_owned(),
+            kind: Some(PRESIGN_KIND_GST_ARCHIVE.to_owned()),
+            fy: Some(fy.to_owned()),
+            ..PresignRequest::default()
+        };
+        let links = match self.cloud.presign(token, &req).await {
+            Ok(l) => l,
+            Err(f) => return Err(self.refused(f, interval)),
+        };
+        let Some(url) = links.url else {
+            tracing::warn!(fy, "gst archive: the cloud issued no archive link");
+            return Err(self.failed(interval));
+        };
+        let size = i64::try_from(file.bytes.len()).unwrap_or(i64::MAX);
+        if let Err(f) = self.cloud.put_object(&url, file.bytes).await {
+            return Err(self.refused(f, interval));
+        }
+        self.fails = 0;
+        let (invoices, credit_notes, orphaned) =
+            (file.invoices, file.credit_notes, file.orphaned.len());
+        let publish = GstArchivePublish {
+            fy: fy.to_owned(),
+            key: gst_archive_object_key(fy),
+            sha256: file.sha256,
+            bytes: size,
+            invoices,
+            credit_notes,
+            orphaned: file.orphaned,
+            built_at,
+        };
+        match writer.publish_gst_archive(publish).await {
+            Ok(_) => {
+                tracing::info!(
+                    fy,
+                    invoices,
+                    credit_notes,
+                    orphaned,
+                    bytes = size,
+                    "gst archive published"
+                );
+                Ok(true)
+            }
+            Err(e) if e.code == ErrorCode::NotPrimary => {
+                tracing::info!("gst archive: this hub is no longer the primary");
+                Err(Next::idle(TIER_RECHECK))
+            }
+            Err(e) => {
+                // The cloud has the file; the next cycle sends it again under the same key.
+                tracing::warn!(
+                    fy,
+                    code = e.code.as_str(),
+                    "gst archive: could not record the upload"
+                );
+                Ok(false)
             }
         }
     }
@@ -3813,5 +3978,229 @@ mod tests {
             ["snapshot", "snapshot"],
             "the rows from Free are in the snapshot, not in batches"
         );
+    }
+
+    // ---- Story 9.14: the yearly GST archive ----
+
+    type Flag = Arc<std::sync::atomic::AtomicBool>;
+
+    fn flag(on: bool) -> Flag {
+        Arc::new(std::sync::atomic::AtomicBool::new(on))
+    }
+
+    fn is_on(f: &Flag) -> bool {
+        f.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// As [`cloud_with_snapshots`], and it issues GST archive links; archive PUTs fail while
+    /// `gst_up` is false and archive presigns are refused `FENCED` while `fenced` is true.
+    fn cloud_with_gst(gst_up: Flag, fenced: Flag) -> impl FnOnce(u16) -> Handler {
+        move |port| {
+            let mut inner = cloud_with_snapshots(flag(true), flag(true))(port);
+            Box::new(move |line, body| {
+                if line.starts_with("POST /v1/presign") {
+                    let req: serde_json::Value = serde_json::from_slice(body).unwrap();
+                    if req["kind"] == "gst_archive" {
+                        if is_on(&fenced) {
+                            return refused(409, "FENCED");
+                        }
+                        let url = format!(
+                            "http://127.0.0.1:{port}/put/gst-archive/{}.zst",
+                            req["fy"].as_str().unwrap()
+                        );
+                        return (200, serde_json::json!({ "url": url }).to_string());
+                    }
+                } else if line.starts_with("PUT /put/gst-archive/") && !is_on(&gst_up) {
+                    return (503, "{}".into());
+                }
+                inner(line, body)
+            })
+        }
+    }
+
+    async fn gst_fx(tier: Tier) -> (Fx, Seen, Flag, Flag) {
+        let (gst_up, fenced) = (flag(true), flag(false));
+        let (port, seen) = serve(cloud_with_gst(Flag::clone(&gst_up), Flag::clone(&fenced))).await;
+        let mut f = fx(port, tier).await;
+        f.task.rollups = true;
+        f.task.daily_snapshot = true;
+        f.task.gst_archive = true;
+        f.task.free_space = |_| Some(u64::MAX);
+        (f, seen, gst_up, fenced)
+    }
+
+    fn gst_asks(seen: &Seen) -> Vec<String> {
+        presigns(seen)
+            .into_iter()
+            .filter(|p| p["kind"] == "gst_archive")
+            .map(|p| p["fy"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    fn gst_puts(seen: &Seen) -> Vec<(String, Vec<u8>)> {
+        puts(seen)
+            .into_iter()
+            .filter(|(k, _)| k.starts_with("/put/gst-archive/"))
+            .collect()
+    }
+
+    fn gst_row(f: &Fx, fy: &str) -> Option<arena_store::GstArchiveLogRow> {
+        Store::open_reader(&f.path)
+            .unwrap()
+            .read_with(|c| arena_store::find_gst_archive_log(c, fy))
+            .unwrap()
+    }
+
+    /// A settled, numbered invoice of `fy`, written directly (the change log is not what is tested).
+    async fn invoice_of(f: &Fx, id: &str, fy: &str, total: i64, updated: i64) {
+        let (id, fy) = (id.to_owned(), fy.to_owned());
+        f.writer
+            .submit(move |tx| {
+                tx.execute_batch(&format!(
+                    "INSERT INTO orders (id, status, subtotal_minor, total_minor, business_day, fy,
+                                         rev, created_at, updated_at, settled_at, kind, invoice_no,
+                                         tax_minor, tax_breakup)
+                     VALUES ('{id}', 'settled', {total}, {total}, '2026-06-01', '{fy}', 0, 1,
+                             {updated}, 1, 'pos_sale', 'ARN/{fy}/E1/{id}', 0, NULL)"
+                ))
+                .map_err(arena_store::db_error)
+            })
+            .await
+            .unwrap();
+    }
+
+    /// A credit note of `fy` against order `order`.
+    async fn credit_note_of(f: &Fx, id: &str, order: &str, fy: &str, updated: i64) {
+        let (id, order, fy) = (id.to_owned(), order.to_owned(), fy.to_owned());
+        f.writer
+            .submit(move |tx| {
+                tx.execute_batch(&format!(
+                    "INSERT INTO refunds (id, order_id, credit_note_no, reason, amount_minor,
+                                          tax_minor, tax_breakup, lines, staff_id, approved_by,
+                                          business_day, fy, rev, created_at, updated_at)
+                     VALUES ('{id}', '{order}', 'CN/{id}', 'mistake', 50, 0, NULL, '[]', 'S', 'S',
+                             '2026-06-02', '{fy}', 0, {updated}, {updated})"
+                ))
+                .map_err(arena_store::db_error)
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_closed_year_is_archived_once_and_recorded_after_its_put() {
+        let (mut f, seen, _, _) = gst_fx(Tier::Basic).await;
+        paid_since(&f, 1).await;
+        invoice_of(&f, "A", "FY2025-26", 1_000, 5).await;
+        invoice_of(&f, "B", "FY2025-26", 2_000, 5).await;
+        credit_note_of(&f, "R", "A", "FY2025-26", 6).await;
+        // The year in progress is not archived.
+        invoice_of(&f, "C", "FY2026-27", 3_000, 5).await;
+
+        f.task.cycle().await;
+        assert_eq!(rollup_asks(&seen), ["2027-01-14"]);
+        assert_eq!(gst_asks(&seen), ["FY2025-26"]);
+        let sent = gst_puts(&seen);
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].0, "/put/gst-archive/FY2025-26.zst");
+
+        let archive = arena_core::gst_archive::decode_archive(&sent[0].1).unwrap();
+        assert_eq!(
+            (
+                archive.fy.as_str(),
+                archive.invoices.len(),
+                archive.credit_notes.len()
+            ),
+            ("FY2025-26", 2, 1)
+        );
+        let row = gst_row(&f, "FY2025-26").expect("recorded after the PUT");
+        assert_eq!(row.key, "gst-archive/FY2025-26.zst");
+        assert_eq!((row.invoices, row.credit_notes), (2, 1));
+        assert_eq!(row.bytes, i64::try_from(sent[0].1.len()).unwrap());
+        assert_eq!(row.sha256.len(), 64);
+        assert_eq!(row.built_at, T0);
+        assert!(gst_row(&f, "FY2026-27").is_none());
+        // The record is a system intent, so it is in the audit.
+        let recorded = count(
+            &f,
+            "SELECT COUNT(*) FROM changes
+             WHERE intent_kind = 'gst_archive.publish' AND actor_kind = 'system'",
+        );
+        assert_eq!(recorded, 1);
+
+        // Archived and unchanged: the next cycle asks for nothing.
+        f.task.cycle().await;
+        assert_eq!(gst_asks(&seen).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_failed_put_records_nothing_and_the_next_cycle_tries_again() {
+        let (mut f, seen, gst_up, _) = gst_fx(Tier::Basic).await;
+        paid_since(&f, 1).await;
+        invoice_of(&f, "A", "FY2025-26", 1_000, 5).await;
+        gst_up.store(false, std::sync::atomic::Ordering::SeqCst);
+
+        let next = f.task.cycle().await;
+        assert!(next.active && !next.early, "a failure backs off");
+        assert!(
+            gst_row(&f, "FY2025-26").is_none(),
+            "no row for a failed PUT"
+        );
+        assert_eq!(gst_asks(&seen), ["FY2025-26"]);
+
+        gst_up.store(true, std::sync::atomic::Ordering::SeqCst);
+        f.task.fails = 0;
+        f.task.cycle().await;
+        assert_eq!(gst_asks(&seen), ["FY2025-26", "FY2025-26"]);
+        assert!(gst_row(&f, "FY2025-26").is_some());
+    }
+
+    #[tokio::test]
+    async fn a_late_credit_note_makes_the_next_close_rebuild_and_overwrite_the_same_key() {
+        let (mut f, seen, _, _) = gst_fx(Tier::Basic).await;
+        paid_since(&f, 1).await;
+        invoice_of(&f, "A", "FY2025-26", 1_000, 5).await;
+        f.task.cycle().await;
+        assert_eq!(gst_puts(&seen).len(), 1);
+
+        // A credit note with the old year's stamp arrives, and the next day closes.
+        f.clock.advance(DAY);
+        keep_lease(&f).await;
+        credit_note_of(&f, "R", "A", "FY2025-26", f.clock.now_ms()).await;
+        f.clock.advance(60_000);
+        keep_lease(&f).await;
+        f.task.cycle().await;
+        let sent = gst_puts(&seen);
+        assert_eq!(sent.len(), 2, "rebuilt once");
+        assert_eq!(sent[0].0, sent[1].0, "under the same key");
+        let rebuilt = arena_core::gst_archive::decode_archive(&sent[1].1).unwrap();
+        assert_eq!(rebuilt.credit_notes.len(), 1);
+        let row = gst_row(&f, "FY2025-26").unwrap();
+        assert_eq!((row.invoices, row.credit_notes), (1, 1));
+
+        // Once is enough: the next close finds it current.
+        f.clock.advance(DAY);
+        keep_lease(&f).await;
+        f.task.cycle().await;
+        assert_eq!(gst_puts(&seen).len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_free_hub_uploads_no_archive_and_a_fenced_epoch_records_nothing() {
+        let (mut f, seen, _, _) = gst_fx(Tier::Free).await;
+        paid_since(&f, 1).await;
+        invoice_of(&f, "A", "FY2025-26", 1_000, 5).await;
+        f.task.cycle().await;
+        assert!(presigns(&seen).is_empty(), "Free makes no request");
+        assert!(gst_row(&f, "FY2025-26").is_none());
+
+        let (mut f, seen, _, fenced) = gst_fx(Tier::Basic).await;
+        paid_since(&f, 1).await;
+        invoice_of(&f, "A", "FY2025-26", 1_000, 5).await;
+        fenced.store(true, std::sync::atomic::Ordering::SeqCst);
+        f.task.cycle().await;
+        assert_eq!(gst_asks(&seen), ["FY2025-26"]);
+        assert!(gst_puts(&seen).is_empty());
+        assert!(gst_row(&f, "FY2025-26").is_none());
     }
 }

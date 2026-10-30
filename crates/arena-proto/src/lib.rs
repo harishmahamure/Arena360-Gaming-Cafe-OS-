@@ -30,6 +30,7 @@ mod fence;
 mod frame;
 mod game_catalog;
 mod gst;
+mod gst_archive;
 mod import;
 mod intent;
 mod kek;
@@ -205,6 +206,12 @@ pub use game_catalog::{
 pub use gst::{
     GST_B2B, GST_B2CS, GST_CDNR, GST_HSN, GstExportRequest, GstExported, GstMonth, GstSection,
     gst_file_name,
+};
+pub use gst_archive::{
+    GST_ARCHIVE_KEY_MAX_CHARS, GST_ARCHIVE_ORPHANS_CAP, GST_ARCHIVE_SCHEMA, GstArchiveCreditNote,
+    GstArchiveEntry, GstArchiveInvoice, GstArchiveLine, GstArchiveList, GstArchivePublish,
+    GstArchiveRate, GstArchiveRateTotal, GstArchiveV1, PRESIGN_KIND_GST_ARCHIVE,
+    gst_archive_object_key, gst_archive_year_label, valid_fy,
 };
 pub use import::{
     IMPORT_CHUNK_ROWS, IMPORT_CREDIT_REMINDER_DAYS, IMPORT_MAX_BYTES, IMPORT_MAX_FAILURES,

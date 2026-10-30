@@ -21,6 +21,7 @@ mod export_reference;
 mod game_plays;
 mod group_bills;
 mod gst;
+mod gst_archive;
 mod identity;
 mod invoices;
 mod kiosk_scans;
@@ -131,6 +132,11 @@ pub use group_bills::{
     set_group_state, set_order_group, set_order_payer, set_session_group,
 };
 pub use gst::{GstCreditRow, GstInvoiceRow, GstLineRow, GstRows, load_gst_rows};
+pub use gst_archive::{
+    ArchiveCreditRow, ArchiveInvoiceRow, GstArchiveLogRow, GstArchiveRows, GstFingerprint,
+    NewGstArchiveLog, OrphanScan, find_gst_archive_log, gst_fingerprints, insert_gst_archive_log,
+    list_gst_archive_logs, load_gst_archive_rows, scan_orphaned_invoices, update_gst_archive_log,
+};
 pub use identity::{
     CachedLicence, HubIdentity, RestorePending, TrustedClockRow, find_cached_licence,
     find_hub_identity, find_restore_pending, find_trusted_clock, insert_hub_identity,

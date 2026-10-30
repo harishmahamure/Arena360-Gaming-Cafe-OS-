@@ -144,6 +144,11 @@ pub fn snapshot_key(prefix: &str, date: &str) -> String {
     format!("{prefix}snapshots/{date}.db.zst")
 }
 
+/// `gst-archive/<fy>.zst` under the prefix (Story 9.14); `fy` is a validated financial-year label.
+pub fn gst_archive_key(prefix: &str, fy: &str) -> String {
+    format!("{prefix}{}", arena_proto::gst_archive_object_key(fy))
+}
+
 /// `keys/player-keys.bin` under the prefix (Story 9.2): the player key backup, overwritten.
 pub fn keys_key(prefix: &str) -> String {
     format!("{prefix}{}", arena_proto::KEYS_OBJECT_KEY)
@@ -323,6 +328,7 @@ pub enum PutKind {
     Rollup,
     Snapshot,
     Keys,
+    GstArchive,
 }
 
 impl PutKind {
@@ -333,6 +339,7 @@ impl PutKind {
             Self::Rollup => "rollup",
             Self::Snapshot => "snapshot",
             Self::Keys => "keys",
+            Self::GstArchive => "gst_archive",
         }
     }
 }
@@ -349,6 +356,7 @@ pub struct PutCounts {
     pub rollup: u64,
     pub snapshot: u64,
     pub keys: u64,
+    pub gst_archive: u64,
     /// Calls refused `RATE_LIMITED`.
     pub refused: u64,
 }
@@ -356,7 +364,7 @@ pub struct PutCounts {
 impl PutCounts {
     /// Every link issued.
     pub fn issued(&self) -> u64 {
-        self.batch + self.summary + self.rollup + self.snapshot + self.keys
+        self.batch + self.summary + self.rollup + self.snapshot + self.keys + self.gst_archive
     }
 
     /// What the links issued cost in R2 Class A operations at `paise_per_million`, in paise (rounded
@@ -391,6 +399,7 @@ impl PutMetrics {
                 PutKind::Rollup => c.rollup += 1,
                 PutKind::Snapshot => c.snapshot += 1,
                 PutKind::Keys => c.keys += 1,
+                PutKind::GstArchive => c.gst_archive += 1,
             }
             *c
         });

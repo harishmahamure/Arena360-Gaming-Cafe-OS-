@@ -10,10 +10,16 @@ use arena_proto::{
     ProductUpsert, RefundCreate, RefundLineReq, UNDO_WINDOW_MS,
 };
 
-const GST_ON: &str = r#"{"country":"IN","gst":true,"gstin":"27AAPFU0939F1ZV","inclusive":true,"product_bp":500,"play_bp":1800,"sac":"9996","label":"Tax","rate_bp":0}"#;
-const BUYER_GSTIN: &str = "29AABCT1332L1ZA";
+pub(super) const GST_ON: &str = r#"{"country":"IN","gst":true,"gstin":"27AAPFU0939F1ZV","inclusive":true,"product_bp":500,"play_bp":1800,"sac":"9996","label":"Tax","rate_bp":0}"#;
+pub(super) const BUYER_GSTIN: &str = "29AABCT1332L1ZA";
 
-async fn product(f: &Fixture, name: &str, price: i64, rate_bp: u16, hsn: &str) -> String {
+pub(super) async fn product(
+    f: &Fixture,
+    name: &str,
+    price: i64,
+    rate_bp: u16,
+    hsn: &str,
+) -> String {
     let id = make(
         f,
         ProductUpsert {
@@ -28,7 +34,7 @@ async fn product(f: &Fixture, name: &str, price: i64, rate_bp: u16, hsn: &str) -
     id
 }
 
-async fn sell(
+pub(super) async fn sell(
     f: &Fixture,
     lines: &[(&str, i64)],
     cash: i64,
@@ -68,7 +74,7 @@ async fn sell(
 }
 
 /// Closes the Undo window and numbers the order; returns its invoice number.
-async fn invoice(f: &Fixture, order: &str) -> String {
+pub(super) async fn invoice(f: &Fixture, order: &str) -> String {
     f.clock.advance(UNDO_WINDOW_MS + 1);
     let mut i = intent(
         system(),
@@ -81,14 +87,14 @@ async fn invoice(f: &Fixture, order: &str) -> String {
     text(&order_row(f, order), "invoice_no")
 }
 
-fn order_row(f: &Fixture, id: &str) -> Row {
+pub(super) fn order_row(f: &Fixture, id: &str) -> Row {
     table(f, Table::Orders)
         .into_iter()
         .find(|o| text(o, "id") == id)
         .unwrap()
 }
 
-fn line_id(f: &Fixture, order: &str, product: &str) -> String {
+pub(super) fn line_id(f: &Fixture, order: &str, product: &str) -> String {
     table(f, Table::OrderLines)
         .iter()
         .find(|l| text(l, "order_id") == order && text(l, "product_id") == product)
@@ -96,7 +102,7 @@ fn line_id(f: &Fixture, order: &str, product: &str) -> String {
         .unwrap()
 }
 
-async fn refund_one(f: &Fixture, invoice_no: &str, line: String) {
+pub(super) async fn refund_one(f: &Fixture, invoice_no: &str, line: String) {
     let mut i = intent(
         owner(),
         IntentPayload::RefundCreate(RefundCreate {

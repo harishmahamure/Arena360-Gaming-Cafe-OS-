@@ -797,6 +797,73 @@ async fn the_player_key_backup_has_one_fixed_key_on_paid_tiers_and_follows_the_f
 }
 
 #[tokio::test]
+async fn the_yearly_gst_archive_has_a_key_per_year_under_the_prefix_and_follows_the_fence() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe(Some("5:HUBA")).await;
+    let prefix = format!("tenants/{}/branches/{}/", a.tenant, a.branch);
+    for (fy, key) in [
+        ("FY2025-26", "gst-archive/FY2025-26.zst"),
+        ("FY2027", "gst-archive/FY2027.zst"),
+    ] {
+        let r = h
+            .presign(
+                &a.token,
+                json!({"epoch": "5:HUBA", "kind": "gst_archive", "fy": fy}),
+            )
+            .await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(r.body.as_object().unwrap().len(), 1);
+        assert_eq!(key_of(url_of(&r, "url")), format!("{prefix}{key}"));
+        assert_valid_600(url_of(&r, "url"));
+    }
+    assert_eq!(h.counts(&a).gst_archive, 2);
+
+    // A year is required and must be a year; a date is not part of it.
+    for body in [
+        json!({"epoch": "5:HUBA", "kind": "gst_archive"}),
+        json!({"epoch": "5:HUBA", "kind": "gst_archive", "fy": "2026-27"}),
+        json!({"epoch": "5:HUBA", "kind": "gst_archive", "fy": "FY2026-28"}),
+        json!({"epoch": "5:HUBA", "kind": "gst_archive", "fy": "FY2026-27", "date": "2026-10-29"}),
+        json!({"epoch": "5:HUBA", "kind": "gst_archive", "fy": "FY2026-27", "summary": true}),
+    ] {
+        let r = h.presign(&a.token, body.clone()).await;
+        assert_eq!((r.status, r.code()), (422, "VALIDATION_FAILED"), "{body}");
+    }
+    // Path characters are refused and audited, never issued.
+    let r = h
+        .presign(
+            &a.token,
+            json!({"epoch": "5:HUBA", "kind": "gst_archive", "fy": "FY2026-27/../x"}),
+        )
+        .await;
+    assert_eq!((r.status, r.code()), (403, "FORBIDDEN"));
+    assert_eq!(h.audit_rows().await.len(), 1);
+    // A Hub below the fence gets nothing.
+    let r = h
+        .presign(
+            &a.token,
+            json!({"epoch": "4:HUBA", "kind": "gst_archive", "fy": "FY2025-26"}),
+        )
+        .await;
+    assert_eq!((r.status, r.code()), (409, "FENCED"));
+    assert_eq!(h.counts(&a).issued(), 2);
+}
+
+#[tokio::test]
+async fn a_free_branch_gets_no_gst_archive_link() {
+    let h = Harness::new().await;
+    let a = h.cafe(PHONE_A, "Pixel Arena", "198.51.100.4").await;
+    let r = h
+        .presign(
+            &a.token,
+            json!({"epoch": "1:HUBA", "kind": "gst_archive", "fy": "FY2025-26"}),
+        )
+        .await;
+    assert_eq!((r.status, r.code()), (403, "FEATURE_NOT_ENTITLED"));
+    assert_eq!(h.counts(&a), PutCounts::default());
+}
+
+#[tokio::test]
 async fn a_free_branch_gets_no_key_backup_link() {
     let h = Harness::new().await;
     let a = h.cafe(PHONE_A, "Pixel Arena", "198.51.100.4").await;

@@ -36,7 +36,7 @@ pub struct PresignRequest {
     pub batch: Option<PresignBatch>,
     #[serde(default)]
     pub summary: bool,
-    /// `rollup` or `snapshot` (with `date`), or `keys` (without one).
+    /// `rollup` or `snapshot` (with `date`), `gst_archive` (with `fy`), or `keys` (without one).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub kind: Option<String>,
@@ -44,6 +44,10 @@ pub struct PresignRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub date: Option<String>,
+    /// The financial year of a `gst_archive` request, `FY2026-27` or `FY2027` (Story 9.14).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fy: Option<String>,
 }
 
 /// The links issued. Each is valid for [`PRESIGN_TTL_S`] seconds.
@@ -58,7 +62,7 @@ pub struct PresignResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub summary_url: Option<String>,
-    /// For the rollup or snapshot asked for.
+    /// For the rollup, snapshot, key backup or GST archive asked for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub url: Option<String>,

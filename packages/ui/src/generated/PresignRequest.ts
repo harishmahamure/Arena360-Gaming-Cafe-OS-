@@ -13,11 +13,15 @@ export type PresignRequest = {
   batch?: PresignBatch;
   summary: boolean;
   /**
-   * `rollup` or `snapshot` (with `date`), or `keys` (without one).
+   * `rollup` or `snapshot` (with `date`), `gst_archive` (with `fy`), or `keys` (without one).
    */
   kind?: string;
   /**
    * `yyyy-mm-dd`.
    */
   date?: string;
+  /**
+   * The financial year of a `gst_archive` request, `FY2026-27` or `FY2027` (Story 9.14).
+   */
+  fy?: string;
 };

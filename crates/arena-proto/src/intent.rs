@@ -231,6 +231,10 @@ pub enum IntentKind {
     /// A daily rollup was published to the cloud (Story 8.6): upserts the day's `rollup_log` row.
     #[serde(rename = "rollup.publish")]
     RollupPublish,
+    /// A yearly GST archive was PUT to the cloud (Story 9.14): upserts the year's
+    /// `gst_archive_log` row.
+    #[serde(rename = "gst_archive.publish")]
+    GstArchivePublish,
     #[serde(rename = "stock.threshold")]
     StockThreshold,
     /// A chunk of a product CSV import: creates or updates products and records opening stock
@@ -426,7 +430,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 132] = [
+    pub const ALL: [IntentKind; 133] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -495,6 +499,7 @@ impl IntentKind {
         Self::StockExpiryCheck,
         Self::SummaryPublish,
         Self::RollupPublish,
+        Self::GstArchivePublish,
         Self::StockThreshold,
         Self::ImportProducts,
         Self::ImportPlayers,
@@ -632,6 +637,7 @@ impl IntentKind {
             Self::StockExpiryCheck => "stock.expiry_check",
             Self::SummaryPublish => "summary.publish",
             Self::RollupPublish => "rollup.publish",
+            Self::GstArchivePublish => "gst_archive.publish",
             Self::StockThreshold => "stock.threshold",
             Self::ImportProducts => "import.products",
             Self::ImportPlayers => "import.players",
@@ -774,6 +780,7 @@ impl IntentKind {
             | Self::StockExpiryCheck
             | Self::SummaryPublish
             | Self::RollupPublish
+            | Self::GstArchivePublish
             | Self::StockThreshold
             | Self::ImportProducts
             | Self::ImportPlans
@@ -927,9 +934,10 @@ impl IntentKind {
             Self::StockWaste | Self::StockWasteReverted | Self::StockWriteOff => {
                 Requirement::Perm(Permission::StockAdjust)
             }
-            Self::StockExpiryCheck | Self::SummaryPublish | Self::RollupPublish => {
-                Requirement::System
-            }
+            Self::StockExpiryCheck
+            | Self::SummaryPublish
+            | Self::RollupPublish
+            | Self::GstArchivePublish => Requirement::System,
             Self::PlayerCreate
             | Self::ImportPlayers
             | Self::PlayerUpdate
@@ -1075,6 +1083,7 @@ impl IntentKind {
             | Self::StockExpiryCheck
             | Self::SummaryPublish
             | Self::RollupPublish
+            | Self::GstArchivePublish
             | Self::StockThreshold
             | Self::ImportProducts
             | Self::ShiftOpen
@@ -1694,6 +1703,8 @@ pub enum IntentPayload {
     SummaryPublish(crate::SummaryPublish),
     #[serde(rename = "rollup.publish")]
     RollupPublish(crate::RollupPublish),
+    #[serde(rename = "gst_archive.publish")]
+    GstArchivePublish(crate::GstArchivePublish),
     #[serde(rename = "stock.threshold")]
     StockThreshold(crate::StockThreshold),
     #[serde(rename = "import.products")]
@@ -1895,6 +1906,7 @@ impl IntentPayload {
             Self::StockExpiryCheck(_) => IntentKind::StockExpiryCheck,
             Self::SummaryPublish(_) => IntentKind::SummaryPublish,
             Self::RollupPublish(_) => IntentKind::RollupPublish,
+            Self::GstArchivePublish(_) => IntentKind::GstArchivePublish,
             Self::StockThreshold(_) => IntentKind::StockThreshold,
             Self::ImportProducts(_) => IntentKind::ImportProducts,
             Self::ImportPlayers(_) => IntentKind::ImportPlayers,
@@ -2286,7 +2298,8 @@ mod tests {
                 | "drawer.kick_failed"
                 | "stock.expiry_check"
                 | "summary.publish"
-                | "rollup.publish" => Requirement::System,
+                | "rollup.publish"
+                | "gst_archive.publish" => Requirement::System,
                 "settings.set" | "ads.consent" | "printer.status" => {
                     Requirement::Perm(Permission::SettingsEdit)
                 }

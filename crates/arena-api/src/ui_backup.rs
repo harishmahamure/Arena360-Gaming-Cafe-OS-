@@ -447,3 +447,28 @@ pub(crate) async fn restore(
     }
     Json(arena_proto::RestoreStaged { restarting: true }).into_response()
 }
+
+/// `GET /ui/backup/gst-archive` (`report.view`, Story 9.14): the financial years whose GST archive
+/// the Hub has uploaded, newest first, for System -> Backup ("GST archive 26-27 saved"). Reads the
+/// `gst_archive_log` rows only; a Free Hub has none.
+pub(crate) async fn gst_archives(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+    let Some(token) = bearer(&headers).map(str::to_owned) else {
+        return fail(auth_failed());
+    };
+    let me = match auth.acting_session(&token).await {
+        Ok(me) => me,
+        Err(e) => return fail(e),
+    };
+    if !me.permissions.contains(&Permission::ReportView) {
+        return fail(ui_error(AppError::new(
+            ErrorCode::PermissionDenied,
+            "you do not have permission to view the backup",
+        )));
+    }
+    let reader = Arc::clone(auth.reader());
+    match tokio::task::spawn_blocking(move || reader.gst_archives()).await {
+        Ok(Ok(list)) => Json(list).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}

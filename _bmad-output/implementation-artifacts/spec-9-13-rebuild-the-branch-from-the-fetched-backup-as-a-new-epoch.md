@@ -2,7 +2,7 @@
 title: 'Story 9.13: Rebuild the branch from the fetched backup as a new epoch'
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: '3c90ade8d152e80c74d59a8a3085c7429ad862b1'
 review_loop_iteration: 0
 context:
@@ -118,3 +118,9 @@ Judgement calls and risks:
 - `gen:types`, `check:strings`, `check:layers`, `check:protocol`, `format:check`: ok.
 - `pnpm --filter @arena/hub check`: only 2 pre-existing errors in `playwright.kitchen.config.ts` (`process` types), none in touched files.
 - Playwright `restore-pending` and `devices-display`: 51 passed, 1 skipped.
+
+## Review Triage Log (code review)
+
+Fixed: a second start during `Restarting` could clear the staged file; a start right after a cancel was swallowed (now `STEP_NOT_READY`); a cancel during staging was ignored (flag and phase change now decided together, staged file removed); download start/cancel/partial routes are refused while a rebuild runs; kitchen displays now show "Pair again" (`KitchenDisplayView.pair_again`) and revoked displays are not marked; a key listed twice in the key backup no longer aborts the rebuild; `CloudRestoreFacts` rejects empty epochs/dates (test added).
+
+Deferred / not blocking: Restarting screen has no timeout; double batch decode; `percent` shape; extra Hub-level test with real batches and keys. Pre-existing failure unrelated to this story: `arena-replay` `replaying_the_seeded_log_reproduces_branch_and_settings` ("library_entries has no row") also fails at HEAD~1.

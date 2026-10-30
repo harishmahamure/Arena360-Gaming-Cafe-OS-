@@ -478,6 +478,7 @@ pub fn read_snapshot(store: &Store, now_ms: i64) -> Result<HubSnapshot, AppError
         .into_iter()
         .filter(|d| d.revoked_at.is_none())
         .map(|d| arena_proto::KitchenDisplayView {
+            pair_again: d.token_hash == arena_proto::PAIR_AGAIN_TOKEN,
             id: d.id,
             name: d.name,
             connected: false,

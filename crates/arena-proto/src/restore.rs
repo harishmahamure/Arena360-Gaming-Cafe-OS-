@@ -167,12 +167,14 @@ pub struct CloudRestoreFacts {
 
 impl CloudRestoreFacts {
     fn is_consistent(&self) -> bool {
-        self.snapshot_date.as_deref().is_none_or(text_ok)
+        self.snapshot_date
+            .as_deref()
+            .is_none_or(|d| !d.is_empty() && text_ok(d))
             && self
                 .first
                 .iter()
                 .chain(self.last.iter())
-                .all(|p| text_ok(&p.epoch) && p.seq >= 0)
+                .all(|p| !p.epoch.is_empty() && text_ok(&p.epoch) && p.seq >= 0)
             && self.applied >= 0
             && self.orphaned >= 0
             && self.keys_restored >= 0
@@ -306,6 +308,59 @@ mod tests {
                 ..f.clone()
             },
         ] {
+            assert!(!bad.is_consistent(), "{bad:?}");
+            assert_eq!(OpsRestore::parse(&bad.to_json()), None);
+        }
+    }
+
+    #[test]
+    fn the_cloud_facts_are_recorded_and_checked() {
+        let cloud = CloudRestoreFacts {
+            snapshot_date: Some("2027-01-14".into()),
+            first: Some(RestorePosition {
+                epoch: "3:abc".into(),
+                seq: 121,
+            }),
+            last: Some(RestorePosition {
+                epoch: "3:abc".into(),
+                seq: 150,
+            }),
+            batches: 2,
+            applied: 30,
+            orphaned: 2,
+            keys_restored: 4,
+        };
+        let f = OpsRestore {
+            cloud: Some(cloud.clone()),
+            ..facts()
+        };
+        assert!(f.is_consistent());
+        assert_eq!(OpsRestore::parse(&f.to_json()), Some(f.clone()));
+        for bad in [
+            CloudRestoreFacts {
+                applied: -1,
+                ..cloud.clone()
+            },
+            CloudRestoreFacts {
+                orphaned: -1,
+                ..cloud.clone()
+            },
+            CloudRestoreFacts {
+                keys_restored: -1,
+                ..cloud.clone()
+            },
+            CloudRestoreFacts {
+                last: Some(RestorePosition {
+                    epoch: String::new(),
+                    seq: 1,
+                }),
+                ..cloud.clone()
+            },
+        ] {
+            let bad = OpsRestore {
+                cloud: Some(bad),
+                ..f.clone()
+            };
             assert!(!bad.is_consistent(), "{bad:?}");
             assert_eq!(OpsRestore::parse(&bad.to_json()), None);
         }

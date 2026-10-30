@@ -16,6 +16,7 @@
 use std::sync::Arc;
 
 use arena_core::{RestoreFetchControl, RestoreRebuildControl};
+use arena_proto::{ErrorCode, RestoreRebuildPhase, UiError};
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -35,7 +36,25 @@ async fn view(State(c): State<Controls>) -> Response {
     Json(c.fetch.view()).into_response()
 }
 
+/// The download is read by a rebuild that has not failed: it is not changed under it.
+fn rebuild_busy(c: &Controls) -> Option<Response> {
+    c.rebuild
+        .view()
+        .filter(|v| v.phase != RestoreRebuildPhase::Failed)
+        .map(|_| {
+            fail(UiError {
+                code: ErrorCode::StepNotReady,
+                message: "The branch is being rebuilt from this backup.".into(),
+                field: None,
+                retry_after_s: None,
+            })
+        })
+}
+
 async fn start(State(c): State<Controls>) -> Response {
+    if let Some(busy) = rebuild_busy(&c) {
+        return busy;
+    }
     match c.fetch.start() {
         Ok(()) => Json(c.fetch.view()).into_response(),
         Err(e) => fail(e),
@@ -43,11 +62,17 @@ async fn start(State(c): State<Controls>) -> Response {
 }
 
 async fn cancel(State(c): State<Controls>) -> Response {
+    if let Some(busy) = rebuild_busy(&c) {
+        return busy;
+    }
     c.fetch.cancel();
     Json(c.fetch.view()).into_response()
 }
 
 async fn partial(State(c): State<Controls>) -> Response {
+    if let Some(busy) = rebuild_busy(&c) {
+        return busy;
+    }
     match c.fetch.restore_partial() {
         Ok(()) => Json(c.fetch.view()).into_response(),
         Err(e) => fail(e),

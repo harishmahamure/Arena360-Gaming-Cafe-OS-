@@ -308,6 +308,10 @@ pub struct KitchenDisplayView {
     pub high_contrast: bool,
     #[ts(type = "number")]
     pub rev: i64,
+    /// Restored from the cloud backup and not paired with this Hub yet (Story 9.13).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(optional, type = "boolean")]
+    pub pair_again: bool,
 }
 
 /// Whether `name` is a display name the Hub accepts: 1 to 40 printable characters.

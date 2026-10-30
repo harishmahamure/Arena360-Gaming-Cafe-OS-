@@ -13,4 +13,8 @@ export type KitchenDisplayView = {
   last_seen?: number;
   high_contrast: boolean;
   rev: number;
+  /**
+   * Restored from the cloud backup and not paired with this Hub yet (Story 9.13).
+   */
+  pair_again?: boolean;
 };

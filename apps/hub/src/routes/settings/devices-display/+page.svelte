@@ -108,6 +108,7 @@
       label: d.name,
       testId: `hc-row-${d.id}`, // i18n-ignore (a test id)
       kitchen: true,
+      again: d.pair_again === true,
     })),
   ]);
 

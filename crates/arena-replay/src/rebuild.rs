@@ -245,12 +245,15 @@ fn run(
                 .optional()
                 .map_err(db_error)?;
             if live == Some(true) {
-                tx.execute(
-                    "INSERT INTO player_keys (player_id, dek_wrapped) VALUES (?1, ?2)",
-                    rusqlite::params![key.player_id, key.dek_wrapped],
-                )
-                .map_err(db_error)?;
-                kept += 1;
+                // A player listed twice keeps the first key; the repeat is counted as dropped.
+                let added = tx
+                    .execute(
+                        "INSERT OR IGNORE INTO player_keys (player_id, dek_wrapped) VALUES (?1, ?2)",
+                        rusqlite::params![key.player_id, key.dek_wrapped],
+                    )
+                    .map_err(db_error)?;
+                kept += added as i64;
+                dropped += 1 - added as i64;
             } else {
                 dropped += 1;
             }
@@ -276,7 +279,8 @@ fn run(
                  SELECT 'devices', device_id FROM devices
                  WHERE token_hash <> '' AND revoked_at IS NULL;
              INSERT INTO {PAIR_AGAIN_TABLE} (tbl, id)
-                 SELECT 'kitchen_displays', id FROM kitchen_displays WHERE token_hash <> '';"
+                 SELECT 'kitchen_displays', id FROM kitchen_displays
+                 WHERE token_hash <> '' AND revoked_at IS NULL;"
         ))
         .map_err(db_error)?;
         let again: i64 = tx

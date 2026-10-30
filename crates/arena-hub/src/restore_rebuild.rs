@@ -179,8 +179,25 @@ impl Rebuilder {
         let work = i.data_dir.join(REBUILD_FILE);
         match self.rebuild_staged(&staging, &work, cancel) {
             Ok(()) => {
-                self.progress(RestoreRebuildPhase::Restarting, 1, 1);
-                (i.restart)();
+                // The cancel flag and the phase change are decided together: a cancel that got in
+                // before this point unstages the rebuilt file, one after it is too late.
+                let cancelled = {
+                    let mut state = lock(&i.state);
+                    if cancel.load(Ordering::SeqCst) {
+                        state.view = None;
+                        true
+                    } else {
+                        drop(state);
+                        self.progress(RestoreRebuildPhase::Restarting, 1, 1);
+                        false
+                    }
+                };
+                if cancelled {
+                    tracing::info!("restore rebuild: cancelled before the restart");
+                    let _ = std::fs::remove_dir_all(i.data_dir.join(arena_store::PENDING_DIR));
+                } else {
+                    (i.restart)();
+                }
             }
             Err(RebuildStop::Cancelled) => {
                 tracing::info!("restore rebuild: cancelled before the restart");
@@ -313,7 +330,26 @@ impl RestoreRebuildControl for Rebuilder {
     fn start(&self) -> Result<(), UiError> {
         self.check_allowed()?;
         let mut state = lock(&self.inner.state);
+        // Once staged the Hub is restarting: a second start must not clear what was staged.
+        if state
+            .view
+            .as_ref()
+            .is_some_and(|v| v.phase == RestoreRebuildPhase::Restarting)
+        {
+            return Ok(());
+        }
         if state.job.as_ref().is_some_and(|j| !j.is_finished()) {
+            // A start that follows a cancel would be lost when the job stops: say so.
+            if state
+                .cancel
+                .as_ref()
+                .is_some_and(|c| c.load(Ordering::SeqCst))
+            {
+                return Err(refuse(
+                    ErrorCode::StepNotReady,
+                    "The rebuild is still stopping. Try again in a moment.",
+                ));
+            }
             return Ok(());
         }
         let cancel = Arc::new(AtomicBool::new(false));

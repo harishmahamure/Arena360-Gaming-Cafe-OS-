@@ -12,6 +12,7 @@
     newIdempotencyKey,
     submitIntent,
   } from "../../../lib/auth";
+  import BackupPanel from "../../../lib/BackupPanel.svelte";
   import { branchLocale } from "../../../lib/locale.svelte";
   import MediaCachePanel from "../../../lib/MediaCachePanel.svelte";
   import { KEY_BACKUP_DIR, folderLabel, sessionStaff, snapshotOf } from "../../../lib/operating";
@@ -52,6 +53,7 @@
 
   const staff = $derived(sessionStaff(page.data));
   const canEdit = $derived(hasPermission(staff, "settings.edit"));
+  const canExport = $derived(hasPermission(staff, "backup.export"));
   const changed = $derived.by(() => server !== null && path.trim() !== server.value);
   const configured = $derived.by(() => server !== null && server.value !== "");
   const unavailable = $derived(
@@ -191,6 +193,13 @@
     status = null;
     if (!canEdit) approving = true;
     else void pick();
+  }
+
+  /** "Choose location" in the export panel: the picker on Android, else the path field. */
+  function chooseLocation() {
+    if (picker) return choose();
+    input?.scrollIntoView({ block: "center" });
+    input?.focus();
   }
 
   async function approve(pin: string) {
@@ -397,6 +406,7 @@
       </div>
     </form>
   {/if}
+  <BackupPanel {canExport} onchoose={chooseLocation} />
   <MediaCachePanel {canEdit} />
 </section>
 

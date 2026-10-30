@@ -16,6 +16,7 @@ mod coupons;
 mod credit;
 mod dedupe;
 mod devices;
+mod export;
 mod game_plays;
 mod group_bills;
 mod gst;
@@ -116,6 +117,7 @@ pub use devices::{
     set_device_revoked, set_device_state, set_group_deleted, set_zone_deleted, tv_number_taken,
     update_device_meta, update_group, update_zone,
 };
+pub use export::{ExportedFile, write_export};
 pub use game_plays::{
     NewGamePlay, insert_game_play, last_played, session_on_device_at, top_played,
 };

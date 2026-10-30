@@ -414,11 +414,15 @@ pub enum IntentKind {
     /// An ad was asked for, whether or not one came back (system only, like the impression).
     #[serde(rename = "ad.request_recorded")]
     AdRequestRecorded,
+    /// An export of the whole database finished (the Hub records the fact; `backup.export`, or a
+    /// Counter with a manager's PIN). Written only by `POST /ui/backup/export`, after the file exists.
+    #[serde(rename = "backup.export")]
+    BackupExport,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 130] = [
+    pub const ALL: [IntentKind; 131] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -549,6 +553,7 @@ impl IntentKind {
         Self::ControllerCheck,
         Self::AdImpressionRecorded,
         Self::AdRequestRecorded,
+        Self::BackupExport,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -684,6 +689,7 @@ impl IntentKind {
             Self::ControllerCheck => "controller.check",
             Self::AdImpressionRecorded => "ad.impression_recorded",
             Self::AdRequestRecorded => "ad.request_recorded",
+            Self::BackupExport => "backup.export",
         }
     }
 
@@ -706,7 +712,8 @@ impl IntentKind {
             | Self::LibraryDismiss
             | Self::LibraryDismissClear
             | Self::AdImpressionRecorded
-            | Self::AdRequestRecorded => IntentCategory::Settings,
+            | Self::AdRequestRecorded
+            | Self::BackupExport => IntentCategory::Settings,
             Self::DeviceRegister
             | Self::DeviceRevoke
             | Self::DeviceVersionReported
@@ -832,6 +839,7 @@ impl IntentKind {
     pub fn requirement(self) -> Requirement {
         match self {
             Self::BranchBootstrap | Self::BranchSeedDefaults => Requirement::System,
+            Self::BackupExport => Requirement::Perm(Permission::BackupExport),
             Self::SettingsSet | Self::AdsConsent | Self::PrinterStatus => {
                 Requirement::Perm(Permission::SettingsEdit)
             }
@@ -1019,6 +1027,7 @@ impl IntentKind {
             | Self::LicenceApply
             | Self::AdImpressionRecorded
             | Self::AdRequestRecorded
+            | Self::BackupExport
             | Self::ZoneUpsert
             | Self::ZoneDelete
             | Self::DevicePlace
@@ -1800,6 +1809,8 @@ pub enum IntentPayload {
     AdImpressionRecorded(crate::AdImpressionRecorded),
     #[serde(rename = "ad.request_recorded")]
     AdRequestRecorded(crate::AdRequestRecorded),
+    #[serde(rename = "backup.export")]
+    BackupExport(crate::BackupExport),
 }
 
 impl IntentPayload {
@@ -1935,6 +1946,7 @@ impl IntentPayload {
             Self::ControllerCheck(_) => IntentKind::ControllerCheck,
             Self::AdImpressionRecorded(_) => IntentKind::AdImpressionRecorded,
             Self::AdRequestRecorded(_) => IntentKind::AdRequestRecorded,
+            Self::BackupExport(_) => IntentKind::BackupExport,
         }
     }
 }
@@ -2017,7 +2029,6 @@ mod tests {
         Permission::StockOverride,
         Permission::ShiftOverrideVariance,
         Permission::DevicePair,
-        Permission::BackupExport,
         Permission::OpsPromote,
         Permission::OpsRestore,
         Permission::AuditView,
@@ -2331,6 +2342,7 @@ mod tests {
                 | "receipt.reprint"
                 | "order.line_cancel" => Requirement::Perm(Permission::PosSell),
                 "order.void" => Requirement::Perm(Permission::PosVoid),
+                "backup.export" => Requirement::Perm(Permission::BackupExport),
                 "kitchen.advance" | "kitchen.advance.reverted" | "kot.reprint" => {
                     Requirement::Perm(Permission::KitchenUse)
                 }

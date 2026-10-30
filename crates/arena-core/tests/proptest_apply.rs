@@ -524,6 +524,14 @@ enum Op {
     DeactivateRefused {
         pick: u8,
     },
+    /// `backup.export` (Story 9.4) by the Owner, a Manager or a Counter, with sound or implausible
+    /// facts: a Counter is refused, bad facts are refused, and a good record by an Owner or Manager
+    /// sets `backup.last_export` to exactly those facts with one change row.
+    BackupExport {
+        by: u8,
+        bad: bool,
+        seq: i64,
+    },
     /// A controller check of a session that may be running, on a PC, ended or already marked: it
     /// applies once for an ended console session and otherwise writes nothing.
     ControllerCheck {
@@ -976,6 +984,8 @@ fn op() -> impl Strategy<Value = Op> {
         2 => (0..3u8, prop::bool::ANY).prop_map(|(slot, undo)| Op::ForceEnd { slot, undo }),
         2 => (0..4u8, prop::bool::ANY).prop_map(|(slot, missing)| Op::ControllerCheck { slot, missing }),
         1 => (0..4u8).prop_map(|pick| Op::DeactivateRefused { pick }),
+        2 => (0..3u8, prop::bool::weighted(0.3), 0..=1_000_000i64)
+            .prop_map(|(by, bad, seq)| Op::BackupExport { by, bad, seq }),
         3 => (
             0..4u8,
             prop::bool::ANY,
@@ -6149,6 +6159,49 @@ b"
             let out = hub.submit_new(intent);
             prop_assert_eq!(code(&out).map(|c| c.0), Some(want), "{:?}", out);
             prop_assert_eq!(hub.change_count(), before);
+        }
+        Op::BackupExport { by, bad, seq } => {
+            let Some(who) = hub.staff.get(usize::from(*by)).cloned() else {
+                return Ok(());
+            };
+            let facts = arena_proto::BackupExport {
+                file_name: if *bad {
+                    "../escape.a360".into()
+                } else {
+                    "DEV01-2027-01-15-1330.a360".into()
+                },
+                bytes: 1024,
+                epoch: "1:proptest".into(),
+                last_seq: *seq,
+                exported_at: hub.clock_now(),
+            };
+            let before = hub.change_count();
+            let was = hub.setting("backup.last_export");
+            let mut intent = hub.intent(IntentPayload::BackupExport(facts.clone()), None);
+            intent.actor = Actor {
+                kind: ActorKind::Staff,
+                id: who,
+            };
+            let out = hub.submit_new(intent);
+            let counter = *by == 2;
+            if counter {
+                prop_assert_eq!(code(&out).map(|c| c.0), Some(ErrorCode::PermissionDenied));
+            } else if *bad {
+                prop_assert_eq!(
+                    code(&out),
+                    Some((ErrorCode::ValidationFailed, Some("file_name")))
+                );
+            } else {
+                prop_assert!(out.is_ok(), "{:?}", out);
+            }
+            if out.is_ok() {
+                prop_assert_eq!(hub.change_count(), before + 1);
+                let stored = hub.setting("backup.last_export").unwrap();
+                prop_assert_eq!(stored["value"].clone(), RowValue::Text(facts.to_json()));
+            } else {
+                prop_assert_eq!(hub.change_count(), before);
+                prop_assert_eq!(hub.setting("backup.last_export"), was);
+            }
         }
         Op::ControllerCheck { slot, missing } => {
             let Some(session) = hub

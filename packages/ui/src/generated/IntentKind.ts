@@ -133,4 +133,5 @@ export type IntentKind =
   | "alert.ack"
   | "controller.check"
   | "ad.impression_recorded"
-  | "ad.request_recorded";
+  | "ad.request_recorded"
+  | "backup.export";

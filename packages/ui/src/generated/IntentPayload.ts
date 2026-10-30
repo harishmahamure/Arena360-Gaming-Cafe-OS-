@@ -5,6 +5,7 @@ import type { AdsConsentSet } from "./AdsConsentSet";
 import type { AlertAck } from "./AlertAck";
 import type { AlertRaise } from "./AlertRaise";
 import type { AuditReadGranted } from "./AuditReadGranted";
+import type { BackupExport } from "./BackupExport";
 import type { BranchBootstrap } from "./BranchBootstrap";
 import type { BranchSeedDefaults } from "./BranchSeedDefaults";
 import type { CashDeposit } from "./CashDeposit";
@@ -261,4 +262,5 @@ export type IntentPayload =
   | ({ kind: "alert.ack" } & AlertAck)
   | ({ kind: "controller.check" } & ControllerCheck)
   | ({ kind: "ad.impression_recorded" } & AdImpressionRecorded)
-  | ({ kind: "ad.request_recorded" } & AdRequestRecorded);
+  | ({ kind: "ad.request_recorded" } & AdRequestRecorded)
+  | ({ kind: "backup.export" } & BackupExport);

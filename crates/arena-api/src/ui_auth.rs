@@ -412,6 +412,8 @@ pub struct UiAuth {
     backup_folder: Option<Arc<dyn arena_core::setup::BackupFolder>>,
     printer: Option<Arc<dyn arena_core::printer::Printer>>,
     printer_find: tokio::sync::Mutex<()>,
+    /// One export of the database at a time (Story 9.4).
+    export_lock: tokio::sync::Mutex<()>,
     printer_jobs: Arc<arena_core::printer::PrinterJobs>,
     pairing: Option<Arc<crate::pairing::Pairing>>,
     /// The kitchen display code (Story 7.6), owned by the issuing staff id.
@@ -469,6 +471,7 @@ impl UiAuth {
             backup_folder: None,
             printer: None,
             printer_find: tokio::sync::Mutex::new(()),
+            export_lock: tokio::sync::Mutex::new(()),
             printer_jobs: Arc::default(),
             pairing: None,
             kds_pairing: None,
@@ -503,6 +506,10 @@ impl UiAuth {
 
     pub(crate) fn printer(&self) -> Option<&Arc<dyn arena_core::printer::Printer>> {
         self.printer.as_ref()
+    }
+
+    pub(crate) fn export_lock(&self) -> &tokio::sync::Mutex<()> {
+        &self.export_lock
     }
 
     pub(crate) fn printer_find_lock(&self) -> &tokio::sync::Mutex<()> {
@@ -632,6 +639,37 @@ impl UiAuth {
                 Err(ui_error(arena_core::setup::backup_dir_error(
                     arena_proto::BackupDirProblem::NotWritable,
                 )))
+            }
+        }
+    }
+
+    /// Checks, within the probe timeout, that an export can be written to `folder`: set, a path
+    /// (an Android tree URI is `unsupported`: the folder bridge has no write call yet), and a
+    /// writable directory. `VALIDATION_FAILED` on `folder` with the reason.
+    pub(crate) async fn probe_export_folder(&self, folder: &str) -> Result<(), UiError> {
+        let bad = |reason: &str| {
+            ui_error(AppError::with_field(
+                ErrorCode::ValidationFailed,
+                "folder",
+                reason,
+            ))
+        };
+        if folder.trim().is_empty() {
+            return Err(bad("not_set"));
+        }
+        if arena_proto::is_backup_tree_uri(folder) {
+            return Err(bad("unsupported"));
+        }
+        let probe = Arc::clone(&self.backup_probe);
+        let path = std::path::PathBuf::from(folder);
+        let job = tokio::task::spawn_blocking(move || probe(&path));
+        match tokio::time::timeout(self.backup_probe_timeout, job).await {
+            Ok(Ok(Ok(()))) => Ok(()),
+            Ok(Ok(Err(problem))) => Err(bad(problem.as_str())),
+            Ok(Err(_)) => Err(internal()),
+            Err(_) => {
+                tracing::warn!("the export folder probe timed out");
+                Err(bad(arena_proto::BackupDirProblem::NotWritable.as_str()))
             }
         }
     }
@@ -1760,6 +1798,34 @@ fn item_key(intent: &arena_proto::Intent) -> Option<&str> {
 }
 
 impl UiAuth {
+    /// Whether `ticket` would be redeemed for an intent of `kind` by `requester` in the session
+    /// `token` (it exists, has not lapsed, is this session's and has an unused matching item),
+    /// without spending it: `PIN_REQUIRED` otherwise. For a route that does work before it submits
+    /// the intent and must not do it for an approval that cannot be redeemed.
+    pub(crate) fn check_ticket(
+        &self,
+        ticket: &str,
+        token: &str,
+        requester: &str,
+        kind: IntentKind,
+    ) -> Result<(), UiError> {
+        let now = self.clock.now_ms();
+        let tickets = self.tickets.lock().map_err(|_| internal())?;
+        let usable = tickets.get(ticket).is_some_and(|t| {
+            t.expires_at > now
+                && t.session == token
+                && t.requester == requester
+                && t.items.iter().any(|(item, used)| {
+                    !used && item.intent_kind == Some(kind) && item.key.is_none()
+                })
+        });
+        if usable {
+            Ok(())
+        } else {
+            Err(ui_error(pin_required()))
+        }
+    }
+
     /// Redeems the first unused approved item of `ticket` that matches `intent` (its kind and,
     /// for `settings.set`, its key) in the session `token`: the `elevated_by` it stands for and
     /// the item's index (so the use can be given back, [`refund`](Self::refund)). Unknown,
@@ -2064,10 +2130,16 @@ async fn intent(
             "the printer status is recorded by a test print or by skipping the printer",
         )));
     }
+    if matches!(intent.payload, arena_proto::IntentPayload::BackupExport(_)) {
+        return fail(ui_error(AppError::new(
+            ErrorCode::Unsupported,
+            "an export is made from Settings → System, which records it",
+        )));
+    }
     run_intent(&auth, &token, &me, intent, elevation_ticket).await
 }
 
-async fn run_intent(
+pub(crate) async fn run_intent(
     auth: &Arc<UiAuth>,
     token: &str,
     me: &SessionStaff,
@@ -3535,6 +3607,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
             "/ui/discount/preview",
             post(crate::ui_coupons::discount_preview),
         )
+        .route("/ui/backup/export", post(crate::ui_backup::export))
         .route("/ui/printer/find", post(crate::ui_printer::find))
         .route("/ui/printer/health", get(crate::ui_printer::health))
         .route("/ui/printer/ready", get(crate::ui_printer::ready))

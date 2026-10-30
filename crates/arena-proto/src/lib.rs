@@ -12,6 +12,7 @@ mod attract;
 mod audit;
 mod audit_build;
 mod audit_query;
+mod backup_export;
 mod billing;
 mod booster;
 mod catalog;
@@ -119,6 +120,11 @@ pub use audit_build::{
 };
 pub use audit_query::{
     AUDIT_LOCAL_CACHE_BYTES, AUDIT_QUERY_PAGE, AuditQueryKind, AuditSearch, AuditSearchPage,
+};
+pub use backup_export::{
+    BackupExport, DEFAULT_BACKUP_LAST_EXPORT, EXPORT_EXTENSION, EXPORT_FORMAT_VERSION,
+    EXPORT_MAGIC, ExportFormatError, ExportHeader, KEY_BACKUP_LAST_EXPORT,
+    MAX_EXPORT_FILE_NAME_CHARS, MAX_EXPORT_HEADER_BYTES, export_file_name,
 };
 pub use billing::{
     BILLING_GRACE_RANGE, BILLING_LOW_BALANCE_MAX_MINOR, BILLING_MINIMUM_RANGE,

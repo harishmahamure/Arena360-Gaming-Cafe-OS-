@@ -1824,6 +1824,46 @@ impl SnapshotReader {
         arena_store::build_snapshot_file(&path, dir, date)
     }
 
+    /// Exports the whole database into `folder` as `<branch_code>-<yyyy-mm-dd-hhmm>.a360`, the
+    /// time in the branch zone (Story 9.4): the file and the facts to record with `backup.export`.
+    /// `VALIDATION_FAILED` on `folder` says why the location cannot take it (`not_set`,
+    /// `unsupported` for a platform folder URI, `not_found`, `not_dir`, `not_writable`). The copy
+    /// is made on a connection of its own, so the shared reader is only held to read the branch
+    /// and the zone, and `apply()` is never blocked. Blocking (disk).
+    pub fn export_to_folder(
+        &self,
+        folder: &str,
+        now_ms: i64,
+    ) -> Result<(arena_proto::BackupExport, std::path::PathBuf), AppError> {
+        let bad =
+            |reason: &str| AppError::with_field(ErrorCode::ValidationFailed, "folder", reason);
+        if folder.trim().is_empty() {
+            return Err(bad("not_set"));
+        }
+        if arena_proto::is_backup_tree_uri(folder) {
+            return Err(bad("unsupported"));
+        }
+        let branch = self
+            .branch()?
+            .ok_or_else(|| AppError::new(ErrorCode::Internal, "the branch is not set up"))?;
+        let tz = self
+            .locale(now_ms)?
+            .map_or_else(|| "UTC".to_owned(), |l| l.tz);
+        let file_name = arena_proto::export_file_name(&branch.branch_code, now_ms, &tz);
+        let db = self.db_path()?;
+        let done = arena_store::write_export(&db, Path::new(folder), &file_name, now_ms)?;
+        Ok((
+            arena_proto::BackupExport {
+                file_name,
+                bytes: i64::try_from(done.bytes).unwrap_or(i64::MAX),
+                epoch: done.header.epoch,
+                last_seq: done.header.last_seq,
+                exported_at: now_ms,
+            },
+            done.path,
+        ))
+    }
+
     /// The next change-log batch to upload (Story 8.2): up to `limit` rows of one epoch after the
     /// upload cursor, `None` when everything is uploaded. Blocking (SQLite).
     pub fn pending_batch(

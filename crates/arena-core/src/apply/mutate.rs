@@ -167,6 +167,10 @@ pub(super) fn mutate(
             Target::Setting(row) => super::printer_status::mutate(tx, intent, p, row.as_ref()),
             _ => Err(mismatch()),
         },
+        IntentPayload::BackupExport(p) => match target {
+            Target::Setting(row) => super::backup_export::mutate(tx, p, row.as_ref()),
+            _ => Err(mismatch()),
+        },
         IntentPayload::DeviceRegister(d) => match target {
             Target::RegisterEdit(t) => devices::mutate_edit(tx, d, t),
             Target::NewDevice(t) => devices::mutate_register(tx, d, t),

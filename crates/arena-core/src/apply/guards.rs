@@ -419,7 +419,11 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
     match target {
         Target::None => Ok(()),
         Target::Setting(_)
-            if matches!(intent.payload, arena_proto::IntentPayload::PrinterStatus(_)) =>
+            if matches!(
+                intent.payload,
+                arena_proto::IntentPayload::PrinterStatus(_)
+                    | arena_proto::IntentPayload::BackupExport(_)
+            ) =>
         {
             Ok(())
         }

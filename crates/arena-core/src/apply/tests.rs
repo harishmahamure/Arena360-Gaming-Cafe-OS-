@@ -21,6 +21,7 @@ use crate::writer::{Writer, WriterHandle};
 mod ad_metrics;
 mod alert;
 mod attract;
+mod backup_export;
 mod cash_moves;
 mod commands;
 mod console;

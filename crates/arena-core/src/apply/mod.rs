@@ -26,6 +26,7 @@ mod ad;
 mod admin_exit;
 mod ads_consent;
 mod alert;
+mod backup_export;
 mod branch_code;
 mod business_invoice;
 mod changes;
@@ -283,6 +284,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         },
         P::AdsConsent(_) => Target::Setting(ads_consent::load(tx)?),
         P::PrinterStatus(_) => Target::Setting(printer_status::load(tx)?),
+        P::BackupExport(_) => Target::Setting(backup_export::load(tx)?),
         P::DeviceRegister(d) => devices::load_register(tx, d)?,
         P::DeviceRevoke(d) => devices::load_device(tx, &d.device_id)?,
         P::DeviceVersionReported(d) => devices::load_device(tx, &d.device_id)?,

@@ -60,6 +60,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Setting(row) => super::printer_status::validate(intent, p, row.as_ref()),
             _ => Err(internal_target()),
         },
+        IntentPayload::BackupExport(p) => match target {
+            Target::Setting(row) => super::backup_export::validate(intent, p, row.as_ref()),
+            _ => Err(internal_target()),
+        },
         IntentPayload::DeviceRegister(d) => match target {
             Target::NewDevice(t) => devices::validate_register(intent, d, t),
             Target::RegisterEdit(t) => devices::validate_edit(intent, d, t),

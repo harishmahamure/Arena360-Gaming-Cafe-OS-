@@ -8,6 +8,9 @@ pub mod pairing;
 mod ui_ads;
 pub mod ui_audit;
 pub mod ui_auth;
+mod ui_backup;
+#[cfg(test)]
+mod ui_backup_tests;
 mod ui_coupons;
 pub mod ui_events;
 mod ui_import;

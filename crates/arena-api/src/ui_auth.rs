@@ -1880,8 +1880,13 @@ impl UiAuth {
                 Ok(owner)
             }
             Ok(Ok(Some((_, false)))) => {
-                settle(Some(true));
-                Err(ui_error(arena_core::rbac::denied()))
+                // Their own right PIN must not reset the lockout, or alternating it with guesses
+                // at the Owner's PIN would never pause them.
+                let paused = settle(Some(false));
+                Err(match paused {
+                    Some(retry) => locked(retry),
+                    None => ui_error(arena_core::rbac::denied()),
+                })
             }
             Ok(Ok(None)) => {
                 let paused = settle(Some(false));

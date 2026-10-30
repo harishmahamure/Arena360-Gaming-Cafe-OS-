@@ -2,7 +2,7 @@
 title: 'Story 9.7: Restore a branch from an export file as a new epoch'
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 baseline_revision: '5d8d176b3975bc20fc85e21b4b98ba71c8ebd2c7'
 review_loop_iteration: 0
 context:
@@ -108,3 +108,12 @@ Judgement calls and risks:
 - The restored database keeps this Hub's pairing identity, licence cache and device/kitchen token hashes from the replaced database, so kiosks reconnect.
 - Cloud key-backup erasure re-apply is left to Story 9.13. Android answers `UNSUPPORTED`.
 - Playwright `audit.spec.ts` "filters combine, dates are branch days" failed once on a date boundary; not touched by this story and not confirmed against baseline.
+
+## Code Review Result
+
+Status: done. Fixed in review:
+- `ulid_like` produced ids whose first character could exceed `7`, so about half of all restores failed the ULID check and `ops.restore` was never recorded (the Hub restore test was flaky for this reason). The first character is now clamped; a unit test covers it.
+- `restore_owner`: a non-Owner's own correct PIN reset the elevate lockout, so alternating it with guesses at the Owner PIN avoided the pause. It now counts as a failed attempt.
+- `stage_export` deleted the source file when the Owner typed the path of the already staged `restore-pending/restore.a360`; it is now refused (`path`/`not_readable`) and the earlier staging is kept.
+
+Deferred (not blocking): crash between the two renames of the swap leaves no `branch.db` (data is in `orphaned/` and the original export); `epoch.changed` is not announced for a restore applied at start (UIs reconnect after the restart); a failed apply at start is only logged; relaunch and supervisor double-start untested; disk-full during unpack reports `RESTORE_CORRUPT`.

@@ -238,6 +238,12 @@ pub fn stage_export(
 ) -> Result<Inspection, AppError> {
     let inspection = inspect_export(db_path, file)?;
     let dir = data_dir(db_path).join(PENDING_DIR);
+    // A file already in the pending folder would be deleted before it is copied.
+    if let (Ok(src), Ok(pending)) = (file.canonicalize(), dir.canonicalize())
+        && src.starts_with(&pending)
+    {
+        return Err(path_problem("not_readable"));
+    }
     clear_dir(&dir);
     fs::create_dir_all(&dir).map_err(|e| internal("create the restore folder", &e))?;
     let staged = (|| -> Result<(), AppError> {
@@ -636,7 +642,12 @@ fn ulid_like(now_ms: i64, epoch: &str) -> String {
     let mut h = Sha256::new();
     h.update(now_ms.to_be_bytes());
     h.update(epoch.as_bytes());
-    hex(&h.finalize())[..26].to_ascii_uppercase()
+    let mut id = hex(&h.finalize())[..26].to_ascii_uppercase();
+    // A ULID's first character is at most `7` (its 48-bit time field must not overflow).
+    let first = id.as_bytes()[0];
+    let first = u8::try_from(char::from(first).to_digit(16).unwrap_or(0) & 7).unwrap_or(0);
+    id.replace_range(..1, &first.to_string());
+    id
 }
 
 /// Applies a staged restore, if there is one, before the Hub opens its database. `Ok(None)` when
@@ -1013,6 +1024,32 @@ mod tests {
         );
         // The live database is untouched until the next start.
         assert_eq!(count(&b.db, "SELECT COUNT(*) FROM changes"), 8);
+    }
+
+    #[test]
+    fn the_ids_of_a_restore_are_always_valid_ulids() {
+        for now in 0..400 {
+            let id = ulid_like(now, "2:HUBA");
+            assert_eq!(id.len(), 26);
+            assert!(id.as_bytes()[0] <= b'7', "{id}");
+            assert!(
+                id.bytes()
+                    .all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b)),
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_staged_file_itself_cannot_be_staged_again() {
+        let b = branch();
+        stage_export(&b.db, &b.file, "owner-1").unwrap();
+        let staged = data_dir(&b.db).join(PENDING_DIR).join("restore.a360");
+        let e = stage_export(&b.db, &staged, "owner-1").unwrap_err();
+        assert_eq!(e.code, ErrorCode::ValidationFailed);
+        // The earlier staging survives the refusal.
+        assert!(has_pending(&b.db));
+        assert!(staged.is_file());
     }
 
     #[test]

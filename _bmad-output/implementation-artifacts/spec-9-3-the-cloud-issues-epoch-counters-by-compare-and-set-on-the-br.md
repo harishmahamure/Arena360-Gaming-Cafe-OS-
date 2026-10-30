@@ -2,7 +2,7 @@
 title: 'Story 9.3: The cloud issues epoch counters by compare-and-set on the branch fence'
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 baseline_commit: '23197aaf90dc003b2e85ea6dbcddcaac4d1f89f1'
 baseline_revision: '23197aaf90dc003b2e85ea6dbcddcaac4d1f89f1'
 review_loop_iteration: 0
@@ -97,8 +97,12 @@ deferred: []
 
 ## Auto Run Result
 
-Status: in-review
+Status: done
 
 Implemented per spec. Failures seen that are not from this story (they are on the 9.2 baseline list): `arena-tasks` `heartbeat::tests::trusted_time_is_cloud_time_plus_monotonic_elapsed` and `printer::lan::tests::a_printer_that_stops_reading_times_out`; `arena-cloud` `backup` `a_hung_run_times_out_with_its_own_code` and `binary` `unreachable_at_start_retries_then_exits_1_without_logging_the_token`.
 
 Judgement calls: a Hub demotes when unconfirmed and the fence counter is at least its own (the matrix row `2:B` vs `2:A`), so two Hubs never serve one counter; a claim before any heartbeat gets `FENCED` with no epoch; a heartbeat advance without `fork_seq` re-queues only `fetched` commands. Claims are rate-limited to 60 an hour per branch. Nothing calls `claim_fence` yet (promote and restore are Stories 9.7 and 9.21), and no LAN epoch is read yet; `note_epoch_seen` is the call for it.
+
+## Review Result
+
+Code review (2026-10-30): no blocking findings. Clippy clean, check scripts clean; tests pass except the baseline failures listed above (`proptest_apply` failed once under load and passes alone). Minor, not blocking: a claim does not check `fork.parent_epoch` against `expected`.

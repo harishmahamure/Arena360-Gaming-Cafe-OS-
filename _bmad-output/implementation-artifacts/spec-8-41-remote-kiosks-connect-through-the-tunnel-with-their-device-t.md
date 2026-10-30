@@ -2,7 +2,7 @@
 title: 'Story 8.41: Remote kiosks connect through the Tunnel with their device token'
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 0
 followup_review_recommended: true
 context:
@@ -70,6 +70,8 @@ deferred: []
 
 ## Review Triage Log
 
+Code review (2026-10-30): no blocking findings. fmt, clippy and the tests (`remote_device`, `live_view`, proto, core, kiosk-core, api lib, kiosk-svc discovery) pass. Noted, not blocking: with no `CF-Connecting-IP` from the connector, remote devices share the loopback limiter key.
+
 ## Design Notes
 
 **TLS pinning (deviation).** The AC says "TLS pinned to the Hub certificate". Through a Cloudflare Tunnel the TLS ends at Cloudflare's edge, so the Hub certificate is never presented to the kiosk. The remote kiosk verifies the web PKI for the tunnel hostname and the Hub verifies the device token; the Hub fingerprint is still returned by `POST /pair` and stored. Real end-to-end pinning would need an inner TLS inside the WebSocket and is not done here.
@@ -86,7 +88,7 @@ deferred: []
 
 ## Auto Run Result
 
-Status: in-review
+Status: done
 
 Implemented as above. Known failures not from this story (also failing on a clean tree): `arena-cloud --test backup a_hung_run_times_out_with_its_own_code`, 14 `arena-kiosk-svc --lib` Windows lockdown/pipe/DPAPI tests, `arena-kiosk-svc` test-target clippy, `arena-e2e` (Unix-only), hub `svelte-check` (`playwright.kitchen.config.ts`).
 

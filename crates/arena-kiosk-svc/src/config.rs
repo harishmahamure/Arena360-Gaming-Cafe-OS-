@@ -42,7 +42,13 @@ fn default_player_user() -> String {
 }
 
 impl KioskConfig {
-    /// The Hub URL: always `wss://` (pinned TLS, no plain fallback).
+    /// Whether the Hub is reached through its branch tunnel hostname (Story 8.41): then the TLS
+    /// is Cloudflare's and the device token is the credential, with no certificate to pin.
+    pub fn remote(&self) -> bool {
+        crate::discovery::is_remote_addr(&self.hub_addr)
+    }
+
+    /// The Hub URL: always `wss://` (pinned TLS, or the tunnel's; no plain fallback).
     pub fn hub_url(&self) -> String {
         format!("wss://{}/", self.hub_addr)
     }

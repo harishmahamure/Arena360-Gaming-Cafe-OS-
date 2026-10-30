@@ -397,7 +397,8 @@ async fn the_tunnel_is_the_only_way_in_for_a_live_viewer() {
     let frame = recv(&mut ws).await.unwrap();
     assert_eq!(code_of(&frame), ErrorCode::Forbidden);
 
-    // And the tunnel serves a live viewer only: a paired hello there is refused.
+    // The tunnel takes a live viewer or a paired device with its token: a paired hello with a
+    // bad token, and any browser class, is refused `TOKEN_INVALID` (Story 8.41).
     let mut ws = hub.connect().await;
     let paired = Frame::new(
         "h",
@@ -411,7 +412,10 @@ async fn the_tunnel_is_the_only_way_in_for_a_live_viewer() {
         }),
     );
     send(&mut ws, &paired).await;
-    assert_eq!(code_of(&recv(&mut ws).await.unwrap()), ErrorCode::Forbidden);
+    assert_eq!(
+        code_of(&recv(&mut ws).await.unwrap()),
+        ErrorCode::TokenInvalid
+    );
 
     // The tunnel listener answers its WebSocket at `/live` or `/` and nothing else.
     let tcp = TcpStream::connect(hub.tunnel).await.unwrap();

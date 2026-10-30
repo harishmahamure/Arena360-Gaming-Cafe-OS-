@@ -12,6 +12,7 @@ serde_json.workspace = true
 sha2.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true
+webpki-roots.workspace = true
 tokio-tungstenite.workspace = true
 futures-util.workspace = true
 tokio = { workspace = true, features = ["net", "io-util"] }
@@ -20,4 +21,4 @@ serde.workspace = true
 
 [dev-dependencies]
 rcgen.workspace = true
-tokio = { workspace = true, features = ["net", "test-util"] }
+tokio = { workspace = true, features = ["net", "test-util", "macros", "rt"] }

@@ -28,6 +28,10 @@
   let floor: LiveFloor | null = $state(null);
   let receivedAt = $state(0);
   let now = $state(Date.now());
+
+  /** The tile's second line: who is playing, then "Remote" for a device outside the café network. */
+  const remoteNote = (who: string | undefined, remote: boolean | undefined) =>
+    [who, remote ? t("hub.floor.remote") : undefined].filter(Boolean).join(" · ") || undefined;
   let connection: LiveConnection | null = null;
   // Each start gets a number; an answer for an older start is dropped.
   let ticket = 0;
@@ -160,7 +164,7 @@
                   label={v.label}
                   time={v.time}
                   warning={v.warning}
-                  secondary={v.who}
+                  secondary={remoteNote(v.who, tile.remote)}
                   tabindex={-1}
                 />
               </li>

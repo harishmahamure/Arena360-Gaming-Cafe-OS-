@@ -34,6 +34,7 @@ const floorNow = (): LiveFloor => ({
       },
     },
     { device_id: "d4", label: "PC 4", state: "offline" },
+    { device_id: "d5", label: "PC 5", state: "online", remote: true },
   ],
 });
 
@@ -103,6 +104,8 @@ test("the floor shows read-only tiles by zone, live, with the player id or Guest
   await expect(tile("d3")).toContainText(/0:0[45]:\d\d/);
   await expect(tile("d2")).toContainText(t("ui.status.free"));
   await expect(tile("d4")).toContainText(t("ui.status.offline"));
+  await expect(tile("d5")).toContainText(t("hub.floor.remote"));
+  await expect(tile("d2")).not.toContainText(t("hub.floor.remote"));
   await expect(page.getByTestId("live-age")).toContainText(t("owner.live.live"));
   // Read only: no buttons on a tile, and nothing but the hello was sent.
   await expect(page.locator("[data-device] button")).toHaveCount(0);

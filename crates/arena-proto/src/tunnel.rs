@@ -26,6 +26,24 @@ pub fn tunnel_hostname(branch_id: &str) -> String {
     format!("{branch_id}.{TUNNEL_DOMAIN}")
 }
 
+/// The tunnel hostname `text` names, lowercased: `<branch>.tunnel.arena360.cloud`, optionally
+/// with `:443`. `None` for anything else (an IP address, another domain, a scheme or a path), so
+/// a kiosk only ever treats an address under the branch tunnel domain as remote (Story 8.41).
+pub fn parse_tunnel_host(text: &str) -> Option<String> {
+    let text = text.trim();
+    let host = text
+        .strip_suffix(":443")
+        .unwrap_or(text)
+        .to_ascii_lowercase();
+    let label = host.strip_suffix(&format!(".{TUNNEL_DOMAIN}"))?;
+    let ok = !label.is_empty()
+        && label.len() <= 63
+        && label
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    ok.then_some(host)
+}
+
 /// What the cloud tells the Hub to do about its tunnel, in every heartbeat answer of a Free or
 /// paid branch.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -134,6 +152,41 @@ mod tests {
             "01JBRANCH.tunnel.arena360.cloud"
         );
         assert_eq!(TUNNEL_ORIGIN, "http://127.0.0.1:7403");
+    }
+
+    #[test]
+    fn only_an_address_under_the_tunnel_domain_is_a_tunnel_host() {
+        for (text, host) in [
+            (
+                "01JBRANCH.tunnel.arena360.cloud",
+                Some("01jbranch.tunnel.arena360.cloud"),
+            ),
+            (
+                " 01jbranch.TUNNEL.arena360.cloud:443 ",
+                Some("01jbranch.tunnel.arena360.cloud"),
+            ),
+            (
+                "a-b.tunnel.arena360.cloud",
+                Some("a-b.tunnel.arena360.cloud"),
+            ),
+        ] {
+            assert_eq!(parse_tunnel_host(text).as_deref(), host, "{text}");
+        }
+        for text in [
+            "",
+            "192.168.1.5",
+            "tunnel.arena360.cloud",
+            ".tunnel.arena360.cloud",
+            "a.b.tunnel.arena360.cloud",
+            "evil.example.com",
+            "x.tunnel.arena360.cloud.evil.com",
+            "https://x.tunnel.arena360.cloud",
+            "x.tunnel.arena360.cloud/pair",
+            "x.tunnel.arena360.cloud:8443",
+            "x_y.tunnel.arena360.cloud",
+        ] {
+            assert_eq!(parse_tunnel_host(text), None, "{text}");
+        }
     }
 
     #[test]

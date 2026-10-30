@@ -38,6 +38,7 @@ type Hub = {
   now: () => number;
   fail: number;
   hold: Promise<void> | null;
+  tunnel: { state: string; hostname?: string };
 };
 
 function newHub(): Hub {
@@ -81,6 +82,7 @@ function newHub(): Hub {
     now: () => T0,
     fail: 0,
     hold: null,
+    tunnel: { state: "on", hostname: "01JBRANCH.tunnel.arena360.cloud" },
   };
 }
 
@@ -169,6 +171,8 @@ async function stub(page: Page, hub: Hub, token: string) {
         const code = hub.codes[hub.issued++ % hub.codes.length];
         return json(route, 200, { code, expires_at: hub.now() + TEN_MIN });
       }
+      case "/ui/tunnel":
+        return json(route, 200, hub.tunnel);
       case "/ui/pairing-code/discard":
         hub.discarded++;
         return route.fulfill({ status: 204, headers: CORS });
@@ -402,5 +406,32 @@ test("a missed renewal is fetched 2 s after expiry, announced, and a failure bac
   await expect(page.getByTestId("pair-code")).toHaveText("654 321");
   await expect(page.getByTestId("pair-announce")).toHaveText(
     en["hub.settings.devices_display.pair_renewed"].replace("{code}", "654 321"),
+  );
+});
+
+test("Remote device shows the tunnel address on the code screen, or says the tunnel is off", async ({
+  page,
+}) => {
+  const hub = newHub();
+  await stub(page, hub, "manager-token");
+  await page.goto("/settings/devices-display");
+  await pairButton(page).click();
+  await expect(page.getByTestId("pair-code")).toHaveText("123 456");
+  await expect(page.getByTestId("pair-remote-host")).toHaveCount(0);
+  await page.getByTestId("pair-remote").check();
+  await expect(page.getByTestId("pair-remote-host")).toHaveText(
+    en["hub.settings.devices_display.pair_remote_address"].replace(
+      "{hostname}",
+      "01JBRANCH.tunnel.arena360.cloud",
+    ),
+  );
+  await expectNoSeriousAxe(page);
+  await page.getByTestId("pair-remote").uncheck();
+  await expect(page.getByTestId("pair-remote-host")).toHaveCount(0);
+
+  hub.tunnel = { state: "off" };
+  await page.getByTestId("pair-remote").check();
+  await expect(page.getByTestId("pair-remote-off")).toHaveText(
+    en["hub.settings.devices_display.pair_remote_off"],
   );
 });

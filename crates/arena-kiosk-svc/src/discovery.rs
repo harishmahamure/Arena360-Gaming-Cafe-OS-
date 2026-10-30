@@ -20,6 +20,8 @@ pub const DISCOVERY_WINDOW: Duration = Duration::from_millis(arena_proto::DISCOV
 pub const PROBE_TIMEOUT: Duration = Duration::from_millis(arena_proto::PROBE_TIMEOUT_MS);
 pub const HUB_WEB_PORT: u16 = arena_proto::DEFAULT_WEB_PORT;
 const MAX_INFO_BYTES: usize = 16 * 1024;
+/// What a remote branch is called where a Hub name goes.
+pub const REMOTE_HUB_NAME: &str = "Remote";
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -273,11 +275,35 @@ pub async fn discover_on(
     found
 }
 
+/// A branch reached through its tunnel hostname (Story 8.41). The Hub is not probed: it answers
+/// nothing on the tunnel but a pairing code and a device token, so pairing is the proof. There is
+/// no fingerprint to pin (Cloudflare terminates the TLS).
+fn remote_hub(host: &str) -> DiscoveredHub {
+    DiscoveredHub {
+        addr: format!("{host}:{}", arena_kiosk_core::REMOTE_PORT),
+        branch_name: host.split('.').next().unwrap_or(host).to_owned(),
+        hub_name: REMOTE_HUB_NAME.to_owned(),
+        fingerprint: String::new(),
+        protocol_version: PROTOCOL_VERSION,
+        compatible: true,
+        web_port: arena_kiosk_core::REMOTE_PORT,
+    }
+}
+
+/// Whether `addr` (`host:port`) is a branch tunnel address.
+pub fn is_remote_addr(addr: &str) -> bool {
+    addr.rsplit_once(':')
+        .is_some_and(|(host, _)| arena_proto::parse_tunnel_host(host).is_some())
+}
+
 pub async fn probe_ip(
     prober: &dyn Prober,
     text: &str,
     web_port: u16,
 ) -> Result<DiscoveredHub, AppError> {
+    if let Some(host) = arena_proto::parse_tunnel_host(text) {
+        return Ok(remote_hub(&host));
+    }
     let ip = parse_ip(text).ok_or_else(no_hub)?;
     let web = SocketAddr::new(ip, web_port);
     let info = match timeout(PROBE_TIMEOUT, prober.hub_info(web)).await {
@@ -432,23 +458,26 @@ pub async fn select_hub(
         .known(fingerprint, addr)
         .filter(|h| h.compatible)
         .ok_or_else(no_hub)?;
-    let ip = ip_of(&hub.addr).ok_or_else(no_hub)?;
-    let web = SocketAddr::new(ip, hub.web_port);
-    let presented = match timeout(PROBE_TIMEOUT, discovery.prober.fingerprint(web)).await {
-        Ok(Ok(fp)) => fp.to_ascii_lowercase(),
-        Ok(Err(e)) => {
-            tracing::info!(error = %e, "select: tls handshake failed");
+    // A tunnel address has no certificate to check; pairing is the proof it is a Hub.
+    if !is_remote_addr(&hub.addr) {
+        let ip = ip_of(&hub.addr).ok_or_else(no_hub)?;
+        let web = SocketAddr::new(ip, hub.web_port);
+        let presented = match timeout(PROBE_TIMEOUT, discovery.prober.fingerprint(web)).await {
+            Ok(Ok(fp)) => fp.to_ascii_lowercase(),
+            Ok(Err(e)) => {
+                tracing::info!(error = %e, "select: tls handshake failed");
+                return Err(no_hub());
+            }
+            Err(_) => return Err(no_hub()),
+        };
+        if presented != hub.fingerprint {
+            tracing::warn!(
+                advertised = %hub.fingerprint,
+                presented = %presented,
+                "select: the hub certificate does not match its advert; refused"
+            );
             return Err(no_hub());
         }
-        Err(_) => return Err(no_hub()),
-    };
-    if presented != hub.fingerprint {
-        tracing::warn!(
-            advertised = %hub.fingerprint,
-            presented = %presented,
-            "select: the hub certificate does not match its advert; refused"
-        );
-        return Err(no_hub());
     }
     let selected = SelectedHub {
         addr: hub.addr,
@@ -682,6 +711,40 @@ mod tests {
             let err = probe_ip(&NeverProber, bad, HUB_WEB_PORT).await.unwrap_err();
             assert_eq!(err.code, ErrorCode::NoHub);
         }
+    }
+
+    #[tokio::test]
+    async fn a_tunnel_hostname_is_a_remote_hub_found_and_selected_without_the_network() {
+        let hub = probe_ip(
+            &NeverProber,
+            "01JBRANCH.tunnel.arena360.cloud",
+            HUB_WEB_PORT,
+        )
+        .await
+        .unwrap();
+        assert_eq!(hub.addr, "01jbranch.tunnel.arena360.cloud:443");
+        assert_eq!(hub.web_port, 443);
+        assert!(hub.compatible && hub.fingerprint.is_empty());
+        assert!(is_remote_addr(&hub.addr));
+        assert!(!is_remote_addr("10.0.0.2:7400"));
+        assert!(!is_remote_addr("evil.example.com:443"));
+        // Any other hostname is still not a Hub.
+        let err = probe_ip(&NeverProber, "hub.example.com", HUB_WEB_PORT)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::NoHub);
+
+        // Selecting it checks no certificate (there is none to pin) and records it as chosen.
+        let dir = tempfile::tempdir().unwrap();
+        let data = DataDir(dir.path().join("kiosk"));
+        let d = Discovery::new(Arc::new(MdnsBrowser), Arc::new(NeverProber));
+        d.remember(std::slice::from_ref(&hub));
+        let selected = select_hub(&d, &data, &hub.addr, &hub.fingerprint)
+            .await
+            .unwrap();
+        assert_eq!(selected.addr, hub.addr);
+        assert_eq!(selected.web_port, 443);
+        assert_eq!(load_selected(&data), Some(selected));
     }
 
     struct InfoProber(HubInfo, String);

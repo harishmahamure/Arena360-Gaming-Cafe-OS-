@@ -114,8 +114,14 @@ pub(crate) async fn read_body<S: AsyncRead + Unpin>(
     Ok(body)
 }
 
-pub(crate) async fn handle(hub: &Arc<LanHub>, peer: SocketAddr, body: &[u8]) -> Answer {
-    match pair(hub, peer, body).await {
+/// `remote` is a pairing request that came through the tunnel (Story 8.41).
+pub(crate) async fn handle(
+    hub: &Arc<LanHub>,
+    peer: SocketAddr,
+    body: &[u8],
+    remote: bool,
+) -> Answer {
+    match pair(hub, peer, body, remote).await {
         Ok(ok) => Answer {
             status: "200 OK".into(),
             body: serde_json::to_string(&ok).unwrap_or_default(),
@@ -150,7 +156,12 @@ fn secret_of(req: &PairRequest) -> Option<&str> {
     }
 }
 
-async fn pair(hub: &Arc<LanHub>, peer: SocketAddr, body: &[u8]) -> Result<PairResponse, Refusal> {
+async fn pair(
+    hub: &Arc<LanHub>,
+    peer: SocketAddr,
+    body: &[u8],
+    remote: bool,
+) -> Result<PairResponse, Refusal> {
     let Some(pairing) = hub.pairing.clone() else {
         return Err(AppError::new(ErrorCode::NotFound, "pairing is not available").into());
     };
@@ -158,6 +169,15 @@ async fn pair(hub: &Arc<LanHub>, peer: SocketAddr, body: &[u8]) -> Result<PairRe
     let req: PairRequest = serde_json::from_slice(body)
         .map_err(|_| AppError::new(ErrorCode::BadFrame, "the body must be a pairing request"))?;
     let secret = req.validate()?;
+    if remote {
+        // A staff PIN typed on a device across the internet is not a pairing method.
+        if matches!(secret, PairSecret::Pin(_)) {
+            return Err(
+                AppError::new(ErrorCode::Forbidden, "a remote device pairs with a code").into(),
+            );
+        }
+        super::session::require_tunnel_flag(hub).await?;
+    }
     let writer = match hub.writer.clone() {
         Some(w) if hub.is_primary() => w,
         _ => {
@@ -234,6 +254,7 @@ async fn pair(hub: &Arc<LanHub>, peer: SocketAddr, body: &[u8]) -> Result<PairRe
         device_id = %device_id,
         peer = %peer.ip(),
         method,
+        remote,
         elevated_by = elevator.as_deref().unwrap_or(""),
         "kiosk paired"
     );

@@ -14,4 +14,8 @@ export type LiveTile = {
   zone?: string;
   state: LiveTileState;
   session?: LiveTileSession;
+  /**
+   * Connected through the tunnel, not the LAN (Story 8.41).
+   */
+  remote?: boolean;
 };

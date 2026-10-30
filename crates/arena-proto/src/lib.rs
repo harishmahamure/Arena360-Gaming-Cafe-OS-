@@ -518,7 +518,7 @@ pub use test_session::{
 pub use tier::{EntitlementSource, TIERS, Tier, TierDefaults, TierLimits};
 pub use tunnel::{
     TUNNEL_DOMAIN, TUNNEL_FLAG, TUNNEL_ORIGIN, TUNNEL_PORT, TunnelAnswer, TunnelLine, TunnelReport,
-    TunnelState, tunnel_hostname,
+    TunnelState, parse_tunnel_host, tunnel_hostname,
 };
 pub use ui_auth::{
     ElevateDrop, ElevateOk, ElevateRequest, ElevationItem, MAX_STAFF_PASSWORD_CHARS,

@@ -40,6 +40,8 @@ use tokio_tungstenite::tungstenite::http::Uri;
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// The default paired-app port.
 pub const DEFAULT_PORT: u16 = 7400;
+/// The port of a tunnel hostname (HTTPS).
+pub const REMOTE_PORT: u16 = 443;
 /// With nothing received for this long, the client sends its own `ping`.
 pub const PING_INTERVAL: Duration = Duration::from_secs(15);
 /// With nothing received for this long, the connection counts as closed.
@@ -222,13 +224,52 @@ pub async fn connect_ws(url: &str, pinned_fingerprint: &str) -> Result<HubStream
     let presented: Arc<Mutex<Option<[u8; 32]>>> = Arc::default();
     let config = pinned_config_with(pinned_fingerprint, Arc::clone(&presented))?;
     let expected = hex_lower(&parse_fingerprint(pinned_fingerprint)?);
+    open_ws(url, config, DEFAULT_PORT, |e| {
+        match presented.lock().ok().and_then(|p| *p) {
+            Some(got) => ClientError::PinMismatch {
+                expected: expected.clone(),
+                presented: hex_lower(&got),
+            },
+            None => ClientError::Tls(e.to_string()),
+        }
+    })
+    .await
+}
+
+/// A rustls client configuration that trusts the public web roots (Mozilla's), for the
+/// Cloudflare-terminated TLS of the branch's tunnel hostname (Story 8.41).
+pub fn web_config() -> Result<Arc<ClientConfig>, ClientError> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let roots = rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let config = ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| ClientError::Tls(e.to_string()))?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    Ok(Arc::new(config))
+}
+
+/// Opens a WebSocket to a tunnel hostname (`wss://<branch>.tunnel…/`), verified against the
+/// public web roots: Cloudflare terminates the TLS, so the Hub's own certificate cannot be pinned
+/// here. The device token is what the Hub checks (Story 8.41).
+pub async fn connect_ws_remote(url: &str) -> Result<HubStream, ClientError> {
+    open_ws(url, web_config()?, REMOTE_PORT, |e| {
+        ClientError::Tls(e.to_string())
+    })
+    .await
+}
+
+async fn open_ws(
+    url: &str,
+    config: Arc<ClientConfig>,
+    default_port: u16,
+    tls_error: impl FnOnce(&std::io::Error) -> ClientError,
+) -> Result<HubStream, ClientError> {
     let uri: Uri = url
         .parse()
         .map_err(|e| ClientError::BadInput(format!("url: {e}")))?;
     if uri.scheme_str() != Some("wss") {
-        return Err(ClientError::BadInput(
-            "the hub url must be wss:// (pinned TLS only)".into(),
-        ));
+        return Err(ClientError::BadInput("the hub url must be wss://".into()));
     }
     let host = uri
         .host()
@@ -236,7 +277,7 @@ pub async fn connect_ws(url: &str, pinned_fingerprint: &str) -> Result<HubStream
         .trim_start_matches('[')
         .trim_end_matches(']')
         .to_owned();
-    let port = uri.port_u16().unwrap_or(DEFAULT_PORT);
+    let port = uri.port_u16().unwrap_or(default_port);
     let server_name = ServerName::try_from(host.clone())
         .map_err(|e| ClientError::BadInput(format!("host: {e}")))?;
     let tcp = timeout(REQUEST_TIMEOUT, TcpStream::connect((host.as_str(), port)))
@@ -250,13 +291,7 @@ pub async fn connect_ws(url: &str, pinned_fingerprint: &str) -> Result<HubStream
     )
     .await
     .map_err(|_| ClientError::Tls("tls handshake timed out".into()))?
-    .map_err(|e| match presented.lock().ok().and_then(|p| *p) {
-        Some(got) => ClientError::PinMismatch {
-            expected: expected.clone(),
-            presented: hex_lower(&got),
-        },
-        None => ClientError::Tls(e.to_string()),
-    })?;
+    .map_err(|e| tls_error(&e))?;
     let (ws, _) = timeout(REQUEST_TIMEOUT, tokio_tungstenite::client_async(url, tls))
         .await
         .map_err(|_| ClientError::Handshake("upgrade timed out".into()))?
@@ -375,7 +410,16 @@ impl HubClient {
         pinned_fingerprint: &str,
         hello: Hello,
     ) -> Result<Self, ClientError> {
-        let ws = connect_ws(url, pinned_fingerprint).await?;
+        Self::start(connect_ws(url, pinned_fingerprint).await?, hello).await
+    }
+
+    /// Connects to a tunnel hostname (Story 8.41) and sends `hello`. The TLS is Cloudflare's,
+    /// checked against the public web roots; the device token is the credential.
+    pub async fn connect_remote(url: &str, hello: Hello) -> Result<Self, ClientError> {
+        Self::start(connect_ws_remote(url).await?, hello).await
+    }
+
+    async fn start(ws: HubStream, hello: Hello) -> Result<Self, ClientError> {
         let (mut sink, mut stream) = ws.split();
 
         let hello_text = Frame::new("hello", FrameBody::Hello(hello)).to_text();

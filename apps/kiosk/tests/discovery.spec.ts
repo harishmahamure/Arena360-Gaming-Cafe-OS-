@@ -288,3 +288,25 @@ test("without a discovery.done the IP form appears after the window and a grace"
   await expect(page.getByTestId("discovery-busy")).toHaveCount(0);
   await expect(page.getByLabel(en["player.discovery.ip_label"])).toBeVisible();
 });
+
+test("a remote address is selected like an IP and pairs without a certificate line", async ({
+  page,
+}) => {
+  const remote = {
+    ...desk,
+    addr: "01jbranch.tunnel.arena360.cloud:443",
+    hub_name: "Remote",
+    fingerprint: "",
+    web_port: 443,
+  };
+  await openUnpaired(page, [{ ok: true, body: { hub: remote } }]);
+  await noneFound(page);
+  await page.getByLabel(en["player.discovery.ip_label"]).fill("01JBRANCH.tunnel.arena360.cloud");
+  await page.getByRole("button", { name: en["player.discovery.check"] }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(en["player.pairing.title"]);
+  await expect(page.getByTestId("selected-hub")).toContainText("Remote");
+  await expect(page.getByTestId("selected-fingerprint")).toHaveCount(0);
+  expect(await calls(page, names.commands.selectHub)).toEqual([
+    { addr: remote.addr, fingerprint: "" },
+  ]);
+});

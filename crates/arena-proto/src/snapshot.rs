@@ -387,6 +387,10 @@ pub struct SnapshotDevice {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "string | null")]
     pub controller_check: Option<String>,
+    /// Connected through the Cloudflare Tunnel, not the LAN (Story 8.41); filled by the snapshot handler.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(optional, type = "boolean")]
+    pub remote: bool,
 }
 
 impl SnapshotDevice {
@@ -437,6 +441,7 @@ mod tests {
                 last_seen_at: None,
                 maintenance_note: None,
                 controller_check: None,
+                remote: false,
             }],
             locale: None,
             ui: SnapshotUi::default(),
@@ -543,6 +548,7 @@ mod locale_tests {
             last_seen_at: None,
             maintenance_note: None,
             controller_check: None,
+            remote: false,
         };
         let mut d = dev(false, DeviceStatus::Offline);
         d.apply_presence(true, Some(9));

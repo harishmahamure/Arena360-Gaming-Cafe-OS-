@@ -186,17 +186,50 @@ fn only_live(req: &Request, resp: Response) -> Result<Response, ErrorResponse> {
     }
 }
 
-/// The Cloudflare Tunnel's connector, from loopback (Story 8.40): a WebSocket for live viewers
-/// and nothing else.
+/// The client address Cloudflare reports in `CF-Connecting-IP`, when `head` carries a valid one.
+/// Only the local connector can reach this listener, and Cloudflare sets the header itself.
+fn client_ip(head: &[u8]) -> Option<IpAddr> {
+    let text = std::str::from_utf8(head).ok()?;
+    text.split("\r\n").skip(1).find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.trim()
+            .eq_ignore_ascii_case("cf-connecting-ip")
+            .then(|| value.trim().parse().ok())
+            .flatten()
+    })
+}
+
+/// The Cloudflare Tunnel's connector, from loopback (Stories 8.40 and 8.41): a WebSocket for
+/// live viewers and paired remote devices, and `POST /pair` for a remote device's pairing code.
+/// Nothing else is served.
 async fn serve_tunnel(tcp: TcpStream, peer: SocketAddr, hub: Arc<LanHub>) {
     if !peer.ip().is_loopback() {
         return;
     }
     let _ = tcp.set_nodelay(true);
+    let mut tcp = tcp;
+    let Ok(Some(head)) = timeout(HANDSHAKE_TIMEOUT, read_head(&mut tcp)).await else {
+        return;
+    };
+    // The throttles key on the real client, not on the connector.
+    let client = SocketAddr::new(client_ip(&head).unwrap_or(peer.ip()), 0);
+    if matches!(route(&request_line(&head)), Route::Pair) && hub.pairing.is_some() {
+        let hub = Arc::clone(&hub);
+        let head_bytes = head.clone();
+        return answer_pair(&mut tcp, &head_bytes, |body| async move {
+            super::pair::handle(&hub, client, &body, true).await
+        })
+        .await;
+    }
+    let stream = Prefixed {
+        prefix: head,
+        pos: 0,
+        inner: tcp,
+    };
     let upgrade =
-        tokio_tungstenite::accept_hdr_async_with_config(tcp, only_live, Some(ws_config()));
+        tokio_tungstenite::accept_hdr_async_with_config(stream, only_live, Some(ws_config()));
     match timeout(HANDSHAKE_TIMEOUT, upgrade).await {
-        Ok(Ok(ws)) => session::run(ws, Transport::Tunnel, peer, hub).await,
+        Ok(Ok(ws)) => session::run(ws, Transport::Tunnel, client, hub).await,
         Ok(Err(e)) => tracing::debug!(error = %e, "tunnel websocket upgrade failed"),
         Err(_) => tracing::debug!("tunnel websocket upgrade timed out"),
     }
@@ -247,7 +280,7 @@ async fn serve_tls(
             let hub = Arc::clone(&hub);
             let head_bytes = head.clone();
             return answer_pair(&mut tls, &head_bytes, |body| async move {
-                super::pair::handle(&hub, peer, &body).await
+                super::pair::handle(&hub, peer, &body, false).await
             })
             .await;
         }

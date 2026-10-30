@@ -3,12 +3,12 @@ use std::time::Duration;
 
 use arena_proto::{AppError, PAIR_PATH, PairRequest, PairResponse};
 use rustls::pki_types::ServerName;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 
-use crate::client::{hex_lower, parse_fingerprint, pinned_config_with};
+use crate::client::{REMOTE_PORT, hex_lower, parse_fingerprint, pinned_config_with, web_config};
 
 pub const PAIR_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_ANSWER_BYTES: usize = 16 * 1024;
@@ -92,33 +92,7 @@ pub async fn pair(
                 },
                 None => PairError::Tls(e.to_string()),
             })?;
-        let head = format!(
-            "POST {PAIR_PATH} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            body.len()
-        );
-        tls.write_all(head.as_bytes())
-            .await
-            .map_err(|e| PairError::Io(e.to_string()))?;
-        tls.write_all(body.as_bytes())
-            .await
-            .map_err(|e| PairError::Io(e.to_string()))?;
-        let mut answer = Vec::new();
-        let mut chunk = [0u8; 4096];
-        loop {
-            let n = match tls.read(&mut chunk).await {
-                Ok(n) => n,
-                Err(e) if !answer.is_empty() && e.kind() == std::io::ErrorKind::UnexpectedEof => 0,
-                Err(e) => return Err(PairError::Io(e.to_string())),
-            };
-            if n == 0 {
-                break;
-            }
-            answer.extend_from_slice(&chunk[..n]);
-            if answer.len() > MAX_ANSWER_BYTES {
-                return Err(PairError::BadAnswer("the answer is too long".into()));
-            }
-        }
-        Ok(answer)
+        post_pair(&mut tls, host, &body).await
     };
     let answer = timeout(wait, attempt)
         .await
@@ -131,6 +105,68 @@ pub async fn pair(
         });
     }
     Ok(parsed)
+}
+
+/// `POST /pair` over `tls` and the whole answer.
+async fn post_pair<S>(tls: &mut S, host: &str, body: &str) -> Result<Vec<u8>, PairError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let head = format!(
+        "POST {PAIR_PATH} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    tls.write_all(head.as_bytes())
+        .await
+        .map_err(|e| PairError::Io(e.to_string()))?;
+    tls.write_all(body.as_bytes())
+        .await
+        .map_err(|e| PairError::Io(e.to_string()))?;
+    let mut answer = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = match tls.read(&mut chunk).await {
+            Ok(n) => n,
+            Err(e) if !answer.is_empty() && e.kind() == std::io::ErrorKind::UnexpectedEof => 0,
+            Err(e) => return Err(PairError::Io(e.to_string())),
+        };
+        if n == 0 {
+            break;
+        }
+        answer.extend_from_slice(&chunk[..n]);
+        if answer.len() > MAX_ANSWER_BYTES {
+            return Err(PairError::BadAnswer("the answer is too long".into()));
+        }
+    }
+    Ok(answer)
+}
+
+/// Pairs through a branch's tunnel hostname (Story 8.41): HTTPS on 443, verified against the
+/// public web roots (Cloudflare terminates the TLS, so the Hub certificate cannot be pinned).
+/// The Hub's fingerprint comes back in the answer and is kept for the paired record.
+pub async fn pair_remote(
+    hostname: &str,
+    request: &PairRequest,
+    wait: Duration,
+) -> Result<PairResponse, PairError> {
+    let name = server_name(hostname)?;
+    let config = web_config().map_err(|e| PairError::BadInput(e.to_string()))?;
+    let body = serde_json::to_string(request).map_err(|e| PairError::BadInput(e.to_string()))?;
+    let attempt = async {
+        let tcp = TcpStream::connect((hostname, REMOTE_PORT))
+            .await
+            .map_err(|e| PairError::Io(e.to_string()))?;
+        let _ = tcp.set_nodelay(true);
+        let mut tls = TlsConnector::from(config)
+            .connect(name, tcp)
+            .await
+            .map_err(|e| PairError::Tls(e.to_string()))?;
+        post_pair(&mut tls, hostname, &body).await
+    };
+    let answer = timeout(wait, attempt)
+        .await
+        .map_err(|_| PairError::Io("the hub did not answer in time".into()))??;
+    parse_answer(&answer)
 }
 
 fn parse_answer(answer: &[u8]) -> Result<PairResponse, PairError> {
@@ -213,5 +249,30 @@ mod tests {
             parse_answer(b"HTTP/1.1 404 Not Found\r\n\r\nnot found").unwrap_err(),
             PairError::BadAnswer(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn the_pairing_post_names_the_host_and_reads_the_whole_answer() {
+        let (mut client, mut server) = tokio::io::duplex(8192);
+        let hub = tokio::spawn(async move {
+            let mut got = vec![0u8; 1024];
+            let n = server.read(&mut got).await.unwrap();
+            let sent = String::from_utf8_lossy(&got[..n]).into_owned();
+            let body = r#"{"device_id":"D","token":"t","hub_fingerprint":"f"}"#;
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            server.write_all(reply.as_bytes()).await.unwrap();
+            server.shutdown().await.unwrap();
+            sent
+        });
+        let answer = post_pair(&mut client, "b.tunnel.arena360.cloud", "{\"code\":\"1\"}")
+            .await
+            .unwrap();
+        assert_eq!(parse_answer(&answer).unwrap().device_id, "D");
+        let sent = hub.await.unwrap();
+        assert!(sent.starts_with("POST /pair HTTP/1.1\r\nHost: b.tunnel.arena360.cloud\r\n"));
+        assert!(sent.ends_with("\r\n\r\n{\"code\":\"1\"}"));
     }
 }

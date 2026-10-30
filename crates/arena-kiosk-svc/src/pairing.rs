@@ -124,14 +124,20 @@ pub async fn pair(ctx: &Ctx, body: Value) -> Result<Value, Refused> {
         version: env!("CARGO_PKG_VERSION").to_owned(),
     };
     request.validate()?;
-    let answer = arena_kiosk_core::pair(
-        &host,
-        selected.web_port,
-        &selected.fingerprint,
-        &request,
-        PAIR_TIMEOUT,
-    )
-    .await;
+    // A branch tunnel address pairs over Cloudflare's TLS (Story 8.41); a LAN Hub, over TLS
+    // pinned to the fingerprint the kiosk chose.
+    let answer = if crate::discovery::is_remote_addr(&selected.addr) {
+        arena_kiosk_core::pair_remote(&host, &request, PAIR_TIMEOUT).await
+    } else {
+        arena_kiosk_core::pair(
+            &host,
+            selected.web_port,
+            &selected.fingerprint,
+            &request,
+            PAIR_TIMEOUT,
+        )
+        .await
+    };
     drop(request);
     let paired = match answer {
         Ok(p) => p,

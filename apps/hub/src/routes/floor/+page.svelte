@@ -358,6 +358,7 @@
   >
     {#snippet secondary()}
       {#if !group}<span data-testid="device-presence">{t(badge.label)}</span>{/if}
+      {#if device.remote}<span data-testid="device-remote">{t("hub.floor.remote")}</span>{/if}
       {#if isTarget(device)}
         <span data-testid="transfer-move-here">{t("hub.transfer.move_here")}</span>
       {:else if groupKind(device)}

@@ -210,6 +210,7 @@ async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Resp
             }
             for d in &mut snapshot.devices {
                 d.online = state.presence.online(&d.device_id);
+                d.remote = state.presence.remote(&d.device_id);
                 let (shown, seen) = state.presence.status(&d.device_id);
                 d.apply_presence(shown, seen);
             }

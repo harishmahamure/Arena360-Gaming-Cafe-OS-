@@ -32,4 +32,8 @@ export type SnapshotDevice = {
    * The ended console session whose controllers staff have not marked yet.
    */
   controller_check?: string | null;
+  /**
+   * Connected through the Cloudflare Tunnel, not the LAN (Story 8.41); filled by the snapshot handler.
+   */
+  remote?: boolean;
 };

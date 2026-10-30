@@ -148,8 +148,15 @@ async fn attempt(ctx: &Arc<Ctx>, backoff: &mut Backoff, stop: &mut watch::Receiv
         capabilities: Vec::new(),
     };
     let url = cfg.hub_url();
+    let remote = cfg.remote();
     let client = tokio::select! {
-        r = HubClient::connect(&url, &cfg.hub_fingerprint, hello) => r,
+        r = async {
+            if remote {
+                HubClient::connect_remote(&url, hello).await
+            } else {
+                HubClient::connect(&url, &cfg.hub_fingerprint, hello).await
+            }
+        } => r,
         _ = stop.changed() => return Ended::Shutdown,
     };
     let client = match client {

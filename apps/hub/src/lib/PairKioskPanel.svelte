@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Button, t } from "@arena/ui";
-  import type { KioskPairingCode } from "@arena/ui/generated";
+  import type { KioskPairingCode, TunnelLine } from "@arena/ui/generated";
   import { invalidate } from "$app/navigation";
   import { onDestroy, onMount, tick } from "svelte";
   import { SESSION_DEPENDENCY } from "./auth";
@@ -13,6 +13,7 @@
     type PairingChange,
   } from "./pairing";
   import { shortFingerprint } from "./snapshot";
+  import { loadTunnel } from "./tunnel";
 
   let { onclose, fingerprint = null }: { onclose: () => void; fingerprint?: string | null } =
     $props();
@@ -28,6 +29,10 @@
   let failures = 0;
   let retryAt = 0;
   let closed = false;
+  // "Remote device": a kiosk outside the café types the tunnel address instead of choosing a Hub (Story 8.41).
+  let remote = $state(false);
+  let tunnel = $state<TunnelLine | null>(null);
+  const remoteHost = $derived(tunnel?.state === "on" ? (tunnel.hostname ?? null) : null);
 
   const left = $derived(current ? current.expires_at - now : 0);
 
@@ -101,6 +106,10 @@
     if (left <= -2000) void fetchCode(true);
   }
 
+  async function onRemote() {
+    if (remote) tunnel = await loadTunnel();
+  }
+
   function close() {
     closed = true;
     discardPairingCode();
@@ -132,6 +141,26 @@
     {t("hub.settings.devices_display.pair_title")}
   </h3>
   <p class="note type-hub-body">{t("hub.settings.devices_display.pair_body")}</p>
+  <label class="remote type-hub-body">
+    <input
+      type="checkbox"
+      bind:checked={remote}
+      onchange={() => void onRemote()}
+      data-testid="pair-remote"
+    />
+    {t("hub.settings.devices_display.pair_remote")}
+  </label>
+  {#if remote}
+    {#if remoteHost}
+      <p class="note type-hub-body" data-testid="pair-remote-host">
+        {t("hub.settings.devices_display.pair_remote_address", { hostname: remoteHost })}
+      </p>
+    {:else}
+      <p class="note type-hub-label" data-testid="pair-remote-off">
+        {t("hub.settings.devices_display.pair_remote_off")}
+      </p>
+    {/if}
+  {/if}
   {#if fingerprint}
     <p class="note type-hub-label" data-testid="pair-fingerprint">
       {t("hub.settings.devices_display.pair_fingerprint", {
@@ -197,6 +226,13 @@
 
   h3:focus {
     outline: none;
+  }
+
+  .remote {
+    display: flex;
+    gap: var(--space-2);
+    align-items: center;
+    color: var(--text);
   }
 
   .note,

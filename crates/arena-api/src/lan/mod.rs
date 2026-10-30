@@ -112,6 +112,11 @@ impl Presence {
         self.0.as_ref().is_some_and(|r| r.is_online(device_id))
     }
 
+    /// Whether `device_id` is connected through the tunnel right now (Story 8.41).
+    pub fn remote(&self, device_id: &str) -> bool {
+        self.0.as_ref().is_some_and(|r| r.is_remote(device_id))
+    }
+
     /// Whether the kitchen display `id` has a live `kds` session right now (Story 7.6).
     pub fn display_online(&self, id: &str) -> bool {
         self.0.as_ref().is_some_and(|r| r.display_online(id))

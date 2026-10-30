@@ -398,9 +398,11 @@
     <p class="type-kiosk-body" data-testid="selected-hub">
       {t("player.pairing.selected", { branch: selected.branch_name, hub: selected.hub_name })}
     </p>
-    <p class="type-kiosk-body" data-testid="selected-fingerprint">
-      {t("player.pairing.fingerprint", { fingerprint: shortFingerprint(selected.fingerprint) })}
-    </p>
+    {#if selected.fingerprint}
+      <p class="type-kiosk-body" data-testid="selected-fingerprint">
+        {t("player.pairing.fingerprint", { fingerprint: shortFingerprint(selected.fingerprint) })}
+      </p>
+    {/if}
     <form class="pair" onsubmit={onPairSubmit} data-testid="pair-form">
       <div class="name">
         <label class="type-kiosk-label" for="pairing-name">{t("player.pairing.pc_name")}</label>
@@ -532,7 +534,7 @@
             id="discovery-ip"
             class="ui-interactive field type-kiosk-body"
             type="text"
-            inputmode="decimal"
+            inputmode="url"
             autocomplete="off"
             spellcheck="false"
             bind:value={ip}

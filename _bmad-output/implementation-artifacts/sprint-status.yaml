@@ -262,7 +262,7 @@ development_status:
   8-38-audit-search-in-reports-with-preparing-audit: done
   8-39-a-cloudflare-tunnel-for-entitled-branches-run-by-the-windows: done
   8-40-live-view-a-read-only-floor-through-the-tunnel: done
-  8-41-remote-kiosks-connect-through-the-tunnel-with-their-device-t: backlog
+  8-41-remote-kiosks-connect-through-the-tunnel-with-their-device-t: review
   8-42-the-owner-s-remote-experience-proven-against-its-targets: backlog
   epic-8-retrospective: optional
 

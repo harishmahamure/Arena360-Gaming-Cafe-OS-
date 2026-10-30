@@ -173,6 +173,8 @@ struct Authed {
     actor: Actor,
     /// A live viewer's token expiry (epoch seconds); the session ends then unless it refreshes.
     live_exp_s: Option<i64>,
+    /// A paired device that connected through the tunnel (Story 8.41).
+    remote: bool,
 }
 
 impl Authed {
@@ -188,9 +190,10 @@ async fn authenticate(
     hello: &Hello,
 ) -> Result<Authed, AppError> {
     let class = hello.class;
-    // The tunnel's peer is always the local connector, so the per-address throttle would
-    // lock out every viewer at once; a live token is a signature check, not a guessable secret.
-    if transport != Transport::Tunnel && hub.throttle.is_blocked(peer.ip(), Instant::now()) {
+    // A live token is a signature check, not a guessable secret, so the per-address throttle
+    // (which counts failed device tokens) does not apply to it. Through the tunnel `peer` is
+    // the client address Cloudflare reports (the connector itself when it reported none).
+    if class != ClientClass::LiveView && hub.throttle.is_blocked(peer.ip(), Instant::now()) {
         return Err(app(
             ErrorCode::TokenInvalid,
             "the device token is not valid",
@@ -199,11 +202,19 @@ async fn authenticate(
     match (class, transport) {
         (ClientClass::Paired, Transport::Tls)
         | (ClientClass::Kds | ClientClass::Phone, Transport::Plain)
+        | (ClientClass::Paired, Transport::Tunnel)
         | (ClientClass::LiveView, Transport::Tunnel) => {}
-        (ClientClass::LiveView, _) | (_, Transport::Tunnel) => {
+        (ClientClass::LiveView, _) => {
             return Err(app(
                 ErrorCode::Forbidden,
                 "live view connects through the tunnel only",
+            ));
+        }
+        // No anonymous or browser class comes in through the tunnel (Story 8.41).
+        (_, Transport::Tunnel) => {
+            return Err(app(
+                ErrorCode::TokenInvalid,
+                "the tunnel takes a paired device token only",
             ));
         }
         (ClientClass::Paired, Transport::Plain) => {
@@ -229,6 +240,7 @@ async fn authenticate(
                 id: format!("live-view:{}", ulid::Ulid::generate()),
             },
             live_exp_s: Some(exp),
+            remote: false,
         });
     }
     let device = if class.uses_device_token() {
@@ -273,6 +285,10 @@ async fn authenticate(
             ));
         }
     }
+    let remote = transport == Transport::Tunnel;
+    if remote {
+        require_tunnel_flag(hub).await?;
+    }
     let actor = match &device {
         Some(d) => Actor {
             kind: ActorKind::Device,
@@ -288,7 +304,25 @@ async fn authenticate(
         device,
         actor,
         live_exp_s: None,
+        remote,
     })
+}
+
+/// A device may use the tunnel only while this branch's licence carries the `tunnel` flag
+/// (Story 8.41).
+pub(super) async fn require_tunnel_flag(hub: &LanHub) -> Result<(), AppError> {
+    let dir = Arc::clone(&hub.devices);
+    let gate = tokio::task::spawn_blocking(move || dir.live_gate())
+        .await
+        .map_err(|e| app(ErrorCode::Internal, format!("branch read failed: {e}")))??;
+    match gate {
+        Some((_, true)) => Ok(()),
+        Some((_, false)) => Err(app(
+            ErrorCode::FeatureNotEntitled,
+            "the tunnel is not part of this branch's plan",
+        )),
+        None => Err(app(ErrorCode::NotPrimary, "this hub has no branch yet")),
+    }
 }
 
 /// Checks a live view token for this Hub (Story 8.40) and returns its expiry in epoch seconds:
@@ -495,9 +529,10 @@ pub(crate) async fn run<S>(
     // Register before hello.ok so no push committed after it is missed, then re-check the
     // token: a revocation committed between the check and the registration is caught here.
     let (out_tx, out_rx) = mpsc::channel::<Message>(SESSION_QUEUE);
-    let guard = hub.registry.register(
+    let guard = hub.registry.register_via(
         authed.class,
         authed.device_id().map(str::to_owned),
+        authed.remote,
         out_tx.clone(),
     );
     // Receivers created inside `register`, before the session was visible: a kill set at any
@@ -629,6 +664,15 @@ pub(crate) async fn run<S>(
                 {
                     seen_at = Instant::now();
                     report_seen(&hub, &authed);
+                }
+                // The tunnel flag went away: the connector stops, and the Hub lets go of the
+                // remote device too. Its running session is not ended (Story 8.41).
+                if authed.remote
+                    && let Err(e) = require_tunnel_flag(&hub).await
+                    && matches!(e.code, ErrorCode::FeatureNotEntitled | ErrorCode::NotPrimary)
+                {
+                    tracing::info!(device_id = authed.device_id().unwrap_or("-"), "tunnel flag gone; dropping a remote device");
+                    break;
                 }
                 pings += 1;
                 let ping = Frame::new(format!("ka-{pings}"), FrameBody::Ping);

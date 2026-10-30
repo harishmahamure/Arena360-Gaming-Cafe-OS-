@@ -53,6 +53,7 @@ pub fn build_live_floor(
                 zone: m.zone_id.clone().filter(|z| zone_ids.contains(&z.as_str())),
                 state,
                 session: session.map(tile_session),
+                remote: false,
             })
         })
         .collect();

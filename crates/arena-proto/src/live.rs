@@ -174,6 +174,10 @@ pub struct LiveTile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub session: Option<LiveTileSession>,
+    /// Connected through the tunnel, not the LAN (Story 8.41).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(optional, type = "boolean")]
+    pub remote: bool,
 }
 
 /// A floor zone.
@@ -286,6 +290,7 @@ mod tests {
                 player_id: None,
                 guest_no: Some(3),
             }),
+            remote: false,
         })
         .unwrap();
         assert!(!json.contains("username") && !json.contains("balance"));

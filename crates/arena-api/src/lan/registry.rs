@@ -69,6 +69,8 @@ fn epoch_ms() -> i64 {
 struct Entry {
     class: ClientClass,
     device_id: Option<String>,
+    /// Connected through the Cloudflare Tunnel rather than the LAN (Story 8.41).
+    remote: bool,
     out: mpsc::Sender<Message>,
     kill: Arc<watch::Sender<Option<Kill>>>,
 }
@@ -232,10 +234,22 @@ pub(crate) fn revoked_error() -> AppError {
 impl Registry {
     /// Adds a session whose pushes go to `out`. It stays registered until the guard is
     /// dropped.
+    #[cfg(test)]
     pub(crate) fn register(
         self: &Arc<Self>,
         class: ClientClass,
         device_id: Option<String>,
+        out: mpsc::Sender<Message>,
+    ) -> SessionGuard {
+        self.register_via(class, device_id, false, out)
+    }
+
+    /// [`Registry::register`] for a session that came through the tunnel when `remote`.
+    pub(crate) fn register_via(
+        self: &Arc<Self>,
+        class: ClientClass,
+        device_id: Option<String>,
+        remote: bool,
         out: mpsc::Sender<Message>,
     ) -> SessionGuard {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
@@ -251,6 +265,7 @@ impl Registry {
                 Entry {
                     class,
                     device_id,
+                    remote,
                     out,
                     kill: Arc::clone(&kill),
                 },
@@ -642,6 +657,23 @@ impl Registry {
         })
     }
 
+    /// Whether `device_id` is connected through the tunnel (Story 8.41): the floor shows it as
+    /// "Remote". A device that also has a LAN session reads as local.
+    pub(crate) fn is_remote(&self, device_id: &str) -> bool {
+        let Ok(map) = self.sessions.lock() else {
+            return false;
+        };
+        let mut mine = map
+            .values()
+            .filter(|e| {
+                e.class == ClientClass::Paired
+                    && e.device_id.as_deref() == Some(device_id)
+                    && e.kill.borrow().is_none()
+            })
+            .peekable();
+        mine.peek().is_some() && mine.all(|e| e.remote)
+    }
+
     /// Whether `device_id` has a live (not closing) `paired` session.
     pub(crate) fn is_online(&self, device_id: &str) -> bool {
         let Ok(map) = self.sessions.lock() else {
@@ -951,6 +983,9 @@ impl Registry {
             }
         };
         arena_core::live_floor::set_presence(&mut floor, |id| self.status(id).0);
+        for tile in &mut floor.tiles {
+            tile.remote = self.is_remote(&tile.device_id);
+        }
         Some(event_frame(
             self.next_rid(),
             HubEvent::LiveFloor(Box::new(floor)),

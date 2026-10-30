@@ -20,7 +20,7 @@ const IMAGE_KEEP: &str = "keep";
 pub const BACKUP_NOW: &str = "backup.now";
 
 /// Every command kind this Hub runs, at [`COMMAND_SCHEMA_VERSION`]: the setup kinds (Story 2.15)
-/// and the owner kinds (Story 8.19). `arena_proto::OWNER_COMMAND_KINDS` lists the same owner kinds
+/// the owner kinds (Story 8.19) and the device revoke (Story 8.27). `arena_proto::OWNER_COMMAND_KINDS` lists the same owner kinds
 /// as handled; a test keeps the two in agreement.
 pub const HANDLED_COMMAND_KINDS: [&str; 17] = [
     "group.upsert",
@@ -119,7 +119,8 @@ pub fn command_intent(cmd: &CommandWire, now: i64) -> Result<Intent, AppError> {
     let reason = if cmd.kind == "device.revoke" {
         let reason = fields
             .remove("reason")
-            .and_then(|r| serde_json::from_value::<ReasonCode>(r).ok());
+            .and_then(|r| serde_json::from_value::<ReasonCode>(r).ok())
+            .filter(|r| arena_proto::DEVICE_REVOKE_REASONS.contains(r));
         Some(reason.ok_or_else(|| {
             refused(
                 ErrorCode::ReasonRequired,

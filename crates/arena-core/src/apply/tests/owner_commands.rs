@@ -806,6 +806,17 @@ async fn the_owner_edits_groups_assigns_a_device_and_revokes_it_once() {
         .unwrap();
     assert!(!bare.applied);
     assert_eq!(refusal(&bare), Some(ErrorCode::ReasonRequired));
+    let unlisted = f
+        .writer
+        .apply_command(cmd(
+            30,
+            "device.revoke",
+            json!({"device_id": pc, "reason": "closing"}),
+        ))
+        .await
+        .unwrap();
+    assert!(!unlisted.applied);
+    assert_eq!(refusal(&unlisted), Some(ErrorCode::ReasonRequired));
     let live = |f: &Fixture| {
         named(rows_of(f, Table::Devices), "device_id", &pc).contains_key("revoked_at")
             && !matches!(

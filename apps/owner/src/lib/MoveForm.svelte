@@ -10,7 +10,10 @@
   let group = $state(line.device.group_id ?? "");
   const options = $derived(groupsFor(line));
 
-  const submit = () => void propose(proposeAssign(line, group === "" ? null : group));
+  const submit = () => {
+    if (group === (line.device.group_id ?? "")) return oncancel();
+    void propose(proposeAssign(line, group === "" ? null : group));
+  };
 </script>
 
 <PricingForm

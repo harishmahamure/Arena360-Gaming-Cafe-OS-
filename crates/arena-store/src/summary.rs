@@ -378,7 +378,7 @@ pub fn catalogue(conn: &Connection) -> Result<SummaryCatalogue, AppError> {
                 "SELECT m.device_id, m.label, m.group_id, m.kind, d.revoked_at IS NOT NULL, m.rev
                  FROM devices_meta m LEFT JOIN devices d ON d.device_id = m.device_id
                  WHERE m.deleted_at IS NULL OR d.revoked_at IS NOT NULL
-                 ORDER BY m.device_id LIMIT ?1",
+                 ORDER BY d.revoked_at IS NOT NULL, m.device_id LIMIT ?1",
             )
             .map_err(db_error)?;
         stmt.query_map(params![SUMMARY_LIST_CAP as i64], |r| {

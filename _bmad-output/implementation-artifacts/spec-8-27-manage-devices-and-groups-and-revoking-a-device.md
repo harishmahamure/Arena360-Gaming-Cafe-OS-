@@ -2,7 +2,7 @@
 title: "Story 8.27: Manage → Devices and groups, and revoking a device"
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 baseline_commit: 'b921b1e'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -75,7 +75,7 @@ deferred: []
 
 ## Review Triage Log
 
-Not run (no code-review pass in this iteration). Verification: clippy for the touched crates, cargo tests (proto, store, core, cloud, api), owner `svelte-check`, the full owner Playwright suite (522), `check:strings`, `check:layers`, `check:protocol` and `format:check` are green. Pre-existing, untouched: the flaky Windows `arena-cloud` `binary` test `unreachable_at_start...`, the Windows-only `arena-e2e` build and a non-exhaustive `HubEvent` match in `arena-kiosk-svc`. `check:generated` compares with git, so it passes once the new type is committed.
+Code review run (blind, edge-case, acceptance). Fixed: the Hub now refuses a revoke reason outside lost|stolen|replaced|other (REASON_REQUIRED, with a test); the summary lists live devices before revoked ones so revoked rows cannot crowd out the cap; Move with the group unchanged closes instead of sending a no-op; stale HANDLED_COMMAND_KINDS doc. Deferred as non-blocking: sweep window between a Hub revoke and re-pair (accepted in the Spec Change Log), extra sweeper and Playwright edge tests. Verification: clippy for the touched crates, cargo tests (proto, store, core, cloud, api), owner `svelte-check`, the full owner Playwright suite (522), `check:strings`, `check:layers`, `check:protocol` and `format:check` are green. Pre-existing, untouched: the flaky Windows `arena-cloud` `binary` test `unreachable_at_start...`, the Windows-only `arena-e2e` build and a non-exhaustive `HubEvent` match in `arena-kiosk-svc`. `check:generated` compares with git, so it passes once the new type is committed.
 
 ## Design Notes
 

@@ -202,4 +202,65 @@ mod tests {
             .unwrap();
         assert_eq!(db.key_request("B1", "I2").await.unwrap().unwrap().id, "R2");
     }
+
+    async fn hub(db: &ControlDb, id: &str, instance: &str, last_seen: Option<i64>, revoked: bool) {
+        db.transact(vec![Stmt::new(
+            "INSERT INTO hubs (id, branch_id, platform, hub_instance_id, version, token_hash, \
+             paired_at, last_seen_at, revoked_at) VALUES (?, 'B1', 'windows', ?, '1', 'h', 1, ?, ?)",
+            vec![
+                text(id),
+                text(instance),
+                last_seen.map_or(SqlValue::Null, SqlValue::Integer),
+                if revoked {
+                    SqlValue::Integer(2)
+                } else {
+                    SqlValue::Null
+                },
+            ],
+        )
+        .expect(1)])
+        .await
+        .unwrap();
+    }
+
+    async fn revoke_command(db: &ControlDb, status: &str) {
+        db.transact(vec![
+            Stmt::new(
+                "INSERT INTO commands (branch_id, idempotency_key, kind, schema_version, payload, \
+             issued_by, status, created_at) VALUES ('B1', 'k', 'hub.revoke', 1, '{}', 'O1', ?, 1)",
+                vec![text(status)],
+            )
+            .expect(1),
+        ])
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn history_is_another_instance_that_checked_in_or_a_revoked_hub() {
+        let (db, _dir) = db().await;
+        assert!(!db.branch_has_history("B1", "I2").await.unwrap(), "no hub");
+
+        // The same instance, even one that beat, pairing again is not a replacement.
+        hub(&db, "H1", "I1", Some(5), false).await;
+        assert!(!db.branch_has_history("B1", "I1").await.unwrap());
+        // Another PC pairing while the first Hub has checked in is.
+        assert!(db.branch_has_history("B1", "I2").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_hub_that_never_checked_in_is_history_only_after_an_applied_revoke() {
+        let (db, _dir) = db().await;
+        hub(&db, "H1", "I1", None, false).await;
+        assert!(!db.branch_has_history("B1", "I2").await.unwrap(), "a retry");
+        revoke_command(&db, "pending").await;
+        assert!(!db.branch_has_history("B1", "I2").await.unwrap());
+        db.transact(vec![
+            Stmt::new("UPDATE commands SET status = 'applied'", vec![]).expect(1),
+        ])
+        .await
+        .unwrap();
+        assert!(db.branch_has_history("B1", "I2").await.unwrap());
+        assert!(!db.branch_has_history("B1", "I1").await.unwrap());
+    }
 }

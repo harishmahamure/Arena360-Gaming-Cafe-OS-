@@ -2,7 +2,7 @@
 title: 'Story 9.9: A replacement Hub opens in "Restore this branch" and serves nothing until restored'
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 baseline_revision: 'e49b586d9fbacdd69b1651ad169fa93c23722023'
 review_loop_iteration: 0
 context:
@@ -83,6 +83,14 @@ deferred: []
 
 ## Review Triage Log
 
+Code review (2026-10-30): four layers (blind, edge-case, verification-gap, acceptance). Fixed:
+- Android restart: a waiting Hub has no branch key, but `AndroidSecrets::lost` counted the missing key as lost, so a restart sent it to re-pairing (which minted a branch key). `lost_expecting(has_identity, expects_kek)` is used at start with `expects_kek = !restore_pending`; the re-pair path also skips minting while waiting.
+- `HubPairResponse.branch_name` defaults; a non-replacement response without `bootstrap` is an error rather than an empty, unflagged pairing.
+- Migration 0085 columns had no export-reference meanings (`export_reference` tests were red): meanings and `docs/export-format/reference.md` updated.
+- Added `branch_has_history` unit tests (last_seen clause, same-instance exclusion, applied vs pending revoke) and a lost-key test for the waiting Hub.
+Deferred (not blocking): revoke-only history for a Hub that never checked in is by design in the spec (owner escape hatch comes with restore stories 9.10/9.12/9.13); rate-limit, LAN kiosk/kitchen pairing refusal and `KeyRequestTask` WAN-return tests; background tasks (upload, housekeeping) while waiting; Revoked chip on the Restore screen.
+Pre-existing failures on a clean checkout: `arena-tasks` `heartbeat::trusted_time...` and `printer::lan::a_printer_that_stops_reading_times_out`, `arena-cloud` `binary::unreachable_at_start...`.
+
 ## Design Notes
 
 "Has history" is decided in the cloud, where the earlier Hubs and the `hub.revoke` row live, so the Hub needs no guess. A Hub that never checked in and was never replaced has nothing to restore, which keeps a failed first install (a retry with a new code) on the normal bootstrap path. The flag lives on `hub_identity`, outside the change log, so it survives restarts and never replicates.
@@ -95,7 +103,7 @@ deferred: []
 
 ## Auto Run Result
 
-Status: review
+Status: done
 
 Implemented per spec. Verified: fmt, clippy `-D warnings`, `cargo test` for proto/store/core/tasks/kiosk-core/cloud/api, the Hub `pairing` integration test (real Hub binary against a local cloud: pair, replace, pair a second Hub, restart), `check:strings/layers/protocol`, `format:check`, and the Hub Playwright spec (desktop and phone, with axe).
 

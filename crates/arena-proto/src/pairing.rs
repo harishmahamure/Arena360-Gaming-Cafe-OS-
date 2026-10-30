@@ -138,6 +138,7 @@ pub struct HubPairResponse {
     /// "Restore this branch" and serves nothing until it is restored.
     #[serde(default)]
     pub restore_pending: bool,
+    #[serde(default)]
     pub branch_name: String,
 }
 

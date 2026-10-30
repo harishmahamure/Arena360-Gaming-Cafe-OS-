@@ -158,6 +158,8 @@ hub_identity.tenant_id: Unique id of the cafe business account in the cloud.
 hub_identity.branch_id: Unique id of the branch this Hub is paired to.
 hub_identity.hub_id: Unique id of this Hub.
 hub_identity.tier: The plan the branch is on: free, basic or premium.
+hub_identity.restore_pending: 1 while this Hub replaces an earlier one and waits to be restored, serving nothing; otherwise 0.
+hub_identity.restore_branch_name: The name of the branch this Hub waits to restore, shown on the Restore this branch screen.
 hub_meta: Small bookkeeping values the Hub keeps for itself, as name and value pairs.
 hub_meta.key: The name of the value.
 hub_meta.value: The value.

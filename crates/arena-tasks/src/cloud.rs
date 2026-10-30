@@ -755,7 +755,12 @@ impl CloudPairer {
                 paired.token.clone().into_bytes(),
             )
             .await?;
-            if let Some(kek) = &self.kek_store {
+            // A Hub waiting to be restored makes no branch key (Story 9.9).
+            let waiting = self
+                .restore
+                .as_ref()
+                .is_some_and(|(_, status)| status.borrow().restore_pending.is_some());
+            if let Some(kek) = self.kek_store.as_ref().filter(|_| !waiting) {
                 let fresh = mint_kek().map_err(|e| internal(&format!("branch key: {e}")))?;
                 self.write_secret(Arc::clone(kek), fresh.to_vec()).await?;
             }
@@ -770,6 +775,9 @@ impl CloudPairer {
         }
         if paired.restore_pending {
             return self.pair_as_replacement(identity, paired).await;
+        }
+        if paired.bootstrap.is_none() {
+            return Err(internal("the pair response has no bootstrap"));
         }
         self.write_secret(
             Arc::clone(&self.keystore),

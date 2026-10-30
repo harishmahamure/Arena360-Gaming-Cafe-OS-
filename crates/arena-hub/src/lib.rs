@@ -268,7 +268,12 @@ async fn run(
         .as_ref()
         .map(|w| AndroidSecrets::new(&cfg.data_dir, w));
     // Before anything can mint a branch key: has the key that wrapped the secrets been lost?
-    let keys_lost = identity.is_some() && secrets.as_ref().is_some_and(|s| s.lost(true));
+    // A Hub waiting to be restored has no branch key yet (Story 9.9).
+    let waiting_restore = store.restore_pending()?.is_some();
+    let keys_lost = identity.is_some()
+        && secrets
+            .as_ref()
+            .is_some_and(|s| s.lost_expecting(true, !waiting_restore));
     let pair_gate = if keys_lost {
         PairGate::needing_repair()
     } else {

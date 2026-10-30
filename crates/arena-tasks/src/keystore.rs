@@ -293,9 +293,16 @@ impl AndroidSecrets {
     /// cannot be unwrapped is lost; so is a missing one while the Hub has a `hub_identity`
     /// (pairing writes both). A plain I/O error is not a lost key.
     pub fn lost(&self, has_identity: bool) -> bool {
+        self.lost_expecting(has_identity, true)
+    }
+
+    /// As [`Self::lost`]. A Hub waiting to be restored (Story 9.9) never made a branch key, so
+    /// with `expects_kek` false a missing branch key file is not a lost key.
+    pub fn lost_expecting(&self, has_identity: bool, expects_kek: bool) -> bool {
         [("token", &self.token), ("branch key", &self.kek)]
             .into_iter()
             .any(|(what, store)| match store.get() {
+                Ok(None) if what == "branch key" && !expects_kek => false,
                 Ok(Some(_)) => false,
                 Ok(None) => has_identity,
                 Err(e) if is_key_lost(&e) => true,
@@ -571,6 +578,17 @@ mod tests {
         assert!(!secrets.lost(true));
         assert!(android(dir.path(), 0x22).lost(true));
         assert!(android(dir.path(), 0x22).lost(false));
+    }
+
+    #[test]
+    fn a_hub_waiting_to_be_restored_has_no_branch_key_and_is_not_lost() {
+        let dir = tempfile::tempdir().unwrap();
+        let secrets = android(dir.path(), 0x21);
+        secrets.token.put(b"hub_x.y").unwrap();
+        assert!(secrets.lost(true));
+        assert!(!secrets.lost_expecting(true, false));
+        // The token is still expected, and an unwrap failure is still a lost key.
+        assert!(android(dir.path(), 0x22).lost_expecting(true, false));
     }
 
     #[test]

@@ -13,6 +13,7 @@ mod audit;
 mod audit_build;
 mod audit_query;
 mod backup_export;
+mod backup_status;
 mod billing;
 mod booster;
 mod catalog;
@@ -132,6 +133,7 @@ pub use backup_export::{
     auto_export_file_name, everything_folder_name, export_file_name, is_auto_export_file,
     is_auto_export_name,
 };
+pub use backup_status::{BackupError, BackupErrorSource, BackupStatus};
 pub use billing::{
     BILLING_GRACE_RANGE, BILLING_LOW_BALANCE_MAX_MINOR, BILLING_MINIMUM_RANGE,
     BILLING_ROUNDING_RANGE, BILLING_WARN_MARK_RANGE, BILLING_WARN_MARKS_MAX, BillingRules,

@@ -2102,6 +2102,71 @@ impl SnapshotReader {
         })
     }
 
+    /// How far the cloud backup has got, for the header and System -> Backup (Story 9.16):
+    /// `upload_cursor`, `snapshot_log`, `backup_state`, the summary and GST archive logs, read in
+    /// one snapshot. `cloud` and `upload_interval_s` come from the Hub's tier; a Hub that is not
+    /// on a paid tier answers [`arena_proto::BackupStatus::local_only`]. Blocking (SQLite).
+    pub fn backup_status(
+        &self,
+        cloud: bool,
+        upload_interval_s: u32,
+        now: i64,
+    ) -> Result<arena_proto::BackupStatus, AppError> {
+        use arena_proto::{BackupError, BackupErrorSource, BackupStatus};
+        if !cloud {
+            return Ok(BackupStatus::local_only(now));
+        }
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_with(|conn| {
+            let state = arena_store::read_backup_state(conn)?;
+            let snapshot = arena_store::latest_snapshot_log(conn)?;
+            let pending_rows = arena_store::count_pending_rows(conn)?;
+            let batch = i64::try_from(arena_store::BATCH_MAX_ROWS).unwrap_or(i64::MAX);
+            let error = [
+                (
+                    BackupErrorSource::Upload,
+                    state.upload_error,
+                    state.upload_error_at,
+                ),
+                (
+                    BackupErrorSource::Keys,
+                    state.keys_error,
+                    state.keys_error_at,
+                ),
+                (
+                    BackupErrorSource::FirstSnapshot,
+                    state.first_snapshot_error,
+                    state.first_snapshot_error_at,
+                ),
+            ]
+            .into_iter()
+            .filter_map(|(source, code, at)| code.map(|code| BackupError { source, code, at }))
+            .max_by_key(|e| e.at.unwrap_or(i64::MIN));
+            Ok(BackupStatus {
+                cloud: true,
+                as_of: now,
+                upload_interval_s,
+                last_upload_at: arena_store::read_upload_cursor(conn)?.map(|c| c.uploaded_at),
+                last_summary_at: arena_store::find_rollup_log(conn, arena_proto::SUMMARY_LOG_DATE)?
+                    .map(|r| r.built_at),
+                last_snapshot_at: snapshot.as_ref().map(|r| r.uploaded_at),
+                last_snapshot_date: snapshot.map(|r| r.date),
+                last_keys_at: state.keys_backed_up_at,
+                last_gst_archive_at: arena_store::list_gst_archive_logs(conn)?
+                    .iter()
+                    .map(|r| r.built_at)
+                    .max(),
+                pending_rows,
+                pending_batches: (pending_rows + batch - 1) / batch,
+                first_backup_pending: state.first_snapshot_pending,
+                error,
+            })
+        })
+    }
+
     /// What the key backup needs (Story 9.2), read in one snapshot: `backup_state` and every
     /// `player_keys` row. The rows are read only when the key table changed since the last
     /// successful backup. Blocking (SQLite).

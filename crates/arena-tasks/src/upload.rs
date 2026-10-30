@@ -323,6 +323,9 @@ pub struct UploadTask {
     backup: Option<BackupResponder>,
     /// Why the last cycle did not finish; `None` when it ran to its end.
     outcome: Option<AppError>,
+    /// What this task last set `backup_state.upload_error` to (Story 9.16); `None` until it has
+    /// written once, since the row may hold an error from before a restart.
+    noted_error: Option<Option<String>>,
 }
 
 impl UploadTask {
@@ -369,6 +372,7 @@ impl UploadTask {
             disk_alerted: None,
             backup: None,
             outcome: None,
+            noted_error: None,
         }
     }
 
@@ -469,6 +473,7 @@ impl UploadTask {
             }
             let next = self.cycle().await;
             let result = self.outcome.take();
+            self.note_outcome(&writer, result.as_ref()).await;
             for reply in waiting.drain(..) {
                 let _ = reply.send(result.clone().map_or(Ok(()), Err));
             }
@@ -667,6 +672,32 @@ impl UploadTask {
             wait,
             active: true,
             early: true,
+        }
+    }
+
+    /// Keeps how the cycle ended in `backup_state` for the header and System -> Backup (Story
+    /// 9.16): the failure's code, or nothing after a cycle that ended well. A Hub that is not
+    /// uploading (follower, Free) says nothing either way. Written only when it changes.
+    async fn note_outcome(&mut self, writer: &WriterHandle, outcome: Option<&AppError>) {
+        let code = match outcome {
+            Some(e)
+                if matches!(
+                    e.code,
+                    ErrorCode::NotPrimary | ErrorCode::FeatureNotEntitled
+                ) =>
+            {
+                return;
+            }
+            Some(e) => Some(e.code.as_str().to_owned()),
+            None => None,
+        };
+        if self.noted_error.as_ref() == Some(&code) {
+            return;
+        }
+        match writer.record_upload_error(code.clone()).await {
+            Ok(()) => self.noted_error = Some(code),
+            Err(e) if e.code == ErrorCode::NotPrimary => {}
+            Err(e) => tracing::warn!(code = e.code.as_str(), "upload: could not note the outcome"),
         }
     }
 
@@ -4203,5 +4234,23 @@ mod tests {
         assert_eq!(gst_asks(&seen), ["FY2025-26"]);
         assert!(gst_puts(&seen).is_empty());
         assert!(gst_row(&f, "FY2025-26").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_failed_cycle_is_noted_for_the_header_and_a_good_one_clears_it() {
+        let (port, _seen) = serve(cloud).await;
+        let mut f = fx(port, Tier::Basic).await;
+        let unreachable = AppError::new(ErrorCode::CloudUnreachable, "no route");
+        f.task.note_outcome(&f.writer, Some(&unreachable)).await;
+        assert_eq!(
+            backup_state(&f).upload_error.as_deref(),
+            Some("CLOUD_UNREACHABLE")
+        );
+        // A Hub that is not uploading says nothing: the failure stays as it was.
+        let not_entitled = AppError::new(ErrorCode::FeatureNotEntitled, "free");
+        f.task.note_outcome(&f.writer, Some(&not_entitled)).await;
+        assert!(backup_state(&f).upload_error.is_some());
+        f.task.note_outcome(&f.writer, None).await;
+        assert_eq!(backup_state(&f).upload_error, None);
     }
 }

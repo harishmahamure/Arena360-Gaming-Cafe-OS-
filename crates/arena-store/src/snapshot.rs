@@ -46,6 +46,14 @@ pub fn latest_snapshot_date(conn: &Connection) -> Result<Option<String>, AppErro
         .map_err(db_error)
 }
 
+/// The newest `snapshot_log` row (the latest day), if the Hub has stored any.
+pub fn latest_snapshot_log(conn: &Connection) -> Result<Option<SnapshotLogRow>, AppError> {
+    match latest_snapshot_date(conn)? {
+        Some(date) => find_snapshot_log(conn, &date),
+        None => Ok(None),
+    }
+}
+
 /// The `snapshot_log` row of `date`, if the Hub has stored it.
 pub fn find_snapshot_log(
     conn: &Connection,

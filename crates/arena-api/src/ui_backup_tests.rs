@@ -533,3 +533,75 @@ async fn the_gst_archive_list_needs_the_report_permission() {
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert_eq!(body["code"], "PERMISSION_DENIED");
 }
+
+const STATUS_URL: &str = "/ui/backup/status";
+
+#[tokio::test]
+async fn a_free_hub_answers_no_cloud_backup() {
+    let hub = hub().await;
+    let token = token_for(&hub, "counter", "c-pass").await;
+    let (status, body) = call(&hub, "GET", STATUS_URL, Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["cloud"], false);
+    assert_eq!(body["upload_interval_s"], 0);
+    assert_eq!(body["last_upload_at"], json!(null));
+    hub._status
+        .send_modify(|s| s.tier = Some(arena_proto::Tier::Free));
+    let (_, body) = call(&hub, "GET", STATUS_URL, Some(&token), None).await;
+    assert_eq!(body["cloud"], false, "an explicit Free is the same");
+}
+
+#[tokio::test]
+async fn a_paid_hub_reads_its_bookkeeping_for_any_signed_in_member() {
+    let hub = hub().await;
+    hub._status
+        .send_modify(|s| s.tier = Some(arena_proto::Tier::Basic));
+    hub.writer
+        .record_upload_error(Some("CLOUD_UNREACHABLE".into()))
+        .await
+        .unwrap();
+    hub.writer.record_upload("0:A".into(), 3).await.unwrap();
+    let token = token_for(&hub, "counter", "c-pass").await;
+    let (status, body) = call(&hub, "GET", STATUS_URL, Some(&token), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["cloud"], true);
+    assert_eq!(body["upload_interval_s"], 300);
+    assert_eq!(body["last_upload_at"], json!(T0));
+    assert_eq!(body["as_of"], json!(T0));
+    assert_eq!(body["first_backup_pending"], false);
+    assert_eq!(body["error"]["source"], "upload");
+    assert_eq!(body["error"]["code"], "CLOUD_UNREACHABLE");
+}
+
+#[tokio::test]
+async fn the_backup_status_needs_a_session() {
+    let hub = hub().await;
+    let (status, _) = call(&hub, "GET", STATUS_URL, None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn the_newest_error_wins_and_a_paid_hub_with_no_snapshot_is_first_backup_pending() {
+    let hub = hub().await;
+    hub._status
+        .send_modify(|s| s.tier = Some(arena_proto::Tier::Premium));
+    hub.writer
+        .record_first_snapshot_pending(Some("DISK_FULL".into()))
+        .await
+        .unwrap();
+    hub.clock.advance(5_000);
+    hub.writer
+        .record_upload_error(Some("CLOUD_UNREACHABLE".into()))
+        .await
+        .unwrap();
+    let token = token_for(&hub, "manager", "m-pass").await;
+    let (_, body) = call(&hub, "GET", STATUS_URL, Some(&token), None).await;
+    assert_eq!(body["first_backup_pending"], true);
+    assert_eq!(body["last_upload_at"], json!(null));
+    assert_eq!(body["error"]["source"], "upload");
+    assert_eq!(body["error"]["at"], json!(T0 + 5_000));
+    hub.writer.record_upload_error(None).await.unwrap();
+    let (_, body) = call(&hub, "GET", STATUS_URL, Some(&token), None).await;
+    assert_eq!(body["error"]["source"], "first_snapshot");
+    assert_eq!(body["error"]["code"], "DISK_FULL");
+}

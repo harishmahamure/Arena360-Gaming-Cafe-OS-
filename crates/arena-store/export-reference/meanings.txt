@@ -49,6 +49,7 @@ backup_state.base_epoch: The epoch of the last change in the full snapshot uploa
 backup_state.base_seq: The number of that last change; the cloud holds no change batches up to it, so checks for missing batches start after it.
 backup_state.first_snapshot_pending: 1 while the branch is on a paid plan but that first full snapshot is not stored yet, so no change batch is uploaded; otherwise 0.
 backup_state.first_snapshot_error: A short code for why the last attempt at that first snapshot failed; it never contains player data.
+backup_state.upload_error: A short code for why the last upload to the cloud failed; empty when the last upload went well. It never contains player data.
 branch: The branch (cafe location) this Hub runs: its name, code, currency and time settings.
 branch.branch_id: Unique id of the branch.
 branch.name: The branch's name as shown to staff and on receipts.

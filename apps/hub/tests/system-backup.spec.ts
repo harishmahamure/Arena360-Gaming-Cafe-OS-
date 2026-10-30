@@ -1,7 +1,8 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import type { GstArchiveEntry, HubSnapshot, SessionStaff } from "@arena/ui/generated";
+import type { BackupStatus, GstArchiveEntry, HubSnapshot, SessionStaff } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
+import { agoOf, isBehind, parseBackupStatus } from "../src/lib/backup-status";
 import { parseGstArchives } from "../src/lib/gst-archive";
 import { ORIGIN } from "./origin";
 
@@ -44,8 +45,36 @@ const ARCHIVED: GstArchiveEntry = {
   built_at: 1_800_000_000_000,
 };
 
-/** Serves the Hub's loopback API with `answer` as the GST archive list. */
-async function stub(page: Page, answer: () => { status: number; body: unknown } | "down") {
+/** A paid Hub that backed up 4 minutes ago, on a 5-minute interval. */
+function paid(over: Partial<BackupStatus> = {}): BackupStatus {
+  const now = Date.now();
+  return {
+    cloud: true,
+    as_of: now,
+    upload_interval_s: 300,
+    last_upload_at: now - 4 * 60_000,
+    last_summary_at: now - 3 * 60_000,
+    last_snapshot_at: now - 5 * 3_600_000,
+    last_snapshot_date: "2027-01-14",
+    last_keys_at: now - 2 * 3_600_000,
+    last_gst_archive_at: null,
+    pending_rows: 0,
+    pending_batches: 0,
+    first_backup_pending: false,
+    error: null,
+    ...over,
+  };
+}
+
+/**
+ * Serves the Hub's loopback API with `answer` as the GST archive list and `status` as the backup
+ * status (a paid Hub that backed up 4 minutes ago when not given).
+ */
+async function stub(
+  page: Page,
+  answer: () => { status: number; body: unknown } | "down",
+  status: () => BackupStatus = () => paid(),
+) {
   await page.addInitScript(() => sessionStorage.setItem("arena.hub.token", "manager-token"));
   await page.route(`${HUB}/**`, (route) => {
     const req = route.request();
@@ -69,6 +98,8 @@ async function stub(page: Page, answer: () => { status: number; body: unknown } 
           headers: CORS,
           body: "retry: 60000\n\n",
         });
+      case "/ui/backup/status":
+        return json(200, status());
       case "/ui/backup/gst-archive": {
         const a = answer();
         return a === "down" ? route.abort() : json(a.status, a.body);
@@ -131,4 +162,123 @@ test("only a well-formed list is read", () => {
   expect(parseGstArchives({ archives: [{ fy: 1 }] })).toBeNull();
   expect(parseGstArchives({})).toBeNull();
   expect(parseGstArchives(null)).toBeNull();
+});
+
+const FREE = () => ({ ...paid(), cloud: false, upload_interval_s: 0 });
+const NO_ARCHIVES = () => ({ status: 200, body: { archives: [] } });
+
+test("the header says when the branch last backed up, with the pending batches", async ({
+  page,
+}) => {
+  test.skip(test.info().project.name === "phone", "the phone header drops the backup status");
+  await stub(page, NO_ARCHIVES, () => paid({ pending_batches: 3, pending_rows: 40 }));
+  await page.goto("/system");
+  const chip = page.getByTestId("hub-backup-status");
+  await expect(chip).toContainText("Backed up 4 min ago · 3 pending");
+  await expect(chip).toHaveAttribute("data-behind", "false");
+  await expect(chip).toHaveAttribute(
+    "title",
+    "Last upload 4 min ago · last summary 3 min ago · 3 batches pending",
+  );
+  await expect(chip).toHaveAccessibleName(/Last upload 4 min ago · last summary 3 min ago/);
+  await chip.click();
+  await expect(page).toHaveURL(/\/system\/backup$/);
+});
+
+test("the header warns 'Backup behind' after twice the interval and says so politely", async ({
+  page,
+}) => {
+  test.skip(test.info().project.name === "phone", "the phone header drops the backup status");
+  await stub(page, NO_ARCHIVES, () => paid({ last_upload_at: Date.now() - 11 * 60_000 }));
+  await page.goto("/system");
+  const chip = page.getByTestId("hub-backup-status");
+  await expect(chip).toHaveAttribute("data-behind", "true");
+  await expect(chip).toContainText(en["hub.header.backup.behind"]);
+  await expect(page.getByTestId("hub-announce")).toContainText("Backup is behind");
+});
+
+test("a paid Hub with no upload yet says the first backup is pending, not behind", async ({
+  page,
+}) => {
+  test.skip(test.info().project.name === "phone", "the phone header drops the backup status");
+  await stub(page, NO_ARCHIVES, () =>
+    paid({ last_upload_at: null, first_backup_pending: true, pending_batches: 1 }),
+  );
+  await page.goto("/system");
+  const chip = page.getByTestId("hub-backup-status");
+  await expect(chip).toContainText(en["hub.header.backup.first"]);
+  await expect(chip).toHaveAttribute("data-behind", "false");
+});
+
+test("a Free Hub shows no backup status in the header and only local exports in System", async ({
+  page,
+}) => {
+  await stub(page, NO_ARCHIVES, FREE);
+  await page.goto("/system");
+  await expect(page.getByTestId("hub-branch")).toBeVisible();
+  await expect(page.getByTestId("hub-backup-status")).toHaveCount(0);
+  await page.goto("/system/backup");
+  await expect(page.getByTestId("cloud-free")).toContainText("Available on Basic");
+  await expect(page.getByTestId("local-exports")).toBeVisible();
+  await expect(page.getByTestId("gst-archives")).toHaveCount(0);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+});
+
+test("below 840px the header drops the backup status and System keeps it", async ({ page }) => {
+  await page.setViewportSize({ width: 600, height: 900 });
+  await stub(page, NO_ARCHIVES, () => paid());
+  await page.goto("/system");
+  await expect(page.getByTestId("hub-branch")).toBeVisible();
+  await expect(page.getByTestId("hub-backup-status")).toHaveCount(0);
+  await page.goto("/system/backup");
+  await expect(page.getByTestId("cloud-last-upload")).toHaveText("4 min ago");
+});
+
+test("System -> Backup lists each last time, the pending batches and the last error in words", async ({
+  page,
+}) => {
+  await stub(page, NO_ARCHIVES, () =>
+    paid({
+      pending_batches: 2,
+      error: { source: "upload", code: "CLOUD_UNREACHABLE", at: Date.now() - 60_000 },
+    }),
+  );
+  await page.goto("/system/backup");
+  await expect(page.getByTestId("cloud-last-upload")).toHaveText("4 min ago");
+  await expect(page.getByTestId("cloud-last-summary")).toHaveText("3 min ago");
+  await expect(page.getByTestId("cloud-last-snapshot")).toHaveText("5 h ago (for 2027-01-14)");
+  await expect(page.getByTestId("cloud-last-keys")).toHaveText("2 h ago");
+  await expect(page.getByTestId("cloud-last-gst")).toHaveText("not yet");
+  await expect(page.getByTestId("cloud-pending")).toHaveText("2");
+  await expect(page.getByTestId("cloud-error")).toContainText(
+    "Uploads: The cloud couldn't be reached.",
+  );
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+});
+
+test("System -> Backup says 'First backup pending' after an upgrade", async ({ page }) => {
+  await stub(page, NO_ARCHIVES, () =>
+    paid({ last_upload_at: null, first_backup_pending: true, last_summary_at: null }),
+  );
+  await page.goto("/system/backup");
+  await expect(page.getByTestId("cloud-first-pending")).toContainText("First backup pending");
+  await expect(page.getByTestId("cloud-last-upload")).toHaveText("not yet");
+});
+
+test("the backup status helpers read the Hub's answer", () => {
+  const now = 10_000_000;
+  const s = paid({ as_of: now, last_upload_at: now - 600_000, upload_interval_s: 300 });
+  expect(isBehind(s, now)).toBe(false);
+  expect(isBehind(s, now + 1)).toBe(true);
+  expect(isBehind({ ...s, last_upload_at: null }, now)).toBe(false);
+  expect(isBehind({ ...s, cloud: false }, now)).toBe(false);
+  expect(agoOf(now - 30_000, now)).toEqual({ key: "hub.backup.ago.now" });
+  expect(agoOf(now - 4 * 60_000, now)).toEqual({ key: "hub.backup.ago.minutes", n: 4 });
+  expect(agoOf(now - 3 * 3_600_000, now)).toEqual({ key: "hub.backup.ago.hours", n: 3 });
+  expect(agoOf(now - 72 * 3_600_000, now)).toEqual({ key: "hub.backup.ago.days", n: 3 });
+  expect(agoOf(null, now)).toEqual({ key: "hub.backup.ago.never" });
+  expect(parseBackupStatus(s)).toEqual(s);
+  expect(parseBackupStatus({ ...s, cloud: "yes" })).toBeNull();
+  expect(parseBackupStatus({ cloud: true })).toBeNull();
+  expect(parseBackupStatus(null)).toBeNull();
 });

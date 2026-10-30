@@ -357,6 +357,21 @@ impl WriterHandle {
         .await
     }
 
+    /// Story 9.16: records how the last upload cycle ended (`Some(code)` on a failure, `None`
+    /// when it ended well). Same rules as [`Self::record_key_backup`].
+    pub async fn record_upload_error(&self, error: Option<String>) -> Result<(), AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        self.run(move |store| {
+            let ctx = ctx_from(clock.as_ref(), &status);
+            store.write_tx(|tx| {
+                crate::apply::check_epoch(tx, &ctx)?;
+                arena_store::write_upload_error(tx, error.as_deref(), clock.now_ms())
+            })
+        })
+        .await
+    }
+
     /// Story 9.2: records that the cloud accepted this Hub's escrowed branch key. Same rules as
     /// [`Self::record_key_backup`].
     pub async fn record_kek_escrow(&self) -> Result<(), AppError> {

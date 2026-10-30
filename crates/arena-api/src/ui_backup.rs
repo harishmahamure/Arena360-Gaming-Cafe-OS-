@@ -448,6 +448,34 @@ pub(crate) async fn restore(
     Json(arena_proto::RestoreStaged { restarting: true }).into_response()
 }
 
+/// `GET /ui/backup/status` (any signed-in member, Story 9.16): how far the cloud backup has got,
+/// for the header ("Backed up 4 min ago") and System -> Backup. It reads the Hub's own logs, so
+/// it is the same whether or not the cloud can be reached now. A Free Hub answers `cloud: false`
+/// and nothing else. The interval is the tier's default: the licence may set its own, but the
+/// header's "behind" mark only needs the order of magnitude.
+pub(crate) async fn status(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+    let Some(token) = bearer(&headers).map(str::to_owned) else {
+        return fail(auth_failed());
+    };
+    if let Err(e) = auth.acting_session(&token).await {
+        return fail(e);
+    }
+    let tier = auth
+        .status()
+        .and_then(|s| s.borrow().tier)
+        .filter(|t| *t != arena_proto::Tier::Free);
+    let interval = tier.map_or(0, |t| t.defaults().upload_interval_s);
+    let now = auth.clock().now_ms();
+    let reader = Arc::clone(auth.reader());
+    match tokio::task::spawn_blocking(move || reader.backup_status(tier.is_some(), interval, now))
+        .await
+    {
+        Ok(Ok(status)) => Json(status).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
 /// `GET /ui/backup/gst-archive` (`report.view`, Story 9.14): the financial years whose GST archive
 /// the Hub has uploaded, newest first, for System -> Backup ("GST archive 26-27 saved"). Reads the
 /// `gst_archive_log` rows only; a Free Hub has none.

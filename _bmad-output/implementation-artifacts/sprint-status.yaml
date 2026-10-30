@@ -282,7 +282,7 @@ development_status:
   9-13-rebuild-the-branch-from-the-fetched-backup-as-a-new-epoch: done
   9-14-the-hub-emits-a-yearly-gst-archive-kept-for-8-years: done
   9-15-backups-are-kept-for-the-plan-s-retention-and-gst-records-fo: done
-  9-16-cloud-backup-status-in-the-hub-header-and-system-screen: backlog
+  9-16-cloud-backup-status-in-the-hub-header-and-system-screen: review
   9-17-owner-sees-backup-status-and-sends-backup-now: backlog
   9-18-owner-issues-a-standby-code-and-a-second-pc-pairs-as-standby: backlog
   9-19-the-standby-bootstraps-from-the-main-hub-and-follows-it-live: backlog

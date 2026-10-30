@@ -6,6 +6,9 @@
   import { page } from "$app/state";
   import AdBanner from "../lib/AdSlot.svelte";
   import AlertList from "../lib/AlertList.svelte";
+  import BackupChip from "../lib/BackupChip.svelte";
+  import { agoOf } from "../lib/backup-status";
+  import { backup, backupBehind, hubNow, watchBackup } from "../lib/backup-status.svelte";
   import Clock from "../lib/Clock.svelte";
   import RuleChips from "../lib/RuleChips.svelte";
   import RestoreBranch from "../lib/RestoreBranch.svelte";
@@ -432,6 +435,28 @@
     });
   });
 
+  // While someone is signed in the header keeps the backup status fresh (Story 9.16).
+  $effect(() => {
+    if (!streamToken) return;
+    return untrack(() => watchBackup(() => void invalidate(SESSION_DEPENDENCY)));
+  });
+
+  // "Backup behind" and its return to normal are announced once each, in the polite region.
+  let announcedBehind = false;
+  $effect(() => {
+    const now = backup.status?.cloud === true && backupBehind();
+    untrack(() => {
+      if (now === announcedBehind) return;
+      announcedBehind = now;
+      if (now) {
+        const a = agoOf(backup.status?.last_upload_at ?? null, hubNow());
+        announcement = t("hub.header.backup.announce_behind", { when: t(a.key, { n: a.n }) });
+      } else if (backup.status?.cloud) {
+        announcement = t("hub.header.backup.announce_ok");
+      }
+    });
+  });
+
   $effect(() => {
     const token = streamToken;
     if (!token) return;
@@ -825,6 +850,7 @@
           <Button label="hub.header.sign_out" variant="secondary" onclick={onSignOut} />
         {/if}
         {#if !viewport.phone}{@render chips()}{/if}
+        {#if !viewport.phone}<BackupChip />{/if}
         {#if alertRows.length > 0}
           <button
             type="button"

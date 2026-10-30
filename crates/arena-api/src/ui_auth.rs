@@ -3734,6 +3734,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
             post(crate::ui_backup::restore_check),
         )
         .route("/ui/backup/restore", post(crate::ui_backup::restore))
+        .route("/ui/backup/status", get(crate::ui_backup::status))
         .route(
             "/ui/backup/gst-archive",
             get(crate::ui_backup::gst_archives),

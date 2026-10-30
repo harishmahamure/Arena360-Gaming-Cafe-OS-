@@ -40,6 +40,11 @@ pub struct BackupState {
     pub first_snapshot_error: Option<String>,
     /// When (Hub clock, ms) it failed.
     pub first_snapshot_error_at: Option<i64>,
+    /// Why the last cloud upload cycle failed (Story 9.16); cleared by the next one that ends
+    /// well.
+    pub upload_error: Option<String>,
+    /// When (Hub clock, ms) it failed.
+    pub upload_error_at: Option<i64>,
 }
 
 impl BackupState {
@@ -61,7 +66,7 @@ pub fn read_backup_state(conn: &Connection) -> Result<BackupState, AppError> {
     conn.query_row(
         "SELECT keys_version, keys_backed_up_version, keys_backed_up_at, keys_error,
                 keys_error_at, kek_escrowed_at, base_epoch, base_seq, first_snapshot_pending,
-                first_snapshot_error, first_snapshot_error_at
+                first_snapshot_error, first_snapshot_error_at, upload_error, upload_error_at
          FROM backup_state WHERE id = 1",
         [],
         |r| {
@@ -77,6 +82,8 @@ pub fn read_backup_state(conn: &Connection) -> Result<BackupState, AppError> {
                 first_snapshot_pending: r.get(8)?,
                 first_snapshot_error: r.get(9)?,
                 first_snapshot_error_at: r.get(10)?,
+                upload_error: r.get(11)?,
+                upload_error_at: r.get(12)?,
             })
         },
     )
@@ -120,6 +127,29 @@ pub fn write_keys_error(conn: &Connection, error: &str, at: i64) -> Result<(), A
         "UPDATE backup_state SET keys_error = ?1, keys_error_at = ?2 WHERE id = 1",
         params![error, at],
     )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// Records how the last cloud upload cycle ended (Story 9.16): `Some(code)` when it failed
+/// (cut to a short code), `None` when it ended well. A write is made only when this changes
+/// what is recorded, so a Hub that keeps failing does not write every cycle.
+pub fn write_upload_error(conn: &Connection, error: Option<&str>, at: i64) -> Result<(), AppError> {
+    match error {
+        Some(error) => {
+            let error: String = error.chars().take(MAX_ERROR_CHARS).collect();
+            conn.execute(
+                "UPDATE backup_state SET upload_error = ?1, upload_error_at = ?2
+                 WHERE id = 1 AND (upload_error IS NOT ?1)",
+                params![error, at],
+            )
+        }
+        None => conn.execute(
+            "UPDATE backup_state SET upload_error = NULL, upload_error_at = NULL
+             WHERE id = 1 AND upload_error IS NOT NULL",
+            [],
+        ),
+    }
     .map_err(db_error)?;
     Ok(())
 }
@@ -209,9 +239,10 @@ pub fn stop_uploads(conn: &Connection) -> Result<bool, AppError> {
         .execute(
             "UPDATE backup_state SET base_epoch = NULL, base_seq = NULL,
                first_snapshot_pending = 0, first_snapshot_error = NULL,
-               first_snapshot_error_at = NULL
+               first_snapshot_error_at = NULL, upload_error = NULL, upload_error_at = NULL
              WHERE id = 1 AND (base_epoch IS NOT NULL OR base_seq IS NOT NULL
-               OR first_snapshot_pending = 1 OR first_snapshot_error IS NOT NULL)",
+               OR first_snapshot_pending = 1 OR first_snapshot_error IS NOT NULL
+               OR upload_error IS NOT NULL)",
             [],
         )
         .map_err(db_error)?;
@@ -348,6 +379,26 @@ mod tests {
         );
         let s = read_backup_state(&conn).unwrap();
         assert!(!s.first_snapshot_pending && s.first_snapshot_error.is_none());
+    }
+
+    #[test]
+    fn an_upload_error_keeps_its_first_time_and_a_good_cycle_clears_it() {
+        let conn = conn();
+        assert_eq!(read_backup_state(&conn).unwrap().upload_error, None);
+        write_upload_error(&conn, Some("CLOUD_UNREACHABLE"), 10).unwrap();
+        write_upload_error(&conn, Some("CLOUD_UNREACHABLE"), 20).unwrap();
+        let s = read_backup_state(&conn).unwrap();
+        assert_eq!(s.upload_error.as_deref(), Some("CLOUD_UNREACHABLE"));
+        assert_eq!(
+            s.upload_error_at,
+            Some(10),
+            "the same failure keeps when it began"
+        );
+        write_upload_error(&conn, Some("RATE_LIMITED"), 30).unwrap();
+        assert_eq!(read_backup_state(&conn).unwrap().upload_error_at, Some(30));
+        write_upload_error(&conn, None, 40).unwrap();
+        let s = read_backup_state(&conn).unwrap();
+        assert_eq!((s.upload_error, s.upload_error_at), (None, None));
     }
 
     #[test]

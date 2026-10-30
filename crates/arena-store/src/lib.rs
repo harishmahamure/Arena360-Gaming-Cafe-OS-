@@ -80,7 +80,7 @@ pub use audit::{
 pub use backup_state::{
     BackupState, PlayerKeyRow, clear_kek_escrow, complete_first_snapshot, list_player_keys,
     read_backup_state, stop_uploads, write_first_snapshot_pending, write_kek_escrowed,
-    write_keys_backed_up, write_keys_error,
+    write_keys_backed_up, write_keys_error, write_upload_error,
 };
 pub use branch::{
     BranchLocale, BranchSummary, ChangeOp, ChangeRecord, NewBranch, NewDeviceEvent, NewReadGrant,
@@ -267,7 +267,7 @@ pub use shifts::{
 };
 pub use snapshot::{
     SnapshotFile, SnapshotLogRow, build_snapshot_file, database_bytes, find_snapshot_log,
-    latest_snapshot_date, packed_snapshot_position, write_snapshot_log,
+    latest_snapshot_date, latest_snapshot_log, packed_snapshot_position, write_snapshot_log,
 };
 pub use staff::{
     PinCandidate, RoleRow, StaffListing, StaffRow, StaffWrite, count_active_staff,

@@ -2,7 +2,10 @@
 //! lease while primary and demotes on supersession.
 //!
 //! Epochs are `(counter, hub_instance_id)`, compared lexicographically. No cloud is contacted
-//! in this story: a Hub that finds no lease mints a provisional `(1, own_id)`. A follower never
+//! to take a lease: a Hub that finds none mints a provisional `(max seen + 1, own_id)`, and one that
+//! takes another instance's expired row mints `max(row counter, max seen) + 1` (Story 9.3, the
+//! highest counter seen is `lease.max_seen_counter`). The first heartbeat confirms the provisional
+//! epoch or answers with the higher fence. A follower never
 //! takes over on its own; promotion is a manual step (later story).
 //!
 //! Beyond the table row, the process-level writer lock (`<db>.lock`, see
@@ -15,7 +18,7 @@ use std::time::Duration;
 
 use arena_core::{Clock, HubStatus, LeaseInfo, LeaseRenewal, Role, Writer, WriterHandle};
 use arena_proto::{AppError, ErrorCode};
-use arena_store::{LeaseRow, Store, read_lease, write_lease};
+use arena_store::{LeaseRow, Store, read_lease, read_max_seen_counter, write_lease};
 use tokio::sync::watch;
 use tokio::time::{Instant, MissedTickBehavior};
 
@@ -42,11 +45,11 @@ enum Decision {
 }
 
 /// The start-up rule for a process that holds the writer lock.
-fn decide(existing: Option<LeaseRow>, own_id: &str, now: i64) -> Decision {
+fn decide(existing: Option<LeaseRow>, max_seen: i64, own_id: &str, now: i64) -> Decision {
     let expires_at = now + LEASE_TTL_MS;
     match existing {
         None => Decision::Take(LeaseRow {
-            counter: 1,
+            counter: max_seen.max(0) + 1,
             hub_instance_id: own_id.to_owned(),
             provisional: true,
             renewed_at: now,
@@ -61,7 +64,7 @@ fn decide(existing: Option<LeaseRow>, own_id: &str, now: i64) -> Decision {
         // Someone else's expired row: take it with a strictly higher epoch, so the old holder
         // demotes if it ever wakes up and re-reads the row.
         Some(row) if row.expires_at <= now => Decision::Take(LeaseRow {
-            counter: row.counter + 1,
+            counter: row.counter.max(max_seen) + 1,
             hub_instance_id: own_id.to_owned(),
             provisional: true,
             renewed_at: now,
@@ -102,7 +105,12 @@ impl LeaseTask {
             }
             let decision = store.write_tx(|tx| {
                 let now = job_clock.now_ms();
-                let decision = decide(read_lease(tx)?, &instance_id, now);
+                let decision = decide(
+                    read_lease(tx)?,
+                    read_max_seen_counter(tx)?,
+                    &instance_id,
+                    now,
+                );
                 if let Decision::Take(row) = &decision {
                     write_lease(tx, row)?;
                 }
@@ -427,6 +435,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_offline_take_mints_above_the_highest_counter_seen() {
+        let f = fixture();
+        seed(
+            &f.path,
+            &LeaseRow {
+                counter: 2,
+                hub_instance_id: OTHER.into(),
+                provisional: false,
+                renewed_at: T0 - 20_000,
+                expires_at: T0 - 1,
+            },
+        );
+        // The Hub heard of a fence at counter 5 (a heartbeat answer) before the lease expired.
+        {
+            let mut s = Store::open(&f.path, T0).unwrap();
+            s.write_tx(|tx| arena_store::raise_max_seen_counter(tx, 5))
+                .unwrap();
+        }
+        let task = start(&f).await;
+        let row = row_in(&f.path).unwrap();
+        assert_eq!((row.counter, row.provisional), (6, true));
+        assert_eq!(row.hub_instance_id, OWN);
+        // Renewing keeps what was seen, and the writer reads it back.
+        assert_eq!(task.writer().unwrap().max_seen_counter().await.unwrap(), 5);
+    }
+
+    #[tokio::test]
     async fn superseded_primary_closes_writer_within_one_tick() {
         let f = fixture();
         let mut task = start(&f).await;
@@ -588,7 +623,7 @@ mod tests {
         assert_eq!(f.rx.borrow().role, Role::Follower);
         // Another instance may take the released lease immediately.
         assert!(matches!(
-            decide(Some(row), OTHER, T0 + 1_000),
+            decide(Some(row), 0, OTHER, T0 + 1_000),
             Decision::Take(_)
         ));
     }
@@ -603,12 +638,21 @@ mod tests {
             expires_at,
         };
         assert!(
-            matches!(decide(None, OWN, 10), Decision::Take(r) if r.counter == 1 && r.provisional)
+            matches!(decide(None, 0, OWN, 10), Decision::Take(r) if r.counter == 1 && r.provisional)
         );
         assert!(matches!(
-            decide(Some(other(5, 11)), OWN, 10),
+            decide(Some(other(5, 11)), 9, OWN, 10),
             Decision::Follow(Some(_))
         ));
-        assert!(matches!(decide(Some(other(5, 10)), OWN, 10), Decision::Take(r) if r.counter == 6));
+        assert!(
+            matches!(decide(Some(other(5, 10)), 0, OWN, 10), Decision::Take(r) if r.counter == 6)
+        );
+        // An offline take mints above the highest counter seen, whichever is higher.
+        assert!(
+            matches!(decide(Some(other(2, 10)), 5, OWN, 10), Decision::Take(r) if r.counter == 6 && r.provisional)
+        );
+        assert!(
+            matches!(decide(Some(other(7, 10)), 5, OWN, 10), Decision::Take(r) if r.counter == 8)
+        );
     }
 }

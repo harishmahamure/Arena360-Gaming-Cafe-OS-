@@ -339,6 +339,38 @@ impl HeartbeatTask {
         }
     }
 
+    /// Settles the Hub's epoch with the fence the cloud answered (Story 9.3): remembers the
+    /// fence's counter, and when the epoch is not confirmed and the fence's counter is not below
+    /// the Hub's own, demotes: closes the writer and makes the Hub a follower (the lease task then
+    /// sees `NOT_PRIMARY` and publishes its own demotion). The same counter held by another
+    /// instance demotes this Hub too, whichever instance sorts first: two Hubs never serve one
+    /// counter. `false` when the Hub demoted.
+    async fn settle_fence(
+        &self,
+        writer: &WriterHandle,
+        lease: &arena_core::LeaseInfo,
+        fence: &arena_proto::HeartbeatFence,
+    ) -> bool {
+        crate::fence::note_epoch(writer, &fence.epoch).await;
+        if fence.confirmed {
+            return true;
+        }
+        let Some((counter, _)) = arena_proto::epoch_parts(&fence.epoch) else {
+            return true;
+        };
+        if counter < lease.counter {
+            return true;
+        }
+        tracing::warn!(
+            fence = %fence.epoch,
+            epoch = %lease.epoch(),
+            "heartbeat: the branch fence is not this hub's epoch; closing the writer"
+        );
+        writer.close().await;
+        self.status.send_modify(|s| s.role = Role::Follower);
+        false
+    }
+
     async fn accept(
         &mut self,
         writer: &WriterHandle,
@@ -353,6 +385,9 @@ impl HeartbeatTask {
         }
         if let (Some(inbox), Some(link)) = (&self.templates, res.setup_template.clone()) {
             inbox.offer(link);
+        }
+        if !self.settle_fence(writer, lease, &res.fence).await {
+            return;
         }
         let Ok(state) = writer.licence_state().await else {
             return;
@@ -775,13 +810,81 @@ mod tests {
         }
     }
 
+    fn answer_fence(fence: &str, confirmed: bool) -> (u16, String) {
+        let claims = LicenceClaims::for_tier("T", "B", Tier::Free, T0 / 1000);
+        let body = serde_json::json!({
+            "licence": dev_sign(&claims).unwrap(),
+            "fence": {"epoch": fence, "confirmed": confirmed},
+            "cloud_time": T0 + 7,
+        });
+        (200, body.to_string())
+    }
+
+    fn max_seen(path: &std::path::Path) -> i64 {
+        Store::open(path, T0)
+            .unwrap()
+            .write_tx(|tx| arena_store::read_max_seen_counter(tx))
+            .unwrap()
+    }
+
     #[tokio::test]
-    async fn an_unconfirmed_fence_keeps_provisional() {
-        let port = serve(vec![answer(false, Tier::Free)], false).await;
+    async fn a_fence_below_the_hubs_counter_that_is_not_confirmed_changes_nothing() {
+        let port = serve(vec![answer_fence("0:ZZZZ", false)], false).await;
         let mut f = fx(port).await;
         f.task.beat().await;
+        assert!(!f.writer.is_closed());
+        assert_eq!(f.status.borrow().role, Role::Primary);
         assert!(f.status.borrow().lease.as_ref().unwrap().provisional);
         assert!(row(&f.path).provisional);
+    }
+
+    #[tokio::test]
+    async fn a_higher_fence_demotes_the_hub_and_is_remembered() {
+        let port = serve(vec![answer_fence("3:HUBC", false)], false).await;
+        let mut f = fx(port).await;
+        f.task.beat().await;
+        assert!(f.writer.is_closed());
+        assert_eq!(f.status.borrow().role, Role::Follower);
+        assert!(row(&f.path).provisional, "the epoch was never confirmed");
+        assert_eq!(max_seen(&f.path), 3);
+        // A follower sends no further beat for its old epoch.
+        assert_eq!(f.task.beat().await, Duration::from_secs(10));
+    }
+
+    #[tokio::test]
+    async fn the_same_counter_held_by_another_instance_demotes_either_way() {
+        for other in ["0000", "ZZZZ"] {
+            let port = serve(vec![answer_fence(&format!("1:{other}"), false)], false).await;
+            let mut f = fx(port).await;
+            f.task.beat().await;
+            assert!(f.writer.is_closed(), "{other}");
+            assert_eq!(f.status.borrow().role, Role::Follower, "{other}");
+            assert_eq!(max_seen(&f.path), 1, "{other}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_confirmed_fence_notes_its_counter_and_keeps_the_hub_primary() {
+        let epoch = format!("4:{OWN}");
+        let port = serve(vec![answer_fence(&epoch, true)], false).await;
+        let mut f = fx(port).await;
+        f.task.beat().await;
+        assert!(!f.writer.is_closed());
+        assert_eq!(f.status.borrow().role, Role::Primary);
+        assert_eq!(max_seen(&f.path), 4);
+        let again = Store::open(&f.path, T0).unwrap();
+        assert_eq!(again.lease().unwrap().unwrap().counter, 1);
+    }
+
+    #[tokio::test]
+    async fn a_counter_seen_never_lowers_the_one_held() {
+        let epoch = format!("5:{OWN}");
+        let port = serve(vec![answer_fence(&epoch, true)], false).await;
+        let mut f = fx(port).await;
+        f.task.beat().await;
+        assert_eq!(f.writer.note_epoch_seen(2).await.unwrap(), 5);
+        assert_eq!(f.writer.note_epoch_seen(7).await.unwrap(), 7);
+        assert_eq!(f.writer.max_seen_counter().await.unwrap(), 7);
     }
 
     #[tokio::test]

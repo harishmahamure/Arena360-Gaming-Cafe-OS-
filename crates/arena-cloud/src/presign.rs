@@ -82,6 +82,16 @@ impl Epoch {
         })
     }
 
+    /// The counter part of the epoch.
+    pub fn counter(&self) -> u64 {
+        self.counter
+    }
+
+    /// The instance part of the epoch.
+    pub fn instance(&self) -> &str {
+        &self.instance
+    }
+
     /// The epoch as it was written.
     pub fn as_str(&self) -> &str {
         &self.text

@@ -2172,6 +2172,28 @@ pub fn read_lease(conn: &Connection) -> Result<Option<LeaseRow>, AppError> {
     .map_err(db_error)
 }
 
+/// The highest epoch counter this Hub has seen (Story 9.3): 0 before the lease row exists.
+pub fn read_max_seen_counter(conn: &Connection) -> Result<i64, AppError> {
+    conn.query_row("SELECT max_seen_counter FROM lease WHERE id = 1", [], |r| {
+        r.get(0)
+    })
+    .optional()
+    .map(|n| n.unwrap_or(0))
+    .map_err(db_error)
+}
+
+/// Raises the highest epoch counter seen to `counter`; a lower one changes nothing. Needs the
+/// lease row (a Hub without one has no writer to record a counter with). Answers the value held
+/// afterwards.
+pub fn raise_max_seen_counter(conn: &Connection, counter: i64) -> Result<i64, AppError> {
+    conn.execute(
+        "UPDATE lease SET max_seen_counter = MAX(max_seen_counter, ?1) WHERE id = 1",
+        params![counter.max(0)],
+    )
+    .map_err(db_error)?;
+    read_max_seen_counter(conn)
+}
+
 /// Deletes the lease row (used by tests and by a later manual-promotion flow).
 pub fn delete_lease(conn: &Connection) -> Result<(), AppError> {
     conn.execute("DELETE FROM lease WHERE id = 1", [])
@@ -2320,6 +2342,43 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::Stale);
         assert_eq!(store.lease().unwrap(), Some(row));
+    }
+
+    #[test]
+    fn the_highest_counter_seen_is_raised_never_lowered_and_survives_a_lease_write() {
+        let (_dir, path) = temp_db();
+        let mut store = Store::open(&path, T).unwrap();
+        let row = LeaseRow {
+            counter: 1,
+            hub_instance_id: "X".into(),
+            provisional: true,
+            renewed_at: 10,
+            expires_at: 20,
+        };
+        store
+            .write_tx(|tx| {
+                assert_eq!(read_max_seen_counter(tx)?, 0);
+                write_lease(tx, &row)?;
+                assert_eq!(read_max_seen_counter(tx)?, 0);
+                assert_eq!(raise_max_seen_counter(tx, 5)?, 5);
+                assert_eq!(raise_max_seen_counter(tx, 3)?, 5);
+                write_lease(
+                    tx,
+                    &LeaseRow {
+                        counter: 2,
+                        ..row.clone()
+                    },
+                )?;
+                assert_eq!(read_max_seen_counter(tx)?, 5);
+                assert_eq!(raise_max_seen_counter(tx, 9)?, 9);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            store.write_tx(|tx| read_max_seen_counter(tx)).unwrap(),
+            9,
+            "a later transaction reads the value the earlier one committed"
+        );
     }
 
     #[cfg(unix)]

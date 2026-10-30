@@ -464,3 +464,118 @@ async fn ad_totals_on_the_remote_backend() {
     db.migrate(1).await.unwrap();
     exercise_ads(&db).await;
 }
+
+fn beat<'a>(epoch: &'a str, fork_seq: Option<i64>, now: i64) -> arena_store::control::Beat<'a> {
+    arena_store::control::Beat {
+        hub_id: "ha",
+        branch_id: "b1",
+        epoch,
+        version: "0.1.0",
+        schema_version: 84,
+        fork_seq,
+        now,
+    }
+}
+
+async fn queue(db: &ControlDb, key: &str, now: i64) -> i64 {
+    db.submit_command(&arena_store::control::NewCommand {
+        branch_id: "b1",
+        idempotency_key: key,
+        kind: "rate.upsert",
+        schema_version: 1,
+        payload: "{}",
+        issued_by: "owner",
+        group_id: None,
+        elevated_by: None,
+        now,
+    })
+    .await
+    .unwrap()
+    .id
+}
+
+async fn exercise_fence(db: &ControlDb) {
+    use arena_store::control::FenceMove;
+    owner(db, "o1", "+919876543210").await;
+    branch(db, "o1", "t1", "b1", "PAG").await;
+    db.choose_free_tier("t1", "b1", 20_000).await.unwrap();
+    let t = 100_000;
+    issued(db, "p1", "h1", t).await;
+    db.pair_hub(&hub("ha", "h1", HubPlatform::Android, t + 1))
+        .await
+        .unwrap();
+
+    // No fence yet: nothing to compare with, nothing written.
+    assert_eq!(
+        db.claim_branch_fence("b1", "ha", "1:A", "2:B", Some(3), t + 2)
+            .await
+            .unwrap(),
+        FenceMove::Stale { current: None }
+    );
+    assert_eq!(
+        db.heartbeat(&beat("1:A", None, t + 3)).await.unwrap(),
+        Some("1:A".to_owned())
+    );
+    // The first fence is kept: a second beat with another epoch does not replace it.
+    assert_eq!(
+        db.heartbeat(&beat("1:Z", Some(9), t + 4)).await.unwrap(),
+        Some("1:A".to_owned())
+    );
+
+    let applied = queue(db, "k-applied", t + 5).await;
+    let past = queue(db, "k-past", t + 5).await;
+    let _waiting = queue(db, "k-waiting", t + 5).await;
+    assert_eq!(
+        db.fetch_commands("b1", 0, 100, t + 5).await.unwrap().len(),
+        3
+    );
+    for (id, seq) in [(applied, 7), (past, 12)] {
+        db.resolve_command("b1", id, Some(seq), None, "1:A", t + 6)
+            .await
+            .unwrap();
+    }
+
+    assert_eq!(
+        db.claim_branch_fence("b1", "ha", "1:A", "2:B", Some(9), t + 7)
+            .await
+            .unwrap(),
+        FenceMove::Moved { requeued: 2 },
+        "the command applied past the fork and the one still fetched"
+    );
+    assert_eq!(
+        db.branch_fence_epoch("b1").await.unwrap().as_deref(),
+        Some("2:B")
+    );
+
+    // A stale expectation changes nothing, and names the fence.
+    assert_eq!(
+        db.claim_branch_fence("b1", "ha", "1:A", "2:C", Some(0), t + 8)
+            .await
+            .unwrap(),
+        FenceMove::Stale {
+            current: Some("2:B".to_owned())
+        }
+    );
+    assert_eq!(
+        db.branch_fence_epoch("b1").await.unwrap().as_deref(),
+        Some("2:B")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_branch_fence_is_a_compare_and_set_on_the_local_backend() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = ControlDb::open_local(&dir.path().join("gz_control.db"))
+        .await
+        .unwrap();
+    db.migrate(1).await.unwrap();
+    exercise_fence(&db).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_branch_fence_is_a_compare_and_set_on_the_remote_backend() {
+    let Some(t) = sqld::fresh().await else { return };
+    let db = ControlDb::connect(&t.url, "").await.unwrap();
+    db.migrate(1).await.unwrap();
+    exercise_fence(&db).await;
+}

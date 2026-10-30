@@ -342,6 +342,22 @@ impl WriterHandle {
         .await
     }
 
+    /// Story 9.3: raises the highest epoch counter this Hub has seen (from a heartbeat answer, a
+    /// claim reply or the LAN) and answers the value held afterwards. A lower counter changes
+    /// nothing. Like [`Self::record_upload`] it is a maintenance write outside `apply()`, but it
+    /// needs no epoch check: remembering a counter is harmless for a Hub that has just lost its
+    /// epoch, and it is exactly the Hub that learns it has.
+    pub async fn note_epoch_seen(&self, counter: i64) -> Result<i64, AppError> {
+        self.run(move |store| store.write_tx(|tx| arena_store::raise_max_seen_counter(tx, counter)))
+            .await
+    }
+
+    /// Story 9.3: the highest epoch counter this Hub has seen (0 before the lease row exists).
+    pub async fn max_seen_counter(&self) -> Result<i64, AppError> {
+        self.run(move |store| store.write_tx(|tx| arena_store::read_max_seen_counter(tx)))
+            .await
+    }
+
     /// Story 8.8: raises the branch-level alert `kind` as the system (`alert.raise`, so it shows
     /// in the Hub header list and writes an audit row). `STALE` when one is already open.
     pub async fn raise_branch_alert(

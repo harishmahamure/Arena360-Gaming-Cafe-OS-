@@ -6,6 +6,7 @@ pub mod commands;
 pub mod connectivity;
 pub mod credit_reminder;
 pub mod disk;
+pub mod fence;
 pub mod heartbeat;
 pub mod housekeeping;
 pub mod invoice;
@@ -33,6 +34,7 @@ pub use connectivity::{
     parse_internet_endpoints,
 };
 pub use credit_reminder::{CREDIT_REMINDER_TICK, CreditReminderTask};
+pub use fence::{Claim, claim_fence};
 pub use heartbeat::HeartbeatTask;
 pub use housekeeping::{
     DEDUPE_RETENTION_MS, HOUSEKEEPING_INTERVAL, Housekeeping, HousekeepingTask,

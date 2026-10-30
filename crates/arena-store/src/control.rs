@@ -54,7 +54,7 @@ pub use catalog::{
 pub use commands::{CommandBacklog, CommandRow, NewCommand, SweepReport};
 pub use dump::{DUMP_HEADER, DUMP_PAGE_ROWS, Dump, DumpManifest, RestoreReport, read_manifest};
 pub use entitlement::{CompGrant, Entitlement, FreeTierOutcome, GrantOutcome, OpsAuditRow};
-pub use hubs::{Beat, HubRow, HubUploadView, NewHub, PairOutcome};
+pub use hubs::{Beat, FenceMove, HubRow, HubUploadView, NewHub, PairOutcome};
 pub use mfa::{BackupCodeRow, NewBackupCode, OwnerMfa};
 pub use otp::{
     NewOtpChallenge, OTP_PURPOSE_SIGNUP, OTP_RETENTION_MS, OtpChallenge, SignupCompletion,
@@ -210,6 +210,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 27,
         sql: include_str!("../control-migrations/0027_kek_escrow.sql"),
+    },
+    ControlMigration {
+        version: 28,
+        sql: include_str!("../control-migrations/0028_fence_fork.sql"),
     },
 ];
 

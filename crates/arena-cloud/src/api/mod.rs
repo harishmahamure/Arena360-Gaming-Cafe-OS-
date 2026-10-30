@@ -22,6 +22,7 @@ pub mod commands;
 mod cors;
 mod dev;
 mod error;
+mod fence;
 pub mod gate;
 mod heartbeat;
 mod json;
@@ -94,6 +95,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>, commands_only: bool) -> Router {
             .merge(catalog::router(Arc::clone(st)))
             .merge(pair::router(Arc::clone(st)))
             .merge(heartbeat::router(Arc::clone(st)))
+            .merge(fence::router(Arc::clone(st)))
             .merge(presign::router(Arc::clone(st)))
             .merge(kek::router(Arc::clone(st)))
             .merge(notify::router(Arc::clone(st)))

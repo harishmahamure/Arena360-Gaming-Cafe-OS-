@@ -803,18 +803,46 @@ impl Harness {
             .unwrap();
     }
 
+    /// Puts the branch fence at `epoch` with `fork_seq` as its fork point and answers how many
+    /// commands went back to `pending` (a branch with no fence yet gets it from a first beat).
     async fn set_fence(&self, c: &Cafe, epoch: &str, fork_seq: i64) -> u64 {
         let hub = self.db.active_hub(&c.branch).await.unwrap().unwrap();
-        self.db
-            .move_branch_fence(
-                &c.branch,
-                epoch,
-                &hub.id,
-                fork_seq,
-                self.now.load(Ordering::SeqCst),
-            )
+        let now = self.now.load(Ordering::SeqCst);
+        let Some(current) = self.db.branch_fence_epoch(&c.branch).await.unwrap() else {
+            self.db
+                .heartbeat(&arena_store::control::Beat {
+                    hub_id: &hub.id,
+                    branch_id: &c.branch,
+                    epoch,
+                    version: "0.2.0",
+                    schema_version: 12,
+                    fork_seq: Some(fork_seq),
+                    now,
+                })
+                .await
+                .unwrap();
+            return 0;
+        };
+        match self
+            .db
+            .claim_branch_fence(&c.branch, &hub.id, &current, epoch, Some(fork_seq), now)
             .await
             .unwrap()
+        {
+            arena_store::control::FenceMove::Moved { requeued } => requeued,
+            other => panic!("the fence did not move: {other:?}"),
+        }
+    }
+
+    async fn claim(&self, c: &Cafe, body: Value) -> Reply {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/fence/claim")
+            .header("authorization", format!("Bearer {}", c.token))
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        reply(self.app.clone().oneshot(req).await.unwrap()).await
     }
 }
 
@@ -948,6 +976,43 @@ async fn a_fence_move_returns_commands_applied_past_the_fork() {
     assert_eq!(cmds[0]["id"], ids[1]);
     let ack = h.hub_result(&a, ids[1], applied(HUB_B, 10)).await;
     assert_eq!(ack.body["status"], "applied");
+}
+
+#[tokio::test]
+async fn a_claim_returns_commands_applied_past_its_fork_point() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    h.set_fence(&a, HUB_A, 0).await;
+    for k in [K1, K2] {
+        let r = h.send(&a, post(&a.branch, k, "rate.upsert", rate())).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+    }
+    let page = h.hub_fetch(&a, 0, HUB_A).await;
+    let ids: Vec<i64> = page.body["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_i64().unwrap())
+        .collect();
+    h.hub_result(&a, ids[0], applied(HUB_A, 7)).await;
+    h.hub_result(&a, ids[1], applied(HUB_A, 12)).await;
+
+    let claim = json!({
+        "expected": HUB_A,
+        "instance_id": "HUBB",
+        "reason": "promote",
+        "fork": {"parent_epoch": HUB_A, "parent_seq": 9},
+    });
+    let won = h.claim(&a, claim.clone()).await;
+    assert_eq!(won.status, 200, "{}", won.body);
+    assert_eq!(won.body["epoch"], HUB_B);
+    assert_eq!(h.status_of(&a, K1).await, "applied");
+    assert_eq!(h.status_of(&a, K2).await, "pending");
+
+    // The same claim again is stale: the fence is no longer the epoch it expects.
+    let again = h.claim(&a, claim).await;
+    assert_eq!((again.status, again.code()), (409, "FENCED"));
+    assert_eq!(h.status_of(&a, K2).await, "pending");
 }
 
 #[tokio::test]

@@ -6,7 +6,8 @@ use arena_proto::{
     TunnelReport, tunnel_hostname,
 };
 use arena_store::control::{
-    AdMetric, Beat, BranchTunnel, HubRow, HubUploadView, NewBranchTunnel, RateRule, TunnelRowState,
+    AdMetric, Beat, BranchTunnel, FenceMove, HubRow, HubUploadView, NewBranchTunnel, RateRule,
+    TunnelRowState,
 };
 use axum::extract::State;
 use axum::http::{HeaderMap, header::AUTHORIZATION};
@@ -119,6 +120,7 @@ async fn heartbeat(
             epoch: &body.epoch,
             version: &body.version,
             schema_version: body.schema_version,
+            fork_seq: body.fork_seq.filter(|s| (0..=MAX_SEQ).contains(s)),
             now,
         })
         .await
@@ -129,6 +131,7 @@ async fn heartbeat(
             "This Hub is no longer paired.",
         ));
     };
+    let fence = settle_fence(&st, &hub, &body, fence, now).await?;
     if let Some(schema) = body.command_schema
         && let Err(e) = st.db.record_command_schema(&hub.id, schema).await
     {
@@ -220,10 +223,7 @@ async fn heartbeat(
     });
     Ok(Json(HeartbeatResponse {
         licence,
-        fence: HeartbeatFence {
-            confirmed: fence == body.epoch,
-            epoch: fence,
-        },
+        fence,
         cloud_time: now,
         pending_commands: Some(pending).filter(|n| *n > 0),
         ad_impressions_through,
@@ -232,6 +232,68 @@ async fn heartbeat(
         resend,
         tunnel,
     }))
+}
+
+/// Settles the Hub's epoch against the branch fence (Story 9.3). `fence` is what the beat found
+/// (the first epoch reported, when there was none).
+///
+/// * The fence is the Hub's epoch: confirmed.
+/// * The Hub's counter is above the fence's: the fence moves to the Hub's epoch by compare-and-set
+///   from exactly the fence read (with the beat's `fork_seq`), and the Hub is confirmed.
+/// * The same counter with another instance, a Hub counter below the fence's, or a lost race for
+///   the move: not confirmed, and the answer carries the fence (the winner's, when it moved).
+async fn settle_fence(
+    st: &AuthState,
+    hub: &HubRow,
+    body: &HeartbeatRequest,
+    fence: String,
+    now: i64,
+) -> Result<HeartbeatFence, ApiError> {
+    if fence == body.epoch {
+        return Ok(HeartbeatFence {
+            confirmed: true,
+            epoch: fence,
+        });
+    }
+    let above = match (Epoch::parse(&body.epoch), Epoch::parse(&fence)) {
+        (Ok(own), Ok(held)) => own.counter() > held.counter(),
+        _ => false,
+    };
+    if !above {
+        return Ok(HeartbeatFence {
+            confirmed: false,
+            epoch: fence,
+        });
+    }
+    let fork_seq = body.fork_seq.filter(|s| (0..=MAX_SEQ).contains(s));
+    match st
+        .db
+        .claim_branch_fence(&hub.branch_id, &hub.id, &fence, &body.epoch, fork_seq, now)
+        .await
+        .map_err(ApiError::internal)?
+    {
+        FenceMove::Moved { requeued } => {
+            tracing::info!(
+                hub_id = %hub.id,
+                branch_id = %hub.branch_id,
+                epoch = %body.epoch,
+                previous = %fence,
+                requeued,
+                "fence advanced to the hub's epoch"
+            );
+            Ok(HeartbeatFence {
+                confirmed: true,
+                epoch: body.epoch.clone(),
+            })
+        }
+        FenceMove::Stale { current } => {
+            let epoch = current.unwrap_or(fence);
+            Ok(HeartbeatFence {
+                confirmed: epoch == body.epoch,
+                epoch,
+            })
+        }
+    }
 }
 
 /// What the Hub is to do about its tunnel (Story 8.39), decided from the signed licence flags and

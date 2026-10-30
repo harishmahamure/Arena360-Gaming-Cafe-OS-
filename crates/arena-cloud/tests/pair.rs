@@ -143,6 +143,44 @@ impl Harness {
         reply(self.app.clone().oneshot(req).await.unwrap()).await
     }
 
+    async fn beat_forked(&self, token: &str, epoch: &str, fork_seq: i64) -> Reply {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/heartbeat")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::from(
+                json!({"epoch": epoch, "version": "0.2.0", "schema_version": 12,
+                       "last_seq_uploaded": fork_seq, "fork_seq": fork_seq})
+                .to_string(),
+            ))
+            .unwrap();
+        reply(self.app.clone().oneshot(req).await.unwrap()).await
+    }
+
+    async fn claim(&self, token: &str, body: Value) -> Reply {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/fence/claim")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        reply(self.app.clone().oneshot(req).await.unwrap()).await
+    }
+
+    /// The branch's fence epoch and the fork point stored with it.
+    fn fence_row(&self, branch: &str) -> (String, Option<i64>) {
+        rusqlite::Connection::open(self.dir.path().join("gz_control.db"))
+            .unwrap()
+            .query_row(
+                "SELECT epoch, fork_seq FROM branch_fence WHERE branch_id = ?",
+                [branch],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+    }
+
     async fn paired_hub(&self, access: &str) -> (String, String) {
         let (code, _) = self.issue(access).await;
         let r = self.pair(&code, "android").await;
@@ -809,9 +847,9 @@ async fn the_first_beat_creates_the_fence_marks_step_three_and_answers_a_licence
 }
 
 #[tokio::test]
-async fn a_later_beat_with_another_epoch_is_not_confirmed() {
+async fn a_later_beat_with_a_higher_counter_moves_the_fence_and_is_confirmed() {
     let h = Harness::new().await;
-    let (a, _) = h.ready().await;
+    let (a, branch) = h.ready().await;
     let (token, _) = h.paired_hub(&a).await;
     assert_eq!(
         h.beat(&token, "1:HUBA").await.body["fence"]["confirmed"],
@@ -821,11 +859,133 @@ async fn a_later_beat_with_another_epoch_is_not_confirmed() {
     let same = h.beat(&token, "1:HUBA").await;
     assert_eq!(same.body["fence"]["confirmed"], true);
     h.advance(5_000);
-    let other = h.beat(&token, "2:HUBB").await;
+    // An epoch minted offline above the fence: the first beat settles it.
+    let other = h.beat_forked(&token, "2:HUBB", 7).await;
     assert_eq!(
         other.body["fence"],
-        json!({"epoch": "1:HUBA", "confirmed": false})
+        json!({"epoch": "2:HUBB", "confirmed": true})
     );
+    assert_eq!(h.fence_row(&branch), ("2:HUBB".to_owned(), Some(7)));
+    h.advance(5_000);
+    assert_eq!(
+        h.beat(&token, "2:HUBB").await.body["fence"],
+        json!({"epoch": "2:HUBB", "confirmed": true})
+    );
+}
+
+#[tokio::test]
+async fn the_same_counter_with_another_instance_or_a_lower_counter_is_not_confirmed() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+    h.beat(&token, "2:HUBA").await;
+    h.advance(5_000);
+    let same_counter = h.beat(&token, "2:HUBB").await;
+    assert_eq!(
+        same_counter.body["fence"],
+        json!({"epoch": "2:HUBA", "confirmed": false})
+    );
+    h.advance(5_000);
+    let lower = h.beat(&token, "1:HUBC").await;
+    assert_eq!(
+        lower.body["fence"],
+        json!({"epoch": "2:HUBA", "confirmed": false})
+    );
+    assert_eq!(h.fence_row(&branch).0, "2:HUBA");
+}
+
+#[tokio::test]
+async fn a_fence_claim_moves_the_fence_to_the_next_counter_and_keeps_the_fork() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+    h.beat(&token, "3:HUBA").await;
+    let won = h.claim(&token, claim_body("3:HUBA", "HUBB", 40)).await;
+    assert_eq!(won.status, 200, "{}", won.body);
+    assert_eq!(won.body, json!({"epoch": "4:HUBB"}));
+    assert_eq!(h.fence_row(&branch), ("4:HUBB".to_owned(), Some(40)));
+}
+
+#[tokio::test]
+async fn a_stale_claim_is_fenced_names_the_fence_and_writes_nothing() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+    h.beat(&token, "3:HUBA").await;
+    for expected in ["2:HUBA", "3:HUBB"] {
+        let r = h.claim(&token, claim_body(expected, "HUBB", 5)).await;
+        assert_eq!((r.status, r.body["code"].as_str()), (409, Some("FENCED")));
+        assert_eq!(
+            arena_proto::fenced_epoch(r.body["message"].as_str().unwrap()),
+            Some("3:HUBA")
+        );
+    }
+    assert_eq!(h.fence_row(&branch), ("3:HUBA".to_owned(), None));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_claims_at_once_have_exactly_one_winner() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+    h.beat(&token, "3:HUBA").await;
+    let (x, y) = tokio::join!(
+        h.claim(&token, claim_body("3:HUBA", "HUBB", 1)),
+        h.claim(&token, claim_body("3:HUBA", "HUBC", 2)),
+    );
+    let mut statuses = [x.status, y.status];
+    statuses.sort_unstable();
+    assert_eq!(statuses, [200, 409], "{} / {}", x.body, y.body);
+    let winner = if x.status == 200 { &x } else { &y };
+    let loser = if x.status == 200 { &y } else { &x };
+    assert_eq!(
+        h.fence_row(&branch).0,
+        winner.body["epoch"].as_str().unwrap()
+    );
+    assert_eq!(loser.body["code"], "FENCED");
+}
+
+#[tokio::test]
+async fn a_claim_with_a_bad_body_or_token_is_refused() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+    h.beat(&token, "3:HUBA").await;
+    for body in [
+        claim_body("3:HUBA", "", 1),
+        claim_body("3:HUBA", "../x", 1),
+        claim_body("3:HUBA", "HUBB", -1),
+        json!({"expected": "3:HUBA", "instance_id": "HUBB", "reason": "promote",
+               "fork": {"parent_epoch": "nope", "parent_seq": 1}}),
+    ] {
+        let r = h.claim(&token, body).await;
+        assert_eq!(r.body["code"], "VALIDATION_FAILED", "{}", r.body);
+    }
+    let anonymous = h.claim("hub_x.y", claim_body("3:HUBA", "HUBB", 1)).await;
+    assert_eq!(anonymous.body["code"], "TOKEN_INVALID");
+    assert_eq!(h.fence_row(&branch).0, "3:HUBA");
+}
+
+#[tokio::test]
+async fn a_claim_before_any_beat_is_fenced_without_a_fence_to_name() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let (token, _) = h.paired_hub(&a).await;
+    let r = h.claim(&token, claim_body("1:HUBA", "HUBB", 0)).await;
+    assert_eq!((r.status, r.body["code"].as_str()), (409, Some("FENCED")));
+    assert_eq!(
+        arena_proto::fenced_epoch(r.body["message"].as_str().unwrap()),
+        None
+    );
+    let c = rusqlite::Connection::open(h.dir.path().join("gz_control.db")).unwrap();
+    let fences: i64 = c
+        .query_row(
+            "SELECT COUNT(*) FROM branch_fence WHERE branch_id = ?",
+            [&branch],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(fences, 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -843,6 +1003,7 @@ async fn two_first_beats_with_different_epochs_leave_one_fence() {
                 epoch,
                 version: "0.2.0",
                 schema_version: 12,
+                fork_seq: None,
                 now: T0,
             })
             .await
@@ -1018,6 +1179,7 @@ async fn a_beat_for_a_revoked_hub_writes_nothing() {
             epoch: "1:HUBA",
             version: "0.2.0",
             schema_version: 12,
+            fork_seq: None,
             now: T0,
         })
         .await
@@ -2500,4 +2662,13 @@ async fn a_malformed_ad_block_is_ignored_and_the_heartbeat_still_answers() {
             .unwrap(),
         0
     );
+}
+
+fn claim_body(expected: &str, instance: &str, parent_seq: i64) -> Value {
+    json!({
+        "expected": expected,
+        "instance_id": instance,
+        "reason": "promote",
+        "fork": {"parent_epoch": expected, "parent_seq": parent_seq},
+    })
 }

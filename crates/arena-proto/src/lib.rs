@@ -25,6 +25,7 @@ mod discovery;
 mod display;
 mod entitlement;
 mod error;
+mod fence;
 mod frame;
 mod game_catalog;
 mod gst;
@@ -177,6 +178,9 @@ pub use entitlement::{
     CLOCK_SKEW_LIMIT_MS, Entitlement, LicenceApply, LicenceStanding, clock_wrong,
 };
 pub use error::{AppError, ErrorCode};
+pub use fence::{
+    FenceClaimReason, FenceClaimRequest, FenceClaimResponse, FenceFork, epoch_parts, fenced_epoch,
+};
 pub use frame::{
     AppliedSummary, ChangeOpKind, ChangeSummary, Envelope, ErrorFrame, EventFrame, FRAME_KINDS,
     Frame, FrameBody, FrameError, Hello, HelloOk, HubEvent, IntentResult, IntentSubmit,

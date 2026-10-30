@@ -32,7 +32,18 @@ pub struct Beat<'a> {
     pub epoch: &'a str,
     pub version: &'a str,
     pub schema_version: u32,
+    /// The `seq` the Hub's epoch was forked from, kept on the fence row when this beat creates it.
+    pub fork_seq: Option<i64>,
     pub now: i64,
+}
+
+/// What a compare-and-set on the branch fence did (Story 9.3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FenceMove {
+    /// The fence moved; `requeued` commands went back to `pending`.
+    Moved { requeued: u64 },
+    /// The fence was not the expected epoch (or there is none); nothing was written.
+    Stale { current: Option<String> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,12 +159,13 @@ impl ControlDb {
                 )
                 .expect(1),
                 Stmt::new(
-                    "INSERT INTO branch_fence (branch_id, epoch, hub_id, created_at) \
-                     VALUES (?, ?, ?, ?) ON CONFLICT (branch_id) DO NOTHING",
+                    "INSERT INTO branch_fence (branch_id, epoch, hub_id, fork_seq, created_at) \
+                     VALUES (?, ?, ?, ?, ?) ON CONFLICT (branch_id) DO NOTHING",
                     vec![
                         text(b.branch_id),
                         text(b.epoch),
                         text(b.hub_id),
+                        opt_int(b.fork_seq),
                         now.clone(),
                     ],
                 ),
@@ -184,8 +196,7 @@ impl ControlDb {
             .transpose()
     }
 
-    /// The branch's fence epoch (the first epoch a Hub of the branch reported since it was last
-    /// paired), or `None` before any heartbeat.
+    /// The branch's fence epoch, or `None` before any heartbeat.
     pub async fn branch_fence_epoch(
         &self,
         branch_id: &str,
@@ -199,49 +210,60 @@ impl ControlDb {
         rows.first().map(|r| col_text(r, 0)).transpose()
     }
 
-    /// Moves the branch fence to `epoch` (the control role's commit of a takeover, Story 8.20).
-    /// In the same transaction, commands applied at the old fence epoch past `fork_seq`, and
-    /// commands still `fetched` by the old Hub, return to `pending`; the number is returned.
-    pub async fn move_branch_fence(
+    /// The one compare-and-set on the branch fence (Story 9.3, AD-24): moves the fence from
+    /// exactly `expected` to `epoch`, held by `hub_id`, with `fork_seq` as the fork point. Every
+    /// epoch counter the cloud issues goes through here (`POST /v1/fence/claim` and the heartbeat
+    /// that settles a provisional epoch).
+    ///
+    /// In the same transaction, commands applied at `expected` past `fork_seq` (none when it is
+    /// `None`), and commands still `fetched` by the old Hub, return to `pending`. When the fence
+    /// is not `expected` (or does not exist) nothing is written and the current fence is answered.
+    pub async fn claim_branch_fence(
         &self,
         branch_id: &str,
-        epoch: &str,
         hub_id: &str,
-        fork_seq: i64,
+        expected: &str,
+        epoch: &str,
+        fork_seq: Option<i64>,
         now: i64,
-    ) -> Result<u64, ControlError> {
+    ) -> Result<FenceMove, ControlError> {
         let rows = self
             .transact_rows(vec![
+                Stmt::new(
+                    "UPDATE branch_fence SET epoch = ?, hub_id = ?, fork_seq = ?, created_at = ? \
+                     WHERE branch_id = ? AND epoch = ?",
+                    vec![
+                        text(epoch),
+                        text(hub_id),
+                        opt_int(fork_seq),
+                        SqlValue::Integer(now),
+                        text(branch_id),
+                        text(expected),
+                    ],
+                )
+                .expect(1),
                 Stmt::new(
                     "UPDATE commands SET status = 'pending', applied_seq = NULL, error = NULL, \
                      resolved_at = NULL, fetched_at = NULL, applied_epoch = NULL \
                      WHERE branch_id = ? AND (status = 'fetched' OR (status = 'applied' \
-                     AND applied_seq > ? AND applied_epoch = \
-                     (SELECT epoch FROM branch_fence WHERE branch_id = ?))) RETURNING id",
+                     AND applied_seq > ? AND applied_epoch = ?)) RETURNING id",
                     vec![
                         text(branch_id),
-                        SqlValue::Integer(fork_seq),
-                        text(branch_id),
+                        SqlValue::Integer(fork_seq.unwrap_or(i64::MAX)),
+                        text(expected),
                     ],
                 )
                 .fetch(),
-                Stmt::new(
-                    "INSERT INTO branch_fence (branch_id, epoch, hub_id, created_at) \
-                     VALUES (?, ?, ?, ?) ON CONFLICT (branch_id) DO UPDATE SET \
-                     epoch = excluded.epoch, hub_id = excluded.hub_id, \
-                     created_at = excluded.created_at",
-                    vec![
-                        text(branch_id),
-                        text(epoch),
-                        text(hub_id),
-                        SqlValue::Integer(now),
-                    ],
-                ),
             ])
             .await?;
-        Ok(rows
-            .and_then(|r| r.first().map(|x| x.len() as u64))
-            .unwrap_or(0))
+        match rows {
+            Some(rows) => Ok(FenceMove::Moved {
+                requeued: rows.get(1).map_or(0, |r| r.len() as u64),
+            }),
+            None => Ok(FenceMove::Stale {
+                current: self.branch_fence_epoch(branch_id).await?,
+            }),
+        }
     }
 
     pub async fn hub(&self, hub_id: &str) -> Result<Option<HubRow>, ControlError> {

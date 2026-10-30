@@ -2,7 +2,7 @@
 title: "Story 8.34: The Hub raises owner alerts for cash variance, low stock, overdue credit and large refunds or discounts"
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 baseline_commit: '392fe2d332dc56cad93a6d6e4a5445c97cac24fc'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -93,6 +93,10 @@ A credit alert rides the auto-pause flip because that is the Hub's single "reach
 
 ## Auto Run Result
 
-Status: in-review
+Status: done
 Implemented by subagent; verified with cargo test (store, proto, core, tasks, cloud), clippy, fmt, check:strings, check:pins, owner svelte-check and the owner Playwright suite. Pre-existing unrelated failures: cloud backup `a_hung_run_times_out_with_its_own_code`, tasks `trusted_time_is_cloud_time_plus_monotonic_elapsed` and `a_printer_that_stops_reading_times_out`.
 Open notes for review: `settings.set` added to the handled owner kinds (17); thresholds key seeded in `DEFAULT_SETTINGS`; a re-settled order after an Undo queues no second discount alert; the limits form starts at defaults and does not read back stored limits.
+
+## Review Result
+
+Code review (2026-10-30): no blocking findings. Checked hooks, migration 81, drain rules, cloud `owner_alert` branch and the Thresholds form. fmt, clippy (store, proto, core, tasks, cloud), cargo tests, check:generated/strings/pins, owner svelte-check and Playwright pass. Only the known unrelated failures remain (cloud backup hung-run, cloud binary unreachable-start timing, tasks trusted-time and LAN printer timeout); one reports-export axe test flaked under load and passed on rerun.

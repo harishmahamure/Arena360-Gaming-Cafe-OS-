@@ -76,7 +76,7 @@ async function cloud(page: Page, opts: { limit?: number } = {}) {
     if (opts.limit !== undefined && wrong >= opts.limit)
       return route.fulfill({
         status: 429,
-        headers: { "retry-after": "900" },
+        headers: { "retry-after": "720" },
         contentType: "application/json",
         body: JSON.stringify({ code: "RATE_LIMITED", message: "" }),
       });
@@ -219,7 +219,7 @@ test("five wrong codes pause the step-up: the dialog shows the time and the page
   }
   await d.getByLabel(t("owner.stepup.code")).fill(GOOD);
   await d.getByRole("button", { name: t("owner.stepup.confirm") }).click();
-  await expect(d.getByText(t("owner.stepup.paused", { minutes: 15 }))).toBeVisible();
+  await expect(d.getByText(t("owner.stepup.paused", { minutes: 12 }))).toBeVisible();
   expect(calls.steps).toHaveLength(6);
   // Still signed in: nothing sent the owner to sign in again.
   expect(new URL(page.url()).pathname).toBe("/manage");

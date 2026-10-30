@@ -55,6 +55,7 @@
     class="stepup"
     aria-labelledby="stepup-title"
     oncancel={cancel}
+    onclose={() => stepup.open && declineStepUp()}
     data-component="step-up-dialog"
   >
     <form class="body" onsubmit={submit}>

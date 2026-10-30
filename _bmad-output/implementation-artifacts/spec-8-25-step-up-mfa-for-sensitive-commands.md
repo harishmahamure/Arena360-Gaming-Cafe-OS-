@@ -2,7 +2,7 @@
 title: "Story 8.25: Step-up MFA for sensitive commands"
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 baseline_commit: '3494619a7a034b0e5f22b0565208dfb27d3fc114'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -86,3 +86,9 @@ deferred: []
 ## Auto Run Result
 
 Status: in-review. Sensitive owner kinds are refused `MFA_REQUIRED` without a step-up proof younger than 5 minutes; `POST /v1/session/stepup` (+ `/sms`) takes a TOTP, backup or SMS code; the command row records `elevated_by`, the Hub copies it into the change row (kind `mfa`); the Owner app asks in a dialog, re-sends with the same key, and holds a sensitive queued change. Verification: clippy clean on the touched crates; cargo tests pass except `arena-cloud` `binary::unreachable_at_start_retries_then_exits_1_without_logging_the_token` (fails without this change too; process timing); owner `pnpm run check` and 488 Playwright tests pass; check:strings, layers, protocol and format:check pass. Not done: the code-review pass. Known limits: the app does not know which kinds are sensitive, so a queued sensitive change is posted once and held after the cloud refuses it; a pending SMS step-up code is lost if the session refreshes before it is entered.
+
+## Code Review Result
+
+Reviewed with four layers (blind, edge-case, verification-gap, acceptance). Fixed in the Owner app: a stale step-up reply no longer settles a newer prompt; a post is re-asked when the proof lapses while the owner types; `sendHeld` drains again if a drain already under way passed it by; a native dialog close declines the step-up; the pause test now uses a `Retry-After` other than the 900 s fallback.
+
+Deferred (accepted): re-send of an already-queued key after the proof lapsed answers `MFA_REQUIRED` (needs a store lookup by key); a held change does not block later queued ones; `MFA_REQUIRED` posts count against the post rate limit; no Playwright cover for the SMS option or row-level Resend of a sensitive kind.

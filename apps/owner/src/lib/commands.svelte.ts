@@ -478,9 +478,12 @@ export function pickMethod(method: StepMethod) {
 /** Checks the code with the cloud; on success the prompt closes and the change goes on. */
 export async function submitStepUp(code: string) {
   if (!stepup.open || stepup.sending) return;
+  const prompt = asking;
   stepup.sending = true;
   stepup.error = null;
   const res = await send<null>("POST", "/session/stepup", { method: stepup.method, code });
+  // The owner cancelled (and maybe opened a new prompt) while the code was being checked.
+  if (asking !== prompt) return;
   stepup.sending = false;
   if (res.ok) return closeStepUp(true);
   if (res.code === "RATE_LIMITED") {
@@ -505,10 +508,13 @@ export async function sendStepUpSms() {
  * the same idempotency key, is sent again once it passes. `"declined"`: the owner cancelled.
  */
 async function post(body: Record<string, unknown>): Promise<Sent<OwnerCommandPosted> | "declined"> {
-  const res = await send<OwnerCommandPosted>("POST", "/commands", body);
-  if (res.ok || res.code !== "MFA_REQUIRED") return res;
-  if (!(await requestStepUp())) return "declined";
-  return send<OwnerCommandPosted>("POST", "/commands", body);
+  let res = await send<OwnerCommandPosted>("POST", "/commands", body);
+  // Asked again if the proof lapsed while the owner was typing: each round needs a fresh code.
+  while (!res.ok && res.code === "MFA_REQUIRED") {
+    if (!(await requestStepUp())) return "declined";
+    res = await send<OwnerCommandPosted>("POST", "/commands", body);
+  }
+  return res;
 }
 
 /** Send on a held change: the code prompt first, then the change goes (Cancel keeps it held). */
@@ -517,6 +523,8 @@ export async function sendHeld(q: Queued) {
   q.state = "queued";
   await stored(q);
   await drainQueue();
+  // A drain already under way may have passed this change by: go once more.
+  if (q.state === "queued") await drainQueue();
 }
 
 // --- The queue on this device (Story 8.22) ---

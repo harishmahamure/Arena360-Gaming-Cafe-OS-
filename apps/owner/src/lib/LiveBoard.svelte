@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Button, Card, FloorTile, StatusBadge, TierLock, t } from "@arena/ui";
   import type { LiveFloor, OwnerBranch } from "@arena/ui/generated";
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
   import { page } from "$app/state";
   import {
     LIVE_AGE_MS,
@@ -24,6 +24,7 @@
 
   let view: View = $state("connecting");
   let tier = $state(false);
+  let platform = $state(false);
   let floor: LiveFloor | null = $state(null);
   let receivedAt = $state(0);
   let now = $state(Date.now());
@@ -41,6 +42,7 @@
     stop();
     floor = null;
     tier = false;
+    platform = false;
     if (entryOf(b) !== "ready") return;
     const mine = ticket;
     view = "connecting";
@@ -49,6 +51,10 @@
     if (answer.state === "signed-out") return void refresh();
     if (answer.state === "tier") {
       tier = true;
+      return;
+    }
+    if (answer.state === "platform") {
+      platform = true;
       return;
     }
     if (answer.state !== "ok") {
@@ -74,9 +80,12 @@
     branchId = branches.some((b) => b.id === wanted) ? (wanted as string) : branches[0].id;
   });
   // Opens (or closes) the view whenever the picked branch changes.
+  // Keyed on the id: a branch refresh that replaces the objects must not reconnect.
+  const pickedId = $derived(picked?.id);
   $effect(() => {
-    const b = picked;
-    if (b) void start(b);
+    const id = pickedId;
+    const b = untrack(() => picked);
+    if (id && b) void start(b);
     else stop();
   });
 
@@ -112,7 +121,7 @@
         </select>
       </label>
     {/if}
-    {#if entry === "platform"}
+    {#if entry === "platform" || platform}
       <p>{t("owner.live.needs_windows")}</p>
     {:else if entry === "tier" || tier}
       <TierLock tier="Premium" />

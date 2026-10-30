@@ -71,7 +71,14 @@ export function connectLive(
 ): LiveConnection {
   let done = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const ws = open(grant.url);
+  let ws: WebSocket;
+  try {
+    ws = open(grant.url);
+  } catch {
+    // A grant with an unusable address is the same as an unreachable Hub.
+    queueMicrotask(events.closed);
+    return { close() {} };
+  }
   const end = () => {
     if (done) return;
     done = true;
@@ -109,7 +116,8 @@ export function connectLive(
     } else if (f.kind === "ping") ws.send(frame("pong", f.rid ?? ""));
     else if (f.kind === "event" && f.event?.kind === "live.floor") {
       const { kind: _kind, ...floor } = f.event;
-      events.floor(floor as LiveFloor);
+      if (Array.isArray(floor.zones) && Array.isArray(floor.tiles))
+        events.floor(floor as LiveFloor);
     }
   };
   ws.onclose = end;
@@ -156,7 +164,8 @@ const WARN_MS = 10 * 60_000;
 
 /** What one tile shows at Hub time `at`. */
 export function tileView(tile: LiveTile, at: number): TileView {
-  const [state, label] = IDLE[tile.state];
+  // A Hub newer than this app may send a state it does not know; show it as offline.
+  const [state, label] = IDLE[tile.state] ?? IDLE.offline;
   const s = tile.session;
   if (!s) return { state, label, warning: false };
   const who = s.player_id

@@ -2,7 +2,7 @@
 title: 'Story 8.40: Live view — a read-only floor through the Tunnel'
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
@@ -85,7 +85,7 @@ There is no subscribe frame in the LAN protocol (state is pushed from registrati
 
 ## Auto Run Result
 
-Status: in-review
+Status: done
 
 Implemented: the cloud route `GET /v1/live/{branch}` (entitlement from the signed claims, Hub platform and tunnel row; a ≤ 5-minute `LiveClaims` token signed with the licence key), the read-only `live_view` client class and its loopback tunnel listener on the Hub (token, branch, trusted-time expiry and `tunnel` flag checks; `FORBIDDEN` for anything but ping/pong/`live.token`; closes with `TOKEN_INVALID` at expiry), the `live.floor` feed (hello, floor changes, 1 s tick, no names/money), and the owner app's Live view (sidebar, Today-card link, tier-lock, "Needs the Windows Hub", "Branch offline", 4-minute token renewal on the open socket).
 
@@ -94,3 +94,9 @@ Verification: `cargo fmt --check` and `cargo clippy -D warnings` clean for arena
 Known failures not from this story (also failing on a clean tree): `arena-replay replaying_the_seeded_log…`, `arena-cloud --test binary unreachable_at_start…`, `arena-api ui_auth lock_and_unlock_log…` (log-capture race), `arena-kiosk-svc` Windows lockdown/pipe tests and its test-target clippy, `arena-e2e` (Unix-only), hub `svelte-check` (`playwright.kitchen.config.ts`), `check:tokens-used` (`--ad-reserved`).
 
 Residual risks: no real `cloudflared`/Cloudflare Access/browser run (the Access session and `Origin` handling for a browser WebSocket to the tunnel hostname are not exercised; the Hub trusts the signed token only); `LICENCE_VERIFY_KEYS` ships empty, so the live view works only with dev keys until the release key is baked in; the 1 s floor read opens a database read per tick only while a viewer is connected.
+
+## Code Review (2026-10-30)
+
+Fixed: cloud `PLATFORM_UNSUPPORTED` now shows "Needs the Windows Hub" (was "Branch offline"); connection no longer restarts when a shell refresh replaces branch objects; unknown tile state falls back to offline; malformed `live.floor` ignored; `new WebSocket` throw is treated as unreachable Hub.
+
+Deferred (not blocking): no auto-reconnect/retry on dropped socket; tunnel connections share the LAN connection cap and a failed hello costs one local DB read (the tunnel is loopback behind Cloudflare Access); a demoted Hub keeps pushing its floor until the ≤ 5-minute token lapses; no direct unit tests for `tileView`/`byZone`, change-driven push timing, or the real Hub wiring in `arena-hub::run`; `NO_HUB` is used for "no Hub/tunnel not ready" (no `UNAVAILABLE` code exists).

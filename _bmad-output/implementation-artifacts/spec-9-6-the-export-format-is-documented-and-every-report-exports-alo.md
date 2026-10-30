@@ -2,7 +2,7 @@
 title: 'Story 9.6: The export format is documented and every report exports alongside it'
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 0
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-9-context.md'
@@ -86,7 +86,7 @@ deferred: []
 
 ## Auto Run Result
 
-Status: in-review
+Status: done
 
 Implemented per spec. Verified: `cargo fmt --check` clean; clippy `-D warnings` clean on proto/store/core/tasks/api/hub; `cargo test` passes for proto/store/core/api (including the new `export_reference`, `export_stock_tools`, core and API tests) except `heartbeat::trusted_time_is_cloud_time_plus_monotonic_elapsed` and `printer::lan::a_printer_that_stops_reading_times_out`, which fail on the baseline (same as Story 9.5); `ui_events::a_component_change_also_reports_the_bundles_that_hold_it` and the `proptest_apply` invariants failed once under full-workspace load and pass alone and on a rerun; `check:layers`, `check:pins`, `check:protocol`, `check:strings`, `check:secrets`, `format:check` clean; `pnpm --filter @arena/hub check` shows only the two baseline `process` errors in `playwright.kitchen.config.ts`; Playwright `backup-export.spec.ts` passes (24 tests).
 
@@ -100,4 +100,4 @@ Judgement calls:
 
 ## Code Review
 
-Self-reviewed the 9.6 diff (renderer, meanings, tests, core folder writer, route refactor, UI). No blocking findings.
+Reviewed the 9.6 diff (renderer, meanings, tests, core folder writer, route refactor, UI, CI). No blocking findings; fmt, clippy -D warnings and cargo test for proto/store/core/api are green.

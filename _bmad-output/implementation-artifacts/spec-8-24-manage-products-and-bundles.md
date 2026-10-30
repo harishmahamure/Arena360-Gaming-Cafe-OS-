@@ -2,7 +2,7 @@
 title: "Story 8.24: Manage → Products and bundles"
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 baseline_commit: 'ed809dc85c64a11819755182a2cfebc9843c9f1a'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -77,6 +77,8 @@ deferred: []
 - The 16 KB command payload cap and 64 KB body limit could not carry a 200 KB picture; both are raised for `product.upsert` only.
 
 ## Review Triage Log
+
+- Code review (2026-10-30): no blocking findings. clippy, Rust tests, owner svelte-check, strings, layers, prettier and all 474 Playwright tests pass. Two unrelated arena-cloud process-timing tests (backup hung-run, unreachable-at-start) flaked under full-suite load; `a_hung_run` passes alone.
 
 ## Design Notes
 

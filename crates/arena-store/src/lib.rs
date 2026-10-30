@@ -17,6 +17,7 @@ mod credit;
 mod dedupe;
 mod devices;
 mod export;
+mod export_reference;
 mod game_plays;
 mod group_bills;
 mod gst;
@@ -118,6 +119,7 @@ pub use devices::{
     update_device_meta, update_group, update_zone,
 };
 pub use export::{ExportedFile, prune_auto_exports, write_export};
+pub use export_reference::{Meanings, reference_gaps, render_export_reference};
 pub use game_plays::{
     NewGamePlay, insert_game_play, last_played, session_on_device_at, top_played,
 };

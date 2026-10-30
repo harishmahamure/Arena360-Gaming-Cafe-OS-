@@ -1,10 +1,11 @@
-import type { BackupExport, ExportEntry } from "@arena/ui/generated";
+import type { BackupExport, EverythingExported, ExportEntry } from "@arena/ui/generated";
 import type { MessageKey } from "@arena/ui/messages";
 import { authHeaders, errorOf, getToken, noticeLocked, setToken } from "./auth";
 
 /** The setting that holds the last export that finished (JSON of a `BackupExport`, or empty). */
 export const KEY_BACKUP_LAST_EXPORT = "backup.last_export";
 export const BACKUP_EXPORT_URL = "http://127.0.0.1:7409/ui/backup/export";
+export const BACKUP_EVERYTHING_URL = "http://127.0.0.1:7409/ui/backup/export-everything";
 /** The intent kind a Counter's manager PIN approves. */
 export const BACKUP_EXPORT_KIND = "backup.export";
 
@@ -43,14 +44,19 @@ export function exportList(last: BackupExport | null): ExportEntry[] {
 /** Why the Hub could not write the file into the backup location. */
 export type FolderProblem = "not_set" | "not_found" | "not_dir" | "not_writable" | "unsupported";
 
-export type ExportOutcome =
-  | { kind: "ok"; export: BackupExport }
+type Failure =
   | { kind: "folder"; problem: FolderProblem }
+  | { kind: "range" }
   | { kind: "pin_required" }
   | { kind: "denied" }
   | { kind: "not_primary" }
   | { kind: "signed_out" }
   | { kind: "failed" };
+
+export type ExportOutcome = { kind: "ok"; export: BackupExport } | Failure;
+
+/** What "Export everything" answered: `range` is a start or end the Hub did not accept. */
+export type EverythingOutcome = { kind: "ok"; done: EverythingExported } | Failure;
 
 const PROBLEMS: readonly string[] = [
   "not_set",
@@ -60,20 +66,19 @@ const PROBLEMS: readonly string[] = [
   "unsupported",
 ];
 
-/**
- * `POST /ui/backup/export`: the Hub writes the whole database as a `.a360` file into the backup
- * location and records it. A Counter sends a manager's PIN `ticket` for `backup.export`. Making
- * the file takes a few seconds on a big database, so the wait is long.
- */
-export async function exportDatabase(ticket?: string): Promise<ExportOutcome> {
+/** POSTs `payload` to an export route; the answer's JSON on success, else why not. */
+async function postExport(
+  url: string,
+  payload: object,
+): Promise<{ kind: "ok"; body: unknown } | Failure> {
   const token = getToken();
   if (!token) return { kind: "signed_out" };
   let res: Response;
   try {
-    res = await fetch(BACKUP_EXPORT_URL, {
+    res = await fetch(url, {
       method: "POST",
       headers: { ...authHeaders(token), "content-type": "application/json" },
-      body: JSON.stringify(ticket ? { elevation_ticket: ticket } : {}),
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(120_000),
       cache: "no-store",
     });
@@ -86,19 +91,16 @@ export async function exportDatabase(ticket?: string): Promise<ExportOutcome> {
   }
   if (res.ok) {
     try {
-      const body = (await res.json()) as BackupExport;
-      if (typeof body.file_name === "string" && typeof body.bytes === "number") {
-        return { kind: "ok", export: body };
-      }
+      return { kind: "ok", body: await res.json() };
     } catch {
-      // fall through
+      return { kind: "failed" };
     }
-    return { kind: "failed" };
   }
   const error = await errorOf(res);
   noticeLocked(error);
   switch (error?.code) {
     case "VALIDATION_FAILED":
+      if (error.field === "from" || error.field === "to") return { kind: "range" };
       return error.field === "folder" && PROBLEMS.includes(error.message)
         ? { kind: "folder", problem: error.message as FolderProblem }
         : { kind: "failed" };
@@ -111,6 +113,41 @@ export async function exportDatabase(ticket?: string): Promise<ExportOutcome> {
     default:
       return { kind: "failed" };
   }
+}
+
+/**
+ * `POST /ui/backup/export`: the Hub writes the whole database as a `.a360` file into the backup
+ * location and records it. A Counter sends a manager's PIN `ticket` for `backup.export`. Making
+ * the file takes a few seconds on a big database, so the wait is long.
+ */
+export async function exportDatabase(ticket?: string): Promise<ExportOutcome> {
+  const out = await postExport(BACKUP_EXPORT_URL, ticket ? { elevation_ticket: ticket } : {});
+  if (out.kind !== "ok") return out;
+  const body = out.body as BackupExport;
+  return typeof body.file_name === "string" && typeof body.bytes === "number"
+    ? { kind: "ok", export: body }
+    : { kind: "failed" };
+}
+
+/**
+ * `POST /ui/backup/export-everything` (Story 9.6): the database file, every report for `from` to
+ * `to` as CSV and a README, in one folder of the backup location.
+ */
+export async function exportEverything(
+  from: string,
+  to: string,
+  ticket?: string,
+): Promise<EverythingOutcome> {
+  const out = await postExport(BACKUP_EVERYTHING_URL, {
+    from,
+    to,
+    ...(ticket ? { elevation_ticket: ticket } : {}),
+  });
+  if (out.kind !== "ok") return out;
+  const body = out.body as EverythingExported;
+  return typeof body.folder_name === "string" && Array.isArray(body.reports)
+    ? { kind: "ok", done: body }
+    : { kind: "failed" };
 }
 
 /** The message for the cause the Hub named. */

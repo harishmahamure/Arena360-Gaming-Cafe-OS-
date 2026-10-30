@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Button, InlinePin, t } from "@arena/ui";
-  import type { BackupExport, ExportEntry } from "@arena/ui/generated";
+  import type { BackupExport, EverythingExported, ExportEntry } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { onMount, untrack } from "svelte";
   import { invalidate } from "$app/navigation";
@@ -9,19 +9,23 @@
     BACKUP_EXPORT_KIND,
     KEY_BACKUP_LAST_EXPORT,
     exportDatabase,
+    exportEverything,
     exportList,
     exportedAt,
     parseLastExport,
     problemMessage,
     retryable,
+    type EverythingOutcome,
     type ExportOutcome,
     type FolderProblem,
   } from "./backup";
+  import { MAX_DAYS, addDays, businessDayNow, daySpan } from "./reports";
   import { branchLocale } from "./locale.svelte";
   import { formatBytes } from "./media-cache";
 
   // Settings → System → "Database export": one tap writes the whole database to the backup
-  // location. A Counter first has a manager's PIN approve it, in place.
+  // location. A Counter first has a manager's PIN approve it, in place. "Export everything"
+  // (Story 9.6) writes the database, every report for a range as CSV and a README into one folder.
   let {
     canExport,
     onchoose,
@@ -38,10 +42,36 @@
   let problem: FolderProblem | null = $state(null);
   let notice: MessageKey | null = $state(null);
   let saved: BackupExport | null = $state(null);
+  let savedAll: EverythingExported | null = $state(null);
+  /** What a PIN approval is for. */
+  let approvingFor: "database" | "everything" = $state("database");
+  let from = $state("");
+  let to = $state("");
   let loadSeq = 0;
 
   const tz = $derived(branchLocale.current?.tz);
   const entries = $derived(exportList(last));
+  const span = $derived(daySpan(from, to));
+  const rangeValid = $derived(span >= 1 && span <= MAX_DAYS);
+  const rangeMessage: MessageKey | null = $derived(
+    !from || !to || rangeValid
+      ? null
+      : span < 1
+        ? "hub.reports.range_order"
+        : "hub.reports.range_long",
+  );
+
+  // The last 30 days by default, ending with the branch's business day today.
+  $effect(() => {
+    const locale = branchLocale.current;
+    if (!locale) return;
+    untrack(() => {
+      if (from || to) return;
+      const today = businessDayNow(locale, Date.now());
+      from = addDays(today, -29);
+      to = today;
+    });
+  });
 
   async function load() {
     const seq = ++loadSeq;
@@ -69,38 +99,31 @@
     });
   }
 
-  /** Tapped: a member with the permission exports at once; a Counter is asked for a PIN. */
-  function tap() {
-    if (busy || approving) return;
+  function clear() {
     problem = null;
     notice = null;
     saved = null;
-    if (canExport) void run();
+    savedAll = null;
+  }
+
+  /** Tapped: a member with the permission exports at once; a Counter is asked for a PIN. */
+  function tap(what: "database" | "everything" = "database") {
+    if (busy || approving) return;
+    if (what === "everything" && !rangeValid) return;
+    clear();
+    approvingFor = what;
+    if (canExport) void run(what);
     else approving = true;
   }
 
-  async function run(ticket?: string) {
-    busy = true;
-    problem = null;
-    notice = null;
-    saved = null;
-    let outcome: ExportOutcome;
-    try {
-      outcome = await exportDatabase(ticket);
-    } finally {
-      busy = false;
-    }
+  /** The cause shared by both exports. */
+  function explain(outcome: Exclude<ExportOutcome, { kind: "ok" }>) {
     switch (outcome.kind) {
-      case "signed_out":
-        return void (await invalidate(SESSION_DEPENDENCY));
-      case "ok":
-        saved = outcome.export;
-        last = outcome.export;
-        // The Hub kept the list of the exports before this one with the record.
-        void load();
-        return;
       case "folder":
         problem = outcome.problem;
+        return;
+      case "range":
+        notice = "hub.backup.everything.range";
         return;
       case "pin_required":
         notice = "hub.backup.needs_pin";
@@ -112,10 +135,37 @@
       case "not_primary":
         notice = "hub.backup.not_primary";
         return;
+      case "signed_out":
+        return;
       case "failed":
         notice = "hub.backup.failed";
         return;
     }
+  }
+
+  async function run(what: "database" | "everything", ticket?: string) {
+    busy = true;
+    clear();
+    let outcome: ExportOutcome | EverythingOutcome;
+    try {
+      outcome =
+        what === "everything"
+          ? await exportEverything(from, to, ticket)
+          : await exportDatabase(ticket);
+    } finally {
+      busy = false;
+    }
+    if (outcome.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
+    if (outcome.kind !== "ok") return explain(outcome);
+    if ("done" in outcome) {
+      savedAll = outcome.done;
+      last = outcome.done.export;
+    } else {
+      saved = outcome.export;
+      last = outcome.export;
+    }
+    // The Hub kept the list of the exports before this one with the record.
+    void load();
   }
 
   async function approve(pin: string) {
@@ -130,7 +180,7 @@
     }
     if (outcome.kind !== "ticket") return { ok: false, message: "ui.pin.unreachable" } as const;
     approving = false;
-    void run(outcome.ticket);
+    void run(approvingFor, outcome.ticket);
     return { ok: true } as const;
   }
 
@@ -176,8 +226,41 @@
       label={busy ? "hub.backup.exporting" : "hub.backup.export_now"}
       disabled={busy || approving}
       disabledReason={busy ? "hub.backup.exporting" : "hub.settings.system.approving"}
-      onclick={tap}
+      onclick={() => tap()}
     />
+  </div>
+
+  <div class="everything" data-testid="backup-everything">
+    <h4 class="type-hub-label">{t("hub.backup.everything.title")}</h4>
+    <p class="intro type-hub-body">{t("hub.backup.everything.intro")}</p>
+    <div class="row">
+      <label class="field type-hub-label">
+        <span>{t("hub.reports.from")}</span>
+        <input class="ui-interactive" type="date" bind:value={from} data-testid="backup-from" />
+      </label>
+      <label class="field type-hub-label">
+        <span>{t("hub.reports.to")}</span>
+        <input class="ui-interactive" type="date" bind:value={to} data-testid="backup-to" />
+      </label>
+    </div>
+    {#if rangeMessage}
+      <p class="type-hub-label warn" role="alert" data-testid="backup-range-problem">
+        {t(rangeMessage)}
+      </p>
+    {/if}
+    <div class="row">
+      <Button
+        label={busy ? "hub.backup.exporting" : "hub.backup.everything.button"}
+        variant="secondary"
+        disabled={busy || approving || !rangeValid}
+        disabledReason={busy
+          ? "hub.backup.exporting"
+          : approving
+            ? "hub.settings.system.approving"
+            : (rangeMessage ?? "hub.backup.everything.range")}
+        onclick={() => tap("everything")}
+      />
+    </div>
   </div>
 
   {#if approving}
@@ -201,7 +284,11 @@
         </p>
         <div class="row">
           {#if retryable(problem)}
-            <Button label="hub.backup.try_again" variant="secondary" onclick={tap} />
+            <Button
+              label="hub.backup.try_again"
+              variant="secondary"
+              onclick={() => tap(approvingFor)}
+            />
           {/if}
           <Button label="hub.backup.choose_location" variant="secondary" onclick={onchoose} />
         </div>
@@ -214,8 +301,26 @@
         </p>
         {#if notice === "hub.backup.failed"}
           <div class="row">
-            <Button label="hub.backup.try_again" variant="secondary" onclick={tap} />
+            <Button
+              label="hub.backup.try_again"
+              variant="secondary"
+              onclick={() => tap(approvingFor)}
+            />
           </div>
+        {/if}
+      </div>
+    {:else if savedAll}
+      <div data-testid="backup-saved-everything">
+        <p class="type-hub-body">
+          {t("hub.backup.everything.saved", {
+            name: savedAll.folder_name,
+            n: String(savedAll.reports.length),
+          })}
+        </p>
+        {#if savedAll.skipped.length > 0}
+          <p class="type-hub-label warn" data-testid="backup-skipped">
+            {t("hub.backup.everything.skipped", { reports: savedAll.skipped.join(", ") })}
+          </p>
         {/if}
       </div>
     {:else if saved}
@@ -279,6 +384,20 @@
     flex-wrap: wrap;
     align-items: flex-start;
     gap: var(--space-3);
+  }
+
+  .everything {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .everything h4 {
+    margin: 0;
+  }
+
+  .field {
+    display: grid;
+    gap: var(--space-1);
   }
 
   .approval,

@@ -3608,6 +3608,10 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
             post(crate::ui_coupons::discount_preview),
         )
         .route("/ui/backup/export", post(crate::ui_backup::export))
+        .route(
+            "/ui/backup/export-everything",
+            post(crate::ui_backup::export_everything),
+        )
         .route("/ui/printer/find", post(crate::ui_printer::find))
         .route("/ui/printer/health", get(crate::ui_printer::health))
         .route("/ui/printer/ready", get(crate::ui_printer::ready))

@@ -272,7 +272,7 @@ development_status:
   9-3-the-cloud-issues-epoch-counters-by-compare-and-set-on-the-br: done
   9-4-one-tap-full-database-export-to-a-folder-or-usb-drive: done
   9-5-the-hub-saves-a-daily-export-to-the-backup-location: done
-  9-6-the-export-format-is-documented-and-every-report-exports-alo: backlog
+  9-6-the-export-format-is-documented-and-every-report-exports-alo: review
   9-7-restore-a-branch-from-an-export-file-as-a-new-epoch: backlog
   9-8-owner-replaces-a-failed-hub-and-gets-a-new-pairing-code: backlog
   9-9-a-replacement-hub-opens-in-restore-this-branch-and-serves-no: backlog

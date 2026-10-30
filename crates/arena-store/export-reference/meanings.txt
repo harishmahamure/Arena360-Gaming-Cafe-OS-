@@ -1,0 +1,491 @@
+# Data dictionary for the Arena 360 database export. One entry per line: "table: what the table holds", "table.column: what the column means", or "*.column: what a column of this name means in every table that has it".
+# A specific "table.column" entry overrides a "*.column" entry. Money is in minor units (paise), times are Unix milliseconds in UTC, business days are YYYY-MM-DD in the branch time zone, rates are in basis points (100 basis points is 1 percent), and 0/1 flags use 1 for yes.
+*.rev: How many times the row has changed; the Hub uses it to refuse stale edits.
+*.business_day: The business day (YYYY-MM-DD, in the branch time zone) the record belongs to.
+*.fy: The financial year the record belongs to, used for invoice numbering and tax reports.
+*.active: 1 if the item is switched on and can be used, 0 if it has been switched off.
+*.password_hash: A hash; the secret itself is not stored.
+*.token_hash: A hash; the secret itself is not stored.
+ad_impressions: One row for each advert shown on a screen, kept only as a count; it holds nothing that identifies a device, advert or advertiser.
+ad_impressions.id: Running number of the impression; later impressions have higher numbers.
+ad_impressions.slot: Where the advert was shown: banner or interstitial.
+ad_impressions.at: When the advert was shown.
+ad_request_cursor: A single row that remembers how far advert requests have been reported to the cloud.
+ad_request_cursor.id: Always 1; the table has only one row.
+ad_request_cursor.through_id: The highest advert request number the cloud has acknowledged.
+ad_requests: One row for each time a screen asked for an advert, kept only as a count with nothing that identifies a device or advertiser.
+ad_requests.id: Running number of the request; later requests have higher numbers.
+ad_requests.slot: Where the advert was requested for: banner or interstitial.
+ad_requests.at: When the advert was requested.
+ad_upload_cursor: A single row that remembers how far advert impressions have been reported to the cloud.
+ad_upload_cursor.id: Always 1; the table has only one row.
+ad_upload_cursor.through_id: The highest advert impression number the cloud has acknowledged.
+alerts: Alerts raised by the Hub that staff must acknowledge, such as time up, low stock or a missing controller.
+alerts.id: Unique id of the alert.
+alerts.kind: What the alert is about: fixture (test only), time_up, controller_missing, printer_offline, stock_expiring, stock_low, login_lockout, check_pc, call_staff, kiosk_order, order_ready or backup_disk.
+alerts.acked_by: Id of the staff member who acknowledged the alert; empty while it is still open.
+alerts.qty: For a low-stock alert, the quantity on hand when the alert was raised; empty for other alerts.
+alerts.threshold: For a low-stock alert, the low-stock level that was crossed; empty for other alerts.
+alerts.ticket_id: For an order-ready alert at the counter, the id of the kitchen ticket it is about; empty for other alerts.
+applied_commands: Commands sent from the owner's app that the Hub has applied or rejected, so none is applied twice.
+applied_commands.command_id: Running number of the command in the order the Hub received it.
+applied_commands.idempotency_key: A unique key that stops the same command being applied twice.
+applied_commands.kind: The type of command, for example a change to a setting.
+applied_commands.status: Whether the Hub applied the command or rejected it: applied or rejected.
+applied_commands.applied_seq: The number of the audit-log entry the command produced; empty if it was rejected.
+applied_commands.error: Why the command was rejected; empty if it was applied.
+applied_intents: A record of every request the Hub has finished handling, so a repeated request gets the same answer instead of being done twice. Records older than 30 days are removed.
+applied_intents.idempotency_key: A unique key sent with the request that stops it being applied twice.
+applied_intents.intent_id: Unique id of the request.
+applied_intents.intent_kind: The type of request, for example starting a session or settling a bill.
+applied_intents.fingerprint: A fingerprint of the request contents, used to detect a key being reused for a different request.
+applied_intents.outcome: The stored result of the request in a compact binary form, returned again if the request is repeated.
+backup_state: A single row that tracks whether the player encryption keys have been backed up.
+backup_state.id: Always 1; the table has only one row.
+backup_state.keys_version: A counter that goes up every time a player encryption key is added, changed or removed.
+backup_state.keys_backed_up_version: The value of the key counter at the last successful key backup.
+backup_state.keys_error: A short code for why the last key backup failed; it never contains player data.
+branch: The branch (cafe location) this Hub runs: its name, code, currency and time settings.
+branch.branch_id: Unique id of the branch.
+branch.name: The branch's name as shown to staff and on receipts.
+branch.branch_code: The short code of the branch, used as the first part of invoice numbers.
+branch.currency: The currency code the branch trades in, for example INR.
+branch.tz: The branch's time zone name, for example Asia/Kolkata; it decides where each business day starts and ends.
+branch.day_start_min: When the business day starts, in minutes after midnight (0 to 1439).
+branch.fy_start_month: The month the financial year starts, 1 for January to 12 for December.
+bundle_components: The products that make up each bundle product.
+bundle_components.qty: How many of the component product go into one bundle.
+cash_events: Every movement of cash against a shift: sales, refunds, float, deposits and expenses. Rows are never edited; an undo adds a reversing row.
+cash_events.id: Unique id of the cash event.
+cash_events.kind: The type of event: sale, sale_reverted, refund, float_in, deposit, expense or drawer_open.
+cash_events.staff_id: Id of the staff member who recorded the event.
+cash_events.order_id: The bill the cash event belongs to, if any.
+cash_events.reference: A reference typed in by staff, such as a bank deposit slip number.
+cash_events.category: For an expense, what it was for: supplies, utilities, repairs, food_stock or other.
+cash_events.paid_from: For an expense, who paid it: drawer (cash from the till) or owner (the owner paid from their own pocket).
+cash_events.note: Free text note typed in by staff.
+cash_events.receipt_photo: A small photo of the receipt for an expense, stored as a JPEG data link of at most 200 KB.
+changes: The audit log. Every change to the branch data is recorded here once, in order, and rows are never edited or deleted.
+changes.epoch: The era of the Hub that wrote the change; a new epoch starts when a different Hub takes over as the writer. Together with seq it fixes the change's place in the log.
+changes.seq: The change's number within its epoch, counted without gaps.
+changes.tbl: The name of the table the change was made to.
+changes.row_id: The id of the row that was changed.
+changes.op: What was done to the row: insert, update or delete.
+changes.row: The contents of the row after the change, in a compact binary form.
+changes.intent_id: Unique id of the request that caused the change.
+changes.intent_kind: The type of request that caused the change, for example session.start.
+changes.actor_kind: Who made the change: staff, owner, admin, system or device.
+changes.actor_id: Id of the person or device that made the change.
+changes.elevated_by_kind: How a manager approved the change when approval was needed: pin or mfa; empty if none.
+changes.elevated_by_id: Id of the manager who approved the change; empty if none.
+changes.elevated_by_mode: Where the approval was checked: hub (the Hub itself) or cached_verifier (a copy kept on the device while offline); empty if none.
+changes.elevated_by_verifier_version: The version of the manager credential list the approval was checked against; empty if none.
+changes.at: When the change was made.
+changes.business_day: The business day the change was made on; empty for the oldest entries.
+changes.fy: The financial year the change was made in; empty for the oldest entries.
+changes.reason: The reason code given for the change when the request required one; empty otherwise.
+consents: A history of each player's consent choices for messages. Rows are never edited, a new row records a new choice.
+consents.consent_id: Unique id of the consent record.
+consents.purpose: What the consent covers: transactional (receipts and service messages) or marketing.
+consents.policy_version: The version of the privacy policy the player agreed to or withdrew from.
+consents.granted: 1 if consent was given, 0 if it was withdrawn.
+consents.at: When the player gave or withdrew consent.
+consents.rev: How many times the row has changed; consent rows are not edited, so this stays at its first value.
+coupon_targets: The device groups, plans or products a coupon is limited to. A coupon with no rows applies to the whole bill.
+coupon_targets.target_kind: What kind of item the coupon is limited to: group, plan or product.
+coupon_targets.target_id: The id of the device group, plan or product.
+coupons: Discount coupons that staff can apply when settling a bill.
+coupons.coupon_id: Unique id of the coupon.
+coupons.code: The code staff type in, always in capital letters and unique in the branch.
+coupons.valid_from: First business day (YYYY-MM-DD) the coupon can be used; empty means no start date.
+coupons.valid_to: Last business day (YYYY-MM-DD) the coupon can be used; empty means no end date.
+coupons.usage_limit: The most times the coupon can be used; empty means unlimited.
+coupons.used: How many bills have used the coupon so far.
+credit_balances: How much each player owes on credit (pay later) and the rules for it.
+credit_balances.reminder_days: Which days after a credit purchase the player is sent a payment reminder, as a list of day counts.
+credit_balances.credit_paused: 1 if new credit for the player is paused, 0 if credit can be given.
+credit_balances.last_override_day: The last business day (YYYY-MM-DD) a manager allowed the player to go past their credit limit; empty if never.
+device_admin_exits: Times when someone left the locked kiosk screen on a PC to reach the Windows desktop for maintenance.
+device_admin_exits.exit_id: Unique id of the exit.
+device_admin_exits.staff_id: Id of the manager who approved the exit.
+device_admin_exits.mode: How the exit was approved: hub (PIN checked by the Hub), cached_verifier (PIN checked offline on the PC) or remote (unlocked from the Hub).
+device_admin_exits.flagged: 1 if the exit needs a manager's attention, for example an offline PIN that was out of date; otherwise 0.
+device_admin_exits.flag_reason: Why the exit was flagged; empty if not flagged.
+device_events: Events reported by a PC's kiosk app, such as warnings and errors.
+device_events.event_id: Unique id of the event.
+device_events.at: When the kiosk recorded the event.
+device_events.level: How serious the event is: info, warn or error.
+device_events.code: A short code for the kind of event.
+device_events.detail: A short description of the event.
+device_groups: Groups of devices, such as PCs, consoles or VR, that share a price.
+device_groups.group_id: Unique id of the group.
+device_groups.name: The group's name, unique among live groups.
+device_groups.kind: The type of device in the group: pc, console, vr or other.
+device_groups.colour: The colour used for the group on screen: teal, orange, lime, sand, coral or silver.
+device_groups.sort_order: The position of the group when groups are listed; lower numbers come first.
+devices: Devices that connect to the Hub with an access token: paired PCs and kitchen screens.
+devices.device_id: Unique id of the device.
+devices.class: The kind of connection: paired (a PC kiosk) or kds (a kitchen display).
+devices.label: The name staff gave the device.
+devices.token_hash: A hash; the secret itself is not stored.
+devices.reported_version: The app version the device last reported; empty if it has not reported.
+devices_meta: Floor details for each PC or console: its type, group, position and current state.
+devices_meta.kind: The type of device: pc, console, vr or sim.
+devices_meta.label: The name shown for the device on the floor.
+devices_meta.tv_number: For a console, the number of the TV it is connected to; empty for other devices.
+devices_meta.floor_x: The device's column on the floor plan, counted from 0.
+devices_meta.floor_y: The device's row on the floor plan, counted from 0.
+devices_meta.state: The device's current state: online, offline, in_session, reserved or maintenance.
+devices_meta.prior_state: The state the device had before it was put in maintenance, so it can go back; empty otherwise.
+devices_meta.maintenance_note: A note on why the device is in maintenance; empty otherwise.
+floor_zones: Named areas of the floor, such as Main hall or VIP room, that devices are placed in.
+floor_zones.zone_id: Unique id of the zone.
+floor_zones.name: The zone's name, unique among live zones.
+floor_zones.sort_order: The position of the zone when zones are listed; lower numbers come first.
+game_matches: The games found on each PC that match the shared game catalogue, from its latest scan.
+game_matches.matches: A list of the catalogue games found and the folder each was found in, in a text format.
+game_plays: Time played per game, recorded by the PC when a game stops running or the session ends.
+game_plays.id: Unique id of the play record.
+game_plays.game_id: The id of the game in the branch library; it is kept even if the game is later deleted.
+game_plays.minutes: How long the game was played, in whole minutes.
+group_bills: A shared bill that several sessions are put on, so one person can pay for the group.
+group_bills.id: Unique id of the group bill.
+group_bills.payer_guest_no: The guest number of the person paying, when the payer has no player account; empty otherwise.
+group_bills.state: Whether the group bill is open or closed.
+hub_identity: A single row saying which tenant, branch and Hub this installation is paired as.
+hub_identity.id: Always 1; the table has only one row.
+hub_identity.tenant_id: Unique id of the cafe business account in the cloud.
+hub_identity.branch_id: Unique id of the branch this Hub is paired to.
+hub_identity.hub_id: Unique id of this Hub.
+hub_identity.tier: The plan the branch is on: free, basic or premium.
+hub_meta: Small bookkeeping values the Hub keeps for itself, as name and value pairs.
+hub_meta.key: The name of the value.
+hub_meta.value: The value.
+invoice_sequences: The next invoice number to use, kept separately for each financial year and numbering series.
+invoice_sequences.fy: The financial year the series belongs to.
+invoice_sequences.segment: The numbering series within the year; a new one starts when the Hub's epoch changes.
+invoice_sequences.next: The next running number to hand out in this series.
+irreversible_effects: Things that cannot be taken back once done, such as a printed receipt, an opened cash drawer, an assigned invoice number or a sent message. Used to block an undo.
+irreversible_effects.id: Unique id of the record.
+irreversible_effects.kind: What happened: receipt_printed, drawer_kicked, invoice_number_assigned or notification_sent.
+irreversible_effects.intent_id: The id of the request it happened for, if any.
+irreversible_effects.order_id: The id of the bill it happened for, if any.
+kiosk_scans: The latest scan of installed games and launchers on each PC.
+kiosk_scans.entries: A list of the programs found on the PC, in a text format.
+kiosk_scans.launchers: A list of the game launchers found on the PC and where they are installed, in a text format.
+kiosk_scans.skipped: How many folders or files the scan could not read.
+kitchen_displays: Kitchen display tablets paired with the Hub.
+kitchen_displays.id: Unique id of the kitchen display.
+kitchen_displays.name: The name staff gave the display.
+kitchen_displays.created_by: Id of the manager or owner who issued the pairing code.
+kitchen_displays.last_seen: When the display last contacted the Hub; updated at most once a minute.
+kitchen_displays.high_contrast: 1 if the display uses the high-contrast theme, 0 if not.
+kitchen_ticket_lines: The items on each kitchen ticket.
+kitchen_ticket_lines.id: Unique id of the ticket line.
+kitchen_ticket_lines.order_line_id: The bill line this item came from; kept even if the line is later cancelled.
+kitchen_ticket_lines.label: The item name as printed on the ticket.
+kitchen_ticket_lines.qty: How many of the item to prepare.
+kitchen_ticket_lines.notes: Preparation notes for the item, such as less spicy; empty if none.
+kitchen_tickets: Orders sent to the kitchen, one ticket for each time kitchen items are placed.
+kitchen_tickets.id: Unique id of the ticket.
+kitchen_tickets.order_id: The bill the ticket belongs to; kept even if the bill is later cancelled.
+kitchen_tickets.device_id: The PC or console the order was placed from; empty for a counter order.
+kitchen_tickets.seat: Where to take the food, such as PC 07, TV 3 or Counter; it never names a player.
+kitchen_tickets.number: The branch's running ticket number, shown as K- followed by this number.
+kitchen_tickets.stage: Where the ticket is: new, preparing, ready, served or cancelled.
+kitchen_tickets.placement_id: The id of the order placement that opened the ticket.
+kitchen_tickets.advanced_by: Id of the staff member who last moved the ticket to a new stage.
+kitchen_tickets.cancel_reason: Why the ticket was cancelled; empty otherwise.
+lease: A single row for the right to write to this branch's data, so only one Hub writes at a time.
+lease.id: Always 1; the table has only one row.
+lease.counter: The epoch counter the Hub currently holds; it goes up each time the writing Hub changes.
+lease.hub_instance_id: Unique id of the Hub installation that holds the lease.
+lease.provisional: 1 if the Hub took the lease while offline and the cloud has not yet confirmed it, 0 if confirmed.
+lease.fork_parent_epoch: If this epoch branched off an earlier one, the epoch it branched from; empty otherwise.
+lease.fork_parent_seq: If this epoch branched off an earlier one, the change number it branched at; empty otherwise.
+lease.max_seen_counter: The highest epoch counter this Hub has ever seen, so a new epoch never repeats a number.
+library_dismissals: Games found on PCs that a manager chose not to add to the library, so they are not suggested again.
+library_dismissals.key: The key of the suggestion that was dismissed.
+library_entries: The branch's library of games and apps.
+library_entries.id: Unique id of the library entry.
+library_entries.kind: Whether the entry is a game or an app.
+library_entries.name: The name shown to players.
+library_entries.launcher: Which launcher starts it: steam, epic, riot, battlenet or none (a plain program).
+library_entries.executable_path: The full Windows path of the program to run; may be empty if a launch link is used.
+library_entries.launch_uri: A launch link, such as a steam:// link, that starts the entry; may be empty.
+library_entries.launch_args: Extra options passed to the program when it starts.
+library_entries.category: The category the entry is listed under, such as Shooter.
+library_entries.tags: A list of tags describing the entry, in a text format.
+library_entries.age_rating: The entry's age rating, such as 18+; empty if none.
+library_entries.enabled: 1 if players can see and start the entry, 0 if hidden.
+library_entries.catalog_id: The id of the matching game in the shared game catalogue; empty if not linked.
+library_installs: Where each library entry is installed on each PC.
+library_installs.path: The full Windows path of the entry on that PC.
+library_installs.match_key: The key of the catalogue suggestion the install was found as; empty if added by hand.
+licence_cache: A single row holding the last licence the Hub received from the cloud.
+licence_cache.id: Always 1; the table has only one row.
+licence_cache.jwt: The signed licence token the Hub last received from the cloud.
+notify_outbox: Messages waiting to be sent to players or alerts for the owner, and how each one went.
+notify_outbox.id: Unique id of the message.
+notify_outbox.purpose: What the message is for: transactional (a service message to a player) or owner_alert (an alert for the owner).
+notify_outbox.kind: The type of message: receipt, low_balance, session_ending, console_5min, credit_reminder, cash_variance, low_stock, credit_overdue, large_refund or large_discount.
+notify_outbox.order_id: The bill the message is about, if any.
+notify_outbox.consent_policy_version: The version of the privacy policy the player had agreed to when the message was queued.
+notify_outbox.not_before: The earliest time the message may be sent.
+notify_outbox.state: Where the message is: queued, sent, failed, skipped or expired (not sent within 7 days).
+notify_outbox.channel: How the message was sent: whatsapp, sms or app; empty until sent.
+notify_outbox.error_code: A short code for why sending failed; empty otherwise.
+notify_outbox.reason: Why the message was skipped; empty otherwise.
+notify_outbox.session_id: The session the message is about, if any.
+notify_outbox.params: The values filled into the message template, in a text format.
+notify_outbox.reminder_day: For a credit reminder, the business day (YYYY-MM-DD) it was raised for; a player gets at most one a day.
+notify_outbox.source_ref: For an owner alert, the event it was raised for, such as a shift, order or credit note, so each event raises one alert.
+order_lines: The lines on each bill: session time, plans and products.
+order_lines.id: Unique id of the bill line.
+order_lines.minutes: For a time line, the minutes charged.
+order_lines.rate_minor_per_hour: For a time line, the hourly rate applied, in paise.
+order_lines.position: The line's place on the bill; lower numbers come first.
+order_lines.label: The text shown for the line on the bill.
+order_lines.qty: For a product line, how many units were sold.
+order_lines.placement_id: The id of the order placement that added the line.
+order_lines.placed_by: Id of the staff member who placed the line.
+order_lines.served: 1 if the item has been served to the customer, 0 if still waiting.
+order_lines.served_by: Id of the staff member who marked the line served.
+order_lines.refunded_qty: How many units of the line have been refunded so far.
+order_lines.kitchen_notes: Preparation notes chosen for the line, as a list in a text format; empty if none.
+orders: Bills. Each is a session bill, wallet top-up, credit payment, plan sale or counter sale, from open to settled or void.
+orders.id: Unique id of the bill.
+orders.guest_no: The walk-in guest number for the day, when the customer has no player account; empty otherwise.
+orders.status: Whether the bill is open, settled or void.
+orders.settled_by: Id of the staff member who settled the bill.
+orders.kind: The type of bill: session, topup, credit_collect, plan_sale or pos_sale.
+orders.tax_breakup: The tax on the bill for each tax rate, in a text format.
+orders.invoice_no: The invoice number given to the settled bill; empty until one is assigned.
+orders.buyer_gstin: For a business invoice, the buyer's GST number; empty for a normal sale.
+orders.buyer_name: For a business invoice, the buyer's registered name; empty for a normal sale.
+orders.coupon_code: The coupon code applied to the bill; empty if none.
+orders.discount_reason: Why a manual discount was given: regular_customer, service_issue, staff_meal or other.
+orders.discount_note: Free text explaining a discount whose reason is other.
+orders.discount_by: Id of the manager who approved the manual discount.
+orders.voided_by: Id of the staff member who approved voiding the bill.
+orders.void_reason: Why the bill was voided: mistake, changed_mind or other.
+orders.void_note: Free text explaining a void whose reason is other.
+orders.void_session_id: The session the voided bill belonged to.
+owner_overrides: A record of changes that the owner's command overwrote, kept so the audit shows both.
+owner_overrides.epoch: The epoch of the owner's change in the audit log.
+owner_overrides.seq: The change number of the owner's change in the audit log.
+owner_overrides.tbl: The table that was changed.
+owner_overrides.row_id: The id of the row that was changed.
+owner_overrides.intent_id: The id of the request behind the change that was overwritten.
+owner_overrides.actor_kind: Who made the change that was overwritten.
+owner_overrides.actor_id: Id of the person or device that made the change that was overwritten.
+owner_overrides.at: When the overwritten change was made.
+payments: The payments taken on bills, and the negative rows for refunds.
+payments.id: Unique id of the payment.
+payments.method: How it was paid: cash, upi, card, wallet or credit.
+payments.reference: A reference for the payment, such as a UPI or card receipt number; empty if none.
+payments.staff_id: Id of the staff member who took the payment.
+payments.position: The payment's order among the payments on the bill.
+payments.refund_id: For a refund payment, the id of the refund it belongs to; empty for ordinary payments.
+plan_groups: The device groups each plan can be used on.
+plans: Prepaid time offers that players can buy: packs of minutes, time blocks and passes.
+plans.plan_id: Unique id of the plan.
+plans.kind: The type of plan: pack (minutes to spend), block (a fixed block of time) or pass (unlimited play for a period).
+plans.name: The plan's name.
+plans.minutes: The minutes included; empty for a pass.
+plans.validity_days: How many days after purchase the plan can be used; empty if it does not expire.
+plans.window_start_min: When in the day the plan can start being used, in minutes after midnight; empty for any time.
+plans.window_end_min: When in the day the plan stops being usable, in minutes after midnight; empty for any time.
+player_keys: The encryption keys that protect each player's personal data.
+player_keys.dek_wrapped: [ciphertext] The player's data key, itself encrypted with the branch key.
+player_packs: Packs and passes that players have bought, with what is left of each.
+player_packs.id: Unique id of the purchased pack or pass.
+player_packs.kind: Whether it is a pack or a pass.
+player_packs.name: The plan's name when it was bought.
+player_packs.minutes_total: The minutes the pack included when bought; empty for a pass.
+player_packs.minutes_left: The minutes still unused; empty for a pass.
+player_packs.validity_days: How many days the pack or pass was valid for from purchase.
+player_packs.window_start_min: When in the day it can start being used, in minutes after midnight; empty for any time.
+player_packs.window_end_min: When in the day it stops being usable, in minutes after midnight; empty for any time.
+player_packs.group_ids: The device groups it can be used on, as a list of group ids.
+player_pc_settings: PC settings a player saved to their profile, applied on whichever PC they sit at.
+player_pc_settings.mouse_speed: The mouse speed from 1 to 20; empty if not chosen.
+player_pc_settings.display_mode: The screen mode as width x height @ refresh rate in Hz; empty if not chosen.
+player_pc_settings.audio_output: The name of the audio output device; empty if not chosen.
+player_pc_settings.keyboard_layout: The keyboard layout's 8-digit Windows id; empty if not chosen.
+players: Registered players. Personal details are stored encrypted.
+players.player_id: Unique id of the player.
+players.username: The player's login name, in lower case; not encrypted.
+players.password_hash: A hash; the secret itself is not stored.
+players.phone_lookup: A keyed hash of the phone number used to find a player by phone; the number itself is not stored here.
+players.name_enc: [ciphertext] The player's name.
+players.phone_enc: [ciphertext] The player's phone number.
+players.email_enc: [ciphertext] The player's email address.
+players.dob_enc: [ciphertext] The player's date of birth.
+players.notes_enc: [ciphertext] Staff notes about the player.
+players.tags: Labels staff added to the player, as a list in a text format.
+pricing_rules: Rules that change the hourly price at certain times or dates, such as happy hour.
+pricing_rules.rule_id: Unique id of the rule.
+pricing_rules.name: The rule's name.
+pricing_rules.rule_kind: How the rule applies: weekly (on chosen days of the week) or date (between two dates).
+pricing_rules.days_mask: For a weekly rule, the days it applies on, as a number from 1 to 127 where each day of the week is one bit.
+pricing_rules.start_min: When in the day the rule starts, in minutes after midnight; empty for the whole day.
+pricing_rules.end_min: When in the day the rule ends, in minutes after midnight; empty for the whole day.
+pricing_rules.date_from: For a date rule, the first day (YYYY-MM-DD) it applies.
+pricing_rules.date_to: For a date rule, the last day (YYYY-MM-DD) it applies.
+pricing_rules.adjust_kind: How the price changes: override_minor (a fixed hourly price in paise) or percent_bp (a percentage change in basis points).
+pricing_rules.adjust_value: The size of the change: the hourly price in paise, or the percentage in basis points, depending on adjust_kind.
+pricing_rules.priority: Which rule wins when several apply; higher numbers win.
+products: Items sold at the counter or ordered from a PC: food, drinks and other goods.
+products.product_id: Unique id of the product.
+products.name: The product's name.
+products.category: The menu category it is listed under.
+products.hsn: The product's HSN code for GST.
+products.track_stock: 1 if the quantity in stock is counted, 0 if not.
+products.image: A small picture of the product, or an icon name.
+products.barcode: The product's barcode; empty if none.
+products.kitchen: 1 if the product is prepared in the kitchen and sent on a kitchen ticket, 0 if not.
+products.favourite: 1 if the product is pinned to the front of the sales screen, 0 if not.
+products.bundle: 1 if the product is a bundle of other products, 0 if not.
+products.low_stock_qty: The quantity at or below which a low-stock alert is raised; empty for no alert.
+products.kitchen_notes: Preset preparation notes staff can choose from, as a list in a text format.
+rates: The hourly price of each device group.
+rates.rate_id: Unique id of the rate.
+read_grants: Records of a manager approving a staff member to view restricted information.
+read_grants.grant_id: Unique id of the approval.
+read_grants.permission: The permission that was granted.
+read_grants.requester_staff_id: Id of the staff member who asked to view the information.
+read_grants.approver_staff_id: Id of the manager who approved with their PIN.
+read_grants.verifier_version: The version of the manager credential list the approval was checked against.
+refunds: Refunds of settled bills, each with a credit note number. Rows are never edited.
+refunds.id: Unique id of the refund.
+refunds.credit_note_no: The credit note number given to the refund.
+refunds.reason: Why the refund was given: changed_mind, mistake, hardware_issue or other.
+refunds.note: Free text note added by staff.
+refunds.method: How the money was paid back, for example cash or upi; empty if not paid out directly.
+refunds.reference: A reference for the payout, such as a UPI receipt number.
+refunds.tax_breakup: The tax refunded for each tax rate, in a text format.
+refunds.lines: The bill lines that were refunded and in what quantity, in a text format.
+refunds.staff_id: Id of the staff member who issued the refund.
+refunds.approved_by: Id of the manager who approved the refund, or the staff member who issued it if no approval was needed.
+role_perms: The permissions each role is allowed or denied.
+role_perms.permission: The name of the permission.
+role_perms.effect: Whether the role is allowed or denied the permission: allow or deny.
+roles: Staff roles such as Owner, Manager and Cashier.
+roles.role_id: Unique id of the role.
+roles.name: The role's name, unique in the branch.
+roles.builtin: 1 if the role is one of the roles that come with the system, 0 if it was created by the cafe.
+rollup_log: A log of the summary files the Hub has published to the cloud.
+rollup_log.date: The business day (YYYY-MM-DD) of a daily summary, or latest for the current summary.
+rollup_log.schema: The version of the summary file's layout.
+rollup_log.key: The storage name the file was uploaded under.
+schema_version: The versions of the database layout that have been applied.
+schema_version.version: The version number of the database layout step.
+session_segments: A session split into periods, each at one device and one hourly price, since moving PCs or a price change starts a new period.
+session_segments.id: Unique id of the segment.
+session_segments.rate_minor_per_hour: The hourly price charged in this segment, in paise.
+session_segments.rule_id: The pricing rule that set the price, if one applied.
+sessions: Play sessions on a device, from start to end.
+sessions.id: Unique id of the session.
+sessions.guest_no: The walk-in guest number for the day, when there is no player account; empty otherwise.
+sessions.mode: How the session is paid: postpaid (pay at the end), pack, wallet, pass or block.
+sessions.plan_id: The plan the session was started on; empty if none.
+sessions.pack_id: The purchased pack or pass the session draws from; empty if none.
+sessions.state: Where the session is: active, paused, grace, expired, ended or orphaned.
+sessions.end_reason: Why the session ended: staff (ended by staff), expired (time ran out) or forced (staff force-ended it); empty while it is running.
+sessions.group_bill_id: The shared group bill the session is on; empty if none.
+sessions.rounding_min: The billing rounding step in minutes that applied to the session.
+sessions.minimum_min: The minimum billed time in minutes that applied to the session.
+sessions.grace_min: The grace period in minutes after time is up that applied to the session.
+sessions.time_up_mode: What happens when time is up: clean_up (the PC is cleaned up automatically) or staff_handles (staff decide).
+sessions.epoch: The Hub epoch the session was started in.
+sessions.ended_by: Id of the staff member who ended the session; empty if it was not ended by staff.
+sessions.pause_reason: Why the session was paused: player_stepped_away, hardware_issue, power_cut or other.
+sessions.pause_note: Free text note about the pause.
+sessions.extended_min: The minutes added to the session by extensions.
+sessions.forced_reason: Why staff force-ended the session: rule_violation, hardware_issue, closing or other.
+sessions.forced_note: Free text note about the forced end.
+sessions.forced_left_min: The minutes that were left on the session when it was force-ended.
+sessions.forced_pack_min: The pack minutes that were deducted when the session was force-ended.
+sessions.controller_check: For a console session, whether the controllers were returned or missing after it ended; na if not applicable.
+sessions.controller_checked_by: Id of the staff member who checked the controllers.
+settings: Branch settings as name and value pairs.
+settings.key: The name of the setting.
+settings.value: The setting's value.
+settings.prior_value: For a time zone or day start change, the earlier value that applies until the new one takes over; empty otherwise.
+settings.effective_from: The business day (YYYY-MM-DD) the new value takes over; empty if it applies at once.
+shifts: Cashier shifts, each with an opening float and, once closed, the cash count.
+shifts.id: Unique id of the shift.
+shifts.staff_id: Id of the staff member who opened the shift.
+shifts.state: Whether the shift is open or closed.
+shifts.variance_reason: Why the counted cash differed from expected: counting_error, unrecorded_expense, change_float_mismatch or other.
+shifts.variance_note: Free text note explaining the difference.
+shifts.closed_by: Id of the staff member who closed the shift.
+shifts.approver_id: Id of the manager who approved a difference above the allowed limit; empty if none.
+shifts.z_report: The end-of-shift summary figures as printed when the shift closed, in a text format; empty for an open shift.
+side_effect_outbox: Jobs for the Hub's printers and cash drawer, with their progress. It is local to the Hub.
+side_effect_outbox.id: Unique id of the job.
+side_effect_outbox.kind: The type of job: print, drawer, cec, local_notify or kot.
+side_effect_outbox.ref_id: The id of the bill or ticket the job is for.
+side_effect_outbox.payload: The details of the job, in a text format.
+side_effect_outbox.state: Where the job is: queued, sending, done or failed.
+side_effect_outbox.at: When the job was queued.
+side_effect_outbox.error: Why the job failed; empty otherwise.
+snapshot_log: A log of the daily database snapshots the Hub has stored in the cloud.
+snapshot_log.date: The business day (YYYY-MM-DD) the snapshot was taken for.
+snapshot_log.epoch: The epoch of the last change in the snapshot.
+snapshot_log.last_seq: The number of the last audit-log change the snapshot contains.
+snapshot_log.bytes: The compressed size of the snapshot, in bytes.
+snapshot_log.key: The storage name the snapshot was uploaded under.
+staff: Staff accounts that sign in to the Hub.
+staff.staff_id: Unique id of the staff member.
+staff.login: The name used to sign in, unique in the branch.
+staff.display_name: The name shown on screen and on receipts.
+staff.password_hash: A hash; the secret itself is not stored.
+staff.pin_hash: A hash; the secret itself is not stored.
+staff.pin_verifier_version: The version of the PIN check that the stored PIN hash belongs to.
+staff.active: 1 if the staff member can sign in, 0 if their account is switched off.
+staff.setup_code_hash: A hash; the secret itself is not stored.
+stock: The quantity on hand and average cost of each product that is stock-tracked.
+stock.qty: The quantity currently in stock.
+stock_holds: Stock set aside for kitchen items that are ordered but not yet served.
+stock_holds.id: Unique id of the hold.
+stock_holds.order_line_id: The bill line the hold is for; kept even if the line is later cancelled.
+stock_holds.qty: The quantity set aside.
+stock_lots: Batches of a product received, with their expiry dates.
+stock_lots.lot_id: Unique id of the batch.
+stock_lots.qty_in: The quantity received in the batch.
+stock_lots.qty_remaining: The quantity of the batch still on hand.
+stock_lots.expiry: The batch's expiry date (YYYY-MM-DD); empty if it does not expire.
+stock_moves: The stock ledger: every increase or decrease of a product's stock. Rows are never edited.
+stock_moves.move_id: Unique id of the stock movement.
+stock_moves.reason: Why stock moved: stock_in, stock_in_reverted, sale, sale_reverted, return, waste, waste_reverted, expired or count_adjust.
+stock_moves.delta: The change in quantity; negative when stock leaves.
+stock_moves.before_qty: The quantity in stock just before the movement.
+stock_moves.supplier: The supplier's name for a stock-in; empty otherwise.
+stock_moves.lot_id: The batch that was received for a stock-in; empty otherwise.
+stock_moves.lots_used: Which batches the stock was taken from, in a text format.
+stock_moves.staff_id: Id of the staff member who made the movement.
+stock_moves.at: When the stock moved.
+stock_moves.waste_reason: For waste, why: spoiled, broken, free or cancelled_order.
+stock_moves.order_id: The bill the movement belongs to, if any.
+stock_moves.note: Free text note added by staff.
+stock_moves.elevated_by: Id of the manager who approved the movement, when approval was needed.
+stock_moves.placement_id: The id of the order placement that caused the movement, if any.
+trusted_clock: A single row used to tell the true time from the cloud, even if the PC's clock is changed.
+trusted_clock.id: Always 1; the table has only one row.
+upload_cursor: A single row that remembers how much of the audit log has been uploaded to the cloud.
+upload_cursor.id: Always 1; the table has only one row.
+upload_cursor.epoch: The epoch of the last change the cloud has stored.
+upload_cursor.last_seq_uploaded: The number of the last audit-log change the cloud has stored.
+verifier_history: A history of the manager credential lists used to approve actions while offline.
+verifier_history.version: The version number of the list.
+verifier_history.valid_from: When this version came into effect.
+verifier_history.digest: A fingerprint of the list, used to tell versions apart.
+verifier_history.staff_ids: The ids of the managers the list covered, one per line; it holds no PINs or hashes.
+wallet_txns: Every credit and debit of a player's wallet.
+wallet_txns.id: Unique id of the wallet entry.
+wallet_txns.reason: Why the balance changed: topup, bill, credit, import, erase_refund or erase_forfeit.
+wallet_txns.method: How the top-up was paid, for example cash or upi; empty for other entries.
+wallet_txns.staff_id: Id of the staff member who made the entry.
+wallets: Each player's prepaid wallet balance.

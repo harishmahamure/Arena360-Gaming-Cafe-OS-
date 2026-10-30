@@ -332,3 +332,143 @@ async fn a_refused_export_keeps_an_earlier_file_it_replaced() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(names(dir.path()), kept, "the earlier export is not deleted");
 }
+
+// Story 9.6: `POST /ui/backup/export-everything`.
+
+const EVERYTHING: &str = "/ui/backup/export-everything";
+
+async fn everything(
+    hub: &Hub,
+    token: &str,
+    range: (&str, &str),
+    ticket: Option<&str>,
+) -> (StatusCode, Value) {
+    let mut body = json!({"from": range.0, "to": range.1});
+    if let Some(t) = ticket {
+        body["elevation_ticket"] = json!(t);
+    }
+    call(hub, "POST", EVERYTHING, Some(token), Some(body)).await
+}
+
+#[tokio::test]
+async fn a_manager_exports_everything_into_one_folder_on_a_free_hub() {
+    // The test Hub is on the Free tier: no tier lock stands in the way.
+    let hub = hub().await;
+    let dir = tempfile::tempdir().unwrap();
+    locate(&hub, &dir.path().to_string_lossy()).await;
+    let token = token_for(&hub, "manager", "m-pass").await;
+    let before = changes(&hub).len();
+
+    let (status, reply) = everything(&hub, &token, ("2027-01-01", "2027-01-15"), None).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let done: arena_proto::EverythingExported = serde_json::from_value(reply).unwrap();
+    assert_eq!(
+        done.folder_name,
+        "DEV01-everything-2027-01-01_2027-01-15-2027-01-15-1330"
+    );
+    assert_eq!(names(dir.path()), vec![done.folder_name.clone()]);
+    let inside = names(&dir.path().join(&done.folder_name));
+    assert!(inside.contains(&"README.txt".to_owned()));
+    assert!(inside.contains(&done.export.file_name));
+    assert!(done.reports.iter().all(|r| inside.contains(r)));
+    assert!(
+        done.reports
+            .iter()
+            .any(|r| r.starts_with("DEV01_daily-sales_2027-01-01_2027-01-15"))
+    );
+
+    // The database file is recorded like any export, by the staff member.
+    assert_eq!(changes(&hub).len(), before + 1);
+    let kept = BackupExport::parse(&setting(&hub, KEY_LAST).0).expect("a record");
+    assert_eq!(kept.file_name, done.export.file_name);
+    assert!(kept.by.is_some());
+    assert_eq!(
+        changes(&hub).pop().unwrap().actor_id,
+        hub.manager_id,
+        "the audit names the manager"
+    );
+}
+
+#[tokio::test]
+async fn a_bad_range_or_location_is_refused_with_its_field_and_nothing_is_written() {
+    let hub = hub().await;
+    let token = token_for(&hub, "manager", "m-pass").await;
+    // No location yet.
+    invalid_folder(
+        &everything(&hub, &token, ("2027-01-01", "2027-01-02"), None).await,
+        "not_set",
+    );
+    let dir = tempfile::tempdir().unwrap();
+    locate(&hub, &dir.path().to_string_lossy()).await;
+    let before = changes(&hub).len();
+    for (from, to, field) in [
+        ("2027-01-15", "2027-01-01", "to"),
+        ("2027-01-01", "2027-12-31", "to"),
+        ("x", "2027-01-01", "from"),
+    ] {
+        let r = everything(&hub, &token, (from, to), None).await;
+        refused(&r, StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION_FAILED");
+        assert_eq!(r.1["field"], field, "{}", r.1);
+    }
+    let (status, body) = call(&hub, "POST", EVERYTHING, Some(&token), Some(json!({}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(names(dir.path()).is_empty());
+    assert_eq!(changes(&hub).len(), before);
+    assert_eq!(setting(&hub, KEY_LAST).0, "");
+}
+
+#[tokio::test]
+async fn a_counter_needs_a_managers_pin_for_export_everything() {
+    let hub = hub().await;
+    let dir = tempfile::tempdir().unwrap();
+    locate(&hub, &dir.path().to_string_lossy()).await;
+    let token = token_for(&hub, "counter", "c-pass").await;
+    refused(
+        &everything(&hub, &token, ("2027-01-01", "2027-01-02"), None).await,
+        StatusCode::FORBIDDEN,
+        "PERMISSION_DENIED",
+    );
+    assert!(names(dir.path()).is_empty());
+
+    let t = ticket_for(&hub, &token, "backup.export", "2222").await;
+    let (status, reply) = everything(&hub, &token, ("2027-01-01", "2027-01-02"), Some(&t)).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let last = changes(&hub).pop().unwrap();
+    assert_eq!(last.actor_id, hub.counter_id);
+    assert_eq!(
+        last.elevated_by_id.as_deref(),
+        Some(hub.manager_id.as_str())
+    );
+    // The ticket was spent.
+    refused(
+        &everything(&hub, &token, ("2027-01-01", "2027-01-02"), Some(&t)).await,
+        StatusCode::FORBIDDEN,
+        "PIN_REQUIRED",
+    );
+    assert_eq!(names(dir.path()).len(), 1);
+}
+
+#[tokio::test]
+async fn an_everything_export_the_intent_refuses_leaves_no_folder() {
+    let hub = hub().await;
+    let dir = tempfile::tempdir().unwrap();
+    locate(&hub, &dir.path().to_string_lossy()).await;
+    let token = token_for(&hub, "manager", "m-pass").await;
+    hub.writer
+        .submit(|tx| {
+            tx.execute_batch("DELETE FROM settings WHERE key = 'backup.last_export'")
+                .map_err(arena_store::db_error)
+        })
+        .await
+        .unwrap();
+    let (status, body) = everything(&hub, &token, ("2027-01-01", "2027-01-02"), None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(names(dir.path()).is_empty(), "the folder was deleted");
+}
+
+#[tokio::test]
+async fn export_everything_needs_a_session() {
+    let hub = hub().await;
+    let (status, _) = call(&hub, "POST", EVERYTHING, None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}

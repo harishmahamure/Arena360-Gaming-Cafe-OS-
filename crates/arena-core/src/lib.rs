@@ -13,6 +13,7 @@ mod commands;
 pub mod credit_reminder;
 pub mod devices;
 pub mod entitlement;
+mod export_everything;
 pub mod game_plays;
 pub mod game_proposals;
 pub mod gst;

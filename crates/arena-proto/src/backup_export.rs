@@ -180,15 +180,10 @@ fn file_code(branch_code: &str) -> String {
 }
 
 fn stamped_name(branch_code: &str, infix: &str, exported_at_ms: i64, tz: &str) -> String {
-    let code = file_code(branch_code);
-    let zone = tz.parse::<chrono_tz::Tz>().unwrap_or(chrono_tz::UTC);
-    let when = zone
-        .timestamp_millis_opt(exported_at_ms)
-        .single()
-        .unwrap_or_else(|| chrono_tz::UTC.timestamp_opt(0, 0).unwrap());
     format!(
-        "{code}-{infix}{}.{EXPORT_EXTENSION}",
-        when.format("%Y-%m-%d-%H%M")
+        "{}-{infix}{}.{EXPORT_EXTENSION}",
+        file_code(branch_code),
+        stamp_of(exported_at_ms, tz)
     )
 }
 
@@ -268,6 +263,64 @@ pub struct BackupExport {
     pub recent: Vec<ExportEntry>,
 }
 
+/// Where the format reference lives for the owner (the help centre); the `README.txt` of an
+/// "Export everything" folder links it.
+pub const EXPORT_FORMAT_REFERENCE_URL: &str = "https://arena360.cloud/help/export-format";
+
+/// `<branch_code>-everything-<from>_<to>-<yyyy-mm-dd-hhmm>`: the folder "Export everything"
+/// writes inside the backup location (Story 9.6), the time in the branch's zone.
+pub fn everything_folder_name(
+    branch_code: &str,
+    from: &str,
+    to: &str,
+    exported_at_ms: i64,
+    tz: &str,
+) -> String {
+    format!(
+        "{}-everything-{from}_{to}-{}",
+        file_code(branch_code),
+        stamp_of(exported_at_ms, tz)
+    )
+}
+
+fn stamp_of(exported_at_ms: i64, tz: &str) -> String {
+    let zone = tz.parse::<chrono_tz::Tz>().unwrap_or(chrono_tz::UTC);
+    let when = zone
+        .timestamp_millis_opt(exported_at_ms)
+        .single()
+        .unwrap_or_else(|| chrono_tz::UTC.timestamp_opt(0, 0).unwrap());
+    when.format("%Y-%m-%d-%H%M").to_string()
+}
+
+/// The payload of `POST /ui/backup/export-everything` (Story 9.6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ExportEverythingRequest {
+    /// First business day (`YYYY-MM-DD`) the reports cover.
+    pub from: String,
+    /// Last business day (`YYYY-MM-DD`) the reports cover.
+    pub to: String,
+    /// A manager's PIN ticket for `backup.export`, when the caller lacks the permission.
+    #[serde(default)]
+    #[ts(optional)]
+    pub elevation_ticket: Option<String>,
+}
+
+/// What "Export everything" wrote.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct EverythingExported {
+    /// The folder, inside the backup location.
+    pub folder_name: String,
+    /// The database export inside it, as `backup.last_export` records it.
+    pub export: BackupExport,
+    /// The report CSV files written, by name.
+    pub reports: Vec<String>,
+    /// The reports that could not be written, as the report ids of `EXPORT_REPORTS`.
+    pub skipped: Vec<String>,
+}
+
 fn plain_name(name: &str) -> bool {
     name.chars().count() <= MAX_EXPORT_FILE_NAME_CHARS
         && name
@@ -329,6 +382,21 @@ impl BackupExport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_everything_folder_is_named_for_the_range_and_the_branch_time() {
+        // 2027-01-15 08:00 UTC is 13:30 in Kolkata.
+        assert_eq!(
+            everything_folder_name(
+                "LV 01",
+                "2027-01-01",
+                "2027-01-15",
+                1_800_000_000_000,
+                "Asia/Kolkata"
+            ),
+            "LV-01-everything-2027-01-01_2027-01-15-2027-01-15-1330"
+        );
+    }
 
     fn header() -> ExportHeader {
         ExportHeader {

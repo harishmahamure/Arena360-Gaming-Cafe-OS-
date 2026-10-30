@@ -1,6 +1,12 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
-import type { BackupExport, ExportEntry, HubSnapshot, SessionStaff } from "@arena/ui/generated";
+import type {
+  BackupExport,
+  EverythingExported,
+  ExportEntry,
+  HubSnapshot,
+  SessionStaff,
+} from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { ORIGIN } from "./origin";
 
@@ -37,12 +43,25 @@ const EXPORTED: BackupExport = {
   recent: [],
 };
 
+const EVERYTHING: EverythingExported = {
+  folder_name: "DEV01-everything-2026-12-17_2027-01-15-2027-01-15-1330",
+  export: EXPORTED,
+  reports: [
+    "DEV01_daily-sales_2026-12-17_2027-01-15.csv",
+    "DEV01_sessions_2026-12-17_2027-01-15.csv",
+  ],
+  skipped: [],
+};
+
 type Answer = { status: number; body: unknown };
 type Hub = {
   settings: Map<string, { value: string; rev: number }>;
   /** What the next exports answer, one per call; the last repeats. */
   answers: Answer[];
   exports: { ticket?: string }[];
+  /** What "Export everything" was sent, and what it answers (Story 9.6). */
+  everything: { from: string; to: string; ticket?: string }[];
+  everythingAnswer: Answer;
   elevations: number;
   /** The daily auto export could not be saved (Story 9.5). */
   exportFailed: boolean;
@@ -58,6 +77,8 @@ function newHub(): Hub {
     ]),
     answers: [{ status: 200, body: EXPORTED }],
     exports: [],
+    everything: [],
+    everythingAnswer: { status: 200, body: EVERYTHING },
     elevations: 0,
     exportFailed: false,
   };
@@ -168,6 +189,26 @@ async function open(page: Page, hub: Hub, token = "manager-token") {
           });
         }
         return json(route, answer.status, answer.body);
+      }
+      case "/ui/backup/export-everything": {
+        if (!STAFF[auth]) return json(route, 401, AUTH_FAILED);
+        const sent = req.postDataJSON() as { from: string; to: string; elevation_ticket?: string };
+        hub.everything.push({
+          from: sent.from,
+          to: sent.to,
+          ...(sent.elevation_ticket ? { ticket: sent.elevation_ticket } : {}),
+        });
+        if (!sent.elevation_ticket && !STAFF[auth].permissions.includes("backup.export")) {
+          return json(route, 403, { code: "PERMISSION_DENIED", message: "denied" });
+        }
+        if (hub.everythingAnswer.status === 200) {
+          // The Hub records the database file like any export.
+          hub.settings.set("backup.last_export", {
+            value: JSON.stringify((hub.everythingAnswer.body as EverythingExported).export),
+            rev: 2,
+          });
+        }
+        return json(route, hub.everythingAnswer.status, hub.everythingAnswer.body);
       }
       default:
         return route.fulfill({ status: 404, headers: CORS });
@@ -323,4 +364,85 @@ test("the header says the backup folder is not available until an export succeed
   const other = await page.context().newPage();
   await open(other, calm);
   await expect(other.getByTestId("hub-backup-alert")).toHaveCount(0);
+});
+
+const everythingButton = (page: Page) =>
+  page.getByRole("button", { name: en["hub.backup.everything.button"] });
+
+test("Export everything sends the picked range and says what the folder holds", async ({
+  page,
+}) => {
+  const hub = newHub();
+  await open(page, hub);
+  // The range starts as the last 30 days, ending with the branch's business day today.
+  await expect(page.getByTestId("backup-to")).toHaveValue(/^\d{4}-\d{2}-\d{2}$/);
+  await page.getByTestId("backup-from").fill("2026-12-17");
+  await page.getByTestId("backup-to").fill("2027-01-15");
+  await expectNoSeriousAxe(page);
+  await everythingButton(page).click();
+  await expect(page.getByTestId("backup-saved-everything")).toContainText(
+    en["hub.backup.everything.saved"].replace("{name}", EVERYTHING.folder_name).replace("{n}", "2"),
+  );
+  await expect(page.getByTestId("backup-skipped")).toHaveCount(0);
+  expect(hub.everything).toEqual([{ from: "2026-12-17", to: "2027-01-15" }]);
+  expect(hub.elevations).toBe(0);
+  await expect(page.getByTestId("backup-last-value")).toContainText(EXPORTED.file_name);
+});
+
+test("a report that could not be written is named", async ({ page }) => {
+  const hub = newHub();
+  hub.everythingAnswer = { status: 200, body: { ...EVERYTHING, skipped: ["players"] } };
+  await open(page, hub);
+  await everythingButton(page).click();
+  await expect(page.getByTestId("backup-skipped")).toHaveText(
+    en["hub.backup.everything.skipped"].replace("{reports}", "players"),
+  );
+});
+
+test("a range the Hub would refuse cannot be sent", async ({ page }) => {
+  const hub = newHub();
+  await open(page, hub);
+  await page.getByTestId("backup-from").fill("2027-01-15");
+  await page.getByTestId("backup-to").fill("2027-01-01");
+  await expect(page.getByTestId("backup-range-problem")).toHaveText(en["hub.reports.range_order"]);
+  await expect(everythingButton(page)).toBeDisabled();
+  await page.getByTestId("backup-from").fill("2026-01-01");
+  await page.getByTestId("backup-to").fill("2027-01-01");
+  await expect(page.getByTestId("backup-range-problem")).toHaveText(en["hub.reports.range_long"]);
+  expect(hub.everything).toEqual([]);
+});
+
+test("a Counter's Export everything asks for a manager's PIN and sends the ticket", async ({
+  page,
+}) => {
+  const hub = newHub();
+  await open(page, hub, "counter-token");
+  await page.getByTestId("backup-from").fill("2027-01-01");
+  await page.getByTestId("backup-to").fill("2027-01-15");
+  await everythingButton(page).click();
+  const approval = page.getByTestId("backup-approval");
+  await expect(approval.locator('[data-component="inline-pin"]')).toBeVisible();
+  expect(hub.everything).toEqual([]);
+  await approval.getByLabel(en["ui.pin.label"]).focus();
+  await page.keyboard.type("2222");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("backup-saved-everything")).toBeVisible();
+  expect(hub.everything).toEqual([{ from: "2027-01-01", to: "2027-01-15", ticket: "T1" }]);
+  expect(hub.exports).toEqual([]);
+});
+
+test("Export everything names an unavailable folder like the plain export does", async ({
+  page,
+}) => {
+  const hub = newHub();
+  hub.everythingAnswer = invalidFolder("not_found");
+  await open(page, hub);
+  await everythingButton(page).click();
+  const problem = page.getByTestId("backup-problem");
+  await expect(problem).toContainText(en["hub.backup.problem.not_found"]);
+  hub.everythingAnswer = { status: 200, body: EVERYTHING };
+  await problem.getByRole("button", { name: en["hub.backup.try_again"] }).click();
+  await expect(page.getByTestId("backup-saved-everything")).toBeVisible();
+  expect(hub.everything).toHaveLength(2);
+  expect(hub.exports).toEqual([]);
 });

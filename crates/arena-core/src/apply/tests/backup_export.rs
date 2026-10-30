@@ -320,3 +320,149 @@ async fn the_reader_names_why_a_location_cannot_take_an_export() {
         "nothing written"
     );
 }
+
+// Story 9.6: "Export everything".
+
+fn names(dir: &std::path::Path) -> Vec<String> {
+    let mut all: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    all.sort();
+    all
+}
+
+#[tokio::test]
+async fn export_everything_writes_the_database_the_report_csvs_and_a_readme_into_one_folder() {
+    let f = bootstrapped().await;
+    let out = tempfile::tempdir().unwrap();
+    let reader = SnapshotReader::open(&f.path).unwrap();
+    let kek = [7u8; crate::players::KEK_LEN];
+    let (done, dir) = reader
+        .export_everything(
+            &out.path().to_string_lossy(),
+            ("2027-01-01", "2027-01-31"),
+            T0,
+            Some(&kek),
+        )
+        .unwrap();
+    // 2027-01-15 08:00 UTC is 13:30 in Asia/Kolkata.
+    assert_eq!(
+        done.folder_name,
+        "DEV01-everything-2027-01-01_2027-01-31-2027-01-15-1330"
+    );
+    assert_eq!(dir, out.path().join(&done.folder_name));
+    assert_eq!(names(out.path()), vec![done.folder_name.clone()]);
+    assert!(done.skipped.is_empty(), "{:?}", done.skipped);
+    assert_eq!(done.export.file_name, "DEV01-2027-01-15-1330.a360");
+    assert!(done.export.is_consistent());
+
+    let files = names(&dir);
+    assert!(files.contains(&done.export.file_name));
+    assert!(files.contains(&"README.txt".to_owned()));
+    for report in [
+        "DEV01_daily-sales_2027-01-01_2027-01-31.csv",
+        "DEV01_sessions_2027-01-01_2027-01-31.csv",
+    ] {
+        assert!(files.contains(&report.to_owned()), "{report} in {files:?}");
+    }
+    // The fixture branch is not GST-registered, so it has no GST return and that is not an error.
+    assert!(!files.iter().any(|n| n.contains("gst")));
+    assert!(files.iter().any(|n| n.contains("stock-on-hand")));
+    // Every report named is a file of the folder, and the folder holds nothing else.
+    let mut expected = done.reports.clone();
+    expected.push(done.export.file_name.clone());
+    expected.push("README.txt".to_owned());
+    expected.sort();
+    assert_eq!(files, expected);
+
+    // A report's CSV is byte for byte the single-report export.
+    let req = arena_proto::ReportExportRequest {
+        report: "daily-sales".into(),
+        format: arena_proto::ExportFormat::Csv,
+        folder: String::new(),
+        from: Some("2027-01-01".into()),
+        to: Some("2027-01-31".into()),
+        month: None,
+        shift_id: None,
+        product: None,
+        reason: None,
+    };
+    let (name, bytes) = reader.export_report(&req, T0, None).unwrap();
+    assert_eq!(std::fs::read(dir.join(name)).unwrap(), bytes);
+
+    let readme = std::fs::read_to_string(dir.join("README.txt")).unwrap();
+    assert!(readme.contains(arena_proto::EXPORT_FORMAT_REFERENCE_URL));
+    assert!(readme.contains("2027-01-01 to 2027-01-31"));
+    assert!(readme.contains(&done.export.file_name));
+}
+
+#[tokio::test]
+async fn a_report_that_cannot_be_built_is_listed_in_the_readme_and_does_not_fail_the_export() {
+    let f = bootstrapped().await;
+    let out = tempfile::tempdir().unwrap();
+    let reader = SnapshotReader::open(&f.path).unwrap();
+    // No key store: the Players report cannot be built.
+    let (done, dir) = reader
+        .export_everything(
+            &out.path().to_string_lossy(),
+            ("2027-01-15", "2027-01-15"),
+            T0,
+            None,
+        )
+        .unwrap();
+    assert_eq!(done.skipped, vec!["players".to_owned()]);
+    assert!(done.reports.iter().all(|r| !r.contains("players")));
+    let readme = std::fs::read_to_string(dir.join("README.txt")).unwrap();
+    assert!(readme.contains("Not exported:\n  players"));
+}
+
+#[tokio::test]
+async fn export_everything_refuses_a_bad_range_or_location_and_leaves_nothing() {
+    let f = bootstrapped().await;
+    let out = tempfile::tempdir().unwrap();
+    let reader = SnapshotReader::open(&f.path).unwrap();
+    let folder = out.path().to_string_lossy().into_owned();
+    let field = |from: &str, to: &str, folder: &str| {
+        let e = reader
+            .export_everything(folder, (from, to), T0, None)
+            .unwrap_err();
+        assert_eq!(e.code, ErrorCode::ValidationFailed);
+        (e.field.unwrap_or_default(), e.message)
+    };
+    assert_eq!(field("2027-01-31", "2027-01-01", &folder).0, "to");
+    assert_eq!(field("2027-01-01", "2027-06-30", &folder).0, "to");
+    assert_eq!(field("nope", "2027-01-01", &folder).0, "from");
+    assert_eq!(
+        field("2027-01-01", "2027-01-02", ""),
+        ("folder".into(), "not_set".into())
+    );
+    assert_eq!(
+        field(
+            "2027-01-01",
+            "2027-01-02",
+            &out.path().join("gone").to_string_lossy()
+        ),
+        ("folder".into(), "not_found".into())
+    );
+    assert!(names(out.path()).is_empty(), "nothing written");
+}
+
+#[tokio::test]
+async fn a_second_export_in_the_same_minute_gets_its_own_folder() {
+    let f = bootstrapped().await;
+    let out = tempfile::tempdir().unwrap();
+    let reader = SnapshotReader::open(&f.path).unwrap();
+    let folder = out.path().to_string_lossy().into_owned();
+    let first = reader
+        .export_everything(&folder, ("2027-01-15", "2027-01-15"), T0, None)
+        .unwrap()
+        .0;
+    let second = reader
+        .export_everything(&folder, ("2027-01-15", "2027-01-15"), T0, None)
+        .unwrap()
+        .0;
+    assert_eq!(second.folder_name, format!("{}-2", first.folder_name));
+    assert_eq!(names(out.path()).len(), 2);
+}

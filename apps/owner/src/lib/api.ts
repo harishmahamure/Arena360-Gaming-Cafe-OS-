@@ -77,6 +77,24 @@ export async function send<T>(
   };
 }
 
+export type Probed = { status: number; data: unknown };
+
+/**
+ * A read that is never cached and keeps the status (the audit answers 202 while it builds).
+ * `null` when the cloud cannot be reached; `"signed-out"` when the session ended.
+ */
+export async function probe(path: string): Promise<Probed | "signed-out" | null> {
+  let res = await fetchJson(path);
+  if (res?.status === 401) {
+    const fresh = await rotate();
+    if (fresh?.ok) res = await fetchJson(path);
+    else if (fresh && fresh.status < 500) return "signed-out";
+  }
+  if (!res) return null;
+  if (res.status === 401) return "signed-out";
+  return { status: res.status, data: await res.json().catch(() => null) };
+}
+
 export const dropCache = () => (epoch++, clearCache());
 
 export async function signOut() {

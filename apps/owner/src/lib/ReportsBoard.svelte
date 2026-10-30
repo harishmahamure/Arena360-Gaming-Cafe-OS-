@@ -3,6 +3,7 @@
   import type { MessageKey } from "@arena/ui/messages";
   import { onMount, tick } from "svelte";
   import { page } from "$app/state";
+  import AuditPanel from "./AuditPanel.svelte";
   import CashPanel from "./CashPanel.svelte";
   import CreditPanel from "./CreditPanel.svelte";
   import ExportsPanel from "./ExportsPanel.svelte";
@@ -39,6 +40,7 @@
     { id: "stock", label: "owner.reports.tab.stock" },
     { id: "credit", label: "owner.reports.tab.credit" },
     { id: "exports", label: "owner.reports.tab.exports" },
+    { id: "audit", label: "owner.reports.tab.audit" },
   ] as const satisfies readonly { id: string; label: MessageKey }[];
   const ALL = "all";
 
@@ -197,51 +199,53 @@
 </script>
 
 {#if paid.length}
-  <div class="controls">
-    <div class="field">
-      <label class="label" for="rep-range">{t("owner.reports.range")}</label>
-      <select id="rep-range" class="ui-interactive select" bind:value={kind}>
-        {#each RANGES as [id, label] (id)}<option value={id}>{t(label)}</option>{/each}
-      </select>
-    </div>
-    <div class="field">
-      <label class="label" for="rep-branch">{t("owner.reports.branch")}</label>
-      <select id="rep-branch" class="ui-interactive select" bind:value={branchId}>
-        {#if paid.length > 1}<option value={ALL}>{t("owner.reports.branch.all")}</option>{/if}
-        {#each paid as b (b.id)}<option value={b.id}>{b.name}</option>{/each}
-      </select>
-    </div>
-    {#if kind === "custom"}
+  {#if tab !== "audit"}
+    <div class="controls">
       <div class="field">
-        <label class="label" for="rep-from">{t("owner.reports.from")}</label>
-        <input
-          id="rep-from"
-          class="ui-interactive select"
-          type="date"
-          max={today}
-          bind:value={custom.from}
-        />
+        <label class="label" for="rep-range">{t("owner.reports.range")}</label>
+        <select id="rep-range" class="ui-interactive select" bind:value={kind}>
+          {#each RANGES as [id, label] (id)}<option value={id}>{t(label)}</option>{/each}
+        </select>
       </div>
       <div class="field">
-        <label class="label" for="rep-to">{t("owner.reports.to")}</label>
-        <input
-          id="rep-to"
-          class="ui-interactive select"
-          type="date"
-          max={today}
-          bind:value={custom.to}
-        />
+        <label class="label" for="rep-branch">{t("owner.reports.branch")}</label>
+        <select id="rep-branch" class="ui-interactive select" bind:value={branchId}>
+          {#if paid.length > 1}<option value={ALL}>{t("owner.reports.branch.all")}</option>{/if}
+          {#each paid as b (b.id)}<option value={b.id}>{b.name}</option>{/each}
+        </select>
       </div>
-    {/if}
-  </div>
-  {#if problem}<p role="alert">
-      {t(problem === "order" ? "owner.reports.error.order" : "owner.reports.error.long")}
-    </p>{/if}
+      {#if kind === "custom"}
+        <div class="field">
+          <label class="label" for="rep-from">{t("owner.reports.from")}</label>
+          <input
+            id="rep-from"
+            class="ui-interactive select"
+            type="date"
+            max={today}
+            bind:value={custom.from}
+          />
+        </div>
+        <div class="field">
+          <label class="label" for="rep-to">{t("owner.reports.to")}</label>
+          <input
+            id="rep-to"
+            class="ui-interactive select"
+            type="date"
+            max={today}
+            bind:value={custom.to}
+          />
+        </div>
+      {/if}
+    </div>
+    {#if problem}<p role="alert">
+        {t(problem === "order" ? "owner.reports.error.order" : "owner.reports.error.long")}
+      </p>{/if}
+  {/if}
 
   <div class="screen">
     <TabControl items={[...TABS]} label="owner.reports.tabs" bind:selected={tab} />
   </div>
-  {#if tab !== "exports"}
+  {#if tab !== "exports" && tab !== "audit"}
     <div class="screen export" role="group" aria-label={t("owner.reports.export")}>
       <Button
         label="owner.reports.export.csv"
@@ -276,7 +280,9 @@
     aria-label={t(TABS.find((x) => x.id === tab)?.label ?? "owner.reports.tab.revenue")}
     class="panel"
   >
-    {#if tab === "exports"}
+    {#if tab === "audit"}
+      <AuditPanel branches={paid} initial={branchId} {now} />
+    {:else if tab === "exports"}
       <ExportsPanel
         from={range.from}
         to={range.to}

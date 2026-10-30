@@ -170,6 +170,11 @@ export type StubOptions = {
   alerts?: OwnerAlertView[];
   /** The notification settings the cloud starts with. */
   alertSettings?: Partial<OwnerAlertSettings>;
+  /** Answers the audit routes (`GET` search, `POST` build); unset: 404. Each call is recorded in `calls.bodies["audit"]`. */
+  audit?: (call: { method: string; branch: string; query: URLSearchParams; body: unknown }) => {
+    status: number;
+    body: unknown;
+  };
   /** Answers a command post instead of the default (queue one row per branch that can take it). */
   post?: (body: Record<string, unknown>) => { status: number; body: unknown } | undefined;
 };
@@ -258,6 +263,18 @@ export async function stubCloud(
       const given = opts.range?.[range[1]];
       const query = new URL(req.url()).searchParams;
       return json(typeof given === "function" ? given(query) : (given ?? rangeOfBranch(range[1])));
+    }
+    const audit = path.match(/^\/v1\/branches\/([^/]+)\/audit(\/build)?$/);
+    if (audit && opts.audit) {
+      const call = {
+        method: req.method(),
+        branch: audit[1],
+        query: new URL(req.url()).searchParams,
+        body: req.postDataJSON() ?? null,
+      };
+      (bodies["audit"] ??= []).push({ ...call, build: !!audit[2], query: call.query.toString() });
+      const answer = opts.audit(call);
+      return json(answer.body, answer.status);
     }
     const exp = path.match(/^\/v1\/branches\/([^/]+)\/export$/);
     if (exp && req.method() === "GET") {

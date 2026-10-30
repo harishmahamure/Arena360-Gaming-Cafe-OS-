@@ -267,7 +267,7 @@ development_status:
   epic-8-retrospective: optional
 
   epic-9: in-progress
-  9-1-erase-a-player-s-personal-data-by-crypto-shredding: review
+  9-1-erase-a-player-s-personal-data-by-crypto-shredding: done
   9-2-player-keys-are-backed-up-and-the-branch-key-is-escrowed: backlog
   9-3-the-cloud-issues-epoch-counters-by-compare-and-set-on-the-br: backlog
   9-4-one-tap-full-database-export-to-a-folder-or-usb-drive: backlog

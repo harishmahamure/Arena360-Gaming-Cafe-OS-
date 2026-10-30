@@ -2,7 +2,7 @@
 title: "Story 9.1: Erase a player's personal data by crypto-shredding"
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 baseline_commit: '6cbcaff6edcd4f750227f59571656f38a5ee346b'
 baseline_revision: '6cbcaff6edcd4f750227f59571656f38a5ee346b'
 review_loop_iteration: 0
@@ -81,6 +81,8 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+Code review (2026-10-30): no blocking findings. Clippy (touched crates), `cargo test` (store, proto, core, api, kiosk-core), `check:generated`, `check:strings` and `check:protocol` pass. Not caused by this story: hub `svelte-check` errors in `playwright.kitchen.config.ts` (missing node types), clippy `clone_on_copy` in `arena-kiosk-svc` tests, `arena-e2e` not building on Windows. The known gaps in the Auto Run Result (proptest generator, tombstone username in past listings, note only in audit, no drawer event for a counter refund) are accepted as deferred.
 
 ## Design Notes
 

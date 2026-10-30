@@ -147,6 +147,7 @@ const KINDS: Record<string, { label: MessageKey; catalogue?: (keyof SummaryCatal
   "group.upsert": { label: "owner.cmd.kind.group", catalogue: ["groups"] },
   "device.assign": { label: "owner.cmd.kind.assign" },
   "device.revoke": { label: "owner.cmd.kind.revoke" },
+  "hub.revoke": { label: "owner.cmd.kind.hub_revoke" },
   "backup.now": { label: "owner.cmd.kind.backup" },
   "credit.remind": { label: "owner.cmd.kind.credit_remind" },
   // The only settings.set an owner sends: the alert limits (Story 8.34).
@@ -464,6 +465,31 @@ export async function sendNow(
   cmd.loaded = true;
   cmd.sent++;
   return "sent";
+}
+
+/**
+ * Replaces a branch's Hub (Story 9.8): the cloud revokes the old Hub's token as it applies the
+ * change, after the code prompt, so the change is never queued on this device. The same `key`
+ * sent again finds the first row. `"declined"` means the owner cancelled the code prompt.
+ */
+export async function revokeHub(
+  branchId: string,
+  key: string,
+): Promise<OwnerCommandView | "declined" | "failed"> {
+  const res = await post({
+    branch_id: branchId,
+    idempotency_key: key,
+    kind: "hub.revoke",
+    payload: {},
+  });
+  if (res === "declined") return "declined";
+  if (!res.ok) return "failed";
+  const row = res.data.commands[0];
+  if (!row) return "failed";
+  cmd.rows = merge(cmd.rows, res.data.commands);
+  cmd.loaded = true;
+  cmd.sent++;
+  return row;
 }
 
 /**

@@ -141,6 +141,7 @@ impl Harness {
             flag: None,
             sensitive: true,
             handled: true,
+            cloud: false,
         });
         let (_tx, rx) = watch::channel(Reachability {
             reachable: true,
@@ -1040,4 +1041,181 @@ async fn a_device_revoke_needs_a_stepup_and_a_reason_but_groups_and_assignment_d
     let mail = h.mailbox(&c).await;
     let sent = mail.iter().find(|m| m["kind"] == "device.revoke").unwrap();
     assert!(sent["elevated_by"].is_string());
+}
+
+impl Harness {
+    async fn hub_fetch(&self, token: &str) -> Reply {
+        let mut req = Request::builder()
+            .method("GET")
+            .uri("/v1/commands?after=0&epoch=1:01HUBINSTANCE")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(SocketAddr::new(
+            "198.51.100.4".parse().unwrap(),
+            40000,
+        )));
+        reply(self.app.clone().oneshot(req).await.unwrap()).await
+    }
+
+    async fn issue_code(&self, c: &Cafe) -> Reply {
+        self.call(
+            "POST",
+            "/v1/wizard/install-hub/code",
+            Some(json!({"branch_id": c.branch})),
+            &c.access,
+        )
+        .await
+    }
+
+    async fn pair_hub(&self, code: &str, instance: &str) -> Reply {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/v1/pair")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "code": code,
+                    "platform": "windows",
+                    "hub_instance_id": instance,
+                    "version": "0.1.0",
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(SocketAddr::new(
+            "198.51.100.4".parse().unwrap(),
+            40000,
+        )));
+        reply(self.app.clone().oneshot(req).await.unwrap()).await
+    }
+}
+
+#[tokio::test]
+async fn replacing_the_hub_needs_a_stepup_then_revokes_the_token_at_once_and_records_the_approval()
+{
+    let h = Harness::new().await;
+    let c = h.cafe().await;
+    let owner = h.owner().await;
+    let live = h.db.active_hub(&c.branch).await.unwrap().unwrap();
+
+    let none = h.post(&c, K1, "hub.revoke", json!({})).await;
+    assert_eq!((none.status, none.code()), (403, "MFA_REQUIRED"));
+    assert_eq!(h.rows(), 0);
+    assert!(h.db.active_hub(&c.branch).await.unwrap().is_some());
+    assert_eq!(h.hub_fetch(&c.token).await.status, 200);
+
+    assert_eq!(h.stepup(&c, "totp", &h.totp(&c)).await.status, 204);
+    let bad = h.post(&c, K1, "hub.revoke", json!({"x": 1})).await;
+    assert_eq!((bad.status, bad.code()), (422, "VALIDATION_FAILED"));
+    assert!(h.db.active_hub(&c.branch).await.unwrap().is_some());
+
+    let done = h.post(&c, K1, "hub.revoke", json!({})).await;
+    assert_eq!(done.status, 200, "{}", done.body);
+    let view = &done.body["commands"][0];
+    assert_eq!(
+        (view["kind"].as_str(), view["status"].as_str()),
+        (Some("hub.revoke"), Some("applied"))
+    );
+    assert!(view["done_at"].is_i64());
+    let row =
+        h.db.command(view["id"].as_i64().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+    assert_eq!(row.elevated_by.as_deref(), Some(owner.id.as_str()));
+    assert_eq!(row.issued_by, owner.id);
+
+    assert!(h.db.active_hub(&c.branch).await.unwrap().is_none());
+    assert!(
+        h.db.hub(&live.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .revoked_at
+            .is_some()
+    );
+    let refused = h.hub_fetch(&c.token).await;
+    assert_eq!((refused.status, refused.code()), (401, "TOKEN_REVOKED"));
+
+    // The same post again finds its row and changes nothing.
+    let again = h.post(&c, K1, "hub.revoke", json!({})).await;
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert_eq!(again.body["commands"][0]["id"], view["id"]);
+    assert_eq!(h.rows(), 1);
+}
+
+#[tokio::test]
+async fn after_a_revoke_a_new_code_pairs_a_replacement_and_a_repeated_post_never_revokes_it() {
+    let h = Harness::new().await;
+    let c = h.cafe().await;
+    assert_eq!(h.stepup(&c, "totp", &h.totp(&c)).await.status, 204);
+    assert_eq!(h.post(&c, K1, "hub.revoke", json!({})).await.status, 200);
+
+    let code = h.issue_code(&c).await;
+    assert_eq!(code.status, 200, "{}", code.body);
+    let paired = h
+        .pair_hub(code.body["code"].as_str().unwrap(), "01REPLACEMENT")
+        .await;
+    assert_eq!(paired.status, 200, "{}", paired.body);
+    let live = h.db.active_hub(&c.branch).await.unwrap().unwrap();
+
+    // The first post again: its row is returned and the replacement keeps its token.
+    let again = h.post(&c, K1, "hub.revoke", json!({})).await;
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert_eq!(again.body["commands"][0]["status"], "applied");
+    assert_eq!(
+        h.db.active_hub(&c.branch).await.unwrap().unwrap().id,
+        live.id
+    );
+    assert_eq!(h.rows(), 1);
+
+    // A new key revokes the replacement; with no live Hub left a further key has nothing to revoke.
+    assert_eq!(h.post(&c, K2, "hub.revoke", json!({})).await.status, 200);
+    let none = h.post(&c, K3, "hub.revoke", json!({})).await;
+    assert_eq!((none.status, none.code()), (409, "STEP_NOT_READY"));
+    assert_eq!(h.rows(), 2);
+}
+
+#[tokio::test]
+async fn replacing_a_hub_is_for_one_branch_of_the_owners_own_cafe() {
+    let h = Harness::new().await;
+    let c = h.cafe().await;
+    assert_eq!(h.stepup(&c, "totp", &h.totp(&c)).await.status, 204);
+    let all = h
+        .call(
+            "POST",
+            "/v1/commands",
+            Some(json!({
+                "branch_id": "all", "idempotency_key": K1, "kind": "hub.revoke", "payload": {},
+            })),
+            &c.access,
+        )
+        .await;
+    assert_eq!((all.status, all.code()), (422, "VALIDATION_FAILED"));
+    let other = h
+        .call(
+            "POST",
+            "/v1/commands",
+            Some(json!({
+                "branch_id": "01JBQ6W3Y8Z9X0A1B2C3D4E5FZ", "idempotency_key": K1,
+                "kind": "hub.revoke", "payload": {},
+            })),
+            &c.access,
+        )
+        .await;
+    assert_eq!((other.status, other.code()), (404, "NOT_FOUND"));
+    assert!(h.db.active_hub(&c.branch).await.unwrap().is_some());
+    assert_eq!(h.rows(), 0);
+    let signed_out = h
+        .call(
+            "POST",
+            "/v1/commands",
+            Some(json!({
+                "branch_id": c.branch, "idempotency_key": K1, "kind": "hub.revoke", "payload": {},
+            })),
+            "",
+        )
+        .await;
+    assert_eq!(signed_out.status, 401);
 }

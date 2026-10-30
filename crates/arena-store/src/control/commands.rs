@@ -138,6 +138,74 @@ impl ControlDb {
         .ok_or_else(|| ControlError::Db("submitted command not found".into()))?
     }
 
+    /// Records a `hub.revoke` that the control role applies at once (Story 9.8): in one transaction
+    /// the command row is written already `applied` and the branch's live Hub token is revoked.
+    /// The answer is the row and the id of the Hub it revoked, or `None` for that id when the post
+    /// was already taken (the same key finds its first row and revokes nothing again) or the branch
+    /// had no live Hub (then no row is written either).
+    pub async fn apply_hub_revoke(
+        &self,
+        c: &NewCommand<'_>,
+    ) -> Result<(Option<CommandRow>, Option<String>), ControlError> {
+        let rows = self
+            .transact_rows(vec![
+                Stmt::new(
+                    "INSERT INTO commands (branch_id, idempotency_key, kind, schema_version, \
+                     payload, issued_by, status, created_at, resolved_at, group_id, elevated_by) \
+                     SELECT ?, ?, ?, ?, ?, ?, 'applied', ?, ?, NULL, ? \
+                     WHERE EXISTS (SELECT 1 FROM hubs WHERE branch_id = ? AND revoked_at IS NULL) \
+                     ON CONFLICT (branch_id, idempotency_key) DO NOTHING",
+                    vec![
+                        text(c.branch_id),
+                        text(c.idempotency_key),
+                        text(c.kind),
+                        SqlValue::Integer(i64::from(c.schema_version)),
+                        text(c.payload),
+                        text(c.issued_by),
+                        SqlValue::Integer(c.now),
+                        SqlValue::Integer(c.now),
+                        c.elevated_by.map_or(SqlValue::Null, text),
+                        text(c.branch_id),
+                    ],
+                )
+                .expect(1),
+                Stmt::new(
+                    "UPDATE hubs SET revoked_at = ? WHERE branch_id = ? AND revoked_at IS NULL \
+                     RETURNING id",
+                    vec![SqlValue::Integer(c.now), text(c.branch_id)],
+                )
+                .fetch(),
+            ])
+            .await?;
+        let Some(rows) = rows else {
+            let existing = self
+                .query(
+                    SELECT_BY_KEY,
+                    vec![text(c.branch_id), text(c.idempotency_key)],
+                )
+                .await?
+                .first()
+                .map(|r| command_from(r))
+                .transpose()?;
+            return Ok((existing, None));
+        };
+        let revoked = rows
+            .get(1)
+            .and_then(|r| r.first())
+            .map(|row| col_text(row, 0))
+            .transpose()?;
+        let row = self
+            .query(
+                SELECT_BY_KEY,
+                vec![text(c.branch_id), text(c.idempotency_key)],
+            )
+            .await?
+            .first()
+            .map(|r| command_from(r))
+            .transpose()?;
+        Ok((row, revoked))
+    }
+
     /// The Hub's mailbox: every `pending` row of the branch in `id` order whatever `after` is (a
     /// re-queued row can sit below the Hub's cursor), then `fetched` rows past `after` (a lost
     /// reply is delivered again). Pending rows become `fetched`.

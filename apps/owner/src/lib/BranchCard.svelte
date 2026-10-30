@@ -1,9 +1,12 @@
 <script lang="ts">
   import { Button, PairingCode, StatusBadge, TextField, t } from "@arena/ui";
   import type { MessageKey } from "@arena/ui/messages";
-  import type { OwnerBranch, PairingCodeIssued } from "@arena/ui/generated";
+  import type { OwnerBranch, OwnerCommandView, PairingCodeIssued } from "@arena/ui/generated";
   import { load, send, setupUrl } from "./api";
+  import CommandRow from "./CommandRow.svelte";
+  import { revokeHub } from "./commands.svelte";
   import { age, refresh } from "./shell.svelte";
+  import { ulid } from "./ulid";
 
   let { branch }: { branch: OwnerBranch } = $props();
 
@@ -21,6 +24,10 @@
   let error: MessageKey | null = $state(null);
   let issued: PairingCodeIssued | null = $state(null);
   let busy = $state(false);
+  let replacing = $state(false);
+  let replaceKey = ulid();
+  let replaceError = $state(false);
+  let replaced: OwnerCommandView | null = $state(null);
 
   const seen = $derived.by(() => {
     const at = branch.hub.last_seen_at;
@@ -74,6 +81,31 @@
           ? "owner.branches.error.not_ready"
           : "owner.branches.error.generic";
   }
+
+  function askReplace() {
+    replaceKey = ulid();
+    replaceError = false;
+    replacing = true;
+  }
+
+  async function replace() {
+    busy = true;
+    replaceError = false;
+    const res = await revokeHub(branch.id, replaceKey);
+    if (res === "declined") {
+      busy = false;
+      return;
+    }
+    if (res === "failed") {
+      busy = false;
+      replaceError = true;
+      return;
+    }
+    replaced = res;
+    replacing = false;
+    await refresh();
+    await pair();
+  }
 </script>
 
 <li class="card">
@@ -122,6 +154,9 @@
   {:else}
     <div class="actions">
       <Button label="owner.branches.edit" variant="secondary" onclick={edit} />
+      {#if branch.hub.paired && !replacing}
+        <Button label="owner.branches.replace" variant="secondary" onclick={askReplace} />
+      {/if}
       {#if !branch.hub.paired && !issued}
         <Button
           label="owner.branches.pair"
@@ -135,8 +170,36 @@
         <a class="link" href={setupUrl(branch.id)}>{t("owner.branches.continue")}</a>
       {/if}
     </div>
+    {#if replacing}
+      <div class="replace" role="group" aria-labelledby="{id}-replace">
+        <p id="{id}-replace" class="type-hub-label">{t("owner.branches.replace.title")}</p>
+        <p>{t("owner.branches.replace.warning")}</p>
+        {#if replaceError}<p role="alert">{t("owner.branches.replace.failed")}</p>{/if}
+        <div class="actions">
+          <Button
+            label="owner.branches.replace.confirm"
+            onclick={replace}
+            disabled={busy}
+            disabledReason="owner.branches.replace.working"
+          />
+          <Button
+            label="owner.branches.cancel"
+            variant="secondary"
+            onclick={() => (replacing = false)}
+            disabled={busy}
+            disabledReason="owner.branches.replace.working"
+          />
+        </div>
+      </div>
+    {/if}
     {#if error}<p role="alert">{t(error)}</p>{/if}
+    {#if replaced}
+      <ul class="replaced">
+        <CommandRow row={replaced} now={Date.now()} />
+      </ul>
+    {/if}
     {#if issued && !branch.hub.paired}
+      {#if replaced}<p>{t("owner.branches.replace.done")}</p>{/if}
       <PairingCode
         code={issued.code}
         expiresAt={issued.expires_at}
@@ -183,6 +246,21 @@
     background-color: var(--text-field-background);
     color: var(--text-field-foreground);
     font: inherit;
+  }
+
+  .replace {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+  }
+
+  .replaced {
+    margin: 0;
+    padding: 0;
+    list-style: none;
   }
 
   .hint {

@@ -34,6 +34,9 @@ pub struct OwnerCommandKind {
     pub sensitive: bool,
     /// The Hub runs this kind. A name reserved without a handler is refused `UNSUPPORTED`.
     pub handled: bool,
+    /// The cloud's control role applies this kind itself when it is posted (Story 9.8): no Hub
+    /// fetches it, so it needs neither a live Hub nor a current command schema.
+    pub cloud: bool,
 }
 
 const fn handled(kind: &'static str) -> OwnerCommandKind {
@@ -44,6 +47,7 @@ const fn handled(kind: &'static str) -> OwnerCommandKind {
         flag: None,
         sensitive: false,
         handled: true,
+        cloud: false,
     }
 }
 
@@ -63,6 +67,16 @@ const fn reserved(kind: &'static str) -> OwnerCommandKind {
         flag: None,
         sensitive: true,
         handled: false,
+        cloud: false,
+    }
+}
+
+/// A sensitive kind the cloud applies itself, offered to a branch of any tier (Story 9.8).
+const fn cloud_applied(kind: &'static str) -> OwnerCommandKind {
+    OwnerCommandKind {
+        min_tier: Tier::Free,
+        cloud: true,
+        ..reserved(kind)
     }
 }
 
@@ -83,7 +97,7 @@ pub const OWNER_COMMAND_KINDS: [OwnerCommandKind; 17] = [
     handled("credit.remind"),
     // The alert limits (Story 8.34): `settings.set` of `owner_alert.thresholds` only.
     handled("settings.set"),
-    reserved("hub.revoke"),
+    cloud_applied("hub.revoke"),
     reserved("backup.restore"),
 ];
 
@@ -171,7 +185,7 @@ fn invalid(field: &str, message: &str) -> AppError {
 /// without a handler.
 pub fn accepted_owner_kind(kind: &str) -> Result<&'static OwnerCommandKind, AppError> {
     owner_command_kind(kind)
-        .filter(|k| k.handled)
+        .filter(|k| k.handled || k.cloud)
         .ok_or_else(|| {
             AppError::with_field(
                 ErrorCode::Unsupported,
@@ -201,7 +215,7 @@ pub fn validate_owner_payload(kind: &str, payload: &serde_json::Value) -> Result
         "coupon.upsert" => parses::<CouponUpsert>(&fields),
         "product.upsert" => parses::<ProductUpsert>(&fields),
         "stock.threshold" => parses::<StockThreshold>(&fields),
-        "backup.now" => fields.as_object().is_some_and(|f| f.is_empty()),
+        "backup.now" | "hub.revoke" => fields.as_object().is_some_and(|f| f.is_empty()),
         "settings.set" => return validate_alert_limits(fields),
         "staff.upsert" => parses::<OwnerStaffUpsert>(&fields),
         "staff.deactivate" => parses::<StaffDeactivate>(&fields),
@@ -484,13 +498,11 @@ mod tests {
             assert!(!kind.sensitive && kind.handled, "{k}");
             assert_eq!(kind.schema_version, COMMAND_SCHEMA_VERSION);
         }
-        for k in ["hub.revoke", "backup.restore"] {
-            assert!(owner_command_kind(k).unwrap().sensitive, "{k}");
-            assert_eq!(
-                accepted_owner_kind(k).unwrap_err().code,
-                ErrorCode::Unsupported
-            );
-        }
+        assert!(owner_command_kind("backup.restore").unwrap().sensitive);
+        assert_eq!(
+            accepted_owner_kind("backup.restore").unwrap_err().code,
+            ErrorCode::Unsupported
+        );
         assert_eq!(
             accepted_owner_kind("pricing.set").unwrap_err().code,
             ErrorCode::Unsupported
@@ -536,8 +548,11 @@ mod tests {
         }
         let kind = accepted_owner_kind("device.revoke").unwrap();
         assert!(kind.sensitive && kind.handled);
-        // The Hub itself is revoked only by Epic 9.
-        assert!(owner_command_kind("hub.revoke").is_some_and(|k| !k.handled));
+        // The Hub itself is revoked by the cloud (Story 9.8): sensitive, any tier, never fetched.
+        let hub = accepted_owner_kind("hub.revoke").unwrap();
+        assert!(hub.sensitive && hub.cloud && !hub.handled && hub.min_tier == Tier::Free);
+        assert!(validate_owner_payload("hub.revoke", &json!({})).is_ok());
+        assert!(validate_owner_payload("hub.revoke", &json!({"x": 1})).is_err());
 
         let group = json!({"name": "Row A", "group_kind": "pc", "colour": "teal", "sort_order": 1});
         assert!(validate_owner_payload("group.upsert", &group).is_ok());

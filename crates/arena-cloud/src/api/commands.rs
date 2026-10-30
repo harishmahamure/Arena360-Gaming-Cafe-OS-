@@ -227,6 +227,9 @@ async fn refusal(
     b: &Branch,
     kind: &OwnerCommandKind,
 ) -> Result<Option<AppError>, ApiError> {
+    if kind.cloud {
+        return Ok(None);
+    }
     let now = st.now();
     let tier = tier_of(st, &b.id).await?;
     let entitled = rank(tier) >= rank(kind.min_tier);
@@ -465,6 +468,19 @@ async fn post_command(
         None
     };
     let elevated = step_up_check(&kind, signed.session.stepup_at, now)?;
+    if kind.cloud {
+        return post_cloud_command(
+            &st,
+            &tenant.id,
+            &signed.owner.id,
+            &body,
+            &kind,
+            elevated,
+            &payload,
+            now,
+        )
+        .await;
+    }
     let branches = st
         .db
         .branches_of_tenant(&tenant.id)
@@ -548,6 +564,70 @@ async fn post_command(
         setup_codes: (!setup_codes.is_empty()).then_some(setup_codes),
     };
     // A setup code is shown once: nothing may keep the answer.
+    Ok(([(CACHE_CONTROL, "no-store")], Json(posted)).into_response())
+}
+
+/// A kind the control role applies itself (Story 9.8, `hub.revoke`): one branch of the tenant, no
+/// Hub needed. The Hub's live token is revoked and the row is written `applied` in one transaction,
+/// with `elevated_by` naming the owner whose step-up allowed it.
+#[allow(clippy::too_many_arguments)]
+async fn post_cloud_command(
+    st: &AuthState,
+    tenant_id: &str,
+    owner_id: &str,
+    body: &OwnerCommandPost,
+    kind: &OwnerCommandKind,
+    elevated: bool,
+    payload: &str,
+    now: i64,
+) -> Result<Response, ApiError> {
+    if body.branch_id == OWNER_ALL_BRANCHES {
+        return Err(ApiError::validation(
+            "branch_id",
+            "Choose one branch to replace the Hub of.",
+        ));
+    }
+    let branch = st
+        .db
+        .branches_of_tenant(tenant_id)
+        .await
+        .map_err(ApiError::internal)?
+        .into_iter()
+        .find(|b| b.id == body.branch_id)
+        .ok_or_else(|| {
+            tracing::warn!(owner_id = %owner_id, "owner command: branch outside the tenant");
+            ApiError::not_found()
+        })?;
+    let (row, revoked) = st
+        .db
+        .apply_hub_revoke(&NewCommand {
+            branch_id: &branch.id,
+            idempotency_key: &body.idempotency_key,
+            kind: kind.kind,
+            schema_version: kind.schema_version,
+            payload,
+            issued_by: owner_id,
+            group_id: None,
+            elevated_by: elevated.then_some(owner_id),
+            now,
+        })
+        .await
+        .map_err(ApiError::internal)?;
+    let Some(row) = row else {
+        return Err(AppError::new(
+            ErrorCode::StepNotReady,
+            "This branch has no Hub to replace.",
+        )
+        .into());
+    };
+    if let Some(hub_id) = revoked {
+        tracing::info!(owner_id = %owner_id, branch_id = %branch.id, hub_id = %hub_id, "hub revoked by the owner");
+    }
+    let posted = OwnerCommandPosted {
+        commands: vec![view_of(row, None)],
+        skipped: Vec::new(),
+        setup_codes: None,
+    };
     Ok(([(CACHE_CONTROL, "no-store")], Json(posted)).into_response())
 }
 

@@ -709,7 +709,11 @@ impl UploadTask {
             return;
         }
         match writer.stop_uploads().await {
-            Ok(true) => tracing::info!("upload: the branch is on Free, uploads stopped"),
+            Ok(true) => {
+                // The stored error went with it; a failure that comes back must be written again.
+                self.noted_error = None;
+                tracing::info!("upload: the branch is on Free, uploads stopped");
+            }
             Ok(false) => {}
             // Not the primary any more; the next lease holder looks at it.
             Err(e) if e.code == ErrorCode::NotPrimary => {}
@@ -4252,5 +4256,26 @@ mod tests {
         assert!(backup_state(&f).upload_error.is_some());
         f.task.note_outcome(&f.writer, None).await;
         assert_eq!(backup_state(&f).upload_error, None);
+    }
+
+    #[tokio::test]
+    async fn a_lapse_forgets_the_noted_failure_so_the_same_one_is_noted_again() {
+        let (port, _seen) = serve(cloud).await;
+        let mut f = fx(port, Tier::Basic).await;
+        let unreachable = AppError::new(ErrorCode::CloudUnreachable, "no route");
+        f.task.note_outcome(&f.writer, Some(&unreachable)).await;
+        assert!(backup_state(&f).upload_error.is_some());
+
+        f.status.send_modify(|s| s.tier = Some(Tier::Free));
+        f.task.cycle().await;
+        assert_eq!(backup_state(&f).upload_error, None, "a lapse clears it");
+
+        f.status.send_modify(|s| s.tier = Some(Tier::Basic));
+        f.task.note_outcome(&f.writer, Some(&unreachable)).await;
+        assert_eq!(
+            backup_state(&f).upload_error.as_deref(),
+            Some("CLOUD_UNREACHABLE"),
+            "the same failure after re-upgrading is written again"
+        );
     }
 }

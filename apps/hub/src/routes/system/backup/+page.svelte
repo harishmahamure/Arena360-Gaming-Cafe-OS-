@@ -105,7 +105,7 @@
     </div>
   {/if}
 
-  {#if !status || status.cloud}
+  {#if status?.cloud || (!status && statusProblem)}
     <div class="gst" data-testid="gst-archives">
       <h3 class="type-hub-label">{t("hub.backup.gst.title")}</h3>
       <p class="type-hub-body">{t("hub.backup.gst.intro")}</p>

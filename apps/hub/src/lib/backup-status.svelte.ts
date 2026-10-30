@@ -24,10 +24,15 @@ export function backupBehind(): boolean {
   return backup.status !== null && isBehind(backup.status, hubNow());
 }
 
+/** Counts how many times the status was forgotten, so a late read can tell. */
+let cleared = 0;
+
 /** Reads the status once and keeps it. The outcome tells the caller to sign in again. */
 export async function refreshBackup(): Promise<BackupStatusOutcome> {
+  const generation = cleared;
   const out = await loadBackupStatus();
-  if (out.kind === "ok") {
+  // A read in flight when the status was forgotten (sign-out) must not bring it back.
+  if (out.kind === "ok" && generation === cleared) {
     backup.status = out.status;
     backup.offset = out.status.as_of - Date.now();
     backup.tick = Date.now();
@@ -37,6 +42,7 @@ export async function refreshBackup(): Promise<BackupStatusOutcome> {
 
 /** Forgets the status (signed out). */
 export function clearBackup() {
+  cleared += 1;
   backup.status = null;
 }
 

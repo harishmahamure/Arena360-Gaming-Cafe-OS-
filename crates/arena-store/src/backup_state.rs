@@ -379,6 +379,13 @@ mod tests {
         );
         let s = read_backup_state(&conn).unwrap();
         assert!(!s.first_snapshot_pending && s.first_snapshot_error.is_none());
+        write_upload_error(&conn, Some("CLOUD_UNREACHABLE"), 2).unwrap();
+        assert!(
+            stop_uploads(&conn).unwrap(),
+            "a stored upload error is forgotten too"
+        );
+        let s = read_backup_state(&conn).unwrap();
+        assert_eq!((s.upload_error, s.upload_error_at), (None, None));
     }
 
     #[test]

@@ -2,7 +2,7 @@
 title: 'Story 9.16: Cloud backup status in the Hub header and System screen'
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
@@ -71,6 +71,9 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+- Fixed: upload task kept its "already noted" error after a lapse to Free (same failure after re-upgrade was never written); a status read in flight at sign-out could bring the status back; System -> Backup showed the GST block on a Free Hub while loading. Tests added for each store/task path.
+- Not changed: "behind" on an idle Hub and the tier-default interval are spec-defined (Design Notes); phone drops the header status by spec; an outcome of none is only a fully successful cycle.
 
 ## Design Notes
 

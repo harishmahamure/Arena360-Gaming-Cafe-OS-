@@ -2,7 +2,7 @@
 title: "Story 8.31: Credit reminders go out on cycle days, and Free shows an overdue list"
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 baseline_commit: 'dbb9042'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -80,3 +80,7 @@ deferred: []
 - `cargo clippy -p arena-proto -p arena-store -p arena-core -p arena-tasks -p arena-hub -p arena-api --all-targets -- -D warnings`: clean.
 - `cargo test` over those crates: all pass. One run of `proptest_apply` failed once while the whole workspace was testing in parallel and passed in 8 later runs (including 3 of 200 cases); no regression file was written.
 - `pnpm run check:protocol`, `check:strings`, prettier on touched files: pass. Playwright `players-overdue.spec.ts` and `credit-aging.spec.ts`: pass on desktop and phone. `svelte-check` reports only the two existing `playwright.kitchen.config.ts` errors.
+
+## Review Notes
+
+- 2026-10-30: code review (3 parallel layers collapsed into a direct read of the diff). No blocking findings. Clippy `-D warnings`, `cargo test` over the touched crates, `check:protocol` and `check:strings` all pass. Cosmetic only: a redundant inner block in `overdue_view`; left as is.

@@ -2,7 +2,7 @@
 title: 'Story 8.39: A Cloudflare Tunnel for entitled branches, run by the Windows Hub'
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 baseline_commit: '6492f9d22183b07c12eec7391481bb5e0bb2eeb6'
 review_loop_iteration: 0
 followup_review_recommended: true
@@ -172,7 +172,7 @@ The Hub's tunnel listener (`:7403`) and the Cloudflare account settings (`ARENA_
 
 ## Auto Run Result
 
-Status: review
+Status: done
 
 Implemented: a Cloudflare Tunnel per entitled branch. The cloud (`TunnelProvider`: Fake or Cloudflare over `ARENA_CF_*`) creates the tunnel, Access application and proxied DNS name on the first heartbeat that carries the `tunnel` flag from a Windows Hub, returns the connector credential in the heartbeat answer (`grant`, later `on`), and deletes everything when the flag goes or the Hub is Android (`unsupported_platform`). The Hub (`TunnelTask`) stores the credential through the DPAPI keystore, runs `cloudflared` as a supervised child (credential in `TUNNEL_TOKEN`), restarts it with backoff and never touches the writer. System → Connection shows the line, including "Needs the Windows Hub". Premium's tier flags gained `tunnel`. The cost spike is recorded in `docs/runbooks/cloudflare-tunnel-cost-spike.md`.
 
@@ -183,3 +183,7 @@ Review: 9 patches applied (5 medium, 4 low/test), 9 items deferred (see frontmat
 Verification: `cargo fmt --check` clean; clippy `-D warnings` clean on arena-proto/store/cloud/tasks/api/hub; passing: `arena-cloud --test tunnel` (13), cloud `tunnel` unit tests (10), arena-tasks `tunnel` (15), arena-api `tunnel` (4), arena-hub config, Hub Playwright `tunnel.spec.ts` (6), `check:strings`, `format:check`, `check:protocol`, `check:layers`. Known failures not from this story: `arena-cloud --test backup a_hung_run_times_out_with_its_own_code` (zero timeout vs a fast run), `arena-tasks heartbeat::trusted_time_is_cloud_time_plus_monotonic_elapsed` (needs 8 days of uptime) and `printer::lan a_printer_that_stops_reading_times_out`, `arena-api ui_auth lock_and_unlock_log...` (log-capture race; passes with `--test-threads=1`), `pnpm -C apps/hub check` (2 errors in `playwright.kitchen.config.ts`), `check:deploy` (no kubectl).
 
 Residual risks: Cloudflare API shapes and `TUNNEL_TOKEN` are proven only against a mock and a fake connector; the cost spike is a model with list prices from memory; the Hub tunnel listener (`:7403`) does not exist until 8.40/8.41.
+
+## Code Review (second pass, 2026-10-30)
+
+Reviewed the implementation commit against the spec: cloud heartbeat decision (`tunnel_answer`), Cloudflare provider (order, idempotence, secret handling), Hub `TunnelTask` / inbox / heartbeat wiring, `/ui/tunnel` and the Connection page. No blocking findings; no code changes. Verified: `cargo fmt --check`, clippy `-D warnings` on arena-proto/store/cloud/tasks/api/hub/core, `arena-cloud --test tunnel` (13), `arena-tasks tunnel` (15), `arena-api tunnel` (4), arena-proto/store suites, `check:strings`, `format:check`, `check:protocol`. Workspace-wide clippy fails only in `arena-kiosk-svc` (`HubEvent::KitchenBoard` match) and `arena-e2e` (Unix sockets on Windows), both untouched by this story. Deferred items in the frontmatter stand.

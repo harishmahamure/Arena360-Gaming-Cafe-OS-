@@ -1003,9 +1003,10 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::ControllersUnchecked
         | ErrorCode::EraseBlocked
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
-        ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
-            StatusCode::SERVICE_UNAVAILABLE
-        }
+        ErrorCode::NotPrimary
+        | ErrorCode::HubSlow
+        | ErrorCode::NoHub
+        | ErrorCode::RestorePending => StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         ErrorCode::Fenced
         | ErrorCode::RollupSchemaOld

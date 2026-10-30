@@ -572,3 +572,106 @@ async fn an_owner_command_reaches_the_paired_hub_within_one_poll_and_applies_onc
         1
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_hub_paired_over_a_replaced_one_opens_in_restore_asks_for_the_key_and_stays_there() {
+    let cloud = start_cloud().await;
+    let branch = cloud.branch_at_step_3().await;
+    let first_code = cloud.code(&branch).await;
+    let old_data = tempfile::tempdir().unwrap();
+    let (old, port) = start_hub(old_data.path(), &cloud.url, "android").await;
+    let (s, body) = request(
+        port,
+        "POST",
+        "/ui/pair-hub",
+        Some(json!({"code": first_code})),
+    )
+    .await;
+    assert_eq!((s, body), (200, json!({"paired": true})));
+    old.stop();
+
+    // The owner replaces the Hub (Story 9.8): the old token is revoked, a new code is issued.
+    let (row, revoked) = cloud
+        .db
+        .apply_hub_revoke(&arena_store::control::NewCommand {
+            branch_id: &branch,
+            idempotency_key: "01HREVOKE",
+            kind: "hub.revoke",
+            schema_version: 1,
+            payload: "{}",
+            issued_by: "o1",
+            group_id: None,
+            elevated_by: Some("o1"),
+            now: now_ms(),
+        })
+        .await
+        .unwrap();
+    assert!(row.is_some() && revoked.is_some());
+    let code = cloud.code(&branch).await;
+
+    let data = tempfile::tempdir().unwrap();
+    let (hub, port) = start_hub(data.path(), &cloud.url, "android").await;
+    let (s, body) = request(port, "POST", "/ui/pair-hub", Some(json!({"code": code}))).await;
+    assert_eq!((s, body.clone()), (200, json!({"paired": true})), "{body}");
+
+    // Paired, but with no branch of its own: "Restore this branch" and nothing else.
+    let (_, snap) = request(port, "GET", "/ui/snapshot", None).await;
+    assert_eq!(snap["paired"], true, "{snap}");
+    assert_eq!(snap["restore_pending"], "Pixel Arena Gaming", "{snap}");
+    assert_eq!(snap["branch"], Value::Null);
+    {
+        let store = arena_store::Store::open_reader(data.path().join("branch.db")).unwrap();
+        assert!(store.hub_identity().unwrap().is_some());
+        assert!(store.restore_pending().unwrap().is_some());
+        assert!(store.branch_summary().unwrap().is_none());
+        assert!(store.rows(arena_store::Table::Staff).unwrap().is_empty());
+        assert!(store.changes().unwrap().is_empty());
+    }
+    // The one-time private key is in the keystore, never in the database file.
+    let secret = arena_tasks::named_keystore(data.path(), arena_tasks::RESTORE_KEY_FILE)
+        .get()
+        .unwrap()
+        .unwrap();
+    assert!(secret.starts_with(b"AGE-SECRET-KEY-1"));
+    let db_file = std::fs::read(data.path().join("branch.db")).unwrap();
+    assert!(!db_file.windows(secret.len()).any(|w| w == &secret[..]));
+
+    // It asks once for the key, with the public half of that key.
+    let live = cloud.db.active_hub(&branch).await.unwrap().unwrap();
+    let first = wait_for_request(&cloud, &branch, &live.hub_instance_id, 0).await;
+    assert_eq!(first.state, arena_proto::KeyRequestState::Pending);
+    assert!(arena_proto::valid_age_recipient(&first.public_key));
+
+    // A restart finds it still waiting, with the same key pair, and it asks again.
+    hub.stop();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let (_hub, port) = start_hub(data.path(), &cloud.url, "android").await;
+    let (_, snap) = request(port, "GET", "/ui/snapshot", None).await;
+    assert_eq!(snap["restore_pending"], "Pixel Arena Gaming", "{snap}");
+    let again = wait_for_request(&cloud, &branch, &live.hub_instance_id, first.requested_at).await;
+    assert_eq!(again.id, first.id);
+    assert_eq!(again.public_key, first.public_key);
+    {
+        let store = arena_store::Store::open_reader(data.path().join("branch.db")).unwrap();
+        assert!(store.changes().unwrap().is_empty(), "nothing is written");
+    }
+}
+
+/// The key request of `instance`, once it is newer than `after`.
+async fn wait_for_request(
+    cloud: &Cloud,
+    branch: &str,
+    instance: &str,
+    after: i64,
+) -> arena_store::control::KeyRequestRow {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if let Some(row) = cloud.db.key_request(branch, instance).await.unwrap()
+            && row.requested_at > after
+        {
+            return row;
+        }
+        assert!(Instant::now() < deadline, "the hub never asked for the key");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}

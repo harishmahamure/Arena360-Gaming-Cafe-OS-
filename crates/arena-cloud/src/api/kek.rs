@@ -8,7 +8,10 @@
 
 use std::sync::Arc;
 
-use arena_proto::{AGE_MAGIC, KEK_ESCROW_MAX_BYTES, KekEscrowRequest, KekEscrowResponse};
+use arena_proto::{
+    AGE_MAGIC, KEK_ESCROW_MAX_BYTES, KekEscrowRequest, KekEscrowResponse, KekRequest,
+    KekRequestResponse, valid_age_recipient,
+};
 use arena_store::control::{NewAdminAudit, RateRule};
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -100,9 +103,82 @@ async fn escrow(
     Ok(Json(KekEscrowResponse { stored: true }))
 }
 
+/// Requests a Hub may make an hour: one per start and one per WAN return, with room to spare.
+const REQUEST_HOURLY_LIMIT: u64 = 30;
+const REQUEST_RATE_PREFIX: &str = "kekreq:";
+
+/// `POST /v1/kek/request` (Story 9.9): a replacement Hub, still waiting to be restored, names the
+/// one-time public key the owner may release the branch key to. One `pending` row per Hub
+/// instance, refreshed by asking again; Story 9.10 decides it. Nothing is released here.
+async fn request(
+    State(st): State<Arc<AuthState>>,
+    headers: HeaderMap,
+    ApiJson(body): ApiJson<KekRequest>,
+) -> Result<Json<KekRequestResponse>, ApiError> {
+    let now = st.now();
+    let hub = authenticate(&st, &headers, now).await?;
+    if body.hub_instance_id != hub.hub_instance_id {
+        return Err(ApiError::validation(
+            "hub_instance_id",
+            "That is not this Hub's instance.",
+        ));
+    }
+    if !valid_age_recipient(&body.public_key) {
+        return Err(ApiError::validation(
+            "public_key",
+            "Send an age public key (age1…).",
+        ));
+    }
+    if !st
+        .db
+        .branch_has_history(&hub.branch_id, &hub.hub_instance_id)
+        .await
+        .map_err(ApiError::internal)?
+    {
+        return Err(ApiError::forbidden(
+            "This Hub does not replace another Hub of the branch.",
+        ));
+    }
+    let key = format!("{REQUEST_RATE_PREFIX}{}", hub.branch_id);
+    let rule = RateRule {
+        key: &key,
+        prune_prefix: REQUEST_RATE_PREFIX,
+        bucket_ms: 1,
+        window_ms: WINDOW_MS,
+        limit: REQUEST_HOURLY_LIMIT,
+    };
+    if let Err(wait_ms) = st
+        .db
+        .rate_reserve(&[rule], now)
+        .await
+        .map_err(ApiError::internal)?
+    {
+        return Err(ApiError::rate_limited(ceil_s(wait_ms)));
+    }
+    let state = st
+        .db
+        .put_key_request(
+            &ulid::Ulid::generate().to_string(),
+            &hub.branch_id,
+            &hub.hub_instance_id,
+            &body.public_key,
+            now,
+        )
+        .await
+        .map_err(ApiError::internal)?;
+    tracing::info!(
+        hub_id = %hub.id,
+        branch_id = %hub.branch_id,
+        state = state.as_str(),
+        "branch key requested by a replacement hub"
+    );
+    Ok(Json(KekRequestResponse { state }))
+}
+
 pub(super) fn router(st: Arc<AuthState>) -> Router {
     Router::new()
         .route("/kek/escrow", post(escrow))
+        .route("/kek/request", post(request))
         .with_state(st)
 }
 

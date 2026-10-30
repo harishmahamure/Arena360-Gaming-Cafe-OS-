@@ -153,10 +153,20 @@ impl KeyBackupTask {
     /// One wake: escrows the branch key if the cloud lacks it, then (paid) backs up the key table
     /// if it changed. Answers how long to sleep.
     pub async fn cycle(&mut self) -> Duration {
-        let (role, lease, pairing, tier) = {
+        let (role, lease, pairing, tier, restoring) = {
             let s = self.status.borrow();
-            (s.role, s.lease.clone(), s.pairing, s.tier)
+            (
+                s.role,
+                s.lease.clone(),
+                s.pairing,
+                s.tier,
+                s.restore_pending.is_some(),
+            )
         };
+        // A Hub waiting to be restored has no branch key of its own to escrow or back up.
+        if restoring {
+            return TIER_RECHECK;
+        }
         let (Some(writer), Some(lease), Role::Primary) = (self.writer.clone(), lease, role) else {
             return TIER_RECHECK;
         };

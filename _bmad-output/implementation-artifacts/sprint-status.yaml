@@ -275,7 +275,7 @@ development_status:
   9-6-the-export-format-is-documented-and-every-report-exports-alo: done
   9-7-restore-a-branch-from-an-export-file-as-a-new-epoch: done
   9-8-owner-replaces-a-failed-hub-and-gets-a-new-pairing-code: done
-  9-9-a-replacement-hub-opens-in-restore-this-branch-and-serves-no: backlog
+  9-9-a-replacement-hub-opens-in-restore-this-branch-and-serves-no: review
   9-10-owner-releases-the-branch-key-to-the-replacement-hub: backlog
   9-11-upgrading-from-free-uploads-a-full-snapshot-before-the-first: backlog
   9-12-fetch-a-paid-branch-s-cloud-backup-onto-a-replacement-hub: backlog

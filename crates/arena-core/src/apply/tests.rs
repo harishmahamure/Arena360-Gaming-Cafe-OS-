@@ -543,6 +543,34 @@ fn failure_after_mutate_rolls_everything_back() {
     assert_eq!(store.rows(Table::Branch).unwrap().len(), 1);
 }
 
+#[test]
+fn a_hub_waiting_to_be_restored_refuses_every_intent_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("branch.db");
+    let mut store = Store::open(&path, T0).unwrap();
+    store
+        .write_tx(|tx| write_lease(tx, &lease_row(1, HUB)))
+        .unwrap();
+    let clock = ManualClock::new(T0);
+    let epoch = Some(LeaseInfo::from(&lease_row(1, HUB)).epoch());
+    let ctx = ApplyCtx {
+        restore_pending: true,
+        ..ApplyCtx::new(&clock, epoch.clone(), Role::Primary)
+    };
+    let err = store
+        .write_tx_mut(|tx| apply(tx, &ctx, &bootstrap()))
+        .unwrap_err();
+    assert_eq!(err.code, ErrorCode::RestorePending);
+    assert_nothing_written(&store);
+
+    // Once it is restored the same intent applies.
+    let ctx = ApplyCtx::new(&clock, epoch, Role::Primary);
+    store
+        .write_tx_mut(|tx| apply(tx, &ctx, &bootstrap()))
+        .unwrap();
+    assert_eq!(store.rows(Table::Branch).unwrap().len(), 1);
+}
+
 #[tokio::test]
 async fn unknown_envelope_kind_does_not_decode() {
     let f = primary();

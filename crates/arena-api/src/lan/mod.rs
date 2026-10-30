@@ -404,6 +404,22 @@ impl LanHub {
         Presence(Some(Arc::clone(&self.registry)))
     }
 
+    /// The Hub replaces another and waits to be restored: it serves no device (Story 9.9).
+    fn restore_pending(&self) -> bool {
+        self.status.borrow().restore_pending.is_some()
+    }
+
+    /// `RESTORE_PENDING` while the Hub waits to be restored.
+    fn refuse_while_restoring(&self) -> Result<(), arena_proto::AppError> {
+        if self.restore_pending() {
+            return Err(arena_proto::AppError::new(
+                arena_proto::ErrorCode::RestorePending,
+                "this hub is waiting for the branch to be restored",
+            ));
+        }
+        Ok(())
+    }
+
     /// Whether intents can be served now: a writer exists and the Hub is primary.
     fn is_primary(&self) -> bool {
         self.writer.as_ref().is_some_and(|w| !w.is_closed())

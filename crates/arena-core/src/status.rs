@@ -100,6 +100,9 @@ pub struct HubStatus {
     pub lan_ports: Option<(u16, u16)>,
     pub tier: Option<arena_proto::Tier>,
     pub pairing: PairingState,
+    /// The branch name while this Hub replaces another and waits to be restored (Story 9.9): it
+    /// writes nothing and serves no device until a restore completes.
+    pub restore_pending: Option<String>,
     pub cloud_time: Option<CloudTime>,
     pub live: bool,
     pub licence: Option<arena_proto::LicenceStanding>,
@@ -154,6 +157,7 @@ impl HubStatus {
             lan_ports: None,
             tier: None,
             pairing: PairingState::Active,
+            restore_pending: None,
             cloud_time: None,
             live: false,
             licence: None,

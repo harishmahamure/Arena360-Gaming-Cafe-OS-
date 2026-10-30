@@ -178,6 +178,7 @@ async fn pair(
         }
         super::session::require_tunnel_flag(hub).await?;
     }
+    hub.refuse_while_restoring()?;
     let writer = match hub.writer.clone() {
         Some(w) if hub.is_primary() => w,
         _ => {

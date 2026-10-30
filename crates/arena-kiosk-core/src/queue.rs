@@ -121,6 +121,7 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::PhoneTaken
         | ErrorCode::Unsupported
         | ErrorCode::NotPrimary
+        | ErrorCode::RestorePending
         | ErrorCode::SchemaTooNew
         | ErrorCode::TokenRevoked
         | ErrorCode::TokenInvalid

@@ -129,7 +129,16 @@ pub struct HubPairResponse {
     pub tier: crate::tier::Tier,
     pub branch_code: String,
     pub licence: String,
-    pub bootstrap: BranchBootstrapCommand,
+    /// What a first Hub applies to start the branch. Absent when the branch already has history
+    /// (`restore_pending`): nothing is queued then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub bootstrap: Option<BranchBootstrapCommand>,
+    /// This Hub replaces an earlier one of a branch with history (Story 9.9): it opens in
+    /// "Restore this branch" and serves nothing until it is restored.
+    #[serde(default)]
+    pub restore_pending: bool,
+    pub branch_name: String,
 }
 
 pub const SETUP_CODE_HUB_TTL_MS: i64 = 72 * 60 * 60 * 1000;
@@ -553,7 +562,7 @@ mod tests {
             tier: crate::tier::Tier::Free,
             branch_code: "LVL".into(),
             licence: "jwt".into(),
-            bootstrap: BranchBootstrapCommand {
+            bootstrap: Some(BranchBootstrapCommand {
                 idempotency_key: "k".into(),
                 profile: BootstrapProfile {
                     name: "n".into(),
@@ -574,7 +583,9 @@ mod tests {
                     setup_expires_at: 1,
                 },
                 template: None,
-            },
+            }),
+            restore_pending: false,
+            branch_name: "n".into(),
         };
         assert!(!format!("{res:?}").contains("secret"));
         let hub = PairHubRequest {

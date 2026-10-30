@@ -81,11 +81,18 @@ impl Drop for DeadOnDrop {
 
 /// The `ApplyCtx` for a job, from the status watch as it is when the job runs.
 fn ctx_from<'a>(clock: &'a dyn Clock, status: &watch::Receiver<HubStatus>) -> ApplyCtx<'a> {
-    let (role, epoch) = {
+    let (role, epoch, restore_pending) = {
         let s = status.borrow();
-        (s.role, s.lease.as_ref().map(LeaseInfo::epoch))
+        (
+            s.role,
+            s.lease.as_ref().map(LeaseInfo::epoch),
+            s.restore_pending.is_some(),
+        )
     };
-    ApplyCtx::new(clock, epoch, role)
+    ApplyCtx {
+        restore_pending,
+        ..ApplyCtx::new(clock, epoch, role)
+    }
 }
 
 /// Spawns the writer actor.
@@ -424,6 +431,35 @@ impl WriterHandle {
             )
             .await?;
         Ok(paired.is_some())
+    }
+
+    /// Pairs a Hub that replaces another of a branch with history (Story 9.9): stores the
+    /// identity and licence and marks the Hub as waiting to be restored, in one transaction. No
+    /// `branch.bootstrap` is applied and no branch row is written. The caller then sets
+    /// `HubStatus::restore_pending`, after which every intent is refused `RESTORE_PENDING`.
+    /// `false` when the Hub already has an identity.
+    pub async fn record_replacement_pairing(
+        &self,
+        identity: arena_store::HubIdentity,
+        licence: String,
+        branch_name: &str,
+    ) -> Result<bool, AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        let name = branch_name.to_owned();
+        self.run(move |store| {
+            let ctx = ctx_from(clock.as_ref(), &status);
+            store.write_tx_mut(|tx| {
+                crate::apply::check_epoch(tx, &ctx)?;
+                if !arena_store::insert_hub_identity(tx, &identity)? {
+                    return Ok(false);
+                }
+                arena_store::store_licence(tx, &licence, identity.paired_at)?;
+                arena_store::mark_restore_pending(tx, &name)?;
+                Ok(true)
+            })
+        })
+        .await
     }
 
     /// Re-pair after the secrets' key was lost: replaces the hub id, tier and licence of the same

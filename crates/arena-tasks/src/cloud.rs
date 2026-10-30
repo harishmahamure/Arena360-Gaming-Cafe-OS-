@@ -2,14 +2,14 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use arena_core::{Clock, HubPairer, PairFuture, PairGate, WriterHandle};
+use arena_core::{Clock, HubPairer, HubStatus, PairFuture, PairGate, WriterHandle};
 use arena_proto::{
     AppError, CATALOG_MANIFEST_PATH, CatalogManifest, CommandResult, CommandResultAck,
     CommandsPage, ErrorCode, FenceClaimRequest, FenceClaimResponse, HeartbeatRequest,
     HeartbeatResponse, HubPairRequest, HubPairResponse, HubPlatform, KekEscrowRequest,
-    KekEscrowResponse, NotifyRequest, NotifyResponse, PresignRequest, PresignResponse,
-    SETUP_MAX_BYTES, SetupTemplateOutcome, SetupTemplateStored, UiError, normalize_pairing_code,
-    valid_pairing_code,
+    KekEscrowResponse, KekRequest, KekRequestResponse, NotifyRequest, NotifyResponse,
+    PresignRequest, PresignResponse, SETUP_MAX_BYTES, SetupTemplateOutcome, SetupTemplateStored,
+    UiError, normalize_pairing_code, valid_pairing_code,
 };
 use arena_store::HubIdentity;
 use sha2::{Digest, Sha256};
@@ -240,6 +240,15 @@ impl CloudClient {
         req: &KekEscrowRequest,
     ) -> Result<KekEscrowResponse, CloudFailure> {
         self.post("/v1/kek/escrow", Some(token), req).await
+    }
+
+    /// Asks the owner to release the branch key to this replacement Hub (Story 9.9).
+    pub async fn kek_request(
+        &self,
+        token: &str,
+        req: &KekRequest,
+    ) -> Result<KekRequestResponse, CloudFailure> {
+        self.post("/v1/kek/request", Some(token), req).await
     }
 
     /// Asks for short-lived upload links under the branch's prefix of the data bucket (Story 8.1).
@@ -585,6 +594,8 @@ pub struct CloudPairer {
     version: String,
     kek_store: Option<Arc<dyn Keystore>>,
     templates: Option<Arc<crate::SetupTemplateInbox>>,
+    /// Where a replacement Hub keeps its one-time key, and the status it turns to "waiting".
+    restore: Option<(Arc<dyn Keystore>, tokio::sync::watch::Sender<HubStatus>)>,
     busy: tokio::sync::Mutex<()>,
 }
 
@@ -611,6 +622,7 @@ impl CloudPairer {
             version,
             kek_store: None,
             templates: None,
+            restore: None,
             busy: tokio::sync::Mutex::new(()),
         }
     }
@@ -619,6 +631,17 @@ impl CloudPairer {
     /// token and the key together). Without it the key is minted lazily on first use.
     pub fn with_kek_store(mut self, kek_store: Arc<dyn Keystore>) -> Self {
         self.kek_store = Some(kek_store);
+        self
+    }
+
+    /// A branch with history pairs this Hub as a replacement (Story 9.9): its one-time key goes
+    /// to `restore_key` and `status` turns to "Restore this branch". No branch key is made.
+    pub fn with_restore(
+        mut self,
+        restore_key: Arc<dyn Keystore>,
+        status: tokio::sync::watch::Sender<HubStatus>,
+    ) -> Self {
+        self.restore = Some((restore_key, status));
         self
     }
 
@@ -634,6 +657,51 @@ impl CloudPairer {
             .await
             .map_err(|e| internal(&format!("keystore task: {e}")))?
             .map_err(|e| internal(&format!("keystore write: {e}")))
+    }
+
+    /// The branch has history: this Hub keeps the token and a one-time key, never makes a branch
+    /// key and applies no bootstrap, then waits to be restored.
+    async fn pair_as_replacement(
+        &self,
+        identity: HubIdentity,
+        paired: HubPairResponse,
+    ) -> Result<(), UiError> {
+        let Some((restore_key, status)) = &self.restore else {
+            return Err(internal("this hub cannot be paired as a replacement"));
+        };
+        let store = Arc::clone(restore_key);
+        tokio::task::spawn_blocking(move || crate::restore_public_key(store.as_ref()))
+            .await
+            .map_err(|e| internal(&format!("keystore task: {e}")))?
+            .map_err(|e| internal(&format!("keystore write: {e}")))?;
+        self.write_secret(
+            Arc::clone(&self.keystore),
+            paired.token.clone().into_bytes(),
+        )
+        .await?;
+        let writer = self
+            .writer
+            .clone()
+            .ok_or_else(|| internal("no writer for the pairing"))?;
+        let written = writer
+            .record_replacement_pairing(identity, paired.licence, &paired.branch_name)
+            .await
+            .map_err(|e| internal(&format!("{}: {}", e.code.as_str(), e.message)))?;
+        if !written {
+            return Err(ui_error(
+                ErrorCode::AlreadySet,
+                "this hub is already paired",
+            ));
+        }
+        status.send_modify(|s| s.restore_pending = Some(paired.branch_name.clone()));
+        self.gate.mark_paired();
+        tracing::info!(
+            hub_id = %paired.hub_id,
+            branch_id = %paired.branch_id,
+            tier = paired.tier.as_str(),
+            "hub paired as a replacement; waiting to be restored"
+        );
+        Ok(())
     }
 
     async fn run(&self, raw: &str) -> Result<(), UiError> {
@@ -700,6 +768,9 @@ impl CloudPairer {
             );
             return Ok(());
         }
+        if paired.restore_pending {
+            return self.pair_as_replacement(identity, paired).await;
+        }
         self.write_secret(
             Arc::clone(&self.keystore),
             paired.token.clone().into_bytes(),
@@ -709,9 +780,9 @@ impl CloudPairer {
             let fresh = mint_kek().map_err(|e| internal(&format!("branch key: {e}")))?;
             self.write_secret(Arc::clone(kek), fresh.to_vec()).await?;
         }
-        let template = paired.bootstrap.template.clone();
+        let template = paired.bootstrap.as_ref().and_then(|b| b.template.clone());
         let written = writer
-            .record_pairing(identity, paired.licence, Some(paired.bootstrap))
+            .record_pairing(identity, paired.licence, paired.bootstrap)
             .await
             .map_err(|e| match e.code {
                 ErrorCode::AlreadyBootstrapped => ui_error(e.code, &e.message),

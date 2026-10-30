@@ -10,5 +10,15 @@ export type HubPairResponse = {
   tier: Tier;
   branch_code: string;
   licence: string;
-  bootstrap: BranchBootstrapCommand;
+  /**
+   * What a first Hub applies to start the branch. Absent when the branch already has history
+   * (`restore_pending`): nothing is queued then.
+   */
+  bootstrap?: BranchBootstrapCommand;
+  /**
+   * This Hub replaces an earlier one of a branch with history (Story 9.9): it opens in
+   * "Restore this branch" and serves nothing until it is restored.
+   */
+  restore_pending: boolean;
+  branch_name: string;
 };

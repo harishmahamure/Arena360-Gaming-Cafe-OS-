@@ -75,6 +75,11 @@ export type HubSnapshot = {
   paired: boolean;
   pairing_revoked?: boolean;
   /**
+   * The Hub replaces another and waits to be restored (Story 9.9): the name of the branch it
+   * restores. The Hub UI shows "Restore this branch" and nothing else.
+   */
+  restore_pending?: string;
+  /**
    * Unpaired because the Hub lost the key that wrapped its secrets: the pairing screen says
    * "This Hub needs to be paired again" (the branch data is intact).
    */

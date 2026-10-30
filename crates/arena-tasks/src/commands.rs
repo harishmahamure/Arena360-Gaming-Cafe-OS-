@@ -95,13 +95,22 @@ impl CommandTask {
     }
 
     pub async fn poll(&mut self) -> Duration {
-        let (role, lease, pairing) = {
+        let (role, lease, pairing, restoring) = {
             let s = self.status.borrow();
-            (s.role, s.lease.clone(), s.pairing)
+            (
+                s.role,
+                s.lease.clone(),
+                s.pairing,
+                s.restore_pending.is_some(),
+            )
         };
         let (Some(writer), Some(lease), Role::Primary) = (self.writer.clone(), lease, role) else {
             return self.interval;
         };
+        // A Hub waiting to be restored applies nothing; the commands stay in the mailbox.
+        if restoring {
+            return self.interval;
+        }
         if pairing == PairingState::Revoked {
             return REVOKED_BACKOFF;
         }

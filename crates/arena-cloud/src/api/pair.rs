@@ -308,6 +308,13 @@ async fn pair(
         now + SETUP_CODE_HUB_TTL_MS,
     )?;
 
+    // Decided before the pairing revokes the earlier Hub: a branch with history is restored on the
+    // new Hub, not started again.
+    let restore_pending = st
+        .db
+        .branch_has_history(&c.branch.id, &body.hub_instance_id)
+        .await
+        .map_err(ApiError::internal)?;
     let outcome = st
         .db
         .pair_hub(&NewHub {
@@ -342,14 +349,19 @@ async fn pair(
                 .unwrap_or_else(invalid));
         }
     };
-    let setup = st
-        .db
-        .setup_code(&c.branch.id)
-        .await
-        .map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError::internal("pairing left no owner setup code"))?;
-    let mut bootstrap = bootstrap_of(&c.branch, &owner, setup.code_hash, setup.hub_expires_at)?;
-    bootstrap.template = super::setup_start::bootstrap_link(&st, &c.branch, now).await;
+    let bootstrap = if restore_pending {
+        None
+    } else {
+        let setup = st
+            .db
+            .setup_code(&c.branch.id)
+            .await
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::internal("pairing left no owner setup code"))?;
+        let mut bootstrap = bootstrap_of(&c.branch, &owner, setup.code_hash, setup.hub_expires_at)?;
+        bootstrap.template = super::setup_start::bootstrap_link(&st, &c.branch, now).await;
+        Some(bootstrap)
+    };
     tracing::info!(
         hub_id = %hub_id,
         tenant_id = %c.branch.tenant_id,
@@ -358,6 +370,7 @@ async fn pair(
         platform = body.platform.as_str(),
         tier = c.tier.as_str(),
         revoked_hubs = revoked.len(),
+        restore_pending,
         "hub paired"
     );
     Ok(Json(HubPairResponse {
@@ -369,6 +382,8 @@ async fn pair(
         branch_code: c.branch.branch_code,
         licence,
         bootstrap,
+        restore_pending,
+        branch_name: c.branch.name,
     }))
 }
 

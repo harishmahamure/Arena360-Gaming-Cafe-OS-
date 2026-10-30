@@ -179,3 +179,76 @@ mod tests {
         assert_eq!(find_hub_identity(&conn).unwrap().unwrap().hub_id, "H2");
     }
 }
+
+/// A Hub that replaces another of a branch with history and waits to be restored (Story 9.9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestorePending {
+    /// The branch name the "Restore this branch" screen shows.
+    pub branch_name: String,
+}
+
+/// Marks the paired Hub as waiting to be restored. `false` when the Hub has no identity.
+pub fn mark_restore_pending(conn: &Connection, branch_name: &str) -> Result<bool, AppError> {
+    let n = conn
+        .execute(
+            "UPDATE hub_identity SET restore_pending = 1, restore_branch_name = ?1 WHERE id = 1",
+            params![branch_name],
+        )
+        .map_err(db_error)?;
+    Ok(n == 1)
+}
+
+/// The restore the Hub is waiting for, if any.
+pub fn find_restore_pending(conn: &Connection) -> Result<Option<RestorePending>, AppError> {
+    conn.query_row(
+        "SELECT restore_branch_name FROM hub_identity WHERE id = 1 AND restore_pending = 1",
+        [],
+        |r| {
+            Ok(RestorePending {
+                branch_name: r.get::<_, Option<String>>(0)?.unwrap_or_default(),
+            })
+        },
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+#[cfg(test)]
+mod restore_pending_tests {
+    use super::*;
+
+    fn conn() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE hub_identity (id INTEGER PRIMARY KEY, tenant_id TEXT NOT NULL,
+               branch_id TEXT NOT NULL, hub_id TEXT NOT NULL, tier TEXT NOT NULL,
+               paired_at INTEGER NOT NULL, restore_pending INTEGER NOT NULL DEFAULT 0,
+               restore_branch_name TEXT NULL);",
+        )
+        .unwrap();
+        c
+    }
+
+    #[test]
+    fn a_hub_without_identity_cannot_wait_and_one_with_it_remembers_the_name() {
+        let c = conn();
+        assert!(!mark_restore_pending(&c, "Level Up").unwrap());
+        assert_eq!(find_restore_pending(&c).unwrap(), None);
+        let id = HubIdentity {
+            tenant_id: "T".into(),
+            branch_id: "B".into(),
+            hub_id: "H".into(),
+            tier: Tier::Basic,
+            paired_at: 1,
+        };
+        assert!(insert_hub_identity(&c, &id).unwrap());
+        assert_eq!(find_restore_pending(&c).unwrap(), None);
+        assert!(mark_restore_pending(&c, "Level Up").unwrap());
+        assert_eq!(
+            find_restore_pending(&c).unwrap(),
+            Some(RestorePending {
+                branch_name: "Level Up".into()
+            })
+        );
+    }
+}

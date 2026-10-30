@@ -8,6 +8,7 @@
   import AlertList from "../lib/AlertList.svelte";
   import Clock from "../lib/Clock.svelte";
   import RuleChips from "../lib/RuleChips.svelte";
+  import RestoreBranch from "../lib/RestoreBranch.svelte";
   import { nextRuleChange, ruleChips } from "../lib/rules";
   import DeviceGate from "../lib/DeviceGate.svelte";
   import Icon from "../lib/Icon.svelte";
@@ -89,6 +90,8 @@
   const onSignIn = $derived(page.url.pathname === SIGN_IN);
   const onPair = $derived(page.url.pathname === PAIR_PATH);
   const unpaired = $derived(data.hub.ok && data.hub.snapshot.paired === false);
+  /** A replacement Hub waiting for its branch to be restored: nothing else is shown (Story 9.9). */
+  const restoring = $derived(data.hub.ok ? (data.hub.snapshot.restore_pending ?? null) : null);
   const staff = $derived(data.session.state === "signed_in" ? data.session.staff : null);
   const signedOut = $derived(data.session.state === "signed_out");
   /** The Hub answered the snapshot and said who is signed in (an unknown session retries). */
@@ -302,6 +305,7 @@
       if (!onPair) void goto(PAIR_PATH, { replaceState: true });
       return;
     }
+    if (restoring !== null) return;
     if (onPair) {
       void goto("/floor", { replaceState: true });
       return;
@@ -766,6 +770,12 @@
   <div class="pair-screen" data-theme="dark">
     <main class="hub-main" bind:this={mainEl}>
       <DeviceGate device={data.device} checking={refreshing} oncheck={refresh} />
+    </main>
+  </div>
+{:else if restoring !== null}
+  <div class="pair-screen" data-theme="dark">
+    <main class="hub-main" bind:this={mainEl}>
+      <RestoreBranch branchName={restoring} />
     </main>
   </div>
 {:else if unpaired}

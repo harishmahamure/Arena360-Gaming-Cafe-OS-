@@ -410,13 +410,17 @@ async fn an_android_hub_on_free_pairs_once_and_gets_a_hashed_token_and_a_free_li
             "bootstrap",
             "branch_code",
             "branch_id",
+            "branch_name",
             "hub_id",
             "licence",
+            "restore_pending",
             "tenant_id",
             "tier",
             "token"
         ]
     );
+    // A first Hub is not a replacement: it bootstraps the branch.
+    assert_eq!(r.body["restore_pending"], false);
     let hub_id = r.body["hub_id"].as_str().unwrap();
     let token = r.body["token"].as_str().unwrap();
     let secret = token

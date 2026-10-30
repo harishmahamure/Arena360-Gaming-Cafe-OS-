@@ -202,6 +202,8 @@ pub enum ErrorCode {
     RestoreWrongBranch,
     /// A restore file is damaged: its header, size or sha256 is wrong (Story 9.7).
     RestoreCorrupt,
+    /// A replacement Hub is waiting for the branch to be restored and serves nothing (Story 9.9).
+    RestorePending,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -322,6 +324,7 @@ impl ErrorCode {
             Self::KeyErased => "KEY_ERASED",
             Self::RestoreWrongBranch => "RESTORE_WRONG_BRANCH",
             Self::RestoreCorrupt => "RESTORE_CORRUPT",
+            Self::RestorePending => "RESTORE_PENDING",
         }
     }
 }
@@ -503,6 +506,7 @@ mod tests {
             (ErrorCode::KeyErased, "KEY_ERASED"),
             (ErrorCode::RestoreWrongBranch, "RESTORE_WRONG_BRANCH"),
             (ErrorCode::RestoreCorrupt, "RESTORE_CORRUPT"),
+            (ErrorCode::RestorePending, "RESTORE_PENDING"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

@@ -1219,3 +1219,163 @@ async fn replacing_a_hub_is_for_one_branch_of_the_owners_own_cafe() {
         .await;
     assert_eq!(signed_out.status, 401);
 }
+
+const AGE_ONE: &str = "age1v0w7nljdjmtc27xp7rt4zyyrmryhr67skkwxemc2slu9x09dsgjq7dr5j4";
+const AGE_TWO: &str = "age1v0w7nljdjmtc27xp7rt4zyyrmryhr67skkwxemc2slu9x09dsgjq7dr5j5";
+
+impl Harness {
+    async fn kek_request(&self, token: &str, body: Value) -> Reply {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/v1/kek/request")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(SocketAddr::new(
+            "198.51.100.4".parse().unwrap(),
+            40000,
+        )));
+        reply(self.app.clone().oneshot(req).await.unwrap()).await
+    }
+
+    /// Replaces the Hub of the café's branch and pairs `instance` with the new code.
+    async fn replace(&self, c: &Cafe, key: &str, instance: &str) -> Reply {
+        assert_eq!(self.stepup(c, "totp", &self.totp(c)).await.status, 204);
+        assert_eq!(self.post(c, key, "hub.revoke", json!({})).await.status, 200);
+        let code = self.issue_code(c).await;
+        assert_eq!(code.status, 200, "{}", code.body);
+        self.pair_hub(code.body["code"].as_str().unwrap(), instance)
+            .await
+    }
+}
+
+#[tokio::test]
+async fn a_hub_paired_after_a_replace_opens_in_restore_and_is_sent_no_bootstrap() {
+    let h = Harness::new().await;
+    let c = h.cafe().await;
+    let paired = h.replace(&c, K1, "01REPLACEMENT").await;
+    assert_eq!(paired.status, 200, "{}", paired.body);
+    assert_eq!(paired.body["restore_pending"], true);
+    assert!(paired.body.get("bootstrap").is_none(), "{}", paired.body);
+    assert!(
+        paired.body["branch_name"]
+            .as_str()
+            .is_some_and(|n| !n.is_empty())
+    );
+    assert!(paired.body["token"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn a_first_hub_and_a_retry_of_the_same_instance_still_bootstrap() {
+    let h = Harness::new().await;
+    let c = h.cafe().await;
+    // Nothing was revoked and the paired Hub never beat: another code for the same PC is a retry.
+    let code = h.issue_code(&c).await;
+    assert_eq!(code.status, 200, "{}", code.body);
+    let paired = h
+        .pair_hub(code.body["code"].as_str().unwrap(), "01HUBINSTANCE")
+        .await;
+    assert_eq!(paired.status, 200, "{}", paired.body);
+    assert_eq!(paired.body["restore_pending"], false);
+    assert!(paired.body["bootstrap"]["profile"].is_object());
+}
+
+#[tokio::test]
+async fn a_replacement_hub_asks_for_the_key_and_asking_again_refreshes_one_pending_row() {
+    let h = Harness::new().await;
+    let c = h.cafe().await;
+    let paired = h.replace(&c, K1, "01REPLACEMENT").await;
+    let token = paired.body["token"].as_str().unwrap().to_owned();
+
+    let first = h
+        .kek_request(
+            &token,
+            json!({"hub_instance_id": "01REPLACEMENT", "public_key": AGE_ONE}),
+        )
+        .await;
+    assert_eq!(first.status, 200, "{}", first.body);
+    assert_eq!(first.body["state"], "pending");
+    let row =
+        h.db.key_request(&c.branch, "01REPLACEMENT")
+            .await
+            .unwrap()
+            .unwrap();
+    assert_eq!(
+        (row.public_key.as_str(), row.decided_at, row.decided_by),
+        (AGE_ONE, None, None)
+    );
+
+    // After a restart the Hub asks again with the key it still holds: one row, refreshed.
+    h.advance(60_000);
+    let again = h
+        .kek_request(
+            &token,
+            json!({"hub_instance_id": "01REPLACEMENT", "public_key": AGE_TWO}),
+        )
+        .await;
+    assert_eq!(again.status, 200, "{}", again.body);
+    let refreshed =
+        h.db.key_request(&c.branch, "01REPLACEMENT")
+            .await
+            .unwrap()
+            .unwrap();
+    assert_eq!(refreshed.id, row.id);
+    assert_eq!(refreshed.public_key, AGE_TWO);
+    assert_eq!(refreshed.requested_at, h.now());
+    assert!(refreshed.requested_at > row.requested_at);
+}
+
+#[tokio::test]
+async fn a_key_request_is_refused_for_a_first_hub_a_bad_key_a_foreign_instance_and_a_revoked_token()
+{
+    let h = Harness::new().await;
+    let c = h.cafe().await;
+    // The café's first Hub replaces nothing.
+    let first = h
+        .kek_request(
+            &c.token,
+            json!({"hub_instance_id": "01HUBINSTANCE", "public_key": AGE_ONE}),
+        )
+        .await;
+    assert_eq!((first.status, first.code()), (403, "FORBIDDEN"));
+    assert!(
+        h.db.key_request(&c.branch, "01HUBINSTANCE")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let paired = h.replace(&c, K1, "01REPLACEMENT").await;
+    let token = paired.body["token"].as_str().unwrap().to_owned();
+    for bad in [
+        json!({"hub_instance_id": "01REPLACEMENT", "public_key": "not-a-key"}),
+        json!({"hub_instance_id": "01REPLACEMENT", "public_key": "AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ"}),
+        json!({"hub_instance_id": "01SOMEONEELSE", "public_key": AGE_ONE}),
+    ] {
+        let r = h.kek_request(&token, bad).await;
+        assert_eq!((r.status, r.code()), (422, "VALIDATION_FAILED"));
+    }
+    assert!(
+        h.db.key_request(&c.branch, "01REPLACEMENT")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // The old Hub's token was revoked by the replace.
+    let old = h
+        .kek_request(
+            &c.token,
+            json!({"hub_instance_id": "01HUBINSTANCE", "public_key": AGE_ONE}),
+        )
+        .await;
+    assert_eq!((old.status, old.code()), (401, "TOKEN_REVOKED"));
+    let none = h
+        .kek_request(
+            "hub_nope.nope",
+            json!({"hub_instance_id": "x", "public_key": AGE_ONE}),
+        )
+        .await;
+    assert_eq!(none.status, 401);
+}

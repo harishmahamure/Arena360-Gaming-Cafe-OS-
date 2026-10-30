@@ -134,6 +134,8 @@ pub struct ApplyCtx<'a> {
     /// The epoch this writer believes it holds (`None` when it holds no lease).
     pub epoch: Option<Epoch>,
     pub role: Role,
+    /// This Hub waits to be restored and refuses every intent `RESTORE_PENDING` (Story 9.9).
+    pub restore_pending: bool,
     /// Test hook: fail right after `mutate`, to prove the rollback.
     #[cfg(test)]
     pub(crate) fail_after_mutate: bool,
@@ -145,6 +147,7 @@ impl<'a> ApplyCtx<'a> {
             clock,
             epoch,
             role,
+            restore_pending: false,
             #[cfg(test)]
             fail_after_mutate: false,
         }
@@ -481,6 +484,12 @@ pub(crate) fn run(
     ctx: &ApplyCtx<'_>,
     intent: &Intent,
 ) -> Result<Outcome, AppError> {
+    if ctx.restore_pending {
+        return Err(AppError::new(
+            arena_proto::ErrorCode::RestorePending,
+            "this hub is waiting for the branch to be restored",
+        ));
+    }
     let now = ctx.clock.now_ms();
     guards::kiosk_orders(tx, intent)?;
     guards::permission(tx, intent)?;

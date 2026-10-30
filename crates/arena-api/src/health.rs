@@ -227,6 +227,7 @@ async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Resp
                     snapshot.lan = snapshot_lan(&status);
                     snapshot.pairing_revoked =
                         (status.pairing == arena_core::PairingState::Revoked).then_some(true);
+                    snapshot.restore_pending.clone_from(&status.restore_pending);
                     snapshot.licence_unverified = (status.licence
                         == Some(arena_proto::LicenceStanding::Unverified))
                     .then_some(true);

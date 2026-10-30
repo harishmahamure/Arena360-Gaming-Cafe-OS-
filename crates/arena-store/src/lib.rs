@@ -131,9 +131,9 @@ pub use group_bills::{
 };
 pub use gst::{GstCreditRow, GstInvoiceRow, GstLineRow, GstRows, load_gst_rows};
 pub use identity::{
-    CachedLicence, HubIdentity, TrustedClockRow, find_cached_licence, find_hub_identity,
-    find_trusted_clock, insert_hub_identity, replace_hub_identity, store_licence,
-    store_trusted_clock,
+    CachedLicence, HubIdentity, RestorePending, TrustedClockRow, find_cached_licence,
+    find_hub_identity, find_restore_pending, find_trusted_clock, insert_hub_identity,
+    mark_restore_pending, replace_hub_identity, store_licence, store_trusted_clock,
 };
 pub use invoices::{
     INVOICED_KINDS, InvoiceOrder, find_invoice_order, find_sequence, list_unnumbered,
@@ -2069,6 +2069,14 @@ impl Store {
             return Ok(None);
         }
         find_hub_identity(&self.conn)
+    }
+
+    /// The restore a replacement Hub is waiting for, if any (Story 9.9).
+    pub fn restore_pending(&self) -> Result<Option<RestorePending>, AppError> {
+        if self.schema_version()? == 0 {
+            return Ok(None);
+        }
+        find_restore_pending(&self.conn)
     }
 
     pub fn trusted_clock(&self) -> Result<Option<TrustedClockRow>, AppError> {

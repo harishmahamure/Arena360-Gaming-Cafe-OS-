@@ -162,6 +162,7 @@ async fn pair_inner(
         )
     })?;
     let name = display_name(req.name.as_deref())?;
+    hub.refuse_while_restoring()?;
     let writer = match hub.writer.clone() {
         Some(w) if hub.is_primary() => w,
         _ => {

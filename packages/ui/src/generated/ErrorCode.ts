@@ -106,4 +106,5 @@ export type ErrorCode =
   | "ERASE_BLOCKED"
   | "KEY_ERASED"
   | "RESTORE_WRONG_BRANCH"
-  | "RESTORE_CORRUPT";
+  | "RESTORE_CORRUPT"
+  | "RESTORE_PENDING";

@@ -64,6 +64,11 @@ pub struct HubSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub pairing_revoked: Option<bool>,
+    /// The Hub replaces another and waits to be restored (Story 9.9): the name of the branch it
+    /// restores. The Hub UI shows "Restore this branch" and nothing else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub restore_pending: Option<String>,
     /// Unpaired because the Hub lost the key that wrapped its secrets: the pairing screen says
     /// "This Hub needs to be paired again" (the branch data is intact).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -450,6 +455,7 @@ mod tests {
             lan: None,
             paired: true,
             pairing_revoked: None,
+            restore_pending: None,
             needs_repair: None,
             licence_unverified: None,
             clock_wrong: None,

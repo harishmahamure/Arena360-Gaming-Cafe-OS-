@@ -300,6 +300,8 @@ async fn run(
 
     let mut initial = HubStatus::opened(schema_version, instance_id.clone());
     initial.tls_fingerprint = Some(cert.fingerprint.clone());
+    // A replacement Hub that restarts is still waiting: nothing is written until it is restored.
+    initial.restore_pending = store.restore_pending()?.map(|r| r.branch_name);
     initial.lan_ports = Some((cfg.lan_port, cfg.web_port));
     // The effective tier is unknown until the heartbeat task has evaluated the cached licence
     // against trusted time (Story 4.15): the tier recorded at pairing is not it. A paid Android
@@ -590,6 +592,25 @@ async fn run(
         )
         .run(),
     );
+    // A replacement Hub asks for the branch key while it waits to be restored (Story 9.9).
+    let restore_key: Arc<dyn Keystore> = match &secrets {
+        Some(s) => Arc::clone(&s.restore),
+        None => Arc::from(arena_tasks::named_keystore(
+            &cfg.data_dir,
+            arena_tasks::RESTORE_KEY_FILE,
+        )),
+    };
+    let key_request_job = tokio::spawn(
+        arena_tasks::KeyRequestTask::new(
+            cloud.clone(),
+            Arc::clone(&keystore),
+            Arc::clone(&restore_key),
+            instance_id.clone(),
+            pair_gate.clone(),
+            status_tx.clone(),
+        )
+        .run(),
+    );
     let command_job = tokio::spawn(
         CommandTask::new(
             cloud.clone(),
@@ -762,6 +783,7 @@ async fn run(
         env!("CARGO_PKG_VERSION").to_owned(),
     );
     cloud_pairer = cloud_pairer.with_templates(setup_templates);
+    cloud_pairer = cloud_pairer.with_restore(restore_key, status_tx.clone());
     if let Some(s) = &secrets {
         cloud_pairer = cloud_pairer.with_kek_store(Arc::clone(&s.kek));
     }
@@ -902,6 +924,8 @@ async fn run(
     let _ = upload_job.await;
     key_backup_job.abort();
     let _ = key_backup_job.await;
+    key_request_job.abort();
+    let _ = key_request_job.await;
     template_job.abort();
     let _ = template_job.await;
     template_apply_job.abort();

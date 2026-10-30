@@ -227,8 +227,9 @@ pub use intent::{
 #[cfg(any(test, feature = "dev-keys"))]
 pub use kek::DEV_KEK_ESCROW_RECIPIENTS;
 pub use kek::{
-    AGE_MAGIC, KEK_ESCROW_MAX_BYTES, KEK_ESCROW_RECIPIENTS, KEYS_OBJECT_KEY, KekEscrowRequest,
-    KekEscrowResponse, PRESIGN_KIND_KEYS,
+    AGE_MAGIC, KEK_ESCROW_MAX_BYTES, KEK_ESCROW_RECIPIENTS, KEY_REQUEST_PUBLIC_KEY_LEN,
+    KEYS_OBJECT_KEY, KekEscrowRequest, KekEscrowResponse, KekRequest, KekRequestResponse,
+    KeyRequestState, PRESIGN_KIND_KEYS, valid_age_recipient,
 };
 pub use kiosk::{
     GameMediaRef, KioskGameLaunched, KioskGamePlayRecorded, KioskHubState, KioskHubStatus,

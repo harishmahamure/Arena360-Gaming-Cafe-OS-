@@ -189,6 +189,7 @@ async fn authenticate(
     peer: SocketAddr,
     hello: &Hello,
 ) -> Result<Authed, AppError> {
+    hub.refuse_while_restoring()?;
     let class = hello.class;
     // A live token is a signature check, not a guessable secret, so the per-address throttle
     // (which counts failed device tokens) does not apply to it. Through the tunnel `peer` is
@@ -1964,10 +1965,17 @@ mod tests {
 
     /// A follower hub on an empty database (enough for phone sessions).
     fn hub() -> (tempfile::TempDir, Arc<LanHub>) {
+        hub_with(None)
+    }
+
+    /// The same hub, waiting to be restored when `restore` names its branch (Story 9.9).
+    fn hub_with(restore: Option<&str>) -> (tempfile::TempDir, Arc<LanHub>) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("branch.db");
         drop(arena_store::Store::open(&path, 0).unwrap());
-        let (_tx, rx) = status_channel(HubStatus::opened(1, "H"));
+        let mut status = HubStatus::opened(1, "H");
+        status.restore_pending = restore.map(str::to_owned);
+        let (_tx, rx) = status_channel(status);
         let hub = LanHub::new(
             None,
             rx,
@@ -2031,6 +2039,27 @@ mod tests {
         ws.send(text(&hello)).await.unwrap();
         let ok = next(ws).await.unwrap();
         assert!(matches!(ok.body, FrameBody::HelloOk(_)), "{ok:?}");
+    }
+
+    #[tokio::test]
+    async fn a_hub_waiting_to_be_restored_refuses_every_hello() {
+        let (_dir, hub) = hub_with(Some("Pixel Arena"));
+        let mut ws = connect(&hub).await;
+        let hello = Frame::new(
+            "h",
+            FrameBody::Hello(Hello {
+                credential: String::new(),
+                class: ClientClass::Phone,
+                versions: Versions {
+                    app: "0.1.0".into(),
+                },
+                capabilities: vec![],
+            }),
+        );
+        ws.send(text(&hello)).await.unwrap();
+        let refused = next(&mut ws).await.unwrap();
+        assert_eq!(code(&refused), ErrorCode::RestorePending);
+        assert_eq!(hub.session_count(), 0);
     }
 
     #[tokio::test(start_paused = true)]

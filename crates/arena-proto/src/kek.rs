@@ -49,3 +49,89 @@ pub struct KekEscrowRequest {
 pub struct KekEscrowResponse {
     pub stored: bool,
 }
+
+/// The longest `public_key` a key request carries (an age X25519 recipient is 62 characters).
+pub const KEY_REQUEST_PUBLIC_KEY_LEN: usize = 62;
+
+/// Where a replacement Hub's request for the branch key stands (Story 9.9; Story 9.10 decides).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+#[serde(rename_all = "lowercase")]
+pub enum KeyRequestState {
+    Pending,
+    Approved,
+    Denied,
+    Expired,
+}
+
+impl KeyRequestState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Approved => "approved",
+            Self::Denied => "denied",
+            Self::Expired => "expired",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        [Self::Pending, Self::Approved, Self::Denied, Self::Expired]
+            .into_iter()
+            .find(|v| v.as_str() == s)
+    }
+}
+
+/// `POST /v1/kek/request`: a replacement Hub asks the owner to release the branch key to it,
+/// naming the one-time public key (age X25519, `age1…`) the key is to be wrapped for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KekRequest {
+    pub hub_instance_id: String,
+    pub public_key: String,
+}
+
+/// The request as the cloud now holds it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KekRequestResponse {
+    pub state: KeyRequestState,
+}
+
+/// Whether `key` looks like an age X25519 public key: `age1` and 58 bech32 characters.
+pub fn valid_age_recipient(key: &str) -> bool {
+    key.len() == KEY_REQUEST_PUBLIC_KEY_LEN
+        && key.starts_with("age1")
+        && key[4..]
+            .bytes()
+            .all(|b| b"023456789acdefghjklmnpqrstuvwxyz".contains(&b))
+}
+
+#[cfg(test)]
+mod request_tests {
+    use super::*;
+
+    #[test]
+    fn only_an_age_public_key_is_a_valid_recipient() {
+        assert!(valid_age_recipient(
+            "age1v0w7nljdjmtc27xp7rt4zyyrmryhr67skkwxemc2slu9x09dsgjq7dr5j4"
+        ));
+        for bad in [
+            "",
+            "age1",
+            "AGE1v0w7nljdjmtc27xp7rt4zyyrmryhr67skkwxemc2slu9x09dsgjq7dr5j4",
+            "age1v0w7nljdjmtc27xp7rt4zyyrmryhr67skkwxemc2slu9x09dsgjq7dr5jb",
+            "age1v0w7nljdjmtc27xp7rt4zyyrmryhr67skkwxemc2slu9x09dsgjq7dr5j45",
+            "AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ",
+        ] {
+            assert!(!valid_age_recipient(bad), "{bad}");
+        }
+        for s in [
+            KeyRequestState::Pending,
+            KeyRequestState::Approved,
+            KeyRequestState::Denied,
+            KeyRequestState::Expired,
+        ] {
+            assert_eq!(KeyRequestState::parse(s.as_str()), Some(s));
+        }
+    }
+}

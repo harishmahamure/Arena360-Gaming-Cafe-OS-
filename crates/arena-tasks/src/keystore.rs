@@ -14,6 +14,8 @@ pub trait Keystore: Send + Sync {
 }
 
 pub const KEK_FILE: &str = "branch-kek.bin";
+/// The one-time private key of a replacement Hub waiting for the branch key (Story 9.9).
+pub const RESTORE_KEY_FILE: &str = "restore-key.bin";
 
 impl<T: Keystore + ?Sized> Keystore for Arc<T> {
     fn put(&self, secret: &[u8]) -> io::Result<()> {
@@ -267,6 +269,9 @@ impl Keystore for AndroidKeystore {
 pub struct AndroidSecrets {
     pub token: Arc<dyn Keystore>,
     pub kek: Arc<dyn Keystore>,
+    /// The replacement Hub's one-time key (Story 9.9); absent until a Hub waits for a restore, and
+    /// not part of lost-key detection.
+    pub restore: Arc<dyn Keystore>,
 }
 
 impl AndroidSecrets {
@@ -280,6 +285,7 @@ impl AndroidSecrets {
         Self {
             token: file(HUB_TOKEN_FILE),
             kek: file(KEK_FILE),
+            restore: file(RESTORE_KEY_FILE),
         }
     }
 

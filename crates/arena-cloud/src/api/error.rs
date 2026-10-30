@@ -98,9 +98,10 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::DeviceLimit
         | ErrorCode::UserLimit => StatusCode::FORBIDDEN,
         ErrorCode::CloudUnreachable => StatusCode::SERVICE_UNAVAILABLE,
-        ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
-            StatusCode::SERVICE_UNAVAILABLE
-        }
+        ErrorCode::NotPrimary
+        | ErrorCode::HubSlow
+        | ErrorCode::NoHub
+        | ErrorCode::RestorePending => StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::HubIncompatible => StatusCode::CONFLICT,
         ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         ErrorCode::Fenced

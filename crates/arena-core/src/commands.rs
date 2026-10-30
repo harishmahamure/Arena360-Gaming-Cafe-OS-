@@ -1,11 +1,12 @@
 use arena_proto::{
     Actor, ActorKind, AppError, COMMAND_SCHEMA_VERSION, CommandWire, ElevatedBy, ElevationKind,
-    ElevationMode, ErrorCode, Intent, IntentPayload, KEY_SETUP_LIVE, SETTINGS_COMMAND_KEYS,
+    ElevationMode, ErrorCode, Intent, IntentPayload, KEY_SETUP_LIVE, ReasonCode,
+    SETTINGS_COMMAND_KEYS,
 };
 
 use arena_store::{
-    StoreTx, find_coupon, find_device_meta, find_plan, find_pricing_rule, find_product, find_role,
-    find_setting, find_staff, newest_change_of,
+    StoreTx, find_coupon, find_device, find_device_meta, find_plan, find_pricing_rule,
+    find_product, find_role, find_setting, find_staff, newest_change_of,
 };
 
 use crate::apply::is_ulid;
@@ -21,7 +22,7 @@ pub const BACKUP_NOW: &str = "backup.now";
 /// Every command kind this Hub runs, at [`COMMAND_SCHEMA_VERSION`]: the setup kinds (Story 2.15)
 /// and the owner kinds (Story 8.19). `arena_proto::OWNER_COMMAND_KINDS` lists the same owner kinds
 /// as handled; a test keeps the two in agreement.
-pub const HANDLED_COMMAND_KINDS: [&str; 16] = [
+pub const HANDLED_COMMAND_KINDS: [&str; 17] = [
     "group.upsert",
     "device.assign",
     "device.register",
@@ -37,6 +38,7 @@ pub const HANDLED_COMMAND_KINDS: [&str; 16] = [
     "stock.threshold",
     "staff.deactivate",
     "role.upsert",
+    "device.revoke",
     BACKUP_NOW,
 ];
 
@@ -113,6 +115,21 @@ pub fn command_intent(cmd: &CommandWire, now: i64) -> Result<Intent, AppError> {
         other => other,
     };
     fields.insert("kind".into(), kind.into());
+    // A revoke carries its reason beside the device id; the intent holds it apart from the payload.
+    let reason = if cmd.kind == "device.revoke" {
+        let reason = fields
+            .remove("reason")
+            .and_then(|r| serde_json::from_value::<ReasonCode>(r).ok());
+        Some(reason.ok_or_else(|| {
+            refused(
+                ErrorCode::ReasonRequired,
+                "reason",
+                "choose a reason for revoking the device",
+            )
+        })?)
+    } else {
+        None
+    };
     if cmd.kind == "product.upsert" && !fields.contains_key("image") {
         fields.insert("image".into(), IMAGE_KEEP.into());
     }
@@ -156,9 +173,21 @@ pub fn command_intent(cmd: &CommandWire, now: i64) -> Result<Intent, AppError> {
             mode: ElevationMode::Hub,
             verifier_version: 0,
         }),
-        reason: None,
+        reason,
         payload,
     })
+}
+
+/// An owner `device.revoke` of a device that is already revoked (Story 8.27): reported `applied`
+/// with nothing changed, so a repeat or a retry does not fail on the Hub's own refusal.
+pub(crate) fn already_revoked(tx: &StoreTx<'_>, cmd: &CommandWire) -> Result<bool, AppError> {
+    if cmd.kind != "device.revoke" {
+        return Ok(false);
+    }
+    let Some(id) = cmd.payload.get("device_id").and_then(|v| v.as_str()) else {
+        return Ok(false);
+    };
+    Ok(find_device(tx, id)?.is_some_and(|d| d.revoked_at.is_some()))
 }
 
 /// The change an owner command is about to overwrite: the newest change of the row the owner's

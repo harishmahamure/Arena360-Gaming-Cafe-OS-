@@ -23,6 +23,7 @@ pub const RUN_TIMEOUT: Duration = Duration::from_secs(50);
 pub struct SweepOutcome {
     pub expired: u64,
     pub requeued: u64,
+    pub revoked: u64,
     pub backlog: Vec<CommandBacklog>,
 }
 
@@ -50,12 +51,14 @@ pub async fn sweep_once(db: &ControlDb, now: i64) -> Result<SweepOutcome, JobErr
         task = Task::CommandSweep.as_str(),
         expired = report.expired,
         requeued = report.requeued,
+        revoked = report.revoked,
         branches_waiting = backlog.len(),
         "commands swept"
     );
     Ok(SweepOutcome {
         expired: report.expired,
         requeued: report.requeued,
+        revoked: report.revoked,
         backlog,
     })
 }

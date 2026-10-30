@@ -510,6 +510,11 @@ impl WriterHandle {
                         {
                             return Ok((done, None));
                         }
+                        if crate::commands::already_revoked(tx, &cmd)? {
+                            let row = record(None, None);
+                            insert_applied_command(tx, &row)?;
+                            return Ok((row, None));
+                        }
                         let mut intent = command_intent(&cmd, now)?;
                         let overwrote = owner_wins(tx, &mut intent)?;
                         let (applied, fresh) = match run(tx, &ctx, &intent)? {

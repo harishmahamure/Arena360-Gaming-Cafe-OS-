@@ -237,10 +237,11 @@ fn to_flags(row: &mut CatalogueRow) {
 /// The owner-editable configuration: names, `rev`, flags. No credentials, no transactions, no
 /// player data.
 pub fn catalogue(conn: &Connection) -> Result<SummaryCatalogue, AppError> {
-    let groups = rows(
+    let groups = editable_rows(
         conn,
-        "SELECT group_id, name, rev, NULL, kind FROM device_groups
+        "SELECT group_id, name, rev, NULL, kind, name, kind, colour, sort_order FROM device_groups
          WHERE deleted_at IS NULL ORDER BY sort_order, group_id LIMIT ?1",
+        |r| fields_of(r, &["name", "group_kind", "colour", "sort_order"]),
     )?;
     let rates = editable_rows(
         conn,
@@ -376,7 +377,8 @@ pub fn catalogue(conn: &Connection) -> Result<SummaryCatalogue, AppError> {
             .prepare(
                 "SELECT m.device_id, m.label, m.group_id, m.kind, d.revoked_at IS NOT NULL, m.rev
                  FROM devices_meta m LEFT JOIN devices d ON d.device_id = m.device_id
-                 WHERE m.deleted_at IS NULL ORDER BY m.device_id LIMIT ?1",
+                 WHERE m.deleted_at IS NULL OR d.revoked_at IS NOT NULL
+                 ORDER BY m.device_id LIMIT ?1",
             )
             .map_err(db_error)?;
         stmt.query_map(params![SUMMARY_LIST_CAP as i64], |r| {

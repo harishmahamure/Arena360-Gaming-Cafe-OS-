@@ -13,6 +13,9 @@ pub struct SweepReport {
     pub expired: u64,
     /// `fetched` commands with no answer after 10 minutes, back to `pending`.
     pub requeued: u64,
+    /// Waiting commands of a branch whose Hub tokens are all revoked, now `rejected` with
+    /// `TOKEN_REVOKED` (Story 8.27).
+    pub revoked: u64,
 }
 
 /// One branch's waiting commands.
@@ -212,17 +215,32 @@ impl ControlDb {
             .transpose()
     }
 
-    /// The command sweeper (Story 8.20). `pending` rows older than the expiry become `expired`
-    /// with `COMMAND_EXPIRED` first (so a row requeued below is not expired in the same run), then
-    /// `fetched` rows with no answer for the fetch timeout return to `pending`.
+    /// The command sweeper (Story 8.20). Waiting rows of a branch with no live Hub token are
+    /// `rejected` with `TOKEN_REVOKED` first (Story 8.27); `pending` rows older than the expiry
+    /// become `expired` with `COMMAND_EXPIRED` (so a row requeued below is not expired in the same
+    /// run), then `fetched` rows with no answer for the fetch timeout return to `pending`.
     pub async fn sweep_commands(&self, now: i64) -> Result<SweepReport, ControlError> {
         let expired = serde_json::to_string(&AppError::new(
             ErrorCode::CommandExpired,
             "The branch did not pick this change up within 7 days.",
         ))
         .map_err(|e| ControlError::Db(e.to_string()))?;
+        let revoked = serde_json::to_string(&AppError::new(
+            ErrorCode::TokenRevoked,
+            "This Hub is no longer paired.",
+        ))
+        .map_err(|e| ControlError::Db(e.to_string()))?;
         let rows = self
             .transact_rows(vec![
+                Stmt::new(
+                    "UPDATE commands SET status = 'rejected', error = ?, resolved_at = ? \
+                     WHERE status IN ('pending', 'fetched') \
+                     AND EXISTS (SELECT 1 FROM hubs h WHERE h.branch_id = commands.branch_id) \
+                     AND NOT EXISTS (SELECT 1 FROM hubs h WHERE h.branch_id = commands.branch_id \
+                                     AND h.revoked_at IS NULL) RETURNING id",
+                    vec![text(&revoked), SqlValue::Integer(now)],
+                )
+                .fetch(),
                 Stmt::new(
                     "UPDATE commands SET status = 'expired', error = ?, resolved_at = ? \
                      WHERE status = 'pending' AND created_at < ? RETURNING id",
@@ -247,8 +265,9 @@ impl ControlDb {
                 .map_or(0, |x| x.len() as u64)
         };
         Ok(SweepReport {
-            expired: count(0),
-            requeued: count(1),
+            revoked: count(0),
+            expired: count(1),
+            requeued: count(2),
         })
     }
 

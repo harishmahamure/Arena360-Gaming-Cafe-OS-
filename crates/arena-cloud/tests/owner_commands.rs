@@ -1175,3 +1175,39 @@ async fn only_a_product_may_carry_a_picture_past_the_usual_payload_size() {
     assert_eq!((r.status, r.code()), (422, "VALIDATION_FAILED"));
     assert_eq!(h.rows(), 1);
 }
+
+/// Story 8.27: commands waiting for a branch whose Hub tokens are all revoked are rejected with
+/// `TOKEN_REVOKED` (the Owner app shows "Device/Hub revoked"); a branch with a live Hub is left alone.
+#[tokio::test]
+async fn waiting_commands_of_a_branch_with_no_live_hub_token_are_rejected_token_revoked() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    let r = h.send(&a, post(&a.branch, K1, "rate.upsert", rate())).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = h.send(&a, post(&a.branch, K2, "rate.upsert", rate())).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(h.hub_fetch(&a, 0, HUB_A).await.status, 200);
+
+    let quiet = h.sweep().await;
+    assert_eq!(quiet.revoked, 0);
+    assert_eq!(h.status_of(&a, K1).await, "fetched");
+
+    rusqlite::Connection::open(h._dir.path().join("gz_control.db"))
+        .unwrap()
+        .execute(
+            "UPDATE hubs SET revoked_at = ?1 WHERE branch_id = ?2",
+            rusqlite::params![T0, a.branch],
+        )
+        .unwrap();
+    let swept = h.sweep().await;
+    assert_eq!(swept.revoked, 2);
+    assert!(swept.backlog.is_empty());
+    for key in [K1, K2] {
+        assert_eq!(h.status_of(&a, key).await, "rejected");
+    }
+    let list = h.get(&a, "/v1/commands?status=rejected").await;
+    let cmds = list.body["commands"].as_array().unwrap();
+    assert_eq!(cmds.len(), 2);
+    assert!(cmds.iter().all(|c| c["error"]["code"] == "TOKEN_REVOKED"));
+    assert_eq!(h.sweep().await.revoked, 0);
+}

@@ -295,6 +295,7 @@ export type { OwnerCommandPreviewRequest } from "./OwnerCommandPreviewRequest";
 export type { OwnerCommandSkip } from "./OwnerCommandSkip";
 export type { OwnerCommandTarget } from "./OwnerCommandTarget";
 export type { OwnerCommandView } from "./OwnerCommandView";
+export type { OwnerDeviceRevoke } from "./OwnerDeviceRevoke";
 export type { OwnerLive } from "./OwnerLive";
 export type { OwnerLiveAll } from "./OwnerLiveAll";
 export type { OwnerLiveTotal } from "./OwnerLiveTotal";

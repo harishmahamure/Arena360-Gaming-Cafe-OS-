@@ -357,8 +357,17 @@ async fn pricing_rows_carry_the_fields_of_their_upsert_payload() {
         })]
     );
 
-    // Groups carry no `fields` key at all.
-    assert!(s.catalogue.groups.iter().all(|r| r.fields.is_none()));
+    // A group carries its `group.upsert` fields (Story 8.27).
+    assert_eq!(
+        s.catalogue
+            .groups
+            .iter()
+            .map(|r| r.fields.clone())
+            .collect::<Vec<_>>(),
+        vec![Some(json!({
+            "name": "Row A", "group_kind": "pc", "colour": "teal", "sort_order": 1
+        }))]
+    );
 }
 
 /// Story 8.26: a staff member carries the login and role id the Owner app edits with, and a role
@@ -474,4 +483,37 @@ async fn product_and_bundle_rows_carry_the_fields_of_their_upsert_payload() {
         json!([{"product_id": cola, "qty": 2}])
     );
     assert!(fields.get("image").is_none() && fields.get("low_stock_qty").is_none());
+}
+
+/// Story 8.27: a revoked device stays in the catalogue, marked revoked, so the owner can see it.
+#[tokio::test]
+async fn a_revoked_device_stays_in_the_catalogue_marked_revoked() {
+    use serde_json::json;
+    let f = booted().await;
+    let pc = super::session::pc(&f, arena_proto::DeviceKind::Pc, "pc", Some(12_000)).await;
+    let listed = |f: &Fixture| {
+        let reader = SnapshotReader::open(&f.path).unwrap();
+        let s = reader.branch_summary(T0).unwrap().unwrap();
+        s.catalogue
+            .devices
+            .into_iter()
+            .find(|d| d.id == pc)
+            .map(|d| d.revoked)
+    };
+    assert_eq!(listed(&f), Some(false));
+    let done = f
+        .writer
+        .apply_command(arena_proto::CommandWire {
+            id: 1,
+            idempotency_key: ulid::Ulid::generate().to_string(),
+            kind: "device.revoke".into(),
+            schema_version: 1,
+            payload: json!({"device_id": pc, "reason": "replaced"}),
+            issued_by: "owner-1".into(),
+            elevated_by: None,
+        })
+        .await
+        .unwrap();
+    assert!(done.applied, "{:?}", done.error);
+    assert_eq!(listed(&f), Some(true));
 }

@@ -123,3 +123,10 @@ The café owner sees every branch and changes it from a phone or laptop, without
 - **Per-branch posts.** Staff are told apart by login and roles by name; `proposeStaff*` / `proposeRole` build one variant per branch (own ids, `base_rev`, role id). `role.upsert` perms are checked against the `arena-proto` catalogue by the cloud (`perms[i]`); the app's checklist is `PERMISSIONS`, typed `Record<Permission, true>` so a new permission breaks the build.
 - **Summary.** `CatalogueStaff.login/role_id` and role `fields.permissions` (additive).
 - **Toasts.** `OWNER_UPDATES` has staff (`staff` table, also for `staff.deactivate` via `OwnerUpdate::covers`) and role (`roles`); an owner-actor `staff.upsert` intent in a test stream now raises `updated_by_owner`.
+
+## Story 8.27: Manage → Devices and groups, and revoking a device
+
+- **Kinds.** `group.upsert` and `device.assign` are plain owner kinds, `device.revoke` is sensitive (step-up) and carries `reason` (`OwnerDeviceRevoke`, lost|stolen|replaced|other); the Hub runs 17 kinds. It moves `reason` into the intent and applies its own intents as the owner. A revoke of an already revoked device is `applied` with no change (`already_revoked`, answered before any intent).
+- **Summary.** Group rows carry `fields {name, group_kind, colour, sort_order}`; a revoked device stays in `catalogue.devices` (`revoked: true`).
+- **Revoked Hub token.** The `command-sweep` job rejects waiting commands of a branch whose Hub rows are all revoked with `TOKEN_REVOKED` ("Device/Hub revoked" in the app); `SweepReport.revoked` counts them.
+- **Owner app.** `?area=devices`: groups by name over the branches in scope (swatch dot via `GroupChip`), devices per branch with Move (groups of the device kind, or Unassigned) and Revoke (reason, then step-up). A device belongs to one branch, so a move or revoke is one command to that branch.

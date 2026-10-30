@@ -9,8 +9,8 @@ use ts_rs::TS;
 use crate::commands::COMMAND_SCHEMA_VERSION;
 use crate::error::{AppError, ErrorCode};
 use crate::{
-    CouponUpsert, Permission, PlanUpsert, ProductUpsert, RateUpsert, RoleUpsert, RuleUpsert,
-    StaffDeactivate, StockThreshold, Tier,
+    CouponUpsert, DeviceAssign, GroupUpsert, Permission, PlanUpsert, ProductUpsert, RateUpsert,
+    ReasonCode, RoleUpsert, RuleUpsert, StaffDeactivate, StockThreshold, Tier,
 };
 
 /// Owner command posts a tenant may make in a minute.
@@ -65,7 +65,7 @@ const fn reserved(kind: &'static str) -> OwnerCommandKind {
     }
 }
 
-pub const OWNER_COMMAND_KINDS: [OwnerCommandKind; 12] = [
+pub const OWNER_COMMAND_KINDS: [OwnerCommandKind; 15] = [
     handled("rate.upsert"),
     handled("plan.upsert"),
     handled("rule.upsert"),
@@ -76,6 +76,9 @@ pub const OWNER_COMMAND_KINDS: [OwnerCommandKind; 12] = [
     sensitive("staff.upsert"),
     sensitive("staff.deactivate"),
     sensitive("role.upsert"),
+    handled("group.upsert"),
+    handled("device.assign"),
+    sensitive("device.revoke"),
     reserved("hub.revoke"),
     reserved("backup.restore"),
 ];
@@ -106,6 +109,24 @@ pub struct OwnerStaffUpsert {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub setup_code: Option<bool>,
+}
+
+/// The reasons an owner gives for revoking a device (the Hub's `device.revoke` list).
+pub const DEVICE_REVOKE_REASONS: [ReasonCode; 4] = [
+    ReasonCode::Lost,
+    ReasonCode::Stolen,
+    ReasonCode::Replaced,
+    ReasonCode::Other,
+];
+
+/// The payload of an owner `device.revoke` (Story 8.27): the device and why. The Hub applies its
+/// own `device.revoke` intent with `reason`, so the reason rides beside the device id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OwnerDeviceRevoke {
+    pub device_id: String,
+    pub reason: ReasonCode,
 }
 
 /// One setup code the cloud issued for a new staff member of a branch. It is shown to the owner
@@ -169,6 +190,10 @@ pub fn validate_owner_payload(kind: &str, payload: &serde_json::Value) -> Result
         "backup.now" => fields.as_object().is_some_and(|f| f.is_empty()),
         "staff.upsert" => parses::<OwnerStaffUpsert>(&fields),
         "staff.deactivate" => parses::<StaffDeactivate>(&fields),
+        "group.upsert" => parses::<GroupUpsert>(&fields),
+        "device.assign" => parses::<DeviceAssign>(&fields),
+        "device.revoke" => serde_json::from_value::<OwnerDeviceRevoke>(fields)
+            .is_ok_and(|d| DEVICE_REVOKE_REASONS.contains(&d.reason)),
         "role.upsert" => match serde_json::from_value::<RoleUpsert>(fields) {
             // Only permissions of the fixed catalogue go to a Hub.
             Ok(role) => {
@@ -460,6 +485,47 @@ mod tests {
         let e = validate_owner_payload("role.upsert", &role("session.destroy")).unwrap_err();
         assert_eq!(e.field.as_deref(), Some("perms[0]"));
         assert!(validate_owner_payload("role.upsert", &json!({"perms": []})).is_err());
+    }
+
+    #[test]
+    fn group_and_assign_are_plain_and_a_device_revoke_is_sensitive_with_a_reason() {
+        for k in ["group.upsert", "device.assign"] {
+            let kind = accepted_owner_kind(k).unwrap();
+            assert!(!kind.sensitive && kind.handled, "{k}");
+        }
+        let kind = accepted_owner_kind("device.revoke").unwrap();
+        assert!(kind.sensitive && kind.handled);
+        // The Hub itself is revoked only by Epic 9.
+        assert!(owner_command_kind("hub.revoke").is_some_and(|k| !k.handled));
+
+        let group = json!({"name": "Row A", "group_kind": "pc", "colour": "teal", "sort_order": 1});
+        assert!(validate_owner_payload("group.upsert", &group).is_ok());
+        assert!(validate_owner_payload("group.upsert", &json!({"name": "Row A"})).is_err());
+        assert!(
+            validate_owner_payload(
+                "device.assign",
+                &json!({"device_id": "D", "group_id": null})
+            )
+            .is_ok()
+        );
+        assert!(validate_owner_payload("device.assign", &json!({"group_id": "G"})).is_err());
+
+        let revoke = |reason: &str| json!({"device_id": "D", "reason": reason});
+        for reason in ["lost", "stolen", "replaced", "other"] {
+            assert!(
+                validate_owner_payload("device.revoke", &revoke(reason)).is_ok(),
+                "{reason}"
+            );
+        }
+        for bad in [revoke("closing"), revoke("nope"), json!({"device_id": "D"})] {
+            assert!(
+                validate_owner_payload("device.revoke", &bad).is_err(),
+                "{bad}"
+            );
+        }
+        let mut extra = revoke("lost");
+        extra["x"] = 1.into();
+        assert!(validate_owner_payload("device.revoke", &extra).is_err());
     }
 
     #[test]

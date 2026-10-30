@@ -995,3 +995,49 @@ async fn deactivating_and_editing_roles_are_sensitive_and_roles_take_catalogue_p
     assert_eq!(mail.len(), 2);
     assert!(mail.iter().all(|m| m["elevated_by"].is_string()));
 }
+
+#[tokio::test]
+async fn a_device_revoke_needs_a_stepup_and_a_reason_but_groups_and_assignment_do_not() {
+    let h = Harness::new().await;
+    let c = h.cafe().await;
+    let group = json!({"name": "Row A", "group_kind": "pc", "colour": "teal", "sort_order": 1});
+    let assign = json!({"device_id": "D1", "group_id": null});
+    let revoke = json!({"device_id": "D1", "reason": "lost"});
+
+    // Groups and assignment go through with no step-up and no elevation.
+    for (key, kind, payload) in [
+        (K1, "group.upsert", group.clone()),
+        (K2, "device.assign", assign),
+    ] {
+        let r = h.post(&c, key, kind, payload).await;
+        assert_eq!(r.status, 200, "{kind}: {}", r.body);
+    }
+    assert_eq!(h.rows(), 2);
+    assert!(
+        h.mailbox(&c)
+            .await
+            .iter()
+            .all(|m| m["elevated_by"].is_null())
+    );
+
+    let r = h.post(&c, K3, "device.revoke", revoke.clone()).await;
+    assert_eq!((r.status, r.code()), (403, "MFA_REQUIRED"));
+    assert_eq!(h.rows(), 2);
+
+    assert_eq!(h.stepup(&c, "totp", &h.totp(&c)).await.status, 204);
+    // The reason is one of the four the Hub lists; a missing or unlisted one is refused.
+    for bad in [
+        json!({"device_id": "D1"}),
+        json!({"device_id": "D1", "reason": "closing"}),
+    ] {
+        let r = h.post(&c, K3, "device.revoke", bad).await;
+        assert_eq!((r.status, r.code()), (422, "VALIDATION_FAILED"));
+    }
+    assert_eq!(h.rows(), 2);
+
+    let r = h.post(&c, K3, "device.revoke", revoke).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let mail = h.mailbox(&c).await;
+    let sent = mail.iter().find(|m| m["kind"] == "device.revoke").unwrap();
+    assert!(sent["elevated_by"].is_string());
+}

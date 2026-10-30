@@ -764,3 +764,85 @@ async fn a_stepped_up_owner_command_records_the_mfa_elevation_on_the_change_row(
     let err: AppError = serde_json::from_str(refused.error.as_deref().unwrap()).unwrap();
     assert_eq!(err.code, ErrorCode::PermissionDenied);
 }
+
+/// Story 8.27: groups and assignment apply as the owner; a revoke carries its reason, is audited
+/// with the MFA elevation, and a second revoke of the same device is `applied` and changes nothing.
+#[tokio::test]
+async fn the_owner_edits_groups_assigns_a_device_and_revokes_it_once() {
+    let f = bootstrapped().await;
+    let pc = super::session::pc(&f, arena_proto::DeviceKind::Pc, "pc", Some(12_000)).await;
+
+    let made = f
+        .writer
+        .apply_command(cmd(
+            1,
+            "group.upsert",
+            json!({"name": "Row A", "group_kind": "pc", "colour": "coral", "sort_order": 2}),
+        ))
+        .await
+        .unwrap();
+    assert!(made.applied, "{:?}", made.error);
+    let group = named(rows_of(&f, Table::DeviceGroups), "name", "Row A");
+    assert_eq!(text(&group, "colour"), "coral");
+
+    let moved = f
+        .writer
+        .apply_command(cmd(
+            2,
+            "device.assign",
+            json!({"device_id": pc, "group_id": text(&group, "group_id")}),
+        ))
+        .await
+        .unwrap();
+    assert!(moved.applied, "{:?}", moved.error);
+    let meta = named(rows_of(&f, Table::DevicesMeta), "device_id", &pc);
+    assert_eq!(text(&meta, "group_id"), text(&group, "group_id"));
+
+    // A revoke without a reason is refused and changes nothing.
+    let bare = f
+        .writer
+        .apply_command(cmd(3, "device.revoke", json!({"device_id": pc})))
+        .await
+        .unwrap();
+    assert!(!bare.applied);
+    assert_eq!(refusal(&bare), Some(ErrorCode::ReasonRequired));
+    let live = |f: &Fixture| {
+        named(rows_of(f, Table::Devices), "device_id", &pc).contains_key("revoked_at")
+            && !matches!(
+                named(rows_of(f, Table::Devices), "device_id", &pc)["revoked_at"],
+                RowValue::Null
+            )
+    };
+    assert!(!live(&f));
+
+    let mut revoke = cmd(
+        4,
+        "device.revoke",
+        json!({"device_id": pc, "reason": "stolen"}),
+    );
+    revoke.elevated_by = Some("owner-1".into());
+    let done = f.writer.apply_command(revoke).await.unwrap();
+    assert!(done.applied, "{:?}", done.error);
+    assert!(live(&f));
+    let changes = reopen(&f).changes().unwrap();
+    let change = changes
+        .iter()
+        .find(|c| Some(c.seq) == done.applied_seq)
+        .unwrap();
+    assert_eq!(change.reason.as_deref(), Some("stolen"));
+    assert_eq!(change.elevated_by_kind.as_deref(), Some("mfa"));
+    assert_eq!(change.actor_kind, "owner");
+
+    let before = max_seq(&f);
+    let again = f
+        .writer
+        .apply_command(cmd(
+            5,
+            "device.revoke",
+            json!({"device_id": pc, "reason": "lost"}),
+        ))
+        .await
+        .unwrap();
+    assert!(again.applied, "{:?}", again.error);
+    assert_eq!(max_seq(&f), before, "a repeat changes nothing");
+}

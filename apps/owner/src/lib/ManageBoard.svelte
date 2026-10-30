@@ -7,6 +7,7 @@
   import CommandList from "./CommandList.svelte";
   import CommandPreview from "./CommandPreview.svelte";
   import { PROPOSE_EVENT, cancel, propose, type CommandDraft } from "./commands.svelte";
+  import DevicesBoard from "./DevicesBoard.svelte";
   import PricingBoard from "./PricingBoard.svelte";
   import ProductsBoard from "./ProductsBoard.svelte";
   import SetupCodes from "./SetupCodes.svelte";
@@ -21,6 +22,7 @@
     { id: "pricing", label: "owner.manage.area.pricing" },
     { id: "products", label: "owner.manage.area.products" },
     { id: "staff", label: "owner.manage.area.staff" },
+    { id: "devices", label: "owner.manage.area.devices" },
   ] as const satisfies readonly { id: string; label: MessageKey }[];
 
   // The area is in the URL (`?area=`, default pricing), without adding history entries. The
@@ -79,6 +81,8 @@
       <ProductsBoard />
     {:else if area === "staff"}
       <StaffBoard />
+    {:else if area === "devices"}
+      <DevicesBoard />
     {:else}
       <PricingBoard />
     {/if}

@@ -144,6 +144,9 @@ const KINDS: Record<string, { label: MessageKey; catalogue?: (keyof SummaryCatal
   "staff.upsert": { label: "owner.cmd.kind.staff", catalogue: ["staff"] },
   "staff.deactivate": { label: "owner.cmd.kind.staff_off", catalogue: ["staff"] },
   "role.upsert": { label: "owner.cmd.kind.role", catalogue: ["roles"] },
+  "group.upsert": { label: "owner.cmd.kind.group", catalogue: ["groups"] },
+  "device.assign": { label: "owner.cmd.kind.assign" },
+  "device.revoke": { label: "owner.cmd.kind.revoke" },
   "backup.now": { label: "owner.cmd.kind.backup" },
 };
 

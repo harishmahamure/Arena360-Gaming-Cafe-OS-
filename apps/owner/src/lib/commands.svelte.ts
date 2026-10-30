@@ -4,13 +4,15 @@ import type {
   OwnerCommandList,
   OwnerCommandPosted,
   OwnerCommandPreview,
+  OwnerCommandTarget,
   OwnerCommandView,
   SummaryCatalogue,
 } from "@arena/ui/generated";
 import type { MessageKey } from "@arena/ui/messages";
 import { load, send } from "./api";
-import { age, refresh, shell } from "./shell.svelte";
-import { fetchLive, live } from "./today.svelte";
+import { getCached, queueAll, queueDelete, queuePut } from "./cache";
+import { age, isLive, refresh, shell } from "./shell.svelte";
+import { fetchLive, live, livePath } from "./today.svelte";
 import { ulid } from "./ulid";
 
 /** A change the owner is about to send; `branch_id` is a branch id or `all`. */
@@ -22,6 +24,29 @@ export type CommandDraft = {
   /** The idempotency key of this change: fixed once, so a second Send never queues it twice. */
   key?: string;
 };
+
+/**
+ * A change made with no signal, kept in IndexedDB until it can be sent (AD-14): the client ULID
+ * key makes a resend after a lost response return the same server row.
+ */
+export type Queued = {
+  key: string;
+  /** The café it was made for; another owner's queue on this device is never shown or sent. */
+  cafe: string;
+  branch_id: string;
+  kind: string;
+  payload: Record<string, unknown>;
+  base_rev?: number;
+  created_at: number;
+  /** `queued` waits to send; `expired` passed its 7 days; `refused` was refused by the cloud. */
+  state: "queued" | "expired" | "refused";
+};
+
+/** A command row: the cloud's, or one standing for a change still queued on this device. */
+export type Row = OwnerCommandView & { local?: Queued };
+
+/** The age after which a queued change is not sent (the cloud's own command TTL). */
+export const COMMAND_TTL_MS = 7 * 86_400_000;
 
 /** The window event the Manage screens use to open the preview (`detail` is a `CommandDraft`). */
 export const PROPOSE_EVENT = "arena:propose-command";
@@ -38,12 +63,16 @@ export const cmd = $state({
   preview: null as OwnerCommandPreview | null,
   previewing: false,
   previewFailed: false,
+  /** Set when the preview was built with no signal: each branch's cached `as_of`, null if never seen. */
+  known: null as Record<string, string | null> | null,
+  /** Changes made with no signal, oldest first. */
+  queued: [] as Queued[],
   sending: false,
   sendError: null as MessageKey | null,
   /** The text of the polite live region: what changed in the last poll. */
   announcement: "",
-  /** Retry/Resend in flight or failed, by command id. */
-  again: {} as Record<number, "sending" | "failed">,
+  /** Retry/Resend in flight or failed, by `rowKey`. */
+  again: {} as Record<string, "sending" | "failed">,
 });
 
 /** Waiting commands of each branch, for the offline branch card on Today. */
@@ -65,6 +94,8 @@ export function whatOf(kind: string, payload: unknown): string {
   return typeof name === "string" && name ? t("owner.cmd.what", { kind: label, name }) : label;
 }
 
+export const rowKey = (r: Row) => (r.local ? `q:${r.local.key}:${r.branch_id}` : String(r.id)); // i18n-ignore
+
 export const branchOf = (id: string): OwnerBranch | undefined =>
   shell.branches?.find((b) => b.id === id);
 
@@ -84,7 +115,9 @@ export const queuedText = (row: OwnerCommandView, now: number) =>
   t("owner.cmd.queued", { age: ago(row.queued_at, now) });
 
 /** The badge of a row: the server state in the owner's words. */
-export function stateOf(row: OwnerCommandView, now: number): RowView {
+export function stateOf(row: Row, now: number): RowView {
+  if (row.local?.state === "queued")
+    return { tone: "muted", text: t("owner.cmd.state.queued"), action: null };
   switch (row.status) {
     case "applied":
       return {
@@ -119,6 +152,27 @@ export function groupOf(row: OwnerCommandView, now: number): "today" | "earlier"
 }
 
 export const isWaiting = (r: OwnerCommandView) => r.status === "pending" || r.status === "fetched";
+
+/** The rows standing for the changes queued on this device, newest first. */
+export function localRows(): Row[] {
+  return cmd.queued
+    .flatMap((q): Row[] => {
+      const all = q.branch_id === "all";
+      const known = (shell.branches ?? []).filter((b) => isLive(b) && b.tier !== "free");
+      const ids = all && known.length ? known.map((b) => b.id) : [q.branch_id];
+      return ids.map((branch_id) => ({
+        id: 0,
+        branch_id,
+        ...(all ? { group_id: q.key } : {}),
+        kind: q.kind,
+        status: q.state === "expired" ? "expired" : q.state === "refused" ? "rejected" : "pending",
+        payload: { ...q.payload, ...(q.base_rev === undefined ? {} : { base_rev: q.base_rev }) },
+        queued_at: q.created_at,
+        local: q,
+      }));
+    })
+    .sort((a, b) => b.queued_at - a.queued_at);
+}
 
 function merge(rows: OwnerCommandView[], fresh: OwnerCommandView[]) {
   const byId = new Map(rows.map((r) => [r.id, r]));
@@ -166,11 +220,49 @@ export async function fetchWaiting(branchId: string) {
   waiting[branchId] = res.data.commands.filter(isWaiting);
 }
 
+/**
+ * The preview with no signal: each branch as the app last saw it (online or not, and when), and
+ * offered only when the plan and setup state it holds say so.
+ */
+async function lastKnown(d: CommandDraft) {
+  const picked = (shell.branches ?? []).filter(
+    (b) => d.branch_id === "all" || b.id === d.branch_id,
+  );
+  const known: Record<string, string | null> = {};
+  const targets: OwnerCommandTarget[] = [];
+  for (const b of picked) {
+    const hit = await getCached<{ branch_online: boolean; last_heartbeat_at?: number }>(
+      livePath(b.id),
+    );
+    known[b.id] = hit?.as_of ?? null;
+    const offered = isLive(b) && b.tier !== "free";
+    targets.push({
+      branch_id: b.id,
+      name: b.name,
+      online: !!hit?.payload.branch_online,
+      ...(hit?.payload.last_heartbeat_at
+        ? { last_heartbeat_at: hit.payload.last_heartbeat_at }
+        : {}),
+      offered,
+      ...(offered
+        ? {}
+        : {
+            error: {
+              code: b.tier === "free" ? "FEATURE_NOT_ENTITLED" : "UNSUPPORTED",
+              message: "",
+            },
+          }),
+    });
+  }
+  return { known, preview: { targets } };
+}
+
 /** Opens the preview for a change. */
 export async function propose(draft: CommandDraft) {
   const mine = { ...draft, key: draft.key ?? ulid() };
   cmd.draft = mine;
   cmd.preview = null;
+  cmd.known = null;
   cmd.previewFailed = false;
   cmd.previewing = true;
   cmd.sendError = null;
@@ -178,21 +270,29 @@ export async function propose(draft: CommandDraft) {
     branch_id: mine.branch_id,
     kind: mine.kind,
   });
+  const fallback = !res.ok && res.code === "OFFLINE" ? await lastKnown(mine) : null;
   if (cmd.draft?.key !== mine.key) return; // cancelled, or replaced by another change
   cmd.previewing = false;
   if (res.ok) cmd.preview = res.data;
-  else cmd.previewFailed = true;
+  else if (fallback) {
+    cmd.preview = fallback.preview;
+    cmd.known = fallback.known;
+  } else cmd.previewFailed = true;
 }
 
 export function cancel() {
   cmd.draft = null;
   cmd.preview = null;
+  cmd.known = null;
   cmd.previewing = false;
   cmd.previewFailed = false;
   cmd.sendError = null;
 }
 
-/** Sends the previewed change. The cloud skips the branches that can't take it. */
+/**
+ * Sends the previewed change; with no signal it waits on this device. The cloud skips the
+ * branches that can't take it.
+ */
 export async function confirm() {
   const d = cmd.draft;
   if (!d || cmd.sending) return;
@@ -207,6 +307,19 @@ export async function confirm() {
   });
   cmd.sending = false;
   if (!res.ok) {
+    if (res.code === "OFFLINE" && d.key) {
+      await enqueue({
+        key: d.key,
+        branch_id: d.branch_id,
+        kind: d.kind,
+        payload: d.payload,
+        base_rev: d.base_rev,
+      });
+      cancel();
+      // A response lost on a working line is answered by sending again at once; with no line this stops at the first call.
+      void drainQueue();
+      return;
+    }
     cmd.sendError =
       res.code === "RATE_LIMITED" ? "owner.cmd.send.limited" : "owner.cmd.send.failed";
     return;
@@ -220,7 +333,7 @@ export async function confirm() {
  * The `rev` the branch holds now for the row a command changes, from its newest summary; the
  * rev the old command carried when the summary doesn't list the row.
  */
-export function currentBaseRev(row: OwnerCommandView): number | undefined {
+export function currentBaseRev(row: Row): number | undefined {
   const p = row.payload as { id?: unknown; base_rev?: unknown } | null;
   const list = KINDS[row.kind]?.catalogue;
   const catalogue = live[row.branch_id]?.data?.summary?.catalogue;
@@ -231,28 +344,147 @@ export function currentBaseRev(row: OwnerCommandView): number | undefined {
   return typeof p?.base_rev === "number" ? p.base_rev : undefined;
 }
 
+// --- The queue on this device (Story 8.22) ---
+
+const byCreation = (a: Queued, b: Queued) =>
+  a.created_at - b.created_at || (a.key < b.key ? -1 : 1);
+const expired = (q: Queued, now = Date.now()) => now - q.created_at > COMMAND_TTL_MS;
+const stored = (q: Queued) => queuePut($state.snapshot(q));
+
+/** Codes that say "not now" rather than "no": the change stays queued and the drain stops. */
+const TRANSIENT = new Set(["OFFLINE", "RATE_LIMITED", "INTERNAL", "UNAVAILABLE", "AUTH_FAILED"]);
+
+/** Keeps a change on this device, with its key, `base_rev` and creation time. */
+async function enqueue(c: Pick<Queued, "key" | "branch_id" | "kind" | "payload" | "base_rev">) {
+  if (cmd.queued.some((q) => q.key === c.key)) return;
+  const q: Queued = { ...c, cafe: shell.cafe, created_at: Date.now(), state: "queued" };
+  if (q.base_rev === undefined) delete q.base_rev;
+  await stored(q);
+  cmd.queued = [...cmd.queued, q].sort(byCreation);
+  cmd.announcement = t("owner.cmd.queued_offline");
+}
+
+/** Reads this café's queue from IndexedDB; a change past its 7 days is marked expired, not sent. */
+export async function loadQueue() {
+  const mine = ((await queueAll<Queued>()) ?? [])
+    .filter((q) => q.cafe === shell.cafe)
+    .sort(byCreation);
+  for (const q of mine) {
+    if (q.state === "queued" && expired(q)) {
+      q.state = "expired";
+      await stored(q);
+    }
+  }
+  cmd.queued = mine;
+}
+
+async function remove(key: string) {
+  await queueDelete(key);
+  cmd.queued = cmd.queued.filter((q) => q.key !== key);
+}
+
+async function drain() {
+  for (const q of [...cmd.queued].sort(byCreation)) {
+    if (q.state !== "queued") continue;
+    if (expired(q)) {
+      q.state = "expired";
+      await stored(q);
+      continue;
+    }
+    const res = await send<OwnerCommandPosted>("POST", "/commands", {
+      branch_id: q.branch_id,
+      idempotency_key: q.key,
+      kind: q.kind,
+      payload: q.payload,
+      ...(q.base_rev === undefined ? {} : { base_rev: q.base_rev }),
+    });
+    if (res.ok) {
+      await remove(q.key);
+      cmd.rows = merge(cmd.rows, res.data.commands);
+      cmd.loaded = true;
+    } else if (TRANSIENT.has(res.code)) {
+      return; // later changes wait behind this one: creation order
+    } else {
+      q.state = "refused";
+      await stored(q);
+    }
+  }
+}
+
+let draining: Promise<void> | null = null;
+
+/** Posts the queued changes in creation order; a refusal marks that one and the rest go on. */
+export const drainQueue = () => (draining ??= drain().finally(() => (draining = null)));
+
+/** Reads the queue, then sends it. */
+export async function startQueue() {
+  await loadQueue();
+  await drainQueue();
+}
+
+/**
+ * Logout: the café's queued changes stay only when the owner chose to keep them, otherwise they
+ * go with the cache.
+ */
+export async function discardQueue() {
+  await Promise.all(cmd.queued.map((q) => queueDelete(q.key)));
+  cmd.queued = [];
+}
+
+/** A queued change that was refused or expired goes again with a fresh key and time. */
+async function requeue(old: Queued, rev: number | undefined) {
+  await remove(old.key);
+  await enqueue({
+    key: ulid(),
+    branch_id: old.branch_id,
+    kind: old.kind,
+    payload: old.payload,
+    base_rev: rev,
+  });
+  await drainQueue();
+}
+
 /**
  * Retry (rejected) or Resend (expired): a new command with a new key and the current `base_rev`,
- * to this branch only. The old row stays in the history.
+ * to this branch only. The old row stays in the history; with no signal the new one is queued.
+ * A queued row that was refused or expired is replaced by the new queued change.
  */
-export async function again(row: OwnerCommandView) {
-  if (cmd.again[row.id] === "sending") return;
-  cmd.again[row.id] = "sending";
+export async function again(row: Row) {
+  const k = rowKey(row);
+  if (cmd.again[k] === "sending") return;
+  cmd.again[k] = "sending";
   const b = branchOf(row.branch_id);
   if (b) await fetchLive(b);
   const { base_rev: _stale, ...fields } = (row.payload ?? {}) as Record<string, unknown>;
   const rev = currentBaseRev(row);
+  if (row.local) {
+    await requeue(row.local, rev);
+    delete cmd.again[k];
+    return;
+  }
+  const key = ulid();
   const res = await send<OwnerCommandPosted>("POST", "/commands", {
     branch_id: row.branch_id,
-    idempotency_key: ulid(),
+    idempotency_key: key,
     kind: row.kind,
     payload: fields,
     ...(rev === undefined ? {} : { base_rev: rev }),
   });
-  if (!res.ok) {
-    cmd.again[row.id] = "failed";
+  if (!res.ok && res.code === "OFFLINE") {
+    await enqueue({
+      key,
+      branch_id: row.branch_id,
+      kind: row.kind,
+      payload: fields,
+      base_rev: rev,
+    });
+    delete cmd.again[k];
     return;
   }
-  delete cmd.again[row.id];
+  if (!res.ok) {
+    cmd.again[k] = "failed";
+    return;
+  }
+  delete cmd.again[k];
   cmd.rows = merge(cmd.rows, res.data.commands);
 }

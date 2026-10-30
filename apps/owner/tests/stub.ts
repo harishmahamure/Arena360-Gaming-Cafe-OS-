@@ -150,6 +150,8 @@ export type StubOptions = {
   commands?: OwnerCommandView[];
   /** Branch ids whose Hub is offline in a preview (default: all online). */
   offline?: string[];
+  /** The first N command posts are recorded but their response is lost (the connection drops). */
+  lose?: number;
   /** Answers a command post instead of the default (queue one row per branch that can take it). */
   post?: (body: Record<string, unknown>) => { status: number; body: unknown } | undefined;
 };
@@ -181,6 +183,8 @@ export async function stubCloud(
   const exports: string[] = [];
   const commands: OwnerCommandView[] = [...(opts.commands ?? [])];
   let nextId = Math.max(0, ...commands.map((c) => c.id));
+  let lost = opts.lose ?? 0;
+  const byKey = new Map<string, OwnerCommandView[]>();
   await page.route("**/v1/**", (route) => {
     const req = route.request();
     const path = new URL(req.url()).pathname;
@@ -256,6 +260,10 @@ export async function stubCloud(
       (bodies["POST /v1/commands"] ??= []).push(body);
       const answer = opts.post?.(body);
       if (answer) return json(answer.body, answer.status);
+      if (byKey.has(body.idempotency_key)) {
+        // The same key returns the rows it already made: the cloud is idempotent.
+        return json({ commands: byKey.get(body.idempotency_key), skipped: [] });
+      }
       const all = body.branch_id === "all";
       const made = list()
         .filter((b) => b.tier !== "free" && (all || b.id === body.branch_id))
@@ -272,6 +280,11 @@ export async function stubCloud(
           queued_at: Date.now(),
         }));
       commands.push(...made);
+      byKey.set(body.idempotency_key, made);
+      if (lost > 0) {
+        lost--;
+        return route.abort("connectionreset");
+      }
       return json({ commands: made, skipped: [] });
     }
     if (path === "/v1/meta/timezones") return json(["Asia/Dubai", "Asia/Kolkata"]);
@@ -287,7 +300,7 @@ export const cacheCount = (page: Page) =>
   page.evaluate(
     () =>
       new Promise<number>((ok) => {
-        const req = indexedDB.open("arena-owner", 1);
+        const req = indexedDB.open("arena-owner");
         req.onupgradeneeded = () => req.transaction!.abort();
         req.onerror = () => ok(-1);
         req.onsuccess = () => {

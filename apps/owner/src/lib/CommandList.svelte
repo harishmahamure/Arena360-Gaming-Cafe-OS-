@@ -2,18 +2,29 @@
   import { Button, t } from "@arena/ui";
   import { onMount } from "svelte";
   import CommandRow from "./CommandRow.svelte";
-  import { POLL_MS, cmd, groupOf, refreshCommands } from "./commands.svelte";
+  import {
+    POLL_MS,
+    cmd,
+    drainQueue,
+    groupOf,
+    localRows,
+    refreshCommands,
+    rowKey,
+  } from "./commands.svelte";
 
   let now = $state(Date.now());
 
+  // What is still on this device comes first, then what the cloud holds.
+  const all = $derived([...localRows(), ...cmd.rows]);
   const groups = $derived(
     (["today", "earlier"] as const)
-      .map((g) => [g, cmd.rows.filter((r) => groupOf(r, now) === g)] as const)
+      .map((g) => [g, all.filter((r) => groupOf(r, now) === g)] as const)
       .filter(([, rows]) => rows.length),
   );
 
   async function tick() {
     now = Date.now();
+    if (cmd.queued.some((q) => q.state === "queued")) await drainQueue();
     await refreshCommands();
   }
 
@@ -37,10 +48,10 @@
 <section class="commands" aria-labelledby="cmd-list-title">
   <h2 id="cmd-list-title" class="type-hub-title">{t("owner.cmd.list.title")}</h2>
   <div class="visually-hidden" role="status" aria-live="polite">{cmd.announcement}</div>
-  {#if !cmd.loaded && cmd.failed}
+  {#if !cmd.loaded && cmd.failed && !groups.length}
     <p>{t("owner.cmd.list.failed")}</p>
     <Button label="common.retry" variant="secondary" onclick={tick} />
-  {:else if !cmd.loaded}
+  {:else if !cmd.loaded && !groups.length}
     <p>{t("owner.loading")}</p>
   {:else if !groups.length}
     <p>{t("owner.cmd.list.empty")}</p>
@@ -50,7 +61,7 @@
         {t(g === "today" ? "owner.cmd.group.today" : "owner.cmd.group.earlier")}
       </h3>
       <ul class="rows">
-        {#each rows as row (row.id)}
+        {#each rows as row (rowKey(row))}
           <CommandRow {row} {now} />
         {/each}
       </ul>

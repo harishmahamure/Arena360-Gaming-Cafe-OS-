@@ -1,16 +1,31 @@
 <script lang="ts">
   import { Button, StatusBadge, t } from "@arena/ui";
-  import type { OwnerCommandView } from "@arena/ui/generated";
-  import { again, branchOf, cmd, queuedText, stateOf, whatOf } from "./commands.svelte";
+  import {
+    again,
+    branchOf,
+    cmd,
+    queuedText,
+    rowKey,
+    stateOf,
+    whatOf,
+    type Row,
+  } from "./commands.svelte";
 
-  let { row, now }: { row: OwnerCommandView; now: number } = $props();
+  let { row, now }: { row: Row; now: number } = $props();
 
   const view = $derived(stateOf(row, now));
-  const branch = $derived(branchOf(row.branch_id)?.name ?? row.branch_id);
-  const scope = $derived(row.group_id ? t("owner.cmd.scope.all_at", { branch }) : branch);
+  const branch = $derived(
+    branchOf(row.branch_id)?.name ??
+      (row.branch_id === "all" ? t("owner.cmd.scope.all") : row.branch_id),
+  );
+  const key = $derived(rowKey(row));
+  const status = $derived(row.local ? `local-${row.local.state}` : row.status); // i18n-ignore
+  const scope = $derived(
+    row.group_id && row.branch_id !== "all" ? t("owner.cmd.scope.all_at", { branch }) : branch,
+  );
 </script>
 
-<li class="row" data-component="command-row" data-status={row.status}>
+<li class="row" data-component="command-row" data-status={status}>
   <div class="what">
     <span class="type-hub-label">{whatOf(row.kind, row.payload)}</span>
     <span class="meta type-hub-micro">{scope} · {queuedText(row, now)}</span>
@@ -22,12 +37,12 @@
         label={view.action === "retry" ? "common.retry" : "owner.cmd.resend"}
         variant="secondary"
         onclick={() => again(row)}
-        disabled={cmd.again[row.id] === "sending"}
+        disabled={cmd.again[key] === "sending"}
         disabledReason="owner.cmd.sending"
       />
     {/if}
   </div>
-  {#if cmd.again[row.id] === "failed"}
+  {#if cmd.again[key] === "failed"}
     <p class="failed type-hub-micro" role="alert">{t("owner.cmd.again.failed")}</p>
   {/if}
 </li>

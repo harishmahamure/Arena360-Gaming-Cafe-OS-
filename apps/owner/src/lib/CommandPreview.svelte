@@ -3,6 +3,7 @@
   import type { MessageKey } from "@arena/ui/messages";
   import { tick } from "svelte";
   import { cancel, cmd, confirm, whatOf } from "./commands.svelte";
+  import { age } from "./shell.svelte";
 
   const REASONS: Record<string, MessageKey> = {
     FEATURE_NOT_ENTITLED: "owner.cmd.reason.entitled",
@@ -10,6 +11,10 @@
   };
 
   let heading: HTMLHeadingElement | undefined = $state();
+  const ago = (asOf: string) => {
+    const [key, n] = age(asOf);
+    return t(key, { n });
+  };
 
   const draft = $derived(cmd.draft);
   const targets = $derived(cmd.preview?.targets ?? []);
@@ -38,28 +43,42 @@
       {:else if cmd.previewFailed}
         <p role="alert">{t("owner.cmd.preview.failed")}</p>
       {:else}
+        {#if cmd.known}<p class="note" role="status">{t("owner.cmd.preview.last_known")}</p>{/if}
         <h3 class="type-hub-label">{t("owner.cmd.preview.targets")}</h3>
         <ul class="targets">
           {#each targets as x (x.branch_id)}
+            {@const seen = cmd.known?.[x.branch_id]}
             <li class="target" class:muted={!x.offered}>
               <span class="name">{x.name}</span>
               <StatusBadge
                 tone={x.online ? "ok" : "muted"}
-                label={x.online ? "owner.cmd.preview.online" : "owner.cmd.preview.offline"}
+                label={cmd.known && !seen
+                  ? "owner.cmd.preview.unknown"
+                  : x.online
+                    ? "owner.cmd.preview.online"
+                    : "owner.cmd.preview.offline"}
               />
+              {#if cmd.known}
+                <span class="note type-hub-micro"
+                  >{seen
+                    ? t("owner.cmd.preview.last_known_age", { age: ago(seen) })
+                    : t("owner.cmd.preview.never")}</span
+                >
+              {/if}
               {#if !x.offered}
                 <span class="note type-hub-micro"
                   >{t("owner.cmd.preview.not_offered")} · {t(
                     REASONS[x.error?.code ?? ""] ?? "owner.cmd.reason.other",
                   )}</span
                 >
-              {:else if !x.online}
+              {:else if !x.online && !cmd.known}
                 <span class="note type-hub-micro">{t("owner.cmd.preview.offline_note")}</span>
               {/if}
             </li>
           {/each}
         </ul>
-        {#if !offered.length}<p>{t("owner.cmd.preview.none")}</p>{/if}
+        {#if !offered.length}<p>{t("owner.cmd.preview.none")}</p>
+        {:else if cmd.known}<p class="note">{t("owner.cmd.preview.queue_note")}</p>{/if}
       {/if}
       {#if cmd.sendError}<p class="error" role="alert">{t(cmd.sendError)}</p>{/if}
       <div class="actions">

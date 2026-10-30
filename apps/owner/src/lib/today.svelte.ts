@@ -25,7 +25,7 @@ export const TICK_MS = 30_000;
 /** A figure older than this during opening hours turns to warning ink. */
 export const LATE_MS = 30 * 60_000;
 
-const path = (id: string) => `/branches/${encodeURIComponent(id)}/live`;
+export const livePath = (id: string) => `/branches/${encodeURIComponent(id)}/live`;
 const fetchedAt: Record<string, number> = {};
 const reported = new Set<string>();
 
@@ -53,7 +53,7 @@ export async function showCached(branches: OwnerBranch[]) {
     branches
       .filter((b) => !live[b.id])
       .map(async (b) => {
-        const hit = await getCached<OwnerLive>(path(b.id));
+        const hit = await getCached<OwnerLive>(livePath(b.id));
         if (hit && !live[b.id]) live[b.id] = { data: hit.payload, fresh: false, failed: false };
       }),
   );
@@ -62,7 +62,7 @@ export async function showCached(branches: OwnerBranch[]) {
 /** Fetches one branch. `report` sends the data age once per open of Today. */
 export async function fetchLive(b: OwnerBranch, report = false, now = Date.now()) {
   fetchedAt[b.id] = now;
-  const res = await load<OwnerLive>(path(b.id));
+  const res = await load<OwnerLive>(livePath(b.id));
   if (res === "signed-out") {
     await refresh();
     return;

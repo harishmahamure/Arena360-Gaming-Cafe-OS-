@@ -4,6 +4,7 @@
   import type { MessageKey } from "@arena/ui/messages";
   import { page } from "$app/state";
   import { onMount, type Snippet } from "svelte";
+  import { drainQueue, startQueue } from "../lib/commands.svelte";
   import { age, refresh, shell } from "../lib/shell.svelte";
 
   let { children }: { children: Snippet } = $props();
@@ -34,12 +35,14 @@
       : page.url.pathname === href || page.url.pathname.startsWith(href + "/");
 
   onMount(() => {
-    refresh();
+    // The changes queued on this device are read once the café is known, then sent.
+    void refresh().then(startQueue);
     const down = () => (shell.offline = true);
-    addEventListener("online", refresh);
+    const back = () => void Promise.all([refresh(), drainQueue()]);
+    addEventListener("online", back);
     addEventListener("offline", down);
     return () => {
-      removeEventListener("online", refresh);
+      removeEventListener("online", back);
       removeEventListener("offline", down);
     };
   });

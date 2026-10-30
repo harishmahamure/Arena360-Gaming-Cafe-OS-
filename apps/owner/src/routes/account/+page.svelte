@@ -2,6 +2,7 @@
   import { Button, ThemeToggle, t } from "@arena/ui";
   import { PUBLIC_ONBOARDING_URL } from "$app/env/public";
   import { signInUrl, signOut } from "../../lib/api";
+  import { cmd, discardQueue } from "../../lib/commands.svelte";
 
   const LINKS = [
     { href: "/account/subscription", label: "owner.account.subscription" },
@@ -9,8 +10,13 @@
     { href: "/account/support", label: "owner.account.support" },
   ] as const;
 
-  async function out() {
+  // Changes still waiting on this device: the owner chooses whether they outlive the sign-out.
+  const waiting = $derived(cmd.queued.filter((q) => q.state === "queued").length);
+  let asking = $state(false);
+
+  async function out(keep: boolean) {
     await signOut();
+    if (!keep) await discardQueue();
     location.assign(signInUrl());
   }
 </script>
@@ -29,9 +35,41 @@
   {/each}
 </ul>
 <ThemeToggle />
-<p><Button label="owner.account.sign_out" variant="secondary" onclick={out} /></p>
+{#if asking}
+  <section class="keep" aria-labelledby="keep-title">
+    <h2 id="keep-title" class="type-hub-title">{t("owner.account.queue.title")}</h2>
+    <p>{t("owner.account.queue.body", { n: waiting })}</p>
+    <div class="actions">
+      <Button label="owner.account.queue.keep" onclick={() => out(true)} />
+      <Button label="owner.account.queue.delete" variant="secondary" onclick={() => out(false)} />
+      <Button label="owner.cmd.cancel" variant="secondary" onclick={() => (asking = false)} />
+    </div>
+  </section>
+{:else}
+  <p>
+    <Button
+      label="owner.account.sign_out"
+      variant="secondary"
+      onclick={() => (waiting ? (asking = true) : out(false))}
+    />
+  </p>
+{/if}
 
 <style>
+  .keep {
+    display: grid;
+    gap: var(--space-3);
+  }
+  .keep h2,
+  .keep p {
+    margin: 0;
+  }
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+
   .links {
     display: flex;
     flex-direction: column;

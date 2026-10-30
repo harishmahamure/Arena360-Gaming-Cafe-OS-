@@ -91,3 +91,11 @@ The café owner sees every branch and changes it from a phone or laptop, without
 - **Manage.** `scope="all"`: one list for the café; Free and setup branches get a `TierLock` / `SetupGate` entry beside it.
 - **Today.** An offline branch's card lists its waiting commands (read with each live fetch).
 - **Badge.** `StatusBadge` takes `tone` and `text` for command states.
+
+## Story 8.22: Commands queue on the owner's device while it is offline
+
+- **Queue.** IndexedDB `arena-owner` is version 2 with a `queue` store (keyPath `key`). A Send that gets `OFFLINE` queues `{key, cafe, branch_id, kind, payload, base_rev?, created_at, state}` with the draft's ULID key; `clearCache` never touches it.
+- **Drain.** `startQueue` (layout mount after `refresh`), the `online` event, the command-list poll and a send that failed on a working line call `drainQueue`: creation order, stop on `OFFLINE`/`RATE_LIMITED`/`INTERNAL`/`UNAVAILABLE`/`AUTH_FAILED`, mark any other refusal `refused` and go on. Older than 7 days -> `expired`, never sent.
+- **Rows.** `localRows()` stands queued items in the command list (`Row.local`); `all` expands to the live paid branches. `rowKey` replaces the numeric id for list keys and Retry state.
+- **Preview offline.** Built from `shell.branches` and each branch's cached `live` answer (`cmd.known` = cached `as_of`); unseen branches read Unknown.
+- **Sign out.** Queued items prompt "Keep queued changes" / delete; session expiry keeps the queue.

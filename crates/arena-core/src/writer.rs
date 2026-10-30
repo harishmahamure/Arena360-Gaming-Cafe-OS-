@@ -22,8 +22,8 @@ use arena_proto::{AppError, CommandWire, ErrorCode, Intent};
 use arena_store::{
     AppliedCommand, LeaseRow, OwnerOverride, Store, UploadCursor, find_applied_command,
     insert_applied_command, insert_owner_override, mark_command_reported, max_applied_command_id,
-    prune_applied_intents, read_lease, read_upload_cursor, unreported_commands, write_lease,
-    write_upload_cursor,
+    prune_applied_intents, prune_uploaded_changes, read_lease, read_upload_cursor,
+    unreported_commands, write_lease, write_upload_cursor,
 };
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
@@ -242,6 +242,29 @@ impl WriterHandle {
             store.write_tx(|tx| {
                 crate::apply::check_epoch(tx, &ctx)?;
                 prune_applied_intents(tx, cutoff_ms, limit)
+            })
+        })
+        .await
+    }
+
+    /// Housekeeping (Story 9.15): deletes one batch of at most `limit` change rows the cloud
+    /// already holds that are older than `cutoff_ms` (money and tax rows: older than
+    /// `money_cutoff_ms`), only while this writer is primary and still holds its epoch
+    /// (`NOT_PRIMARY` otherwise). A maintenance write outside `apply()`: it writes no change
+    /// rows. Returns how many rows were deleted (fewer than `limit`: none remain).
+    pub async fn prune_changes(
+        &self,
+        cutoff_ms: i64,
+        money_cutoff_ms: i64,
+        limit: usize,
+    ) -> Result<usize, AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        self.run(move |store| {
+            let ctx = ctx_from(clock.as_ref(), &status);
+            store.write_tx(|tx| {
+                crate::apply::check_epoch(tx, &ctx)?;
+                prune_uploaded_changes(tx, cutoff_ms, money_cutoff_ms, limit)
             })
         })
         .await

@@ -354,6 +354,21 @@ fn the_offline_watch_is_a_jobs_task() {
 }
 
 #[test]
+fn the_retention_sweep_is_a_jobs_task() {
+    assert_eq!(
+        parse(
+            args(&["--role", "jobs", "--task", "retention-sweep"]),
+            env_of(&[])
+        ),
+        Ok(Command::Job(JobConfig {
+            task: Task::RetentionSweep,
+            dev_data_dir: None,
+        }))
+    );
+    assert_eq!(Task::RetentionSweep.as_str(), "retention-sweep");
+}
+
+#[test]
 fn jobs_run_one_task_and_read_no_env_at_parse_time() {
     assert_eq!(
         parse(

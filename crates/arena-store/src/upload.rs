@@ -668,6 +668,48 @@ pub fn decode_batch(bytes: &[u8]) -> Result<DecodedBatch, AppError> {
     Ok(DecodedBatch { header, rows: out })
 }
 
+/// Deletes at most `limit` change rows the cloud already has (Story 9.15): `at < cutoff_ms`,
+/// passed by the upload cursor, never the newest row of an epoch, and money or tax rows only once
+/// `at < money_cutoff_ms`. Nothing is deleted before the first upload (Free). Returns how many
+/// went; fewer than `limit` means none that qualify remain. Opens the delete trigger's permit
+/// for this statement only, so call it inside the write transaction.
+pub fn prune_uploaded_changes(
+    conn: &Connection,
+    cutoff_ms: i64,
+    money_cutoff_ms: i64,
+    limit: usize,
+) -> Result<usize, AppError> {
+    let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+    conn.execute(
+        "INSERT INTO changes_prune_permit (id, cutoff_ms, money_cutoff_ms) VALUES (1, ?1, ?2)
+         ON CONFLICT (id) DO UPDATE SET cutoff_ms = excluded.cutoff_ms,
+             money_cutoff_ms = excluded.money_cutoff_ms",
+        params![cutoff_ms, money_cutoff_ms],
+    )
+    .map_err(db_error)?;
+    // The same conditions as the `changes_no_delete` trigger, which would abort on any other row.
+    let deleted = conn
+        .execute(
+            "DELETE FROM changes WHERE rowid IN (
+                 SELECT o.rowid FROM changes o, upload_cursor c
+                 WHERE o.at < ?1
+                   AND (o.tbl NOT IN ('orders', 'order_lines', 'payments', 'refunds',
+                                      'invoice_sequences', 'gst_archive_log')
+                        OR o.at < ?2)
+                   AND ((o.epoch_counter, o.epoch)
+                            < (CAST(substr(c.epoch, 1, instr(c.epoch, ':') - 1) AS INTEGER),
+                               c.epoch)
+                        OR (o.epoch = c.epoch AND o.seq <= c.last_seq_uploaded))
+                   AND o.seq < (SELECT MAX(seq) FROM changes WHERE epoch = o.epoch)
+                 ORDER BY o.at LIMIT ?3)",
+            params![cutoff_ms, money_cutoff_ms, limit],
+        )
+        .map_err(db_error);
+    conn.execute("DELETE FROM changes_prune_permit", [])
+        .map_err(db_error)?;
+    deleted
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1214,5 +1256,142 @@ mod tests {
             .write_tx(|tx| crate::complete_first_snapshot(tx, "1:A", 30, 1))
             .unwrap();
         assert_eq!(progress(&store).base_seq, None);
+    }
+
+    const DAY: i64 = 24 * 60 * 60 * 1000;
+
+    fn put_old(
+        store: &mut Store,
+        epoch: &str,
+        seqs: impl IntoIterator<Item = i64>,
+        tbl: &str,
+        at: i64,
+    ) {
+        store
+            .write_tx(|tx| {
+                for s in seqs {
+                    let mut c = change(epoch, s);
+                    c.tbl = tbl.into();
+                    c.at = at;
+                    insert_change(tx, &c)?;
+                }
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    fn cursor_at(store: &mut Store, epoch: &str, last: i64) {
+        store
+            .write_tx(|tx| {
+                write_upload_cursor(
+                    tx,
+                    &UploadCursor {
+                        epoch: epoch.into(),
+                        last_seq_uploaded: last,
+                        uploaded_at: T0,
+                    },
+                )
+            })
+            .unwrap();
+    }
+
+    fn prune(store: &mut Store, cutoff: i64, money: i64, limit: usize) -> usize {
+        store
+            .write_tx(|tx| prune_uploaded_changes(tx, cutoff, money, limit))
+            .unwrap()
+    }
+
+    fn seqs(store: &Store, epoch: &str) -> Vec<i64> {
+        store
+            .changes()
+            .unwrap()
+            .iter()
+            .filter(|c| c.epoch == epoch)
+            .map(|c| c.seq)
+            .collect()
+    }
+
+    #[test]
+    fn prune_deletes_old_uploaded_rows_and_keeps_the_rest() {
+        let (_d, mut store) = store();
+        let old = T0 - 91 * DAY;
+        put_old(&mut store, "1:A", 1..=6, "settings", old);
+        put_old(&mut store, "1:A", 7..=9, "settings", T0 - 10 * DAY);
+        cursor_at(&mut store, "1:A", 4);
+        let cutoff = T0 - 90 * DAY;
+        // Rows 1-4 are old and uploaded; 5-6 are old but not uploaded; 7-9 are recent.
+        assert_eq!(prune(&mut store, cutoff, cutoff, 100), 4);
+        assert_eq!(seqs(&store, "1:A"), vec![5, 6, 7, 8, 9]);
+        assert_eq!(prune(&mut store, cutoff, cutoff, 100), 0);
+    }
+
+    #[test]
+    fn prune_is_batched_and_oldest_first() {
+        let (_d, mut store) = store();
+        put_old(&mut store, "1:A", 1..=5, "settings", T0 - 200 * DAY);
+        put_old(&mut store, "1:A", 6..=6, "settings", T0);
+        cursor_at(&mut store, "1:A", 6);
+        let cutoff = T0 - 90 * DAY;
+        assert_eq!(prune(&mut store, cutoff, cutoff, 2), 2);
+        assert_eq!(seqs(&store, "1:A"), vec![3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn prune_never_runs_before_the_first_upload() {
+        let (_d, mut store) = store();
+        put_old(&mut store, "1:A", 1..=3, "settings", T0 - 500 * DAY);
+        assert_eq!(prune(&mut store, T0, T0, 100), 0);
+        assert_eq!(seqs(&store, "1:A"), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn prune_keeps_the_newest_row_of_every_epoch() {
+        let (_d, mut store) = store();
+        put_old(&mut store, "1:A", 1..=3, "settings", T0 - 500 * DAY);
+        put_old(&mut store, "2:B", 1..=3, "settings", T0 - 500 * DAY);
+        cursor_at(&mut store, "2:B", 3);
+        assert_eq!(prune(&mut store, T0, T0, 100), 4);
+        assert_eq!(seqs(&store, "1:A"), vec![3]);
+        assert_eq!(seqs(&store, "2:B"), vec![3]);
+        // The next seq of the cursor's epoch still follows on.
+        let next = store
+            .write_tx(|tx| crate::next_change_seq(tx, "2:B"))
+            .unwrap();
+        assert_eq!(next, 4);
+    }
+
+    #[test]
+    fn money_and_tax_rows_stay_until_eight_years_old() {
+        let (_d, mut store) = store();
+        let old = T0 - 200 * DAY;
+        put_old(&mut store, "1:A", 1..=1, "orders", old);
+        put_old(&mut store, "1:A", 2..=2, "payments", old);
+        put_old(&mut store, "1:A", 3..=3, "refunds", old);
+        put_old(&mut store, "1:A", 4..=4, "gst_archive_log", old);
+        put_old(&mut store, "1:A", 5..=5, "settings", old);
+        put_old(&mut store, "1:A", 6..=6, "orders", T0 - 9 * 366 * DAY);
+        put_old(&mut store, "1:A", 7..=7, "settings", T0);
+        cursor_at(&mut store, "1:A", 7);
+        let cutoff = T0 - 90 * DAY;
+        let money = T0 - 8 * 366 * DAY;
+        assert_eq!(prune(&mut store, cutoff, money, 100), 2);
+        assert_eq!(seqs(&store, "1:A"), vec![1, 2, 3, 4, 7]);
+    }
+
+    #[test]
+    fn changes_stay_append_only_without_the_permit() {
+        let (_d, mut store) = store();
+        put_old(&mut store, "1:A", 1..=2, "settings", T0 - 500 * DAY);
+        cursor_at(&mut store, "1:A", 2);
+        let err = store
+            .write_tx(|tx| tx.execute("DELETE FROM changes", []).map_err(db_error))
+            .unwrap_err();
+        assert!(err.message.contains("append-only"), "{err}");
+        // The permit is gone after a prune, so a later delete is refused again.
+        prune(&mut store, T0, T0, 100);
+        let err = store
+            .write_tx(|tx| tx.execute("DELETE FROM changes", []).map_err(db_error))
+            .unwrap_err();
+        assert!(err.message.contains("append-only"), "{err}");
     }
 }

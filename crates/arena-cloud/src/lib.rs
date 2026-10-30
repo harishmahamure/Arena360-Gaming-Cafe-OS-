@@ -41,6 +41,7 @@ pub mod pairing_code;
 pub mod passwords;
 pub mod presign;
 pub mod push;
+pub mod retention;
 pub mod rollups;
 pub mod store;
 pub mod templates;

@@ -21,6 +21,7 @@ const ALL_TABLES: &[&str] = &[
     "admin_audit",
     "branch_fence",
     "branch_opening",
+    "branch_retention",
     "branch_setup_status",
     "branch_template_choice",
     "branch_tunnels",

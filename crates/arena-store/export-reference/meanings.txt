@@ -503,3 +503,7 @@ wallet_txns.reason: Why the balance changed: topup, bill, credit, import, erase_
 wallet_txns.method: How the top-up was paid, for example cash or upi; empty for other entries.
 wallet_txns.staff_id: Id of the staff member who made the entry.
 wallets: Each player's prepaid wallet balance.
+changes_prune_permit: A single row that is present only for the moment the Hub removes change rows that are old and already stored in the cloud; it is empty at any other time.
+changes_prune_permit.id: Always 1; the table has only one row.
+changes_prune_permit.cutoff_ms: Change rows newer than this time (milliseconds) may not be removed.
+changes_prune_permit.money_cutoff_ms: Change rows of invoices, credit notes, payments and tax records newer than this time (milliseconds) may not be removed.

@@ -58,6 +58,8 @@ pub trait ObjectStore: Send + Sync {
 #[derive(Debug, Default)]
 pub struct MemoryStore {
     objects: Mutex<BTreeMap<String, Vec<u8>>>,
+    /// When each key was last written (ms); keys written through [`MemoryStore::put_at`] or `put`.
+    modified: Mutex<BTreeMap<String, i64>>,
     heads: AtomicU64,
     reads: AtomicU64,
     lists: AtomicU64,
@@ -114,6 +116,28 @@ impl MemoryStore {
         self.lock().get(key).map(|b| (b.clone(), memory_etag(b)))
     }
 
+    /// Writes `key` as if it had been written at `modified_ms` (tests of the retention sweep).
+    pub fn put_at(&self, key: &str, body: Vec<u8>, modified_ms: i64) {
+        self.lock().insert(key.to_owned(), body);
+        self.stamps().insert(key.to_owned(), modified_ms);
+    }
+
+    /// Every key under `prefix` with when it was last written (ms).
+    pub fn list_modified(&self, prefix: &str) -> Vec<(String, i64)> {
+        let stamps = self.stamps();
+        self.lock()
+            .keys()
+            .filter(|k| k.starts_with(prefix))
+            .map(|k| (k.clone(), stamps.get(k).copied().unwrap_or_default()))
+            .collect()
+    }
+
+    fn stamps(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, i64>> {
+        self.modified
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Every key under `prefix` with its ETag.
     pub fn list_etags(&self, prefix: &str) -> Vec<(String, String)> {
         self.lists.fetch_add(1, Ordering::SeqCst);
@@ -127,7 +151,7 @@ impl MemoryStore {
 
 impl ObjectStore for MemoryStore {
     async fn put(&self, key: &str, body: Vec<u8>) -> Result<(), StoreError> {
-        self.lock().insert(key.to_owned(), body);
+        self.put_at(key, body, crate::now_ms());
         Ok(())
     }
 
@@ -149,6 +173,7 @@ impl ObjectStore for MemoryStore {
 
     async fn delete(&self, key: &str) -> Result<(), StoreError> {
         self.lock().remove(key);
+        self.stamps().remove(key);
         Ok(())
     }
 }
@@ -346,6 +371,31 @@ impl S3Store {
             .await
             .map_err(|e| self.err("read", key, e))?;
         Ok(Some((body.into_bytes().to_vec(), etag)))
+    }
+
+    /// Every key under `prefix` with when the bucket says it was last written (ms).
+    pub async fn list_modified(&self, prefix: &str) -> Result<Vec<(String, i64)>, StoreError> {
+        let mut keys = Vec::new();
+        let mut token: Option<String> = None;
+        loop {
+            let out = self
+                .client
+                .list_objects_v2()
+                .bucket(&self.bucket)
+                .prefix(prefix)
+                .set_continuation_token(token.take())
+                .send()
+                .await
+                .map_err(|e| self.err("list", prefix, e))?;
+            keys.extend(out.contents().iter().filter_map(|o| {
+                let modified = o.last_modified().and_then(|t| t.to_millis().ok())?;
+                Some((o.key()?.to_owned(), modified))
+            }));
+            match out.next_continuation_token() {
+                Some(t) if out.is_truncated() == Some(true) => token = Some(t.to_owned()),
+                _ => return Ok(keys),
+            }
+        }
     }
 
     /// Every key under `prefix` with its ETag.

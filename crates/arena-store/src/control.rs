@@ -34,6 +34,7 @@ mod owner_alerts;
 mod owner_commands;
 mod pairing;
 mod rate_limit;
+mod retention;
 mod send_ledger;
 mod session;
 mod setup_codes;
@@ -72,6 +73,7 @@ pub use pairing::{
     IssueOutcome, NewPairingCode, PAIRING_HISTORY_MS, PairingCodeRow, RedeemInvalid, Redeemed,
 };
 pub use rate_limit::{RateReservation, RateRule, RateWindow};
+pub use retention::{RetentionBranch, RetentionState};
 pub use send_ledger::{LedgerRow, MessageTemplate, NewLedgerRow, NewTemplate, Settlement};
 pub use session::{
     NewOwnerSession, OwnerSession, REFRESH_RACE_MS, RefreshOutcome, SessionWithOwner,
@@ -224,6 +226,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 30,
         sql: include_str!("../control-migrations/0030_key_release.sql"),
+    },
+    ControlMigration {
+        version: 31,
+        sql: include_str!("../control-migrations/0031_branch_retention.sql"),
     },
 ];
 

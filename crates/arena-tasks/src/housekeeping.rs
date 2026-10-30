@@ -7,6 +7,11 @@
 //! transaction), in batches of [`PRUNE_BATCH`] records, one writer job per batch, so a large
 //! backlog never holds the write lock for long. It stops once the writer closes.
 //!
+//! It also prunes the change log (Story 9.15): rows older than [`CHANGES_RETENTION_MS`] (90 days) that
+//! the upload cursor has passed, in batches of [`CHANGES_PRUNE_BATCH`]. Rows of invoices, credit
+//! notes, payments and tax records go only once [`MONEY_RETENTION_MS`] (8 years) old; rows not yet
+//! uploaded never go, so a Free Hub (no upload cursor) prunes none.
+//!
 //! Pruning is a maintenance write outside `apply()`: dedupe records are not branch rows, so it
 //! writes no change rows and is not audited. Intents expire after 7 days, so a pruned key can
 //! no longer be applied anyway.
@@ -26,6 +31,12 @@ use tokio::time::{Instant, MissedTickBehavior};
 
 /// How long a dedupe record is kept: 30 days.
 pub const DEDUPE_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+/// How long an uploaded `changes` row is kept: 90 days.
+pub const CHANGES_RETENTION_MS: i64 = 90 * 24 * 60 * 60 * 1000;
+/// How long a money or tax `changes` row is kept: 8 years.
+pub const MONEY_RETENTION_MS: i64 = 8 * 366 * 24 * 60 * 60 * 1000;
+/// The most `changes` rows one prune job deletes.
+pub const CHANGES_PRUNE_BATCH: usize = 1_000;
 /// How often housekeeping runs after the first run at start.
 pub const HOUSEKEEPING_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 /// How often the credit auto-pause check runs, so a pause lands within an hour of the business
@@ -97,6 +108,34 @@ impl HousekeepingTask {
         }
     }
 
+    /// One run of the change-log prune (see the module docs), while primary: batches until fewer
+    /// than [`CHANGES_PRUNE_BATCH`] go. Returns how many rows were deleted.
+    pub async fn prune_changes(&self) -> Result<usize, AppError> {
+        if !self.is_primary() {
+            return Ok(0);
+        }
+        let now = self.clock.now_ms();
+        let cutoff = now.saturating_sub(CHANGES_RETENTION_MS);
+        let money_cutoff = now.saturating_sub(MONEY_RETENTION_MS);
+        let mut total = 0;
+        loop {
+            match self
+                .writer
+                .prune_changes(cutoff, money_cutoff, CHANGES_PRUNE_BATCH)
+                .await
+            {
+                Ok(n) => {
+                    total += n;
+                    if n < CHANGES_PRUNE_BATCH {
+                        return Ok(total);
+                    }
+                }
+                Err(e) if e.code == ErrorCode::NotPrimary => return Ok(total),
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
     async fn tick_and_log(&self) {
         match self.tick().await {
             Ok(Housekeeping::Pruned(n)) => {
@@ -104,6 +143,11 @@ impl HousekeepingTask {
             }
             Ok(Housekeeping::Idle) => {}
             Err(e) => tracing::warn!(code = e.code.as_str(), "housekeeping failed"),
+        }
+        match self.prune_changes().await {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(pruned = n, "housekeeping: uploaded change rows pruned"),
+            Err(e) => tracing::warn!(code = e.code.as_str(), "housekeeping: change prune failed"),
         }
     }
 
@@ -347,6 +391,97 @@ mod tests {
         assert_eq!(f.task.writer.jobs_submitted() - jobs, 2);
     }
 
+    fn seed_changes(path: &Path, cursor_seq: Option<i64>) {
+        use arena_store::{
+            ChangeOp, ChangeRecord, UploadCursor, insert_change, write_upload_cursor,
+        };
+        let mut store = Store::open(path, NOW).unwrap();
+        store
+            .write_tx(|tx| {
+                // Seqs 1-4 are 100 days old, 5 is a 100-day-old order, 6 is a day old.
+                for seq in 1..=6_i64 {
+                    insert_change(
+                        tx,
+                        &ChangeRecord {
+                            epoch: "1:H".into(),
+                            seq,
+                            tbl: if seq == 5 { "orders" } else { "settings" }.into(),
+                            row_id: format!("r{seq}"),
+                            op: ChangeOp::Insert,
+                            row: vec![0x80],
+                            intent_id: format!("I{seq}"),
+                            intent_kind: "settings.set".into(),
+                            actor_kind: "staff".into(),
+                            actor_id: "S".into(),
+                            elevated_by_kind: None,
+                            elevated_by_id: None,
+                            elevated_by_mode: None,
+                            elevated_by_verifier_version: None,
+                            at: if seq == 6 { NOW - DAY } else { NOW - 100 * DAY },
+                            business_day: None,
+                            fy: None,
+                            reason: None,
+                        },
+                    )?;
+                }
+                if let Some(last) = cursor_seq {
+                    write_upload_cursor(
+                        tx,
+                        &UploadCursor {
+                            epoch: "1:H".into(),
+                            last_seq_uploaded: last,
+                            uploaded_at: NOW,
+                        },
+                    )?;
+                }
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    fn change_seqs(path: &Path) -> Vec<i64> {
+        Store::open(path, NOW)
+            .unwrap()
+            .changes()
+            .unwrap()
+            .iter()
+            .map(|c| c.seq)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn uploaded_change_rows_older_than_90_days_are_pruned_but_money_rows_stay() {
+        let f = fixture(Role::Primary);
+        seed_changes(&f.path, Some(5));
+        assert_eq!(f.task.prune_changes().await.unwrap(), 4);
+        // The order row (money, 100 days old) and the recent row stay.
+        assert_eq!(change_seqs(&f.path), vec![5, 6]);
+        assert_eq!(f.task.prune_changes().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn unuploaded_change_rows_are_never_pruned() {
+        let f = fixture(Role::Primary);
+        seed_changes(&f.path, Some(2));
+        assert_eq!(f.task.prune_changes().await.unwrap(), 2);
+        assert_eq!(change_seqs(&f.path), vec![3, 4, 5, 6]);
+    }
+
+    #[tokio::test]
+    async fn a_free_hub_with_no_upload_cursor_prunes_no_change_rows() {
+        let f = fixture(Role::Primary);
+        seed_changes(&f.path, None);
+        assert_eq!(f.task.prune_changes().await.unwrap(), 0);
+        assert_eq!(change_seqs(&f.path), vec![1, 2, 3, 4, 5, 6]);
+    }
+
+    #[tokio::test]
+    async fn a_follower_prunes_no_change_rows() {
+        let f = fixture(Role::Follower);
+        seed_changes(&f.path, Some(6));
+        assert_eq!(f.task.prune_changes().await.unwrap(), 0);
+        assert_eq!(change_seqs(&f.path).len(), 6);
+    }
     #[tokio::test]
     async fn a_follower_prunes_nothing() {
         let f = fixture(Role::Follower);

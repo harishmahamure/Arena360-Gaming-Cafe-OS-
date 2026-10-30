@@ -236,6 +236,18 @@ impl Presigner {
         }
     }
 
+    /// Every key under `prefix` in the data bucket with when it was last written (ms; Story 9.15).
+    pub async fn list_modified(&self, prefix: &str) -> Result<Vec<(String, i64)>, String> {
+        match &self.listing {
+            Some(mem) => Ok(mem.list_modified(prefix)),
+            None => self
+                .lister
+                .list_modified(prefix)
+                .await
+                .map_err(|e| e.to_string()),
+        }
+    }
+
     /// Every key under `prefix` in the data bucket with its ETag (Story 8.9).
     pub async fn list_etags(&self, prefix: &str) -> Result<Vec<(String, String)>, String> {
         match &self.listing {

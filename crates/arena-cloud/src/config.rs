@@ -9,7 +9,7 @@ use std::time::Duration;
 pub const USAGE: &str =
     "usage: arena-cloud --role control|command|builder|all [--listen <addr:port>] [--help] [--version]
        arena-cloud --role control|command|builder|all --dev [--data-dir <dir>] [--listen <loopback addr:port>]
-       arena-cloud --role jobs --task control-backup|command-sweep|offline-watch [--dev [--data-dir <dir>]]
+       arena-cloud --role jobs --task control-backup|command-sweep|offline-watch|retention-sweep [--dev [--data-dir <dir>]]
        arena-cloud ops restore-control (--from-key <key> | --from-file <path|->)
                                        (--identity <file> | --plaintext) [--dev [--data-dir <dir>]]
        arena-cloud ops grant-comp --branch <id> --tier basic|premium --until <YYYY-MM-DD>
@@ -29,6 +29,8 @@ pub const USAGE: &str =
                ones and log the command backlog (run every minute)
                offline-watch: alert the owner when a paid branch is offline or not uploading while it
                should be open, and when it is back (run every 5 minutes)
+               retention-sweep: delete backups past the plan's retention and GST archives 8 years
+               after their financial year (run daily)
   --dev        local dev mode: gz_control is <data-dir>/gz_control.db (SQLite), no env or
                token needed, loopback only (default 127.0.0.1:8080), dev routes under /v1/dev
   --data-dir   dev data directory, created if missing (default ./.arena-cloud-dev)
@@ -160,6 +162,8 @@ pub enum Task {
     CommandSweep,
     /// The offline watch (Story 8.35).
     OfflineWatch,
+    /// The backup retention sweep (Story 9.15).
+    RetentionSweep,
 }
 
 impl Task {
@@ -168,6 +172,7 @@ impl Task {
             Self::ControlBackup => "control-backup",
             Self::CommandSweep => "command-sweep",
             Self::OfflineWatch => "offline-watch",
+            Self::RetentionSweep => "retention-sweep",
         }
     }
 }
@@ -582,13 +587,14 @@ pub fn parse(
         let task = match task.as_deref() {
             None => {
                 return Err(
-                    "--role jobs needs --task (control-backup, command-sweep or offline-watch)"
+                    "--role jobs needs --task (control-backup, command-sweep, offline-watch or retention-sweep)"
                         .to_owned(),
                 );
             }
             Some("control-backup") => Task::ControlBackup,
             Some("command-sweep") => Task::CommandSweep,
             Some("offline-watch") => Task::OfflineWatch,
+            Some("retention-sweep") => Task::RetentionSweep,
             Some(other) => return Err(format!("unknown --task {other}")),
         };
         if listen.is_some() {

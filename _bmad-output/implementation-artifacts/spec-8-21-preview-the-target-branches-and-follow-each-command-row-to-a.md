@@ -2,7 +2,7 @@
 title: 'Story 8.21: Preview the target branches and follow each command row to Applied'
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 baseline_commit: 'ebf4722'
 review_loop_iteration: 0
 followup_review_recommended: false

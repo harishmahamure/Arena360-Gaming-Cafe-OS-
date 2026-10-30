@@ -242,7 +242,7 @@ development_status:
   8-18-the-cloud-accepts-owner-command-kinds-checks-them-and-fans-a: done
   8-19-the-hub-applies-owner-commands-exactly-once-and-the-owner-s: done
   8-20-commands-are-swept-expire-after-7-days-and-are-fenced-by-epo: done
-  8-21-preview-the-target-branches-and-follow-each-command-row-to-a: review
+  8-21-preview-the-target-branches-and-follow-each-command-row-to-a: done
   8-22-commands-queue-on-the-owner-s-device-while-it-is-offline: backlog
   8-23-manage-pricing-plans-and-rates-pricing-rules-and-coupons: backlog
   8-24-manage-products-and-bundles: backlog

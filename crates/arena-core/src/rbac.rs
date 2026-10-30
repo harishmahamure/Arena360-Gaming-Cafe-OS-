@@ -90,6 +90,16 @@ pub fn staff_builtin_role(tx: &StoreTx<'_>, staff_id: &str) -> Result<Option<Str
         .map(|r| r.name))
 }
 
+/// The Hub recording its own daily export (Story 9.5).
+fn is_auto_export(intent: &Intent) -> bool {
+    intent.actor.kind == ActorKind::System
+        && intent.actor.id == arena_proto::AUTO_EXPORT_ACTOR
+        && matches!(
+            &intent.payload,
+            arena_proto::IntentPayload::BackupExport(p) if arena_proto::is_auto_export_file(&p.file_name)
+        )
+}
+
 pub fn is_pairing(intent: &Intent) -> bool {
     intent.actor.kind == ActorKind::System
         && intent.actor.id == arena_proto::PAIR_SYSTEM_ACTOR
@@ -296,7 +306,7 @@ pub fn check(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
         Requirement::Perm(p) => match actor.kind {
             ActorKind::Owner => true,
             ActorKind::Staff => staff_allows(tx, &actor.id, p)?,
-            ActorKind::System => is_pairing(intent),
+            ActorKind::System => is_pairing(intent) || is_auto_export(intent),
             ActorKind::Admin => false,
             ActorKind::Device => {
                 device_starts_own_session(p, intent)

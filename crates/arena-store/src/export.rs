@@ -310,6 +310,34 @@ pub fn write_export(
     })
 }
 
+/// Deletes the oldest daily auto exports of the branch in `folder` until `keep` remain (Story
+/// 9.5). Only files named by [`arena_proto::auto_export_file_name`] for this `branch_code` are
+/// considered, so a file a person exported, another branch's file and anything else in the folder
+/// are never touched. The name carries the branch-local time, so name order is time order. A file
+/// that cannot be deleted is left. Returns the names deleted. Blocking (disk).
+pub fn prune_auto_exports(
+    folder: &Path,
+    branch_code: &str,
+    keep: usize,
+) -> Result<Vec<String>, AppError> {
+    let entries = fs::read_dir(folder).map_err(|_| target_problem(folder))?;
+    let mut autos: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|name| arena_proto::is_auto_export_name(name, branch_code))
+        .collect();
+    autos.sort_unstable_by(|a, b| b.cmp(a));
+    let mut deleted = Vec::new();
+    for old in autos.into_iter().skip(keep) {
+        // A file that cannot be deleted stays and is tried again after the next export.
+        if fs::remove_file(folder.join(&old)).is_ok() {
+            deleted.push(old);
+        }
+    }
+    Ok(deleted)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,6 +402,40 @@ mod tests {
             .collect();
         names.sort();
         names
+    }
+
+    #[test]
+    fn pruning_keeps_the_newest_auto_files_and_touches_nothing_else() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut keep_always = vec![
+            "LVL01-2026-10-01-0900.a360".to_owned(),
+            "LVL01-auto-notes.a360".to_owned(),
+            "LVL02-auto-2026-10-01-0100.a360".to_owned(),
+            "readme.txt".to_owned(),
+        ];
+        for name in &keep_always {
+            fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        let autos: Vec<String> = (1..=9)
+            .map(|d| format!("LVL01-auto-2026-10-0{d}-0130.a360"))
+            .collect();
+        for name in &autos {
+            fs::write(dir.path().join(name), b"x").unwrap();
+        }
+        fs::create_dir(dir.path().join("LVL01-auto-2026-09-01-0130.a360")).unwrap();
+        let mut gone = prune_auto_exports(dir.path(), "LVL01", 7).unwrap();
+        gone.sort();
+        assert_eq!(gone, autos[..2].to_vec());
+        keep_always.extend(autos[2..].iter().cloned());
+        keep_always.push("LVL01-auto-2026-09-01-0130.a360".into());
+        keep_always.sort();
+        assert_eq!(names(dir.path()), keep_always);
+        assert!(
+            prune_auto_exports(dir.path(), "LVL01", 7)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(prune_auto_exports(&dir.path().join("missing"), "LVL01", 7).is_err());
     }
 
     #[test]

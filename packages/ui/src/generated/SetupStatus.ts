@@ -18,4 +18,9 @@ export type SetupStatus = {
   manager_exists: boolean;
   test_session: TestSessionState;
   live: boolean;
+  /**
+   * The daily auto export could not be saved (Story 9.5); the header says the backup folder is
+   * not available until an export succeeds.
+   */
+  backup_export_failed?: boolean;
 };

@@ -5,6 +5,7 @@ pub mod cloud;
 pub mod commands;
 pub mod connectivity;
 pub mod credit_reminder;
+pub mod daily_export;
 pub mod disk;
 pub mod fence;
 pub mod heartbeat;
@@ -34,6 +35,9 @@ pub use connectivity::{
     parse_internet_endpoints,
 };
 pub use credit_reminder::{CREDIT_REMINDER_TICK, CreditReminderTask};
+pub use daily_export::{
+    DAILY_EXPORT_RETRY, DAILY_EXPORT_TICK, DailyExportTask, Pass as DailyExportPass,
+};
 pub use fence::{Claim, claim_fence};
 pub use heartbeat::HeartbeatTask;
 pub use housekeeping::{

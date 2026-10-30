@@ -732,6 +732,9 @@ pub struct SnapshotReader {
     /// Set by the backup-folder watch while the chosen folder cannot be written; setup status
     /// then reports the backup location as not set.
     backup_unavailable: AtomicBool,
+    /// Set by the daily export while its last attempt failed (Story 9.5); setup status then
+    /// reports `backup_export_failed`.
+    export_failed: AtomicBool,
 }
 
 impl std::fmt::Debug for SnapshotReader {
@@ -746,6 +749,7 @@ impl SnapshotReader {
         Ok(Self {
             reader: Mutex::new(Store::open_reader(db_path)?),
             backup_unavailable: AtomicBool::new(false),
+            export_failed: AtomicBool::new(false),
         })
     }
 
@@ -1588,6 +1592,7 @@ impl SnapshotReader {
         let mut snapshot = read_snapshot(&store, now_ms)?;
         if let Some(setup) = snapshot.setup.as_mut() {
             setup.backup_location_set &= !self.backup_unavailable.load(Ordering::Relaxed);
+            setup.backup_export_failed = self.export_failed.load(Ordering::Relaxed);
         }
         Ok(snapshot)
     }
@@ -1600,6 +1605,11 @@ impl SnapshotReader {
     /// Records whether the chosen backup folder is unavailable; `true` when that changed.
     pub fn set_backup_unavailable(&self, unavailable: bool) -> bool {
         self.backup_unavailable.swap(unavailable, Ordering::Relaxed) != unavailable
+    }
+
+    /// Records whether the daily export's last attempt failed; `true` when that changed.
+    pub fn set_export_failed(&self, failed: bool) -> bool {
+        self.export_failed.swap(failed, Ordering::Relaxed) != failed
     }
 
     /// The value of one setting; `None` when the row does not exist. Blocking (SQLite).
@@ -1835,6 +1845,51 @@ impl SnapshotReader {
         folder: &str,
         now_ms: i64,
     ) -> Result<(arena_proto::BackupExport, std::path::PathBuf), AppError> {
+        self.export_named(folder, now_ms, false)
+    }
+
+    /// The daily auto export (Story 9.5): as [`Self::export_to_folder`], under the auto file name
+    /// (`<branch_code>-auto-<yyyy-mm-dd-hhmm>.a360`).
+    pub fn auto_export_to_folder(
+        &self,
+        folder: &str,
+        now_ms: i64,
+    ) -> Result<(arena_proto::BackupExport, std::path::PathBuf), AppError> {
+        self.export_named(folder, now_ms, true)
+    }
+
+    /// Deletes this branch's auto exports in `folder` beyond the newest
+    /// [`arena_proto::AUTO_EXPORT_KEEP`] (Story 9.5); returns the names deleted. Blocking (disk).
+    pub fn prune_auto_exports(&self, folder: &str) -> Result<Vec<String>, AppError> {
+        let branch = self
+            .branch()?
+            .ok_or_else(|| AppError::new(ErrorCode::Internal, "the branch is not set up"))?;
+        arena_store::prune_auto_exports(
+            Path::new(folder),
+            &branch.branch_code,
+            arena_proto::AUTO_EXPORT_KEEP,
+        )
+    }
+
+    /// When the daily export is due (Story 9.5); `None` before the branch is set up. Blocking
+    /// (SQLite).
+    pub fn auto_export_plan(
+        &self,
+        now_ms: i64,
+    ) -> Result<Option<crate::auto_export::AutoExportPlan>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        crate::auto_export::plan_auto_export(&store, now_ms)
+    }
+
+    fn export_named(
+        &self,
+        folder: &str,
+        now_ms: i64,
+        auto: bool,
+    ) -> Result<(arena_proto::BackupExport, std::path::PathBuf), AppError> {
         let bad =
             |reason: &str| AppError::with_field(ErrorCode::ValidationFailed, "folder", reason);
         if folder.trim().is_empty() {
@@ -1849,7 +1904,11 @@ impl SnapshotReader {
         let tz = self
             .locale(now_ms)?
             .map_or_else(|| "UTC".to_owned(), |l| l.tz);
-        let file_name = arena_proto::export_file_name(&branch.branch_code, now_ms, &tz);
+        let file_name = if auto {
+            arena_proto::auto_export_file_name(&branch.branch_code, now_ms, &tz)
+        } else {
+            arena_proto::export_file_name(&branch.branch_code, now_ms, &tz)
+        };
         let db = self.db_path()?;
         let done = arena_store::write_export(&db, Path::new(folder), &file_name, now_ms)?;
         Ok((
@@ -1859,6 +1918,7 @@ impl SnapshotReader {
                 epoch: done.header.epoch,
                 last_seq: done.header.last_seq,
                 exported_at: now_ms,
+                ..Default::default()
             },
             done.path,
         ))
@@ -2310,6 +2370,7 @@ impl SnapshotReader {
         let mut setup = store.read_consistent(read_setup)?;
         if let Some(s) = setup.as_mut() {
             s.backup_location_set &= !self.backup_unavailable.load(Ordering::Relaxed);
+            s.backup_export_failed = self.export_failed.load(Ordering::Relaxed);
         }
         Ok(setup)
     }
@@ -2498,6 +2559,7 @@ mod tests {
                     manager_exists: false,
                     test_session: Default::default(),
                     live: false,
+                    backup_export_failed: false,
                 }),
                 lan: None,
                 paired: true,

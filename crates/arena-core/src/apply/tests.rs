@@ -5289,6 +5289,7 @@ mod operating {
                 manager_exists: false,
                 test_session: Default::default(),
                 live: false,
+                backup_export_failed: false,
             }
         );
         let manager = staff(&f, "manager", ROLE_MANAGER).await;
@@ -5313,6 +5314,7 @@ mod operating {
                 manager_exists: true,
                 test_session: Default::default(),
                 live: false,
+                backup_export_failed: false,
             }
         );
         f.writer
@@ -5340,6 +5342,7 @@ mod operating {
                 manager_exists: true,
                 test_session: Default::default(),
                 live: false,
+                backup_export_failed: false,
             }
         );
         save(&f, "system.backup_dir", "").await.unwrap();
@@ -5385,6 +5388,7 @@ mod operating {
                 manager_exists: false,
                 test_session: Default::default(),
                 live: false,
+                backup_export_failed: false,
             },
         )
         .await;
@@ -5402,6 +5406,7 @@ mod operating {
                 manager_exists: false,
                 test_session: Default::default(),
                 live: false,
+                backup_export_failed: false,
             },
         )
         .await;
@@ -5432,6 +5437,7 @@ mod operating {
                 manager_exists: true,
                 test_session: Default::default(),
                 live: false,
+                backup_export_failed: false,
             },
         )
         .await;
@@ -5449,6 +5455,7 @@ mod operating {
                 manager_exists: true,
                 test_session: Default::default(),
                 live: false,
+                backup_export_failed: false,
             },
         )
         .await;

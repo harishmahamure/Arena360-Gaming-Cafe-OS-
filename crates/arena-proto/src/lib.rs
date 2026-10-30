@@ -122,9 +122,11 @@ pub use audit_query::{
     AUDIT_LOCAL_CACHE_BYTES, AUDIT_QUERY_PAGE, AuditQueryKind, AuditSearch, AuditSearchPage,
 };
 pub use backup_export::{
-    BackupExport, DEFAULT_BACKUP_LAST_EXPORT, EXPORT_EXTENSION, EXPORT_FORMAT_VERSION,
-    EXPORT_MAGIC, ExportFormatError, ExportHeader, KEY_BACKUP_LAST_EXPORT,
-    MAX_EXPORT_FILE_NAME_CHARS, MAX_EXPORT_HEADER_BYTES, export_file_name,
+    AUTO_EXPORT_ACTOR, AUTO_EXPORT_KEEP, BackupExport, DEFAULT_BACKUP_LAST_EXPORT,
+    EXPORT_EXTENSION, EXPORT_FORMAT_VERSION, EXPORT_HISTORY, EXPORT_MAGIC, ExportEntry,
+    ExportFormatError, ExportHeader, KEY_BACKUP_LAST_EXPORT, MAX_EXPORT_FILE_NAME_CHARS,
+    MAX_EXPORT_HEADER_BYTES, auto_export_file_name, export_file_name, is_auto_export_file,
+    is_auto_export_name,
 };
 pub use billing::{
     BILLING_GRACE_RANGE, BILLING_LOW_BALANCE_MAX_MINOR, BILLING_MINIMUM_RANGE,

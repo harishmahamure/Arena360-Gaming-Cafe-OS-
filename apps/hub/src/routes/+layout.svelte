@@ -121,6 +121,10 @@
   let alertsOpen = $state(false);
   let alertButton: HTMLButtonElement | undefined = $state();
   const alertRows = $derived(listRows());
+  /** The daily export could not be saved: the backup folder is not available (Story 9.5). */
+  const backupFailed = $derived(
+    data.hub.ok && data.hub.snapshot.setup?.backup_export_failed === true,
+  );
   const deviceNames = $derived(
     Object.fromEntries(
       (data.hub.ok ? data.hub.snapshot.devices : []).map((d) => [d.device_id, d.label]),
@@ -823,6 +827,18 @@
             <AlertBadge count={alertRows.length} live={false} />
           </button>
         {/if}
+        {#if backupFailed}
+          <a
+            class="backup-alert ui-interactive"
+            href="/settings/system"
+            data-testid="hub-backup-alert"
+          >
+            <span class="type-hub-label" class:visually-hidden={viewport.phone}
+              >{t("hub.header.backup_alert")}</span
+            >
+            <AlertBadge count={1} />
+          </a>
+        {/if}
         {#if alertCount(service.access) > 0}
           <a
             class="service-alert ui-interactive"
@@ -1096,6 +1112,16 @@
   .service-alert {
     display: inline-flex;
     align-items: center;
+    min-height: var(--space-touch-min);
+    min-width: var(--space-touch-min);
+    justify-content: center;
+    text-decoration: none;
+  }
+
+  .backup-alert {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
     min-height: var(--space-touch-min);
     min-width: var(--space-touch-min);
     justify-content: center;

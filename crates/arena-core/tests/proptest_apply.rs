@@ -6174,6 +6174,7 @@ b"
                 epoch: "1:proptest".into(),
                 last_seq: *seq,
                 exported_at: hub.clock_now(),
+                ..Default::default()
             };
             let before = hub.change_count();
             let was = hub.setting("backup.last_export");
@@ -6197,7 +6198,21 @@ b"
             if out.is_ok() {
                 prop_assert_eq!(hub.change_count(), before + 1);
                 let stored = hub.setting("backup.last_export").unwrap();
-                prop_assert_eq!(stored["value"].clone(), RowValue::Text(facts.to_json()));
+                // The Hub stamps who made it and keeps the history of the exports before.
+                let RowValue::Text(json) = stored["value"].clone() else {
+                    return Err(TestCaseError::fail("backup.last_export is not text"));
+                };
+                let kept = arena_proto::BackupExport::parse(&json).expect("a consistent record");
+                prop_assert!(kept.by.is_some());
+                prop_assert_eq!(
+                    arena_proto::BackupExport {
+                        by: None,
+                        recent: Vec::new(),
+                        ..kept.clone()
+                    },
+                    facts.clone()
+                );
+                prop_assert!(kept.recent.len() < arena_proto::EXPORT_HISTORY);
             } else {
                 prop_assert_eq!(hub.change_count(), before);
                 prop_assert_eq!(hub.setting("backup.last_export"), was);

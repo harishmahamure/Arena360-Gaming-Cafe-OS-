@@ -51,6 +51,7 @@ pub fn setup_status<'a>(
             .and_then(TestSessionStatus::parse)
             .map_or_else(Default::default, |s| s.state),
         live: value(KEY_SETUP_LIVE) == Some("true"),
+        backup_export_failed: false,
     }
 }
 
@@ -164,7 +165,7 @@ pub async fn watch_backup_folder(
     }
 }
 
-async fn refresh(reader: &Arc<SnapshotReader>, status: &watch::Sender<HubStatus>) {
+pub async fn refresh(reader: &Arc<SnapshotReader>, status: &watch::Sender<HubStatus>) {
     let r = Arc::clone(reader);
     match tokio::task::spawn_blocking(move || r.setup()).await {
         Ok(Ok(setup)) => {
@@ -252,6 +253,7 @@ mod tests {
                 manager_exists: false,
                 test_session: Default::default(),
                 live: false,
+                backup_export_failed: false,
             }
         );
         let given = r#"{"given":true,"at":1,"staff_id":"S"}"#;
@@ -277,6 +279,7 @@ mod tests {
                 manager_exists: false,
                 test_session: Default::default(),
                 live: false,
+                backup_export_failed: false,
             }
         );
         assert_eq!(
@@ -309,6 +312,7 @@ mod tests {
                 manager_exists: false,
                 test_session: Default::default(),
                 live: false,
+                backup_export_failed: false,
             }
         );
         for (value, state) in [

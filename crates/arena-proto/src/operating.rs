@@ -295,6 +295,10 @@ pub struct SetupStatus {
     pub test_session: TestSessionState,
     #[serde(default)]
     pub live: bool,
+    /// The daily auto export could not be saved (Story 9.5); the header says the backup folder is
+    /// not available until an export succeeds.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub backup_export_failed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
@@ -549,6 +553,7 @@ mod tests {
                 manager_exists: true,
                 test_session: TestSessionState::Passed,
                 live: false,
+                backup_export_failed: false,
             })
             .unwrap(),
             serde_json::json!({"opening_hours_set": false, "backup_location_set": true, "ad_consent": "not_needed", "ad_rating": "PG", "printer": "skipped", "products_count": 0, "groups_without_rate": 2, "manager_exists": true, "test_session": "passed", "live": false})

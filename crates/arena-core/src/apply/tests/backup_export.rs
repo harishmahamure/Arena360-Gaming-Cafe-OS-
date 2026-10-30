@@ -16,6 +16,7 @@ fn facts() -> BackupExport {
         epoch: "1:abc".into(),
         last_seq: 7,
         exported_at: T0,
+        ..Default::default()
     }
 }
 
@@ -54,7 +55,13 @@ async fn a_manager_records_an_export_and_the_setting_holds_its_facts() {
     assert_eq!(applied.changes.len(), 1);
     assert_eq!(applied.changes[0].tbl, "settings");
     assert!(applied.changes[0].row_id.ends_with("/backup.last_export"));
-    assert_eq!(BackupExport::parse(&stored(&f)), Some(facts()));
+    assert_eq!(
+        BackupExport::parse(&stored(&f)),
+        Some(BackupExport {
+            by: Some("mgr-direct".into()),
+            ..facts()
+        })
+    );
     let rows = reopen(&f).changes().unwrap();
     assert_eq!(rows.len(), before + 1);
     assert_eq!(rows[before].actor_id, mgr.id);
@@ -77,7 +84,17 @@ async fn a_second_export_replaces_the_first_and_needs_no_base_rev() {
     let mut again = record(mgr, later.clone());
     again.base_rev = Some(99);
     f.writer.submit_intent(again).await.unwrap();
-    assert_eq!(BackupExport::parse(&stored(&f)), Some(later));
+    let kept = BackupExport::parse(&stored(&f)).unwrap();
+    assert_eq!(kept.file_name, later.file_name);
+    assert_eq!(kept.last_seq, 20);
+    let names: Vec<String> = kept.entries().into_iter().map(|e| e.file_name).collect();
+    assert_eq!(
+        names,
+        vec![
+            "DEV01-2027-01-16-0900.a360".to_owned(),
+            "DEV01-2027-01-15-1330.a360".to_owned()
+        ]
+    );
 }
 
 #[tokio::test]
@@ -105,7 +122,11 @@ async fn a_counter_is_refused_until_a_managers_pin_elevates_and_both_actors_are_
         ..record(counter.clone(), facts())
     };
     f.writer.submit_intent(elevated).await.unwrap();
-    assert_eq!(BackupExport::parse(&stored(&f)), Some(facts()));
+    let kept = BackupExport::parse(&stored(&f)).unwrap();
+    assert_eq!(
+        (kept.file_name.as_str(), kept.by.as_deref()),
+        (facts().file_name.as_str(), Some("ctr"))
+    );
     let rows = reopen(&f).changes().unwrap();
     assert_eq!(rows.len(), before + 1);
     assert_eq!(rows[before].actor_id, counter.id);
@@ -113,6 +134,73 @@ async fn a_counter_is_refused_until_a_managers_pin_elevates_and_both_actors_are_
         rows[before].elevated_by_id.as_deref(),
         Some(manager.as_str())
     );
+}
+
+fn auto_facts(n: i64) -> BackupExport {
+    BackupExport {
+        file_name: format!("DEV01-auto-2027-01-{:02}-0130.a360", n),
+        bytes: 100 + n,
+        epoch: "1:abc".into(),
+        last_seq: n,
+        exported_at: T0 + n,
+        ..Default::default()
+    }
+}
+
+fn hub_record(facts: BackupExport) -> Intent {
+    Intent {
+        actor: Actor {
+            kind: ActorKind::System,
+            id: arena_proto::AUTO_EXPORT_ACTOR.into(),
+        },
+        ..record(owner(), facts)
+    }
+}
+
+#[tokio::test]
+async fn the_hub_records_its_auto_export_without_a_person_and_the_list_keeps_seven() {
+    let f = bootstrapped().await;
+    let mgr = manager(&f).await;
+    f.writer.submit_intent(record(mgr, facts())).await.unwrap();
+    for n in 1..=8 {
+        f.writer
+            .submit_intent(hub_record(auto_facts(n)))
+            .await
+            .unwrap();
+    }
+    let kept = BackupExport::parse(&stored(&f)).unwrap();
+    assert_eq!(kept.by, None, "an auto export names no person");
+    let entries = kept.entries();
+    assert_eq!(entries.len(), arena_proto::EXPORT_HISTORY);
+    let names: Vec<&str> = entries.iter().map(|e| e.file_name.as_str()).collect();
+    assert_eq!(names[0], "DEV01-auto-2027-01-08-0130.a360");
+    assert_eq!(names[6], "DEV01-auto-2027-01-02-0130.a360");
+    assert!(
+        entries.iter().all(|e| e.by.is_none()),
+        "the manual export has aged out"
+    );
+}
+
+#[tokio::test]
+async fn staff_cannot_pass_for_the_hub_and_the_hub_cannot_pass_for_staff() {
+    let f = bootstrapped().await;
+    let mgr = manager(&f).await;
+    let before = changes(&f);
+    // A staff member sending an auto name.
+    let (code, field) = refusal(f.writer.submit_intent(record(mgr, auto_facts(1))).await);
+    assert_eq!(
+        (code, field.as_deref()),
+        (ErrorCode::ValidationFailed, Some("actor"))
+    );
+    // The Hub sending a manual name, or another system actor sending an auto one.
+    let (code, _) = refusal(f.writer.submit_intent(hub_record(facts())).await);
+    assert_eq!(code, ErrorCode::PermissionDenied);
+    let mut other = hub_record(auto_facts(1));
+    other.actor.id = "notify".into();
+    let (code, _) = refusal(f.writer.submit_intent(other).await);
+    assert_eq!(code, ErrorCode::PermissionDenied);
+    assert_eq!(changes(&f), before);
+    assert_eq!(stored(&f), "");
 }
 
 #[tokio::test]

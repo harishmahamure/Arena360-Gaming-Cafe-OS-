@@ -718,6 +718,19 @@ async fn run(
             .run(),
         )
     });
+    // The daily export (Story 9.5): when the business day closes, the Story 9.4 export is saved to
+    // the backup location and the oldest auto files are deleted.
+    let daily_export_job = writer.clone().map(|w| {
+        tokio::spawn(
+            arena_tasks::DailyExportTask::new(
+                w,
+                Arc::clone(&snapshots),
+                Arc::clone(&clock),
+                status_tx.clone(),
+            )
+            .run(),
+        )
+    });
     let mut cloud_pairer = CloudPairer::new(
         cloud,
         writer.clone(),
@@ -900,6 +913,10 @@ async fn run(
         let _ = job.await;
     }
     if let Some(job) = credit_reminder_job {
+        job.abort();
+        let _ = job.await;
+    }
+    if let Some(job) = daily_export_job {
         job.abort();
         let _ = job.await;
     }

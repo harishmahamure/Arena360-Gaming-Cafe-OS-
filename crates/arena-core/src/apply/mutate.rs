@@ -168,7 +168,7 @@ pub(super) fn mutate(
             _ => Err(mismatch()),
         },
         IntentPayload::BackupExport(p) => match target {
-            Target::Setting(row) => super::backup_export::mutate(tx, p, row.as_ref()),
+            Target::Setting(row) => super::backup_export::mutate(tx, intent, p, row.as_ref()),
             _ => Err(mismatch()),
         },
         IntentPayload::DeviceRegister(d) => match target {

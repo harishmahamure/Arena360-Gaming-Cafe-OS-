@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Button, InlinePin, t } from "@arena/ui";
-  import type { BackupExport } from "@arena/ui/generated";
+  import type { BackupExport, ExportEntry } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { onMount, untrack } from "svelte";
   import { invalidate } from "$app/navigation";
@@ -9,6 +9,7 @@
     BACKUP_EXPORT_KIND,
     KEY_BACKUP_LAST_EXPORT,
     exportDatabase,
+    exportList,
     exportedAt,
     parseLastExport,
     problemMessage,
@@ -40,6 +41,7 @@
   let loadSeq = 0;
 
   const tz = $derived(branchLocale.current?.tz);
+  const entries = $derived(exportList(last));
 
   async function load() {
     const seq = ++loadSeq;
@@ -48,6 +50,15 @@
     if (result.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
     if (result.kind !== "ok") return;
     last = parseLastExport(result.settings.find((s) => s.key === KEY_BACKUP_LAST_EXPORT)?.value);
+  }
+
+  function describeEntry(entry: ExportEntry): string {
+    return t("hub.backup.entry", {
+      name: entry.file_name,
+      size: formatBytes(entry.bytes),
+      time: exportedAt(entry.exported_at, tz),
+      by: entry.by ?? t("hub.backup.auto"),
+    });
   }
 
   function describe(file: BackupExport): string {
@@ -85,6 +96,8 @@
       case "ok":
         saved = outcome.export;
         last = outcome.export;
+        // The Hub kept the list of the exports before this one with the record.
+        void load();
         return;
       case "folder":
         problem = outcome.problem;
@@ -146,6 +159,17 @@
       <span class="muted" data-testid="backup-never">{t("hub.backup.never")}</span>
     {/if}
   </p>
+
+  {#if entries.length > 0}
+    <div class="recent" data-testid="backup-recent">
+      <h4 class="type-hub-label">{t("hub.backup.recent")}</h4>
+      <ul class="type-hub-body">
+        {#each entries as entry (entry.file_name + entry.exported_at)}
+          <li data-testid="backup-entry">{describeEntry(entry)}</li>
+        {/each}
+      </ul>
+    </div>
+  {/if}
 
   <div class="row">
     <Button
@@ -227,6 +251,21 @@
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
+    overflow-wrap: anywhere;
+  }
+
+  .recent {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .recent h4,
+  .recent ul {
+    margin: 0;
+  }
+
+  .recent ul {
+    padding-inline-start: var(--space-5);
     overflow-wrap: anywhere;
   }
 

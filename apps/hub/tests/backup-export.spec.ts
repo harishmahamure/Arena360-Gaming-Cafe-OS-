@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
-import type { BackupExport, HubSnapshot, SessionStaff } from "@arena/ui/generated";
+import type { BackupExport, ExportEntry, HubSnapshot, SessionStaff } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { ORIGIN } from "./origin";
 
@@ -33,6 +33,8 @@ const EXPORTED: BackupExport = {
   epoch: "1:abc",
   last_seq: 41,
   exported_at: AT,
+  by: null,
+  recent: [],
 };
 
 type Answer = { status: number; body: unknown };
@@ -42,6 +44,8 @@ type Hub = {
   answers: Answer[];
   exports: { ticket?: string }[];
   elevations: number;
+  /** The daily auto export could not be saved (Story 9.5). */
+  exportFailed: boolean;
 };
 
 function newHub(): Hub {
@@ -55,6 +59,7 @@ function newHub(): Hub {
     answers: [{ status: 200, body: EXPORTED }],
     exports: [],
     elevations: 0,
+    exportFailed: false,
   };
 }
 
@@ -63,7 +68,7 @@ const invalidFolder = (message: string): Answer => ({
   body: { code: "VALIDATION_FAILED", message, field: "folder" },
 });
 
-function snapshot(): HubSnapshot {
+function snapshot(failed = false): HubSnapshot {
   return {
     branch: { name: "Dev Branch", branch_code: "DEV01" },
     groups: [],
@@ -93,6 +98,7 @@ function snapshot(): HubSnapshot {
       manager_exists: false,
       test_session: "unset",
       live: false,
+      backup_export_failed: failed,
     },
     lan: null,
     paired: true,
@@ -117,7 +123,7 @@ async function open(page: Page, hub: Hub, token = "manager-token") {
     const auth = (req.headers()["authorization"] ?? "").replace(/^Bearer /, "");
     switch (url.pathname) {
       case "/ui/snapshot":
-        return json(route, 200, snapshot());
+        return json(route, 200, snapshot(hub.exportFailed));
       case "/ui/me":
         return STAFF[auth] ? json(route, 200, STAFF[auth]) : json(route, 401, AUTH_FAILED);
       case "/ui/settings":
@@ -271,4 +277,50 @@ test("a failed export says nothing was saved and offers Try again", async ({ pag
   await expect(notice).toContainText(en["hub.backup.failed"]);
   await expect(notice.getByRole("button", { name: en["hub.backup.try_again"] })).toBeVisible();
   await expect(page.getByTestId("backup-last-value")).toHaveCount(0);
+});
+
+test("System → Backup lists the last seven exports with time, size and auto or the staff name", async ({
+  page,
+}) => {
+  const hub = newHub();
+  const entry = (n: number, by: string | null): ExportEntry => ({
+    file_name: by ? `DEV01-2027-01-${10 + n}-0900.a360` : `DEV01-auto-2027-01-${10 + n}-0130.a360`,
+    bytes: 2 * 1024 * 1024,
+    exported_at: AT - (7 - n) * 24 * 60 * 60 * 1000,
+    by,
+  });
+  const recent = [entry(5, null), entry(4, "Asha"), entry(3, null), entry(2, null), entry(1, null)];
+  const last: BackupExport = {
+    ...EXPORTED,
+    file_name: "DEV01-auto-2027-01-16-0130.a360",
+    by: null,
+    recent: [...recent, entry(0, "Ravi")],
+  };
+  hub.settings.set("backup.last_export", { value: JSON.stringify(last), rev: 2 });
+  await open(page, hub);
+  const rows = page.getByTestId("backup-entry");
+  await expect(rows).toHaveCount(7);
+  await expect(rows.first()).toContainText("DEV01-auto-2027-01-16-0130.a360");
+  await expect(rows.first()).toContainText(en["hub.backup.auto"]);
+  await expect(rows.nth(2)).toContainText("Asha");
+  await expect(rows.nth(6)).toContainText("Ravi");
+  await expect(rows.nth(2)).toContainText("2 MB");
+  await expectNoSeriousAxe(page);
+});
+
+test("the header says the backup folder is not available until an export succeeds", async ({
+  page,
+}) => {
+  const hub = newHub();
+  hub.exportFailed = true;
+  await open(page, hub);
+  const alert = page.getByTestId("hub-backup-alert");
+  await expect(alert).toContainText(en["hub.header.backup_alert"]);
+  await expect(alert).toHaveAttribute("href", "/settings/system");
+  await expectNoSeriousAxe(page);
+
+  const calm = newHub();
+  const other = await page.context().newPage();
+  await open(other, calm);
+  await expect(other.getByTestId("hub-backup-alert")).toHaveCount(0);
 });

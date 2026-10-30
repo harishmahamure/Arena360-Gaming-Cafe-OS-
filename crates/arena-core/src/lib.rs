@@ -5,6 +5,7 @@ mod ad_metrics;
 mod apply;
 pub mod attract;
 pub mod audit;
+pub mod auto_export;
 pub mod billing;
 mod catalog;
 mod clock;

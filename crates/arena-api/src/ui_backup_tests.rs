@@ -128,9 +128,16 @@ async fn a_manager_exports_and_the_file_and_the_record_agree() {
     assert_eq!(rows[before - 1].seq, facts.last_seq);
     assert_eq!(rows[before].actor_id, hub.manager_id);
     assert_eq!(rows[before].elevated_by_id, None);
+    // The record adds who made it and the list of the exports before this one.
+    let kept = BackupExport::parse(&setting(&hub, KEY_LAST).0).expect("a record");
+    assert!(kept.by.is_some(), "the staff member is named");
     assert_eq!(
-        BackupExport::parse(&setting(&hub, KEY_LAST).0),
-        Some(facts),
+        BackupExport {
+            by: None,
+            recent: Vec::new(),
+            ..kept
+        },
+        facts,
         "backup.last_export holds the facts"
     );
 }
@@ -255,6 +262,7 @@ async fn the_direct_intent_route_does_not_take_a_backup_export() {
         epoch: String::new(),
         last_seq: 0,
         exported_at: T0,
+        ..Default::default()
     };
     let (status, body) = call(
         &hub,

@@ -1,4 +1,4 @@
-import type { BackupExport } from "@arena/ui/generated";
+import type { BackupExport, ExportEntry } from "@arena/ui/generated";
 import type { MessageKey } from "@arena/ui/messages";
 import { authHeaders, errorOf, getToken, noticeLocked, setToken } from "./auth";
 
@@ -26,6 +26,18 @@ export function parseLastExport(value: string | undefined): BackupExport | null 
     // An unreadable value reads as no export yet.
   }
   return null;
+}
+
+/** The last export and the ones before it, newest first: at most seven (Story 9.5). */
+export function exportList(last: BackupExport | null): ExportEntry[] {
+  if (!last) return [];
+  const first: ExportEntry = {
+    file_name: last.file_name,
+    bytes: last.bytes,
+    exported_at: last.exported_at,
+    by: last.by ?? null,
+  };
+  return [first, ...(Array.isArray(last.recent) ? last.recent : [])].slice(0, 7);
 }
 
 /** Why the Hub could not write the file into the backup location. */

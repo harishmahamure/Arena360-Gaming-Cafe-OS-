@@ -169,21 +169,80 @@ impl ExportHeader {
 /// `<branch_code>-<yyyy-mm-dd-hhmm>.a360`, the time in the branch's zone (UTC for an unknown
 /// zone). Characters of the code that are not letters or digits become `-`.
 pub fn export_file_name(branch_code: &str, exported_at_ms: i64, tz: &str) -> String {
-    let code: String = branch_code
+    stamped_name(branch_code, "", exported_at_ms, tz)
+}
+
+fn file_code(branch_code: &str) -> String {
+    branch_code
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
+        .collect()
+}
+
+fn stamped_name(branch_code: &str, infix: &str, exported_at_ms: i64, tz: &str) -> String {
+    let code = file_code(branch_code);
     let zone = tz.parse::<chrono_tz::Tz>().unwrap_or(chrono_tz::UTC);
     let when = zone
         .timestamp_millis_opt(exported_at_ms)
         .single()
         .unwrap_or_else(|| chrono_tz::UTC.timestamp_opt(0, 0).unwrap());
-    format!("{code}-{}.{EXPORT_EXTENSION}", when.format("%Y-%m-%d-%H%M"))
+    format!(
+        "{code}-{infix}{}.{EXPORT_EXTENSION}",
+        when.format("%Y-%m-%d-%H%M")
+    )
+}
+
+/// How many daily auto exports the Hub keeps (Story 9.5); older auto files are deleted.
+pub const AUTO_EXPORT_KEEP: usize = 7;
+/// The `actor.id` of the system actor that records an auto export.
+pub const AUTO_EXPORT_ACTOR: &str = "backup";
+/// How many exports `backup.last_export` lists in all: the last one and the ones before it.
+pub const EXPORT_HISTORY: usize = 7;
+
+/// `<branch_code>-auto-<yyyy-mm-dd-hhmm>.a360`: the name of a daily auto export (Story 9.5), the
+/// manual name with `auto-` after the code. Only files with this shape are ever pruned.
+pub fn auto_export_file_name(branch_code: &str, exported_at_ms: i64, tz: &str) -> String {
+    stamped_name(branch_code, "auto-", exported_at_ms, tz)
+}
+
+/// Whether `name` ends like an auto export of any branch: `-auto-<yyyy-mm-dd-hhmm>.a360`.
+pub fn is_auto_export_file(name: &str) -> bool {
+    let Some((_, rest)) = name.rsplit_once("-auto-") else {
+        return false;
+    };
+    rest.strip_suffix(&format!(".{EXPORT_EXTENSION}"))
+        .is_some_and(|stamp| {
+            stamp.len() == 15
+                && stamp.bytes().enumerate().all(|(i, b)| match i {
+                    4 | 7 | 10 => b == b'-',
+                    _ => b.is_ascii_digit(),
+                })
+        })
+}
+
+/// Whether `name` is an auto export of the branch with `branch_code`.
+pub fn is_auto_export_name(name: &str, branch_code: &str) -> bool {
+    let prefix = format!("{}-auto-", file_code(branch_code));
+    name.starts_with(&prefix) && is_auto_export_file(name) && name.len() == prefix.len() + 15 + 5
+}
+
+/// One line of the export list: a file, how big, when, and who (`None` for a daily auto export).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ExportEntry {
+    pub file_name: String,
+    #[ts(type = "number")]
+    pub bytes: i64,
+    #[ts(type = "number")]
+    pub exported_at: i64,
+    /// The display name of the staff member who tapped Export; `None` for an auto export.
+    pub by: Option<String>,
 }
 
 /// What an export wrote, and what `backup.export` records: the answer of `POST /ui/backup/export`
 /// and (as JSON) the value of `backup.last_export`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct BackupExport {
@@ -199,22 +258,55 @@ pub struct BackupExport {
     /// When the file was made, UTC ms.
     #[ts(type = "number")]
     pub exported_at: i64,
+    /// Who made it (Story 9.5): the staff member's display name, `None` for an auto export. Set
+    /// by the Hub when it applies the record; whatever a sender puts here is replaced.
+    #[serde(default)]
+    pub by: Option<String>,
+    /// The exports before this one, newest first, fewer than [`EXPORT_HISTORY`]. Set by the Hub
+    /// when it applies the record.
+    #[serde(default)]
+    pub recent: Vec<ExportEntry>,
+}
+
+fn plain_name(name: &str) -> bool {
+    name.chars().count() <= MAX_EXPORT_FILE_NAME_CHARS
+        && name
+            .strip_suffix(&format!(".{EXPORT_EXTENSION}"))
+            .is_some_and(|stem| {
+                !stem.is_empty()
+                    && stem
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            })
 }
 
 impl BackupExport {
+    /// This export and the ones before it, newest first.
+    pub fn entries(&self) -> Vec<ExportEntry> {
+        let mut all = vec![ExportEntry {
+            file_name: self.file_name.clone(),
+            bytes: self.bytes,
+            exported_at: self.exported_at,
+            by: self.by.clone(),
+        }];
+        all.extend(self.recent.iter().cloned());
+        all
+    }
+
     /// Whether the facts could describe a file this build writes.
     pub fn is_consistent(&self) -> bool {
-        let name_ok = self.file_name.chars().count() <= MAX_EXPORT_FILE_NAME_CHARS
-            && self
-                .file_name
-                .strip_suffix(&format!(".{EXPORT_EXTENSION}"))
-                .is_some_and(|stem| {
-                    !stem.is_empty()
-                        && stem
-                            .chars()
-                            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-                });
-        name_ok
+        let by_ok = |b: &String| {
+            !b.is_empty() && b.chars().count() <= 100 && !b.chars().any(char::is_control)
+        };
+        plain_name(&self.file_name)
+            && self.by.as_ref().is_none_or(by_ok)
+            && self.recent.len() < EXPORT_HISTORY
+            && self.recent.iter().all(|e| {
+                plain_name(&e.file_name)
+                    && e.bytes > 0
+                    && e.exported_at > 0
+                    && e.by.as_ref().is_none_or(by_ok)
+            })
             && self.bytes > 0
             && self.last_seq >= 0
             && self.exported_at > 0
@@ -348,6 +440,59 @@ mod tests {
     }
 
     #[test]
+    fn an_auto_export_has_its_own_name_and_only_that_name_is_auto() {
+        let at = chrono::Utc
+            .with_ymd_and_hms(2026, 10, 30, 18, 42, 59)
+            .unwrap()
+            .timestamp_millis();
+        let auto = auto_export_file_name("LVL01", at, "Asia/Kolkata");
+        assert_eq!(auto, "LVL01-auto-2026-10-31-0012.a360");
+        assert!(is_auto_export_name(&auto, "LVL01"));
+        assert!(!is_auto_export_name(&auto, "LVL02"));
+        assert!(!is_auto_export_name("LVL01-2026-10-31-0012.a360", "LVL01"));
+        assert!(!is_auto_export_name(
+            "LVL01-auto-2026-10-31-0012.a360.part",
+            "LVL01"
+        ));
+        assert!(!is_auto_export_name("LVL01-auto-notes.a360", "LVL01"));
+        assert!(!is_auto_export_name(
+            "x/LVL01-auto-2026-10-31-0012.a360",
+            "LVL01"
+        ));
+        assert!(is_auto_export_name(
+            "A-B---auto-2026-10-30-1842.a360",
+            "A/B.."
+        ));
+    }
+
+    #[test]
+    fn the_history_is_bounded_and_listed_newest_first() {
+        let entry = |n: i64| ExportEntry {
+            file_name: format!("X-{n}.a360"),
+            bytes: 10,
+            exported_at: n,
+            by: None,
+        };
+        let facts = BackupExport {
+            file_name: "X-9.a360".into(),
+            bytes: 5,
+            exported_at: 9,
+            by: Some("Asha".into()),
+            recent: (1..=6).map(entry).collect(),
+            ..Default::default()
+        };
+        assert!(facts.is_consistent());
+        assert_eq!(facts.entries().len(), 7);
+        assert_eq!(facts.entries()[0].by.as_deref(), Some("Asha"));
+        assert_eq!(BackupExport::parse(&facts.to_json()), Some(facts.clone()));
+        let long = BackupExport {
+            recent: (1..=7).map(entry).collect(),
+            ..facts
+        };
+        assert!(!long.is_consistent());
+    }
+
+    #[test]
     fn the_recorded_facts_round_trip_and_reject_a_path() {
         let facts = BackupExport {
             file_name: "LVL01-2026-10-30-1842.a360".into(),
@@ -355,6 +500,7 @@ mod tests {
             epoch: "2:abc".into(),
             last_seq: 41,
             exported_at: 1_800_000_000_000,
+            ..Default::default()
         };
         assert!(facts.is_consistent());
         assert_eq!(BackupExport::parse(&facts.to_json()), Some(facts.clone()));

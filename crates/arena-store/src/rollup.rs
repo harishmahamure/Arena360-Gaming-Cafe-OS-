@@ -290,7 +290,7 @@ fn published_days(conn: &Connection) -> Result<std::collections::BTreeSet<String
         .map_err(db_error)
 }
 
-fn shifts_closed_since(conn: &Connection, since_ms: i64) -> Result<Vec<i64>, AppError> {
+pub(crate) fn shifts_closed_since(conn: &Connection, since_ms: i64) -> Result<Vec<i64>, AppError> {
     let mut stmt = conn
         .prepare(
             "SELECT closed_at FROM shifts

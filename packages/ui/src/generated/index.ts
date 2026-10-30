@@ -162,6 +162,7 @@ export type { ExpenseCreate } from "./ExpenseCreate";
 export type { ExpensePaidFrom } from "./ExpensePaidFrom";
 export type { ExpiringLot } from "./ExpiringLot";
 export type { ExpiryView } from "./ExpiryView";
+export type { ExportEntry } from "./ExportEntry";
 export type { ExportFormat } from "./ExportFormat";
 export type { ExportHeader } from "./ExportHeader";
 export type { ExtendPackSource } from "./ExtendPackSource";

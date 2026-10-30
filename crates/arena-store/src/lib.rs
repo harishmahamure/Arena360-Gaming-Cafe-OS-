@@ -117,7 +117,7 @@ pub use devices::{
     set_device_revoked, set_device_state, set_group_deleted, set_zone_deleted, tv_number_taken,
     update_device_meta, update_group, update_zone,
 };
-pub use export::{ExportedFile, write_export};
+pub use export::{ExportedFile, prune_auto_exports, write_export};
 pub use game_plays::{
     NewGamePlay, insert_game_play, last_played, session_on_device_at, top_played,
 };
@@ -1746,6 +1746,20 @@ impl Store {
     /// What the planner of the daily rollups reads (Story 8.6), in one snapshot.
     pub fn rollup_facts(&self, changes: &[ChangedRow]) -> Result<RollupFacts, AppError> {
         self.read_consistent(|s| load_rollup_facts(&s.conn, changes))
+    }
+
+    /// When shifts closed at or after `since_ms`, oldest first, and whether a shift is open now
+    /// (Story 9.5: the daily export runs when the last shift of a day closes).
+    pub fn shift_closes_since(&self, since_ms: i64) -> Result<(Vec<i64>, bool), AppError> {
+        if !self.table_exists("shifts")? {
+            return Ok((Vec::new(), false));
+        }
+        self.read_consistent(|s| {
+            Ok((
+                rollup::shifts_closed_since(&s.conn, since_ms)?,
+                open_shift_id(&s.conn)?.is_some(),
+            ))
+        })
     }
 
     /// The shift `id` (open or closed) with its Z-report, if one was stored (Story 5.28).

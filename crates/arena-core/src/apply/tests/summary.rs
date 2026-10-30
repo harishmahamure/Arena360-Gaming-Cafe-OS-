@@ -248,3 +248,122 @@ async fn a_counted_shift_follows_the_open_one_with_its_signed_variance() {
             .any(|a| a.kind == ATTENTION_SHIFT_VARIANCE && a.reference == "SHIFT0")
     );
 }
+
+/// Story 8.23: the pricing rows carry the fields their upsert payload takes, so the Owner app can
+/// prefill an edit; nothing else (no `id`, no `active`) rides along.
+#[tokio::test]
+async fn pricing_rows_carry_the_fields_of_their_upsert_payload() {
+    use arena_proto::{CouponTarget, CouponUpsert, PlanUpsert, RateUpsert, RuleUpsert};
+    use serde_json::json;
+
+    let f = booted().await;
+    let group = super::plans::group(&f, "Row A", "pc").await;
+    let submit = |p: IntentPayload| f.writer.submit_intent(intent(owner(), p));
+    submit(IntentPayload::RateUpsert(RateUpsert {
+        group_id: group.clone(),
+        price_per_hour_minor: 6_000,
+    }))
+    .await
+    .unwrap();
+    submit(IntentPayload::RateUpsert(RateUpsert {
+        group_id: group.clone(),
+        price_per_hour_minor: 8_000,
+    }))
+    .await
+    .unwrap();
+    submit(IntentPayload::PlanUpsert(PlanUpsert {
+        id: None,
+        plan_kind: "pass".into(),
+        name: "Night pass".into(),
+        price_minor: 90_000,
+        minutes: None,
+        validity_days: Some(30),
+        window_start_min: Some(22 * 60),
+        window_end_min: Some(6 * 60),
+        group_ids: vec![group.clone()],
+        active: true,
+    }))
+    .await
+    .unwrap();
+    submit(IntentPayload::RuleUpsert(RuleUpsert {
+        id: None,
+        name: "Happy hour".into(),
+        group_id: group.clone(),
+        rule_kind: "weekly".into(),
+        days_mask: Some(0b001_1111),
+        start_min: Some(16 * 60),
+        end_min: Some(18 * 60),
+        date_from: None,
+        date_to: None,
+        adjust_kind: "percent_bp".into(),
+        adjust_value: -2000,
+        priority: 2,
+        active: true,
+    }))
+    .await
+    .unwrap();
+    submit(IntentPayload::CouponUpsert(CouponUpsert {
+        id: None,
+        code: "WELCOME".into(),
+        percent_bp: Some(1_000),
+        amount_minor: None,
+        valid_from: Some("2027-01-01".into()),
+        valid_to: None,
+        usage_limit: Some(50),
+        min_bill_minor: 10_000,
+        targets: vec![CouponTarget {
+            kind: "group".into(),
+            id: group.clone(),
+        }],
+        active: true,
+    }))
+    .await
+    .unwrap();
+
+    let s = SnapshotReader::open(&f.path)
+        .unwrap()
+        .branch_summary(T0)
+        .unwrap()
+        .unwrap();
+    let fields = |rows: &[arena_proto::CatalogueRow]| -> Vec<serde_json::Value> {
+        rows.iter().filter_map(|r| r.fields.clone()).collect()
+    };
+
+    // The first rate is inactive history; the current one is the row the app shows.
+    let rates = fields(&s.catalogue.rates);
+    assert_eq!(rates.len(), 2);
+    assert!(s.catalogue.rates.iter().any(|r| r.active == Some(false)));
+    assert!(rates.contains(&json!({"group_id": group, "price_per_hour_minor": 8_000})));
+
+    assert_eq!(
+        fields(&s.catalogue.plans),
+        vec![json!({
+            "plan_kind": "pass", "price_minor": 90_000, "validity_days": 30,
+            "window_start_min": 1_320, "window_end_min": 360, "group_ids": [group]
+        })]
+    );
+    assert_eq!(
+        fields(&s.catalogue.pricing_rules),
+        vec![json!({
+            "group_id": group, "rule_kind": "weekly", "days_mask": 31, "start_min": 960,
+            "end_min": 1_080, "adjust_kind": "percent_bp", "adjust_value": -2_000, "priority": 2
+        })]
+    );
+    assert_eq!(
+        fields(&s.catalogue.coupons),
+        vec![json!({
+            "percent_bp": 1_000, "valid_from": "2027-01-01", "usage_limit": 50,
+            "min_bill_minor": 10_000, "targets": [{"kind": "group", "id": group}]
+        })]
+    );
+
+    // Every other list is unchanged: no `fields` key at all.
+    assert!(s.catalogue.products.iter().all(|r| r.fields.is_none()));
+    let json = serde_json::to_value(&s.catalogue.roles).unwrap();
+    assert!(
+        json.as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r.get("fields").is_none())
+    );
+}

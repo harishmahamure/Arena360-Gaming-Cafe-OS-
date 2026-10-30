@@ -4,14 +4,15 @@
   import CommandList from "./CommandList.svelte";
   import CommandPreview from "./CommandPreview.svelte";
   import { PROPOSE_EVENT, cancel, propose, type CommandDraft } from "./commands.svelte";
+  import PricingBoard from "./PricingBoard.svelte";
   import SetupGate from "./SetupGate.svelte";
   import { isLive, shell } from "./shell.svelte";
 
   // A branch that is in setup or on Free can't take a change: it says so, beside the one list.
   const gated = $derived((shell.branches ?? []).filter((b) => !isLive(b) || b.tier === "free"));
 
-  // The Manage forms (Story 8.23 on) call `propose` themselves; until one exists this event is how
-  // a change reaches the preview.
+  // The Manage forms (Pricing, Story 8.23) call `propose` themselves; the event lets any other
+  // screen open the preview the same way.
   onMount(() => {
     const open = (e: Event) => void propose((e as CustomEvent<CommandDraft>).detail);
     addEventListener(PROPOSE_EVENT, open);
@@ -37,6 +38,7 @@
       {/each}
     </ul>
   {/if}
+  <PricingBoard />
   <CommandPreview />
   <CommandList />
 </div>

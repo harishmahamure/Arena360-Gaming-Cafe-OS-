@@ -60,7 +60,7 @@ pub struct SummaryAttention {
 }
 
 /// One owner-editable row: its id, a display name, its `rev` (the `base_rev` of an edit) and, for
-/// the kinds that have one, whether it is active and one more display detail.
+/// the kinds that have one, whether it is active, one more display detail and the editable fields.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct CatalogueRow {
@@ -74,6 +74,12 @@ pub struct CatalogueRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub detail: Option<String>,
+    /// The row as its upsert payload without `id` and `active`, for the kinds the Owner app can
+    /// edit (rates, plans, pricing rules, coupons; Story 8.23). Additive: an older summary lacks
+    /// it and its row can be listed but not edited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "Record<string, unknown>")]
+    pub fields: Option<serde_json::Value>,
 }
 
 /// A staff member as the owner sees them: no credentials of any kind.

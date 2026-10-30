@@ -2,7 +2,7 @@
   import { Button, Card, StatusBadge, t } from "@arena/ui";
   import type { MessageKey } from "@arena/ui/messages";
   import { tick } from "svelte";
-  import { cancel, cmd, confirm, whatOf } from "./commands.svelte";
+  import { cancel, choose, cmd, confirm, partsOf, whatOf } from "./commands.svelte";
   import { age } from "./shell.svelte";
 
   const REASONS: Record<string, MessageKey> = {
@@ -19,6 +19,12 @@
   const draft = $derived(cmd.draft);
   const targets = $derived(cmd.preview?.targets ?? []);
   const offered = $derived(targets.filter((x) => x.offered));
+  // A change that differs per branch sends one part to each branch it fits, once the owner has
+  // said what to do where the item is missing.
+  const plan = $derived(draft ? partsOf(draft, targets) : { send: [], ask: [] });
+  const sendable = $derived(draft?.variants ? plan.send.length : offered.length);
+  const variantOf = (id: string) => draft?.variants?.find((v) => v.branch_id === id);
+  const leftOut = (id: string) => draft?.excluded?.find((x) => x.branch_id === id);
   const scope = $derived(
     draft?.branch_id === "all" ? t("owner.cmd.scope.all") : (targets[0]?.name ?? ""),
   );
@@ -74,10 +80,37 @@
               {:else if !x.online && !cmd.known}
                 <span class="note type-hub-micro">{t("owner.cmd.preview.offline_note")}</span>
               {/if}
+              {#if x.offered && leftOut(x.branch_id)}
+                <span class="note type-hub-micro" data-excluded
+                  >{t("owner.pricing.excluded.label", {
+                    reason: leftOut(x.branch_id)?.reason ?? "",
+                  })}</span
+                >
+              {:else if x.offered && variantOf(x.branch_id)?.ask}
+                <div
+                  class="ask"
+                  role="group"
+                  aria-label={t("owner.pricing.ask.group", { branch: x.name })}
+                >
+                  <span class="type-hub-micro note-inline">{t("owner.pricing.ask")}</span>
+                  {#each ["create", "exclude"] as const as c (c)}
+                    <label class="choice type-hub-label"
+                      ><input
+                        type="radio"
+                        name="ask-{x.branch_id}"
+                        checked={draft?.choices?.[x.branch_id] === c}
+                        onchange={() => choose(x.branch_id, c)}
+                      />{t(
+                        c === "create" ? "owner.pricing.ask.create" : "owner.pricing.ask.exclude",
+                      )}</label
+                    >
+                  {/each}
+                </div>
+              {/if}
             </li>
           {/each}
         </ul>
-        {#if !offered.length}<p>{t("owner.cmd.preview.none")}</p>
+        {#if !sendable && !plan.ask.length}<p>{t("owner.cmd.preview.none")}</p>
         {:else if cmd.known}<p class="note">{t("owner.cmd.preview.queue_note")}</p>{/if}
       {/if}
       {#if cmd.sendError}<p class="error" role="alert">{t(cmd.sendError)}</p>{/if}
@@ -85,14 +118,20 @@
         <Button
           label="owner.cmd.send"
           onclick={confirm}
-          disabled={cmd.previewing || cmd.previewFailed || cmd.sending || !offered.length}
+          disabled={cmd.previewing ||
+            cmd.previewFailed ||
+            cmd.sending ||
+            !sendable ||
+            plan.ask.length > 0}
           disabledReason={cmd.sending
             ? "owner.cmd.sending"
             : cmd.previewing
               ? "owner.cmd.preview.checking"
               : cmd.previewFailed
                 ? "owner.cmd.preview.failed"
-                : "owner.cmd.send.none"}
+                : plan.ask.length
+                  ? "owner.pricing.choose_first"
+                  : "owner.cmd.send.none"}
         />
         <Button label="owner.cmd.cancel" variant="secondary" onclick={cancel} />
       </div>
@@ -140,6 +179,27 @@
   }
   .error {
     color: var(--danger);
+  }
+  .ask {
+    flex-basis: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-4);
+    min-width: 0;
+  }
+  .note-inline {
+    color: var(--text-muted);
+  }
+  .choice {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--space-touch-min);
+  }
+  .choice input {
+    inline-size: var(--space-touch-min);
+    block-size: var(--space-touch-min);
   }
   .actions {
     display: flex;

@@ -15,6 +15,22 @@ import { age, isLive, refresh, shell } from "./shell.svelte";
 import { fetchLive, live, livePath } from "./today.svelte";
 import { ulid } from "./ulid";
 
+/**
+ * What one branch gets of a change that differs per branch (Story 8.23): ids are per branch, so
+ * each carries its own payload, `base_rev` and idempotency key.
+ */
+export type Variant = {
+  branch_id: string;
+  payload: Record<string, unknown>;
+  base_rev?: number;
+  key: string;
+  /** The item is missing here: the owner picks "Create here" or "Exclude" before Send. */
+  ask?: boolean;
+};
+
+/** A branch that gets nothing of the change, with the reason in the owner's words. */
+export type Excluded = { branch_id: string; reason: string };
+
 /** A change the owner is about to send; `branch_id` is a branch id or `all`. */
 export type CommandDraft = {
   kind: string;
@@ -23,7 +39,17 @@ export type CommandDraft = {
   base_rev?: number;
   /** The idempotency key of this change: fixed once, so a second Send never queues it twice. */
   key?: string;
+  /** One part per branch when the payload differs per branch; the preview post stays `branch_id`. */
+  variants?: Variant[];
+  excluded?: Excluded[];
+  /** The owner's answer for each branch whose variant asks. */
+  choices?: Record<string, "create" | "exclude">;
+  /** Keys of the variants the cloud already took, so a second Send skips them. */
+  done?: string[];
 };
+
+/** One post of a draft. */
+export type Part = Pick<Variant, "branch_id" | "payload" | "base_rev" | "key">;
 
 /**
  * A change made with no signal, kept in IndexedDB until it can be sent (AD-14): the client ULID
@@ -68,6 +94,8 @@ export const cmd = $state({
   /** Changes made with no signal, oldest first. */
   queued: [] as Queued[],
   sending: false,
+  /** Counts the changes sent or queued, so a form can close once its change left. */
+  sent: 0,
   sendError: null as MessageKey | null,
   /** The text of the polite live region: what changed in the last poll. */
   announcement: "",
@@ -90,7 +118,8 @@ const KINDS: Record<string, { label: MessageKey; catalogue?: keyof SummaryCatalo
 /** What a command changes: its kind and, when the payload names the thing, the name. */
 export function whatOf(kind: string, payload: unknown): string {
   const label = t(KINDS[kind]?.label ?? "owner.cmd.kind.other");
-  const name = (payload as { name?: unknown } | null)?.name;
+  const named = payload as { name?: unknown; code?: unknown } | null;
+  const name = named?.name ?? named?.code;
   return typeof name === "string" && name ? t("owner.cmd.what", { kind: label, name }) : label;
 }
 
@@ -257,6 +286,30 @@ async function lastKnown(d: CommandDraft) {
   return { known, preview: { targets } };
 }
 
+/**
+ * What Send posts for a draft, and what still waits for an answer. A plain draft is one post to
+ * its branch; a draft with variants posts to each branch the preview offers, once the owner has
+ * chosen for every branch the item is missing from.
+ */
+export function partsOf(d: CommandDraft, targets: OwnerCommandTarget[]) {
+  if (!d.variants) {
+    const one: Part = { branch_id: d.branch_id, payload: d.payload, key: d.key ?? "" };
+    if (d.base_rev !== undefined) one.base_rev = d.base_rev;
+    return { send: [one] as Part[], ask: [] as Variant[] };
+  }
+  const offered = new Set(targets.filter((x) => x.offered).map((x) => x.branch_id));
+  const here = d.variants.filter((v) => offered.has(v.branch_id));
+  return {
+    send: here.filter((v) => !v.ask || d.choices?.[v.branch_id] === "create") as Part[],
+    ask: here.filter((v) => v.ask && !d.choices?.[v.branch_id]),
+  };
+}
+
+/** The owner's answer for a branch the item is missing from. */
+export function choose(branchId: string, choice: "create" | "exclude") {
+  if (cmd.draft) cmd.draft.choices = { ...cmd.draft.choices, [branchId]: choice };
+}
+
 /** Opens the preview for a change. */
 export async function propose(draft: CommandDraft) {
   const mine = { ...draft, key: draft.key ?? ulid() };
@@ -291,41 +344,53 @@ export function cancel() {
 
 /**
  * Sends the previewed change; with no signal it waits on this device. The cloud skips the
- * branches that can't take it.
+ * branches that can't take it. A change with variants is one post per branch, each with its own
+ * key: the ones the cloud took stay taken if a later one fails.
  */
 export async function confirm() {
   const d = cmd.draft;
   if (!d || cmd.sending) return;
+  const { send: parts, ask } = partsOf(d, cmd.preview?.targets ?? []);
+  if (ask.length) return;
   cmd.sending = true;
   cmd.sendError = null;
-  const res = await send<OwnerCommandPosted>("POST", "/commands", {
-    branch_id: d.branch_id,
-    idempotency_key: d.key,
-    kind: d.kind,
-    payload: d.payload,
-    ...(d.base_rev === undefined ? {} : { base_rev: d.base_rev }),
-  });
-  cmd.sending = false;
-  if (!res.ok) {
-    if (res.code === "OFFLINE" && d.key) {
-      await enqueue({
-        key: d.key,
-        branch_id: d.branch_id,
-        kind: d.kind,
-        payload: d.payload,
-        base_rev: d.base_rev,
-      });
-      cancel();
-      // A response lost on a working line is answered by sending again at once; with no line this stops at the first call.
-      void drainQueue();
+  const todo = parts.filter((p) => !d.done?.includes(p.key));
+  for (const [i, part] of todo.entries()) {
+    const res = await send<OwnerCommandPosted>("POST", "/commands", {
+      branch_id: part.branch_id,
+      idempotency_key: part.key,
+      kind: d.kind,
+      payload: part.payload,
+      ...(part.base_rev === undefined ? {} : { base_rev: part.base_rev }),
+    });
+    if (!res.ok) {
+      cmd.sending = false;
+      if (res.code === "OFFLINE" && part.key) {
+        for (const rest of todo.slice(i)) {
+          await enqueue({
+            key: rest.key,
+            branch_id: rest.branch_id,
+            kind: d.kind,
+            payload: rest.payload,
+            base_rev: rest.base_rev,
+          });
+        }
+        cmd.sent++;
+        cancel();
+        // A response lost on a working line is answered by sending again at once; with no line this stops at the first call.
+        void drainQueue();
+        return;
+      }
+      cmd.sendError =
+        res.code === "RATE_LIMITED" ? "owner.cmd.send.limited" : "owner.cmd.send.failed";
       return;
     }
-    cmd.sendError =
-      res.code === "RATE_LIMITED" ? "owner.cmd.send.limited" : "owner.cmd.send.failed";
-    return;
+    d.done = [...(d.done ?? []), part.key];
+    cmd.rows = merge(cmd.rows, res.data.commands);
+    cmd.loaded = true;
   }
-  cmd.rows = merge(cmd.rows, res.data.commands);
-  cmd.loaded = true;
+  cmd.sending = false;
+  cmd.sent++;
   cancel();
 }
 

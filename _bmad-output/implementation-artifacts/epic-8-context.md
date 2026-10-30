@@ -99,3 +99,12 @@ The café owner sees every branch and changes it from a phone or laptop, without
 - **Rows.** `localRows()` stands queued items in the command list (`Row.local`); `all` expands to the live paid branches. `rowKey` replaces the numeric id for list keys and Retry state.
 - **Preview offline.** Built from `shell.branches` and each branch's cached `live` answer (`cmd.known` = cached `as_of`); unseen branches read Unknown.
 - **Sign out.** Queued items prompt "Keep queued changes" / delete; session expiry keeps the queue.
+
+## Story 8.23: Manage → Pricing — plans and rates, pricing rules and coupons
+
+- **Fields.** `CatalogueRow.fields` (optional, additive, no schema bump) carries a rate, plan, rule or coupon as its upsert payload without `id`/`active` (plans add `group_ids`, coupons `targets`). An older summary lacks it: the row lists by name and has no Edit. `arena-core` test `pricing_rows_carry_the_fields_of_their_upsert_payload`.
+- **Board.** `PricingBoard` (tabs `?tab=plans|rules|coupons`, default `plans`, always written to the URL) reads each live paid branch's `live` answer (the shared `live` store, `fetchDue` on the Today cadence) and shows each branch's data age. `lib/pricing.ts` holds name matching, the Hub's validators (reusing `hub.plans|rules|coupons.invalid.*` and `hub.groups.rate_invalid`), the payload builders and rule status.
+- **Ids are per branch.** Forms hold group/plan/product names. `resolve()` builds one `Variant` per branch (own `id`, `base_rev`, group ids, ULID key) matched by trimmed, case-insensitive name (coupon by code, rate by group name). `CommandDraft.variants/excluded/choices`; `confirm` posts one part per variant (`partsOf`), skipping the ones already taken (`done`); offline each is queued. The preview post stays `all`.
+- **Choices.** A branch missing the item (scope All) asks "Create here" / "Exclude" and Send waits (`choose`); a branch missing a named group/plan/product, an amount that does not fit its currency, or (when adding) an item with that name is left out with the reason inline.
+- **Rule status.** `active now` / `scheduled` / `ended` / `off` in the branch zone; a weekly window past midnight belongs to the day it starts on.
+- **Closing.** `cmd.sent` counts sent or queued changes; open forms close when it moves. `whatOf` names a coupon by its code.

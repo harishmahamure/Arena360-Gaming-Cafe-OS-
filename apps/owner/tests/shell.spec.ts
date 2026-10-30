@@ -113,11 +113,11 @@ test("a mixed tenant locks the Free branch and leaves the paid branch working", 
     await page.goto(k === "today" ? "/" : `/${k}`);
     const paid = page.getByRole("listitem").filter({ hasText: PAID[0].name });
     const free = page.getByRole("listitem").filter({ hasText: PAID[1].name });
-    // Today shows the paid branch's figures; Manage shows one command list (the paid branch has no
-    // entry of its own); the other sections still hold their placeholder.
+    // Today shows the paid branch's figures; Manage shows its prices and one command list (the
+    // paid branch has no lock or gate entry of its own); the other sections still hold their placeholder.
     if (k === "manage") {
       await expect(page.getByRole("heading", { name: t("owner.cmd.list.title") })).toBeVisible();
-      await expect(paid).toHaveCount(0);
+      await expect(page.getByRole("tablist", { name: t("owner.pricing.tabs") })).toBeVisible();
     } else {
       await expect(
         paid.getByText(k === "today" ? t("owner.today.revenue") : t("owner.section.soon")),

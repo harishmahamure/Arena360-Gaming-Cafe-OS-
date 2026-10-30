@@ -132,6 +132,8 @@ test("with no network Send stores the command in IndexedDB and the row says Queu
 
 test("a branch never seen is Unknown in the offline preview", async ({ page }) => {
   await stubCloud(page, ONE);
+  // Manage reads each branch's prices; here that read fails, so nothing is cached for the branch.
+  await page.route("**/v1/branches/b1/live", (route) => route.abort("internetdisconnected"));
   const line = await lineDown(page);
   await page.goto("/manage");
   await expect(page.getByRole("heading", { name: t("owner.cmd.list.title") })).toBeVisible();

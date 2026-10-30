@@ -6,6 +6,7 @@ import type {
   OwnerCommandView,
   OwnerLive,
   OwnerRange,
+  SummaryCatalogue,
 } from "@arena/ui/generated";
 import { t } from "../../../packages/ui/src/messages/index.js";
 
@@ -92,6 +93,16 @@ export function summaryOf(
     ...over,
   };
 }
+
+/** A catalogue with only the lists a test names. */
+export const catalogueOf = (over: Partial<SummaryCatalogue> = {}): SummaryCatalogue => ({
+  ...summaryOf("x").catalogue,
+  ...over,
+});
+
+/** The `live` answer of a branch whose summary carries `catalogue`, heard from `ageMs` ago. */
+export const liveWith = (id: string, catalogue: Partial<SummaryCatalogue>, ageMs = 120_000) =>
+  liveOf(id, {}, { catalogue: catalogueOf(catalogue), as_of: Date.now() - ageMs });
 
 /** The `live` answer of a branch that is online and was heard from a minute ago. */
 export function liveOf(

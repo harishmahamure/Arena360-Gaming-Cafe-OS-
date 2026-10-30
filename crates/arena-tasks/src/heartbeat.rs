@@ -3,8 +3,8 @@ use std::time::{Duration, Instant};
 
 use arena_core::{AdPending, CloudTime, HubStatus, PairGate, PairingState, Role, WriterHandle};
 use arena_proto::{
-    Entitlement, ErrorCode, HEARTBEAT_BOOT_INTERVAL_S, HEARTBEAT_LIVE_INTERVAL_S, HeartbeatRequest,
-    HeartbeatResponse, LicenceStanding, Tier, VerifyKey,
+    Entitlement, ErrorCode, HEARTBEAT_BOOT_INTERVAL_S, HEARTBEAT_LIVE_INTERVAL_S, HeartbeatBackup,
+    HeartbeatRequest, HeartbeatResponse, LicenceStanding, Tier, VerifyKey,
 };
 use arena_store::TrustedClockRow;
 use tokio::sync::{Notify, watch};
@@ -20,6 +20,19 @@ pub fn backoff(fails: u32, interval: Duration, unit: f64) -> Duration {
         .saturating_mul(1 << fails.min(16))
         .min(interval);
     ceil.mul_f64(0.5 + 0.5 * unit.clamp(0.0, 1.0))
+}
+
+/// The backup block of a paid Hub's heartbeat (Story 9.17): when the last snapshot was stored,
+/// the waiting rows in whole batches and when the Hub's upload last failed. Times only.
+fn backup_block(upload: &arena_core::UploadStatus) -> HeartbeatBackup {
+    let batch = i64::try_from(arena_store::BATCH_MAX_ROWS)
+        .unwrap_or(i64::MAX)
+        .max(1);
+    HeartbeatBackup {
+        last_snapshot_at: upload.last_snapshot_at,
+        pending_batches: (upload.pending_rows.max(0) + batch - 1) / batch,
+        failed_at: upload.failed_at,
+    }
 }
 
 fn mono_ms() -> i64 {
@@ -268,6 +281,7 @@ impl HeartbeatTask {
             command_schema: Some(arena_proto::COMMAND_SCHEMA_VERSION),
             opening,
             tunnel: self.tunnel.as_ref().map(|t| t.report()),
+            backup: paid.then(|| backup_block(&upload)),
         };
         let sent = Instant::now();
         match self.cloud.heartbeat(&token, &req).await {
@@ -1602,6 +1616,8 @@ mod tests {
                 base_seq: Some(7),
                 last_summary_at: None,
                 last_rollup_date: None,
+                last_snapshot_at: None,
+                failed_at: None,
             }
         });
         f.task.beat().await;
@@ -1628,6 +1644,53 @@ mod tests {
         let week: Vec<serde_json::Value> =
             serde_json::from_str(opening["opening_hours"].as_str().unwrap()).unwrap();
         assert_eq!(week.len(), 7);
+    }
+
+    #[tokio::test]
+    async fn only_a_paid_heartbeat_carries_the_backup_block_with_times_and_whole_batches() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let port = serve_with(vec![answer(true, Tier::Basic)], false, Arc::clone(&seen)).await;
+        let mut f = fx(port).await;
+        f.status.send_modify(|s| {
+            s.upload.pending_rows = 5_001;
+            s.upload.last_snapshot_at = Some(7_000);
+            s.upload.failed_at = Some(8_000);
+        });
+        // The first beat runs before any licence is stored, so no paid tier is known yet.
+        f.task.beat().await;
+        assert!(sent(&seen, 0).get("backup").is_none());
+        f.task.beat().await;
+        assert_eq!(
+            sent(&seen, 1)["backup"],
+            serde_json::json!({
+                "last_snapshot_at": 7_000, "pending_batches": 2, "failed_at": 8_000
+            })
+        );
+        // Nothing waiting and no failure: only the count is sent.
+        f.status.send_modify(|s| {
+            s.upload = arena_core::UploadStatus::default();
+        });
+        f.task.beat().await;
+        assert_eq!(
+            sent(&seen, 2)["backup"],
+            serde_json::json!({"pending_batches": 0})
+        );
+    }
+
+    #[tokio::test]
+    async fn a_free_heartbeat_carries_no_backup_block() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let port = serve_with(vec![answer(true, Tier::Free)], false, Arc::clone(&seen)).await;
+        let mut f = fx(port).await;
+        f.status.send_modify(|s| {
+            s.upload.pending_rows = 10;
+            s.upload.failed_at = Some(8_000);
+        });
+        f.task.beat().await;
+        f.task.beat().await;
+        for i in 0..2 {
+            assert!(sent(&seen, i).get("backup").is_none(), "beat {i}");
+        }
     }
 
     #[tokio::test]

@@ -535,6 +535,33 @@ async fn exercise_fence(db: &ControlDb) {
             .unwrap();
     }
 
+    // Only an applied command counts for the "last applied" time; the one still fetched, and a
+    // kind that was never sent, do not.
+    assert_eq!(
+        db.last_applied_command_at("b1", "rate.upsert")
+            .await
+            .unwrap(),
+        Some(t + 6)
+    );
+    assert_eq!(
+        db.last_applied_command_at("b1", "backup.now")
+            .await
+            .unwrap(),
+        None
+    );
+    let hub_view = arena_store::control::HubUploadView {
+        last_snapshot_at: Some(5),
+        pending_batches: Some(2),
+        failed_at: Some(9),
+        ..Default::default()
+    };
+    assert_eq!(
+        db.hub_upload_view("ha").await.unwrap().pending_batches,
+        None,
+        "nothing reported yet"
+    );
+    db.save_hub_upload_view("ha", &hub_view).await.unwrap();
+    assert_eq!(db.hub_upload_view("ha").await.unwrap(), hub_view);
     assert_eq!(
         db.claim_branch_fence("b1", "ha", "1:A", "2:B", Some(9), t + 7)
             .await

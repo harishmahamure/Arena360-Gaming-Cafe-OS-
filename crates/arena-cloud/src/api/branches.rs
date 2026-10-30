@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use arena_proto::{
-    AddBranch, AppError, BranchCodeSet, BranchHub, BranchSetupProgress, ErrorCode, OwnerBranch,
-    PendingKeyRequest, SetBranchCode, Tier, UpdateBranch, valid_branch_code,
+    AddBranch, AppError, BranchCodeSet, BranchHub, BranchSetupProgress, ErrorCode, OwnerBackup,
+    OwnerBranch, PendingKeyRequest, SetBranchCode, Tier, UpdateBranch, valid_branch_code,
 };
 use arena_store::control::{Branch, BranchCodeOutcome, BranchProfile};
 use axum::extract::State;
@@ -47,6 +47,24 @@ async fn row(st: &AuthState, b: &Branch) -> Result<OwnerBranch, ApiError> {
         });
     let tier = tier_of(st, &b.id).await?;
     let hub = st.db.active_hub(&b.id).await.map_err(ApiError::internal)?;
+    // A paid branch shows what its Hub last reported of the backup; before the first block there
+    // is nothing to show (Story 9.17).
+    let backup = match (&hub, tier) {
+        (Some(h), t) if t != Tier::Free => {
+            let v = st
+                .db
+                .hub_upload_view(&h.id)
+                .await
+                .map_err(ApiError::internal)?;
+            v.pending_batches.map(|pending_batches| OwnerBackup {
+                last_upload_at: v.last_upload_at,
+                last_snapshot_at: v.last_snapshot_at,
+                pending_batches,
+                failed_at: v.failed_at,
+            })
+        }
+        _ => None,
+    };
     let states: Vec<_> = st
         .db
         .onboarding_progress(&b.id)
@@ -81,6 +99,7 @@ async fn row(st: &AuthState, b: &Branch) -> Result<OwnerBranch, ApiError> {
             .await
             .map_err(ApiError::internal)?,
         key_request,
+        backup,
     })
 }
 

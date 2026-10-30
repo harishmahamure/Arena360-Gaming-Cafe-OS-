@@ -2089,6 +2089,7 @@ impl SnapshotReader {
             .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
         store.read_with(|conn| {
             let progress = arena_store::read_epoch_progress(conn)?;
+            let state = arena_store::read_backup_state(conn)?;
             Ok(crate::UploadStatus {
                 last_upload_at: arena_store::read_upload_cursor(conn)?.map(|c| c.uploaded_at),
                 pending_rows: arena_store::count_pending_rows(conn)?,
@@ -2098,6 +2099,8 @@ impl SnapshotReader {
                 last_summary_at: arena_store::find_rollup_log(conn, arena_proto::SUMMARY_LOG_DATE)?
                     .map(|r| r.built_at),
                 last_rollup_date: arena_store::last_rollup_date(conn)?,
+                last_snapshot_at: arena_store::latest_snapshot_log(conn)?.map(|r| r.uploaded_at),
+                failed_at: state.upload_error.and(state.upload_error_at),
             })
         })
     }

@@ -56,7 +56,8 @@ export async function load<T>(path: string): Promise<Loaded<T> | "signed-out" | 
 }
 
 export type Sent<T> =
-  { ok: true; data: T } | { ok: false; code: string; field?: string; retryAfter?: number };
+  | { ok: true; data: T }
+  | { ok: false; code: string; field?: string; message?: string; retryAfter?: number };
 
 export async function send<T>(
   method: "POST" | "PATCH",
@@ -73,6 +74,7 @@ export async function send<T>(
     ok: false,
     code: data?.code ?? "INTERNAL",
     field: data?.field,
+    ...(typeof data?.message === "string" ? { message: data.message } : {}),
     ...(wait > 0 ? { retryAfter: wait } : {}),
   };
 }

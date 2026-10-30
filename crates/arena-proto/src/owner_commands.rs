@@ -19,6 +19,32 @@ pub const OWNER_COMMAND_POSTS_PER_MIN: u64 = 60;
 pub const OWNER_COMMANDS_PAGE: usize = 50;
 pub const OWNER_COMMANDS_PAGE_MAX: usize = 200;
 
+/// The least time between two applied `backup.now` commands of a branch (Story 9.17): the cloud
+/// refuses another `RATE_LIMITED` until it has passed.
+pub const BACKUP_NOW_MIN_GAP_MS: i64 = 15 * 60 * 1000;
+
+/// `HH:MM` of `at_ms` (UTC ms) in the IANA zone `tz`; an unknown zone reads as UTC.
+fn clock_in_zone(at_ms: i64, tz: &str) -> String {
+    use chrono::TimeZone;
+    let zone = tz.parse::<chrono_tz::Tz>().unwrap_or(chrono_tz::UTC);
+    zone.timestamp_millis_opt(at_ms)
+        .single()
+        .map_or_else(|| "00:00".to_owned(), |t| t.format("%H:%M").to_string())
+}
+
+/// The refusal of a `backup.now` sent less than [`BACKUP_NOW_MIN_GAP_MS`] after the branch's last
+/// applied one (Story 9.17): "A backup ran at 14:05. Try again after 14:20." in the branch's zone.
+pub fn backup_now_too_soon(last_applied_ms: i64, tz: &str) -> AppError {
+    AppError::new(
+        ErrorCode::RateLimited,
+        format!(
+            "A backup ran at {}. Try again after {}.",
+            clock_in_zone(last_applied_ms, tz),
+            clock_in_zone(last_applied_ms.saturating_add(BACKUP_NOW_MIN_GAP_MS), tz)
+        ),
+    )
+}
+
 /// One entry of the catalogue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OwnerCommandKind {
@@ -507,6 +533,17 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn a_backup_too_soon_names_both_times_in_the_branch_zone() {
+        // 2026-10-31 08:35:00 UTC is 14:05 in Kolkata.
+        let ran = 1_793_435_700_000;
+        let e = backup_now_too_soon(ran, "Asia/Kolkata");
+        assert_eq!(e.code, ErrorCode::RateLimited);
+        assert_eq!(e.message, "A backup ran at 14:05. Try again after 14:20.");
+        // An unknown zone reads as UTC.
+        let e = backup_now_too_soon(ran, "Nowhere/Land");
+        assert_eq!(e.message, "A backup ran at 08:35. Try again after 08:50.");
+    }
     #[test]
     fn the_first_kinds_are_handled_and_the_reserved_ones_are_not() {
         for k in [

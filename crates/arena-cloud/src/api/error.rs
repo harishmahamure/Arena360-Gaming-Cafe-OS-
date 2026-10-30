@@ -215,6 +215,13 @@ impl ApiError {
         e
     }
 
+    /// `error` (a `RATE_LIMITED` with its own message, 429) with `Retry-After: retry_after_s`.
+    pub fn retry_in(error: AppError, retry_after_s: u64) -> Self {
+        let mut e: Self = error.into();
+        e.retry_after_s = Some(retry_after_s.max(1));
+        e
+    }
+
     pub fn locked(retry_after_s: u64) -> Self {
         let mut e: Self = AppError::new(
             ErrorCode::AuthLocked,

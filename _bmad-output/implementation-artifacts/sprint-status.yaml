@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-31-2026 15:00
+last_updated: 10-31-2026 16:00
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -283,7 +283,7 @@ development_status:
   9-14-the-hub-emits-a-yearly-gst-archive-kept-for-8-years: done
   9-15-backups-are-kept-for-the-plan-s-retention-and-gst-records-fo: done
   9-16-cloud-backup-status-in-the-hub-header-and-system-screen: done
-  9-17-owner-sees-backup-status-and-sends-backup-now: backlog
+  9-17-owner-sees-backup-status-and-sends-backup-now: review
   9-18-owner-issues-a-standby-code-and-a-second-pc-pairs-as-standby: backlog
   9-19-the-standby-bootstraps-from-the-main-hub-and-follows-it-live: backlog
   9-20-the-standby-keeps-its-own-catalogue-media-and-licence-and-sh: backlog

@@ -305,11 +305,18 @@ pub struct HubUploadView {
     pub unavailable: Option<arena_proto::ResendUnavailable>,
     /// Gaps found for this Hub since it paired.
     pub gaps_found: i64,
+    /// The backup block of the Hub's last paid heartbeat (Story 9.17): when its last snapshot was
+    /// stored (Hub clock, ms), the batches it still has to upload (`None` until it has sent the
+    /// block) and when its upload last failed.
+    pub last_snapshot_at: Option<i64>,
+    pub pending_batches: Option<i64>,
+    pub failed_at: Option<i64>,
 }
 
 const VIEW_COLUMNS: &str = "last_epoch_seen, last_seq_seen, last_upload_at, last_summary_at, \
      last_rollup_date, resend_epoch, resend_from, resend_to, unavailable_epoch, \
-     unavailable_from, unavailable_to, gaps_found";
+     unavailable_from, unavailable_to, gaps_found, last_snapshot_at, backup_pending_batches, \
+     backup_failed_at";
 
 fn opt_int(v: Option<i64>) -> SqlValue {
     v.map_or(SqlValue::Null, SqlValue::Integer)
@@ -348,6 +355,9 @@ impl ControlDb {
             resend,
             unavailable,
             gaps_found: col_int(r, 11)?,
+            last_snapshot_at: col_opt_int(r, 12)?,
+            pending_batches: col_opt_int(r, 13)?,
+            failed_at: col_opt_int(r, 14)?,
         })
     }
 
@@ -361,7 +371,8 @@ impl ControlDb {
             "UPDATE hubs SET last_epoch_seen = ?, last_seq_seen = ?, last_upload_at = ?, \
              last_summary_at = ?, last_rollup_date = ?, resend_epoch = ?, resend_from = ?, \
              resend_to = ?, unavailable_epoch = ?, unavailable_from = ?, unavailable_to = ?, \
-             gaps_found = ? WHERE id = ?",
+             gaps_found = ?, last_snapshot_at = ?, backup_pending_batches = ?, \
+             backup_failed_at = ? WHERE id = ?",
             vec![
                 opt_text(v.epoch_seen.as_deref()),
                 opt_int(v.seq_seen),
@@ -375,6 +386,9 @@ impl ControlDb {
                 opt_int(v.unavailable.as_ref().map(|u| u.from)),
                 opt_int(v.unavailable.as_ref().map(|u| u.to)),
                 SqlValue::Integer(v.gaps_found),
+                opt_int(v.last_snapshot_at),
+                opt_int(v.pending_batches),
+                opt_int(v.failed_at),
                 text(hub_id),
             ],
         )

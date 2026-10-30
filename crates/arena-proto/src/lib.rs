@@ -318,13 +318,13 @@ pub use owner_alert::{
     PUSH_TTL_S, PushKeys, PushRemove, PushSubscribe,
 };
 pub use owner_commands::{
-    CreditRemind, DEVICE_REVOKE_REASONS, KeyRelease, KeyReleaseDecision, OWNER_COMMAND_KINDS,
-    OWNER_COMMAND_POSTS_PER_MIN, OWNER_COMMANDS_PAGE, OWNER_COMMANDS_PAGE_MAX, OWNER_UPDATES,
-    OverwrittenChange, OwnerCommandKind, OwnerCommandList, OwnerCommandPost, OwnerCommandPosted,
-    OwnerCommandPreview, OwnerCommandPreviewRequest, OwnerCommandSkip, OwnerCommandTarget,
-    OwnerCommandView, OwnerDeviceRevoke, OwnerStaffUpsert, OwnerUpdate, StaffSetupCode,
-    UpdatedByOwnerEvent, accepted_owner_kind, owner_command_kind, owner_update_for_table,
-    validate_owner_payload,
+    BACKUP_NOW_MIN_GAP_MS, CreditRemind, DEVICE_REVOKE_REASONS, KeyRelease, KeyReleaseDecision,
+    OWNER_COMMAND_KINDS, OWNER_COMMAND_POSTS_PER_MIN, OWNER_COMMANDS_PAGE, OWNER_COMMANDS_PAGE_MAX,
+    OWNER_UPDATES, OverwrittenChange, OwnerCommandKind, OwnerCommandList, OwnerCommandPost,
+    OwnerCommandPosted, OwnerCommandPreview, OwnerCommandPreviewRequest, OwnerCommandSkip,
+    OwnerCommandTarget, OwnerCommandView, OwnerDeviceRevoke, OwnerStaffUpsert, OwnerUpdate,
+    StaffSetupCode, UpdatedByOwnerEvent, accepted_owner_kind, backup_now_too_soon,
+    owner_command_kind, owner_update_for_table, validate_owner_payload,
 };
 pub use owner_export::{ExportReport, major, owner_csv, utc_minute};
 pub use owner_read::{
@@ -337,12 +337,13 @@ pub use owner_read::{
 pub use pairing::{
     ActivePairingCode, BOOTSTRAP_DAY_START_MIN, BootstrapOwner, BootstrapProfile,
     BranchBootstrapCommand, HEARTBEAT_BOOT_INTERVAL_S, HEARTBEAT_LIVE_INTERVAL_S,
-    HEARTBEAT_MIN_GAP_MS, HUB_TOKEN_PREFIX, HeartbeatFence, HeartbeatRequest, HeartbeatResponse,
-    HubPairRequest, HubPairResponse, HubPlatform, InstallHubState, IssuePairingCode, OWNER_ROLE,
-    PAIR_ATTEMPTS_PER_IP_PER_HOUR, PAIR_FAILURES_PER_CODE, PAIRING_CODE_ALPHABET, PAIRING_CODE_LEN,
-    PAIRING_CODE_TTL_MS, PairHubOk, PairHubRequest, PairingCodeIssued, ResendUnavailable,
-    SETUP_CODE_HUB_TTL_MS, SETUP_CODE_PLAINTEXT_TTL_MS, SeqRange, SetupCodeReveal, check_bootstrap,
-    format_pairing_code, normalize_pairing_code, valid_pairing_code,
+    HEARTBEAT_MIN_GAP_MS, HUB_TOKEN_PREFIX, HeartbeatBackup, HeartbeatFence, HeartbeatRequest,
+    HeartbeatResponse, HubPairRequest, HubPairResponse, HubPlatform, InstallHubState,
+    IssuePairingCode, OWNER_ROLE, PAIR_ATTEMPTS_PER_IP_PER_HOUR, PAIR_FAILURES_PER_CODE,
+    PAIRING_CODE_ALPHABET, PAIRING_CODE_LEN, PAIRING_CODE_TTL_MS, PairHubOk, PairHubRequest,
+    PairingCodeIssued, ResendUnavailable, SETUP_CODE_HUB_TTL_MS, SETUP_CODE_PLAINTEXT_TTL_MS,
+    SeqRange, SetupCodeReveal, check_bootstrap, format_pairing_code, normalize_pairing_code,
+    valid_pairing_code,
 };
 pub use pc_command::{
     DeviceMessage, DevicePower, DeviceScreen, LockReason, MessageScope, PC_MESSAGE_MAX, PcAck,
@@ -575,9 +576,9 @@ pub use wizard::{
     AddBranch, BRANCH_CODE_MAX, BRANCH_CODE_MIN, BranchCodeSet, BranchHub, BranchSetupProgress,
     COUNTRIES, CafeDetails, ChooseTier, Country, CountryRow, GoLiveBlocker, GoLiveItem,
     GoLiveItemView, GoLiveView, KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT, KEY_BRANCH_NAME,
-    OwnerBranch, SetBranchCode, StepState, TierChoices, TierOption, TierUnavailable, UpdateBranch,
-    WizardBranch, WizardState, WizardStep, WizardStepInfo, WizardTenant, country, current_step,
-    valid_branch_code,
+    OwnerBackup, OwnerBranch, SetBranchCode, StepState, TierChoices, TierOption, TierUnavailable,
+    UpdateBranch, WizardBranch, WizardState, WizardStep, WizardStepInfo, WizardTenant, country,
+    current_step, valid_branch_code,
 };
 
 /// Returns this crate's name.

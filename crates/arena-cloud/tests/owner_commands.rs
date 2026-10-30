@@ -1339,3 +1339,303 @@ async fn the_alert_limits_are_a_settings_key_an_owner_may_set_within_range() {
     let r = h.send(&a, other).await;
     assert_eq!((r.status, r.code()), (422, "VALIDATION_FAILED"));
 }
+
+// ---- Story 9.17: "Back up now" is limited to once per 15 minutes; the backup line ----
+
+impl Harness {
+    /// Posts `backup.now` for `branch` under `key` and has the Hub answer it `applied` now.
+    async fn backup_applied(&self, c: &Cafe, branch: &str, key: &str) -> i64 {
+        let r = self
+            .send(c, post(branch, key, "backup.now", json!({})))
+            .await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        let id = self.id_of(branch, key);
+        self.resolve_applied(branch, id).await;
+        id
+    }
+
+    async fn resolve_applied(&self, branch: &str, id: i64) {
+        let now = self.now.load(Ordering::SeqCst);
+        let status = self
+            .db
+            .resolve_command(branch, id, None, None, HUB_A, now)
+            .await
+            .unwrap();
+        assert_eq!(status, Some(arena_proto::CommandStatus::Applied));
+    }
+
+    fn command_rows(&self, kind: &str) -> i64 {
+        rusqlite::Connection::open(self._dir.path().join("gz_control.db"))
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM commands WHERE kind = ?",
+                [kind],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    /// Moves every answer back in time by `by_ms`.
+    fn age_applied(&self, branch: &str, by_ms: i64) {
+        rusqlite::Connection::open(self._dir.path().join("gz_control.db"))
+            .unwrap()
+            .execute(
+                "UPDATE commands SET resolved_at = resolved_at - ?1 WHERE branch_id = ?2",
+                rusqlite::params![by_ms, branch],
+            )
+            .unwrap();
+    }
+
+    /// The id of the row an "all branches" post under `group` made for `branch`.
+    fn id_in_group(&self, branch: &str, group: &str) -> i64 {
+        rusqlite::Connection::open(self._dir.path().join("gz_control.db"))
+            .unwrap()
+            .query_row(
+                "SELECT id FROM commands WHERE branch_id = ? AND group_id = ?",
+                [branch, group],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+}
+
+/// `HH:MM` in Asia/Kolkata (UTC+5:30), the zone of the test branches.
+fn ist(ms: i64) -> String {
+    let zone = chrono::FixedOffset::east_opt(5 * 3600 + 30 * 60).unwrap();
+    chrono::DateTime::from_timestamp_millis(ms)
+        .unwrap()
+        .with_timezone(&zone)
+        .format("%H:%M")
+        .to_string()
+}
+
+#[tokio::test]
+async fn a_second_backup_now_within_15_minutes_of_an_applied_one_is_refused() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    let ran = T0;
+    h.backup_applied(&a, &a.branch, K1).await;
+
+    h.advance(10 * MIN);
+    let r = h
+        .send(&a, post(&a.branch, K2, "backup.now", json!({})))
+        .await;
+    assert_eq!((r.status, r.code()), (429, "RATE_LIMITED"), "{}", r.body);
+    assert_eq!(
+        r.body["message"],
+        format!(
+            "A backup ran at {}. Try again after {}.",
+            ist(ran),
+            ist(ran + 15 * MIN)
+        )
+    );
+    assert_eq!(r.retry_after.as_deref(), Some("300"), "5 minutes to go");
+    assert_eq!(h.command_rows("backup.now"), 1, "nothing was queued");
+
+    // Other kinds are not held by it.
+    let other = h.send(&a, post(&a.branch, K3, "rate.upsert", rate())).await;
+    assert_eq!(other.status, 200, "{}", other.body);
+
+    // The window ends 15 minutes after the applied one (the clock is moved by ageing its row,
+    // as the owner's session would not outlive the wait).
+    h.age_applied(&a.branch, 6 * MIN);
+    let r = h
+        .send(&a, post(&a.branch, K2, "backup.now", json!({})))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(h.command_rows("backup.now"), 2);
+}
+
+#[tokio::test]
+async fn the_same_key_sent_again_returns_its_first_row_and_is_never_limited() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    let id = h.backup_applied(&a, &a.branch, K1).await;
+    h.advance(MIN);
+    let again = h
+        .send(&a, post(&a.branch, K1, "backup.now", json!({})))
+        .await;
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert_eq!(again.body["commands"][0]["id"], id);
+    assert_eq!(again.body["commands"][0]["status"], "applied");
+    assert_eq!(h.command_rows("backup.now"), 1);
+}
+
+#[tokio::test]
+async fn a_rejected_or_waiting_backup_now_does_not_count_toward_the_limit() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    let r = h
+        .send(&a, post(&a.branch, K1, "backup.now", json!({})))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    // Still waiting: a second one is queued.
+    h.advance(MIN);
+    let r = h
+        .send(&a, post(&a.branch, K2, "backup.now", json!({})))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    // The Hub rejects both with the transport error: neither counts.
+    for key in [K1, K2] {
+        let id = h.id_of(&a.branch, key);
+        let ack = h
+            .hub_result(
+                &a,
+                id,
+                json!({"epoch": HUB_A, "error": {
+                    "code": "CLOUD_UNREACHABLE", "message": "The cloud couldn't be reached."
+                }}),
+            )
+            .await;
+        assert_eq!(ack.body["status"], "rejected", "{}", ack.body);
+    }
+    let r = h
+        .send(&a, post(&a.branch, K3, "backup.now", json!({})))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+}
+
+#[tokio::test]
+async fn an_all_branches_post_skips_a_branch_that_backed_up_lately() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    let two = h.extra_branch(&a, "Arena Two", Some(Tier::Basic)).await;
+    h.backup_applied(&a, &a.branch, K1).await;
+    h.advance(3 * MIN);
+
+    let r = h.send(&a, post("all", K2, "backup.now", json!({}))).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let queued: Vec<&str> = r.body["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["branch_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(queued, [two.as_str()]);
+    let skipped = r.body["skipped"].as_array().unwrap();
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0]["branch_id"], a.branch);
+    assert_eq!(skipped[0]["code"], "RATE_LIMITED");
+    assert!(
+        skipped[0]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("A backup ran at ")
+    );
+
+    // The same post again: the branch that took it finds its row, the other is still held.
+    let again = h.send(&a, post("all", K2, "backup.now", json!({}))).await;
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert_eq!(again.body["commands"].as_array().unwrap().len(), 1);
+    assert_eq!(h.command_rows("backup.now"), 2);
+
+    // Every branch within its window: the code is the answer and nothing is queued.
+    let id = h.id_in_group(&two, K2);
+    h.resolve_applied(&two, id).await;
+    let all_limited = h.send(&a, post("all", K3, "backup.now", json!({}))).await;
+    assert_eq!(
+        (all_limited.status, all_limited.code()),
+        (429, "RATE_LIMITED")
+    );
+    assert_eq!(h.command_rows("backup.now"), 2);
+}
+
+#[tokio::test]
+async fn a_free_branch_is_still_refused_for_its_tier_not_the_limit() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    let free = h.extra_branch(&a, "Free Arena", None).await;
+    let r = h.send(&a, post(&free, K1, "backup.now", json!({}))).await;
+    assert_eq!((r.status, r.code()), (403, "FEATURE_NOT_ENTITLED"));
+}
+
+impl Harness {
+    /// A heartbeat of the Hub carrying `extra` fields.
+    async fn beat_with(&self, c: &Cafe, extra: Value) {
+        let mut body = json!({"epoch": "3:HUBA", "version": "0.2.0", "schema_version": 12,
+                              "last_seq_uploaded": 0});
+        for (k, v) in extra.as_object().unwrap() {
+            body[k] = v.clone();
+        }
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/heartbeat")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", c.token))
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let r = reply(self.app.clone().oneshot(req).await.unwrap()).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+    }
+
+    async fn branch_row(&self, c: &Cafe) -> Value {
+        let list = self.get(c, "/v1/branches").await;
+        assert_eq!(list.status, 200, "{}", list.body);
+        list.body
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["id"] == c.branch.as_str())
+            .unwrap()
+            .clone()
+    }
+}
+
+#[tokio::test]
+async fn the_branch_list_serves_the_backup_block_of_a_paid_hub() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+
+    // Paid, but the Hub has not sent the block: nothing to show yet.
+    h.beat_with(&a, json!({"last_upload_at": 1_000})).await;
+    assert!(h.branch_row(&a).await.get("backup").is_none());
+
+    h.advance(MIN);
+    h.beat_with(
+        &a,
+        json!({
+            "last_upload_at": 4_000,
+            "backup": {"last_snapshot_at": 2_000, "pending_batches": 2, "failed_at": 3_000},
+        }),
+    )
+    .await;
+    assert_eq!(
+        h.branch_row(&a).await["backup"],
+        json!({
+            "last_upload_at": 4_000, "last_snapshot_at": 2_000,
+            "pending_batches": 2, "failed_at": 3_000,
+        })
+    );
+
+    // The next block replaces the failure and the count: a failure the Hub no longer reports
+    // leaves with it.
+    h.advance(MIN);
+    h.beat_with(
+        &a,
+        json!({"last_upload_at": 9_000, "backup": {"pending_batches": 0}}),
+    )
+    .await;
+    assert_eq!(
+        h.branch_row(&a).await["backup"],
+        json!({"last_upload_at": 9_000, "pending_batches": 0})
+    );
+}
+
+#[tokio::test]
+async fn a_free_branch_shows_no_backup_line_whatever_its_hub_sent() {
+    let h = Harness::new().await;
+    let a = h.cafe(PHONE_A, "Pixel Arena", "198.51.100.4").await;
+    h.upgrade(&a.branch, Tier::Basic, T0 + 5 * MIN).await;
+    h.beat_with(&a, json!({"backup": {"pending_batches": 3}}))
+        .await;
+    assert!(h.branch_row(&a).await.get("backup").is_some());
+    // The plan ends: the line goes with it.
+    h.advance(6 * MIN);
+    assert_eq!(h.branch_row(&a).await["tier"], "free");
+    assert!(h.branch_row(&a).await.get("backup").is_none());
+
+    let free = h.cafe(PHONE_B, "Other Arena", "198.51.100.5").await;
+    h.beat_with(&free, json!({"backup": {"pending_batches": 3}}))
+        .await;
+    assert!(h.branch_row(&free).await.get("backup").is_none());
+}

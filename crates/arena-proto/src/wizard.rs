@@ -355,6 +355,31 @@ pub struct OwnerBranch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub key_request: Option<crate::PendingKeyRequest>,
+    /// The latest backup block the branch's Hub sent (Story 9.17); absent on a Free branch and
+    /// before a paid Hub has sent one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub backup: Option<OwnerBackup>,
+}
+
+/// How a paid branch's cloud backup stands, as its Hub last reported (Story 9.17). Times are Hub
+/// clock ms; the owner app shows their age.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OwnerBackup {
+    /// When the cloud last accepted a batch from the Hub.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub last_upload_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub last_snapshot_at: Option<i64>,
+    #[ts(type = "number")]
+    pub pending_batches: i64,
+    /// When the Hub's last upload cycle failed, while it still reports a failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub failed_at: Option<i64>,
 }
 
 /// How far a branch's setup wizard has come (Story 8.14): steps no longer pending, of ten, and the

@@ -695,7 +695,11 @@ impl UploadTask {
             return;
         }
         match writer.record_upload_error(code.clone()).await {
-            Ok(()) => self.noted_error = Some(code),
+            Ok(()) => {
+                self.noted_error = Some(code);
+                // The heartbeat reads the failure time from the status, so it is seen at once.
+                self.refresh_progress().await;
+            }
             Err(e) if e.code == ErrorCode::NotPrimary => {}
             Err(e) => tracing::warn!(code = e.code.as_str(), "upload: could not note the outcome"),
         }
@@ -712,6 +716,8 @@ impl UploadTask {
             Ok(true) => {
                 // The stored error went with it; a failure that comes back must be written again.
                 self.noted_error = None;
+                self.status
+                    .send_if_modified(|s| s.upload.failed_at.take().is_some());
                 tracing::info!("upload: the branch is on Free, uploads stopped");
             }
             Ok(false) => {}
@@ -2143,6 +2149,8 @@ mod tests {
                 base_seq: None,
                 last_summary_at: None,
                 last_rollup_date: None,
+                last_snapshot_at: None,
+                failed_at: None,
             }
         );
 
@@ -2495,6 +2503,8 @@ mod tests {
                 base_seq: None,
                 last_summary_at: None,
                 last_rollup_date: None,
+                last_snapshot_at: None,
+                failed_at: None,
             }
         );
 
@@ -3504,6 +3514,11 @@ mod tests {
         );
         assert_eq!(row.epoch, EPOCH);
         assert_eq!(row.bytes, i64::try_from(sent[0].1.len()).unwrap());
+        assert_eq!(
+            progress(&f).last_snapshot_at,
+            Some(T0),
+            "the status says when"
+        );
         assert_eq!(row.uploaded_at, T0);
         // The copy holds the day's rollup publish, so it is taken after the rollup.
         let published: i64 = copy
@@ -4256,6 +4271,27 @@ mod tests {
         assert!(backup_state(&f).upload_error.is_some());
         f.task.note_outcome(&f.writer, None).await;
         assert_eq!(backup_state(&f).upload_error, None);
+    }
+
+    #[tokio::test]
+    async fn the_failure_time_is_in_the_status_at_once_and_goes_with_a_good_cycle() {
+        let (port, _seen) = serve(cloud).await;
+        let mut f = fx(port, Tier::Basic).await;
+        assert_eq!(progress(&f).failed_at, None);
+        let unreachable = AppError::new(ErrorCode::CloudUnreachable, "no route");
+        f.task.note_outcome(&f.writer, Some(&unreachable)).await;
+        let at = backup_state(&f).upload_error_at;
+        assert!(at.is_some());
+        assert_eq!(progress(&f).failed_at, at, "seen without another cycle");
+        f.task.note_outcome(&f.writer, None).await;
+        assert_eq!(progress(&f).failed_at, None);
+
+        // A lapse to Free forgets it in the status too.
+        f.task.note_outcome(&f.writer, Some(&unreachable)).await;
+        assert!(progress(&f).failed_at.is_some());
+        f.status.send_modify(|s| s.tier = Some(Tier::Free));
+        f.task.cycle().await;
+        assert_eq!(progress(&f).failed_at, None);
     }
 
     #[tokio::test]

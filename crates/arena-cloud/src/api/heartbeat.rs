@@ -27,6 +27,8 @@ use crate::presign::{Epoch, MAX_SEQ, branch_prefix};
 
 const TOKEN_CACHE_MS: i64 = 5 * 60 * 1000;
 const RATE_PREFIX: &str = "hb:";
+/// The most batches a heartbeat's backup block may report waiting (a bound on what is stored).
+const MAX_PENDING_BATCHES: i64 = 1_000_000;
 /// How long the tunnel step may hold a heartbeat answer (the Hub's request times out at 15 s).
 const TUNNEL_BUDGET: std::time::Duration = std::time::Duration::from_secs(8);
 
@@ -457,6 +459,13 @@ async fn check_upload(
     let mut view = before.clone();
     view.last_upload_at = body.last_upload_at.or(view.last_upload_at);
     view.last_summary_at = body.last_summary_at.or(view.last_summary_at);
+    // A paid Hub's backup block replaces the three fields each time, so a failure the Hub no
+    // longer reports leaves with it (Story 9.17). An older Hub or a Free one sends none.
+    if let Some(b) = &body.backup {
+        view.last_snapshot_at = b.last_snapshot_at.filter(|t| *t >= 0);
+        view.pending_batches = Some(b.pending_batches.clamp(0, MAX_PENDING_BATCHES));
+        view.failed_at = b.failed_at.filter(|t| *t >= 0);
+    }
     if let Some(day) = body.last_rollup_date.as_ref().filter(|d| d.len() <= 10) {
         view.last_rollup_date = Some(day.clone());
     }

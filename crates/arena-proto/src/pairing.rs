@@ -351,6 +351,29 @@ pub struct HeartbeatRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub tunnel: Option<crate::TunnelReport>,
+    /// How the cloud backup stands, sent by a paid Hub only, so the owner app can show it (Story
+    /// 9.17). Times only; never player data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub backup: Option<HeartbeatBackup>,
+}
+
+/// The backup block of a paid Hub's heartbeat (Story 9.17). Times are Hub-clock ms, like
+/// `last_upload_at` beside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct HeartbeatBackup {
+    /// When the last snapshot was stored; absent before the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub last_snapshot_at: Option<i64>,
+    /// Batches still to upload (waiting change rows, in whole batches).
+    #[ts(type = "number")]
+    pub pending_batches: i64,
+    /// When the last upload cycle failed, while the Hub still reports a failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub failed_at: Option<i64>,
 }
 
 /// A run of change-log `seq`s of the heartbeat's epoch, both ends included.

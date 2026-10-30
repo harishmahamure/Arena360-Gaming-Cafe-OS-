@@ -1,10 +1,21 @@
 <script lang="ts">
-  import { Button, PairingCode, StatusBadge, TextField, t } from "@arena/ui";
+  import { Button, PairingCode, StatusBadge, TextField, TierLock, formatTime, t } from "@arena/ui";
   import type { MessageKey } from "@arena/ui/messages";
   import type { OwnerBranch, OwnerCommandView, PairingCodeIssued } from "@arena/ui/generated";
   import { load, send, setupUrl } from "./api";
   import CommandRow from "./CommandRow.svelte";
-  import { denyKey, releaseKey, revokeHub } from "./commands.svelte";
+  import {
+    POLL_MS,
+    backupNow,
+    cmd,
+    denyKey,
+    drainQueue,
+    isWaiting,
+    localRows,
+    refreshCommands,
+    releaseKey,
+    revokeHub,
+  } from "./commands.svelte";
   import { age, refresh } from "./shell.svelte";
   import { ulid } from "./ulid";
 
@@ -33,6 +44,12 @@
   let keyBusy = $state(false);
   let keyError: MessageKey | null = $state(null);
   let keyDecided: OwnerCommandView | null = $state(null);
+  let backupKey = ulid();
+  let backing = $state(false);
+  let backupError: string | null = $state(null);
+  /** The lowest command id this card started (0: queued on this device); null before the first tap. */
+  let followed: number | null = $state(null);
+  let now = $state(Date.now());
 
   const seen = $derived.by(() => {
     const at = branch.hub.last_seen_at;
@@ -41,6 +58,79 @@
     const [key, n] = age(new Date(at).toISOString());
     return t("owner.branches.hub.seen", { age: t(key, { n }) });
   });
+
+  const paid = $derived(branch.tier !== "free");
+  const ago = (ms: number) => {
+    const [key, n] = age(new Date(ms).toISOString());
+    return t(key, { n });
+  };
+  /** The backup line (Story 9.17): the failure replaces the good state while the Hub reports one. */
+  const backupLine = $derived.by(() => {
+    const b = branch.backup;
+    if (!b) return t("owner.branches.backup.none");
+    if (b.failed_at !== undefined)
+      return t("owner.branches.backup.failed", { time: formatTime(b.failed_at, branch.timezone) });
+    return t("owner.branches.backup.line", {
+      upload:
+        b.last_upload_at === undefined
+          ? t("owner.branches.backup.upload_none")
+          : t("owner.branches.backup.upload", { age: ago(b.last_upload_at) }),
+      snapshot:
+        b.last_snapshot_at === undefined
+          ? t("owner.branches.backup.snapshot_none")
+          : t("owner.branches.backup.snapshot", { age: ago(b.last_snapshot_at) }),
+      pending:
+        b.pending_batches === 1
+          ? t("owner.branches.backup.pending_one")
+          : t("owner.branches.backup.pending", { n: b.pending_batches }),
+    });
+  });
+  const backupFailed = $derived(branch.backup?.failed_at !== undefined);
+
+  /** The newest `backup.now` this card started, or what a Retry of it made after. */
+  const backupRow = $derived.by(() => {
+    const from = followed;
+    if (from === null) return null;
+    return (
+      [...localRows(), ...cmd.rows].find(
+        (r) => r.kind === "backup.now" && r.branch_id === branch.id && (r.id === 0 || r.id >= from),
+      ) ?? null
+    );
+  });
+  const backupWaiting = $derived(!!backupRow && isWaiting(backupRow));
+
+  // While the command is not finished the row follows it, and the card reads the branch again once
+  // it is, so the backup line is the Hub's latest.
+  let wasWaiting = false;
+  $effect(() => {
+    const waitingNow = backupWaiting;
+    if (wasWaiting && !waitingNow) void refresh();
+    wasWaiting = waitingNow;
+    if (!waitingNow) return;
+    const tick = async () => {
+      now = Date.now();
+      if (cmd.queued.some((q) => q.state === "queued")) await drainQueue();
+      await refreshCommands();
+    };
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void tick();
+    }, POLL_MS);
+    return () => clearInterval(timer);
+  });
+
+  async function backUp() {
+    backing = true;
+    backupError = null;
+    const res = await backupNow(branch.id, backupKey);
+    backing = false;
+    if (res.state === "limited") backupError = res.message;
+    else if (res.state === "failed") backupError = t("owner.branches.backup.error");
+    else if (res.state === "sent" || res.state === "queued") {
+      backupKey = ulid();
+      now = Date.now();
+      followed = Math.min(followed ?? res.id, res.id);
+    }
+  }
 
   async function edit() {
     name = branch.name;
@@ -152,6 +242,9 @@
       })}
     </p>
   {/if}
+  {#if paid}
+    <p data-testid="backup-line" data-failed={backupFailed}>{backupLine}</p>
+  {/if}
   {#if branch.waiting}<StatusBadge state="warning" label="owner.branches.waiting" />{/if}
   {#if editing}
     <form onsubmit={save}>
@@ -179,6 +272,19 @@
   {:else}
     <div class="actions">
       <Button label="owner.branches.edit" variant="secondary" onclick={edit} />
+      {#if paid}
+        <Button
+          label="owner.branches.backup.now"
+          variant="secondary"
+          onclick={backUp}
+          disabled={backing || backupWaiting}
+          disabledReason={backing
+            ? "owner.branches.backup.working"
+            : "owner.branches.backup.waiting"}
+        />
+      {:else}
+        <TierLock tier="Basic" />
+      {/if}
       {#if branch.hub.paired && !replacing}
         <Button label="owner.branches.replace" variant="secondary" onclick={askReplace} />
       {/if}
@@ -195,6 +301,12 @@
         <a class="link" href={setupUrl(branch.id)}>{t("owner.branches.continue")}</a>
       {/if}
     </div>
+    {#if backupError}<p role="alert" data-testid="backup-error">{backupError}</p>{/if}
+    {#if backupRow}
+      <ul class="replaced">
+        <CommandRow row={backupRow} {now} />
+      </ul>
+    {/if}
     {#if branch.key_request}
       {@const ask = branch.key_request}
       {@const [ageKey, ageN] = age(new Date(ask.requested_at).toISOString())}

@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
 use arena_proto::{
-    AppError, BRANCH_ONLINE_WINDOW_MS, COMMAND_PAYLOAD_MAX, COMMAND_SCHEMA_VERSION, COMMANDS_PAGE,
-    CommandResult, CommandResultAck, CommandStatus, CommandWire, CommandsPage, ErrorCode,
-    KeyRelease, KeyReleaseDecision, OWNER_ALL_BRANCHES, OWNER_COMMAND_POSTS_PER_MIN,
-    OWNER_COMMANDS_PAGE, OWNER_COMMANDS_PAGE_MAX, OwnerCommandKind, OwnerCommandList,
-    OwnerCommandPost, OwnerCommandPosted, OwnerCommandPreview, OwnerCommandPreviewRequest,
-    OwnerCommandSkip, OwnerCommandTarget, OwnerCommandView, OwnerStaffUpsert,
-    PRODUCT_COMMAND_PAYLOAD_MAX, SETTINGS_COMMAND_KEYS, SETUP_CODE_HUB_TTL_MS, STEPUP_TTL_MS,
-    StaffSetupCode, Tier, command_payload_max, is_setup_command, owner_command_kind,
-    validate_owner_payload,
+    AppError, BACKUP_NOW_MIN_GAP_MS, BRANCH_ONLINE_WINDOW_MS, COMMAND_PAYLOAD_MAX,
+    COMMAND_SCHEMA_VERSION, COMMANDS_PAGE, CommandResult, CommandResultAck, CommandStatus,
+    CommandWire, CommandsPage, ErrorCode, KeyRelease, KeyReleaseDecision, OWNER_ALL_BRANCHES,
+    OWNER_COMMAND_POSTS_PER_MIN, OWNER_COMMANDS_PAGE, OWNER_COMMANDS_PAGE_MAX, OwnerCommandKind,
+    OwnerCommandList, OwnerCommandPost, OwnerCommandPosted, OwnerCommandPreview,
+    OwnerCommandPreviewRequest, OwnerCommandSkip, OwnerCommandTarget, OwnerCommandView,
+    OwnerStaffUpsert, PRODUCT_COMMAND_PAYLOAD_MAX, SETTINGS_COMMAND_KEYS, SETUP_CODE_HUB_TTL_MS,
+    STEPUP_TTL_MS, StaffSetupCode, Tier, backup_now_too_soon, command_payload_max,
+    is_setup_command, owner_command_kind, validate_owner_payload,
 };
 use arena_store::control::{
     Branch, CommandRow, KeyDecision, KeyDecisionOutcome, KeyRefusal, NewAdminAudit, NewCommand,
@@ -509,17 +509,6 @@ async fn post_command(
     let mut skipped = Vec::new();
     let mut setup_codes = Vec::new();
     for b in &targets {
-        if let Some(e) = refusal(&st, b, &kind).await? {
-            if !all {
-                return Err(e.into());
-            }
-            skipped.push(OwnerCommandSkip {
-                branch_id: b.id.clone(),
-                code: e.code,
-                message: e.message,
-            });
-            continue;
-        }
         let (row_key, group) = if all {
             (
                 branch_key(&body.idempotency_key, &b.id),
@@ -528,6 +517,34 @@ async fn post_command(
         } else {
             (body.idempotency_key.clone(), None)
         };
+        let mut retry_after_s = None;
+        let refused = match refusal(&st, b, &kind).await? {
+            Some(e) => Some(e),
+            None if kind.kind == "backup.now" => {
+                match backup_now_refusal(&st, b, &row_key, now).await? {
+                    Some((e, wait_s)) => {
+                        retry_after_s = Some(wait_s);
+                        Some(e)
+                    }
+                    None => None,
+                }
+            }
+            None => None,
+        };
+        if let Some(e) = refused {
+            if !all {
+                return Err(match retry_after_s {
+                    Some(wait) => ApiError::retry_in(e, wait),
+                    None => e.into(),
+                });
+            }
+            skipped.push(OwnerCommandSkip {
+                branch_id: b.id.clone(),
+                code: e.code,
+                message: e.message,
+            });
+            continue;
+        }
         let (payload, code) = match &staff {
             Some(fields) => {
                 let (p, code) = staff_part(fields, body.base_rev, &row_key, &b.id, now).await?;
@@ -571,6 +588,43 @@ async fn post_command(
     };
     // A setup code is shown once: nothing may keep the answer.
     Ok(([(CACHE_CONTROL, "no-store")], Json(posted)).into_response())
+}
+
+/// Why a branch cannot be sent `backup.now` right now (Story 9.17), with the seconds to wait: its
+/// last `applied` one answered less than [`BACKUP_NOW_MIN_GAP_MS`] ago. The same key sent again
+/// finds its first row and is never refused, and a rejected or waiting command does not count.
+async fn backup_now_refusal(
+    st: &AuthState,
+    b: &Branch,
+    row_key: &str,
+    now: i64,
+) -> Result<Option<(AppError, u64)>, ApiError> {
+    if st
+        .db
+        .command_by_key(&b.id, row_key)
+        .await
+        .map_err(ApiError::internal)?
+        .is_some()
+    {
+        return Ok(None);
+    }
+    let Some(last) = st
+        .db
+        .last_applied_command_at(&b.id, "backup.now")
+        .await
+        .map_err(ApiError::internal)?
+    else {
+        return Ok(None);
+    };
+    let wait_ms = last.saturating_add(BACKUP_NOW_MIN_GAP_MS) - now;
+    if wait_ms <= 0 {
+        return Ok(None);
+    }
+    tracing::info!(branch_id = %b.id, "owner command refused: a backup ran within 15 minutes");
+    Ok(Some((
+        backup_now_too_soon(last, &b.timezone),
+        ceil_s(wait_ms),
+    )))
 }
 
 /// A kind the control role applies itself (Story 9.8, `hub.revoke`): one branch of the tenant, no

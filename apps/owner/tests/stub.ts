@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 import type {
   BranchSummary,
+  OwnerBackup,
   OwnerBranch,
   OwnerCommandPreview,
   OwnerCommandView,
@@ -190,6 +191,16 @@ export function commandOf(over: Partial<OwnerCommandView> = {}, ageMs = 120_000)
     status: "pending",
     payload: { group_id: "g1", price_per_hour_minor: 6000 },
     queued_at: Date.now() - ageMs,
+    ...over,
+  };
+}
+
+/** The backup block a paid Hub last sent (Story 9.17): uploaded 4 min ago, snapshot 3 h ago, 2 pending. */
+export function backupOf(over: Partial<OwnerBackup> = {}): OwnerBackup {
+  return {
+    last_upload_at: Date.now() - 4 * 60_000,
+    last_snapshot_at: Date.now() - 3 * 3_600_000,
+    pending_batches: 2,
     ...over,
   };
 }

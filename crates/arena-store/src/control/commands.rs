@@ -414,6 +414,23 @@ impl ControlDb {
         rows.first().map(|r| command_from(r)).transpose()
     }
 
+    /// When the branch's newest `applied` command of `kind` was answered (cloud clock, ms), or
+    /// `None` if it has none (Story 9.17). A rejected or waiting command does not count.
+    pub async fn last_applied_command_at(
+        &self,
+        branch_id: &str,
+        kind: &str,
+    ) -> Result<Option<i64>, ControlError> {
+        let rows = self
+            .query(
+                "SELECT MAX(resolved_at) FROM commands \
+                 WHERE branch_id = ? AND kind = ? AND status = 'applied'",
+                vec![text(branch_id), text(kind)],
+            )
+            .await?;
+        rows.first().map_or(Ok(None), |r| col_opt_int(r, 0))
+    }
+
     pub async fn command(&self, id: i64) -> Result<Option<CommandRow>, ControlError> {
         let rows = self
             .query(SELECT_BY_ID, vec![SqlValue::Integer(id)])

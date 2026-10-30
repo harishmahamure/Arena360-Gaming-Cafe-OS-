@@ -138,6 +138,11 @@ pub struct UploadStatus {
     pub last_summary_at: Option<i64>,
     /// The latest business day (`yyyy-mm-dd`) whose rollup is in `rollup_log` (Story 8.6).
     pub last_rollup_date: Option<String>,
+    /// When the last snapshot was stored (Hub clock, ms; `snapshot_log`) (Story 9.17).
+    pub last_snapshot_at: Option<i64>,
+    /// When the last upload cycle failed, while `backup_state` still holds the failure (Hub
+    /// clock, ms) (Story 9.17).
+    pub failed_at: Option<i64>,
 }
 
 impl HubStatus {

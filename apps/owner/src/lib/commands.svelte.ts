@@ -468,6 +468,43 @@ export async function sendNow(
   return "sent";
 }
 
+/** How "Back up now" went (Story 9.17). `id` is the cloud row, or 0 for one queued on this device. */
+export type BackupNowResult =
+  | { state: "sent" | "queued"; id: number }
+  | { state: "limited"; message: string }
+  | { state: "failed" | "declined" };
+
+/**
+ * Sends `backup.now` to one branch at once. The cloud refuses a second one within 15 minutes of an
+ * applied one (`RATE_LIMITED`, with "A backup ran at <time>. Try again after <time>."): nothing is
+ * queued then. The same `key` sent again finds the first row. With no signal it waits on this
+ * device like any other change.
+ */
+export async function backupNow(branchId: string, key: string): Promise<BackupNowResult> {
+  const res = await post({
+    branch_id: branchId,
+    idempotency_key: key,
+    kind: "backup.now",
+    payload: {},
+  });
+  if (res === "declined") return { state: "declined" };
+  if (!res.ok) {
+    if (res.code === "RATE_LIMITED" && res.message)
+      return { state: "limited", message: res.message };
+    if (res.code !== "OFFLINE") return { state: "failed" };
+    await enqueue({ key, branch_id: branchId, kind: "backup.now", payload: {} });
+    cmd.sent++;
+    void drainQueue();
+    return { state: "queued", id: 0 };
+  }
+  const row = res.data.commands[0];
+  if (!row) return { state: "failed" };
+  cmd.rows = merge(cmd.rows, res.data.commands);
+  cmd.loaded = true;
+  cmd.sent++;
+  return { state: "sent", id: row.id };
+}
+
 /** Codes that say the request itself can no longer be answered, not that the call failed. */
 const CLOUD_REFUSED = new Set([
   "STEP_NOT_READY",

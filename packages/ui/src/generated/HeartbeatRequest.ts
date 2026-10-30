@@ -2,6 +2,7 @@
 import type { AdCounts } from "./AdCounts";
 import type { BranchOpening } from "./BranchOpening";
 import type { BranchSetup } from "./BranchSetup";
+import type { HeartbeatBackup } from "./HeartbeatBackup";
 import type { ResendUnavailable } from "./ResendUnavailable";
 import type { TunnelReport } from "./TunnelReport";
 
@@ -63,4 +64,9 @@ export type HeartbeatRequest = {
    * Whether the Hub holds a tunnel credential (Story 8.39); an older Hub omits it.
    */
   tunnel?: TunnelReport;
+  /**
+   * How the cloud backup stands, sent by a paid Hub only, so the owner app can show it (Story
+   * 9.17). Times only; never player data.
+   */
+  backup?: HeartbeatBackup;
 };

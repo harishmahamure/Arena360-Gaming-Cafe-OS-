@@ -70,6 +70,49 @@ pub struct NotifyResponse {
     pub error_code: Option<String>,
 }
 
+/// How long a queued message may wait for the cloud before it is marked `expired` (Story 8.29).
+pub const NOTIFY_EXPIRY_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+/// How often a paid Hub looks for due messages, in seconds.
+pub const NOTIFY_DRAIN_INTERVAL_S: u64 = 10;
+/// A `notify_outbox` row the cloud sent.
+pub const NOTIFY_STATE_SENT: &str = "sent";
+/// A `notify_outbox` row the cloud could not send.
+pub const NOTIFY_STATE_FAILED: &str = "failed";
+/// A `notify_outbox` row that waited more than [`NOTIFY_EXPIRY_MS`].
+pub const NOTIFY_STATE_EXPIRED: &str = "expired";
+
+/// The payload of `notify.sent` (system): the cloud sent the row's message. The forward action is
+/// now an irreversible effect.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct NotifySent {
+    pub outbox_id: String,
+    pub channel: NotifyChannel,
+}
+
+/// The payload of `notify.failed` (system): the cloud could not send the row's message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct NotifyFailed {
+    pub outbox_id: String,
+    pub code: String,
+}
+
+/// The payload of `notify.skip` (system): the row's message is never sent, with the reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct NotifySkipped {
+    pub outbox_id: String,
+    pub reason: String,
+}
+
+/// The payload of `notify.expire` (system): the row waited more than 7 days.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct NotifyExpired {
+    pub outbox_id: String,
+}
+
 /// Whether `s` is a phone in E.164: `+`, then 8 to 15 digits, the first not 0.
 pub fn valid_e164(s: &str) -> bool {
     let Some(d) = s.strip_prefix('+') else {

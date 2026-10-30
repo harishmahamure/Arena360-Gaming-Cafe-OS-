@@ -316,6 +316,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 77,
         sql: include_str!("../migrations/0077_owner_overrides.sql"),
     },
+    Migration {
+        version: 78,
+        sql: include_str!("../migrations/0078_notify_drain.sql"),
+    },
 ];
 
 /// The schema version this binary writes.

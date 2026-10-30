@@ -740,6 +740,18 @@ impl SnapshotReader {
         })
     }
 
+    /// Runs `read` on the reader's store, under its lock.
+    pub(crate) fn with_store<T>(
+        &self,
+        read: impl FnOnce(&Store) -> Result<T, AppError>,
+    ) -> Result<T, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        read(&store)
+    }
+
     /// The database file this reader reads.
     pub fn db_path(&self) -> Result<std::path::PathBuf, AppError> {
         let store = self

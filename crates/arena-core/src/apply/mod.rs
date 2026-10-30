@@ -59,6 +59,7 @@ mod library_dismiss;
 mod licence;
 mod maintenance;
 mod mutate;
+mod notify_drain;
 mod order_line;
 mod order_place;
 mod order_ready;
@@ -261,6 +262,8 @@ pub(crate) enum Target {
     InvoiceIssue(Box<invoice_issue::IssueTarget>),
     Receipt(Box<receipt_print::ReceiptTarget>),
     Kot(Box<kot::KotTarget>),
+    /// `notify.sent`, `notify.failed`, `notify.skip` and `notify.expire`: the queued row.
+    Notify(Box<notify_drain::NotifyTarget>),
     /// `kds.pair`, `kds.revoke`, `kds.seen` and `settings.set` of a display's high-contrast key.
     KdsDisplay(Box<kds_display::KdsTarget>),
     Alert(Box<alert::AlertTarget>),
@@ -411,6 +414,9 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         | P::DrawerKicked(_)
         | P::DrawerKickFailed(_) => {
             Target::Receipt(Box::new(receipt_print::load(tx, &intent.payload)?))
+        }
+        P::NotifySent(_) | P::NotifyFailed(_) | P::NotifySkip(_) | P::NotifyExpire(_) => {
+            Target::Notify(Box::new(notify_drain::load(tx, &intent.payload)?))
         }
         P::KotReprint(_) | P::KotPrinted(_) | P::KotPrintFailed(_) => {
             Target::Kot(Box::new(kot::load(tx, &intent.payload)?))

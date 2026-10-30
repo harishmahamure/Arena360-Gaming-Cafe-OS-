@@ -5,11 +5,13 @@ use super::prepaid::system;
 use super::session::{billed, pay, refusal, rev_of, settle_intent, submit, table, text};
 use super::stock::{intent, make, owner, staff, stock_in, up};
 use super::*;
+use crate::notify_drain::{DrainAction, plan};
 use crate::rbac::ROLE_COUNTER;
 use arena_proto::PaymentMethod::Cash;
 use arena_proto::{
-    PosSale, PosSaleLine, PosSaleReverted, PrinterErrorKind, ProductUpsert, ReceiptChoice,
-    ReceiptPrintFailed, ReceiptPrinted, ReceiptReprint, UNDO_WINDOW_MS,
+    InvoiceIssue, NOTIFY_EXPIRY_MS, NotifyChannel, NotifyExpired, NotifyFailed, NotifySent,
+    NotifySkipped, PosSale, PosSaleLine, PosSaleReverted, PrinterErrorKind, ProductUpsert,
+    ReceiptChoice, ReceiptPrintFailed, ReceiptPrinted, ReceiptReprint, UNDO_WINDOW_MS,
 };
 
 async fn cola(f: &Fixture) -> String {
@@ -1131,4 +1133,199 @@ async fn a_session_bill_and_a_plan_sale_take_a_business_too() {
     }
     let e = super::session::end(&f, i).await.unwrap_err();
     assert_eq!(e.field.as_deref(), Some("business.gstin"));
+}
+
+// Story 8.29: the notification drain.
+
+async fn whatsapp_order(f: &Fixture) -> (String, String, Actor) {
+    let id = cola(f).await;
+    let by = counter(f).await;
+    whatsapp_branch(f).await;
+    let player = profiled(f, "asha", true).await;
+    let (order, _) = whatsapp_sale(f, &by, &id, Some(&player)).await.unwrap();
+    (order, player, by)
+}
+
+fn notify_row(f: &Fixture) -> (String, String, Option<String>, Option<String>) {
+    let r = &table(f, Table::NotifyOutbox)[0];
+    let opt = |k: &str| match &r[k] {
+        RowValue::Text(t) => Some(t.clone()),
+        _ => None,
+    };
+    (
+        text(r, "id"),
+        text(r, "state"),
+        opt("channel"),
+        opt("error_code"),
+    )
+}
+
+fn sent(id: &str) -> IntentPayload {
+    IntentPayload::NotifySent(NotifySent {
+        outbox_id: id.into(),
+        channel: NotifyChannel::Sms,
+    })
+}
+
+#[tokio::test]
+async fn a_sent_message_is_an_irreversible_effect_and_the_sale_can_no_longer_be_undone() {
+    let f = bootstrapped().await;
+    let (order, _, by) = whatsapp_order(&f).await;
+    let (id, ..) = notify_row(&f);
+    assert!(effect_kinds(&f, &order).is_empty());
+
+    let applied = result(&f, sent(&id)).await.unwrap();
+    assert!(
+        applied
+            .changes
+            .iter()
+            .any(|c| c.tbl == "notify_outbox" && c.op == ChangeOp::Update)
+    );
+    let (_, state, channel, _) = notify_row(&f);
+    assert_eq!((state.as_str(), channel.as_deref()), ("sent", Some("sms")));
+    assert_eq!(effect_kinds(&f, &order), ["notification_sent"]);
+    assert!(
+        f.writer
+            .submit_intent(revert_intent(&f, &by, &order))
+            .await
+            .is_err(),
+        "a message has gone out: the sale cannot be undone"
+    );
+
+    let e = result(&f, sent(&id)).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Stale, "a row is settled once");
+}
+
+#[tokio::test]
+async fn a_failed_skipped_or_expired_row_keeps_why_and_leaves_the_sale_undoable() {
+    for case in 0..3 {
+        let f = bootstrapped().await;
+        let (order, _, by) = whatsapp_order(&f).await;
+        let (id, ..) = notify_row(&f);
+        let (payload, want) = match case {
+            0 => (
+                IntentPayload::NotifyFailed(NotifyFailed {
+                    outbox_id: id.clone(),
+                    code: "PROVIDER_REJECTED".into(),
+                }),
+                "failed",
+            ),
+            1 => (
+                IntentPayload::NotifySkip(NotifySkipped {
+                    outbox_id: id.clone(),
+                    reason: "consent_withdrawn".into(),
+                }),
+                "skipped",
+            ),
+            _ => (
+                IntentPayload::NotifyExpire(NotifyExpired {
+                    outbox_id: id.clone(),
+                }),
+                "expired",
+            ),
+        };
+        result(&f, payload).await.unwrap();
+        let (_, state, channel, code) = notify_row(&f);
+        assert_eq!(state, want);
+        assert_eq!(channel, None);
+        assert_eq!(code.is_some(), case == 0);
+        assert!(effect_kinds(&f, &order).is_empty());
+        f.writer
+            .submit_intent(revert_intent(&f, &by, &order))
+            .await
+            .expect("nothing was sent, so the Undo is still open");
+    }
+}
+
+#[tokio::test]
+async fn a_result_for_an_unknown_row_or_with_a_blank_note_is_refused() {
+    let f = bootstrapped().await;
+    let (..) = whatsapp_order(&f).await;
+    let (id, ..) = notify_row(&f);
+    let e = result(&f, sent("nope")).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::NotFound);
+    let e = result(
+        &f,
+        IntentPayload::NotifyFailed(NotifyFailed {
+            outbox_id: id,
+            code: " ".into(),
+        }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code, ErrorCode::ValidationFailed);
+    assert_eq!(notify_row(&f).1, "queued");
+}
+
+fn due(f: &Fixture) -> Vec<DrainAction> {
+    plan(&reopen(f), &super::players::KEK, f.clock.now_ms(), 20)
+        .unwrap()
+        .into_iter()
+        .map(|i| i.action)
+        .collect()
+}
+
+async fn number(f: &Fixture, order: &str) {
+    let mut i = intent(
+        system(),
+        IntentPayload::InvoiceIssue(InvoiceIssue {
+            order_id: order.into(),
+        }),
+    );
+    i.issued_at = f.clock.now_ms();
+    f.writer.submit_intent(i).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_receipt_is_due_after_the_window_and_waits_for_its_invoice_number() {
+    let f = bootstrapped().await;
+    let (order, _, _) = whatsapp_order(&f).await;
+    assert!(due(&f).is_empty(), "inside the Undo window nothing is due");
+
+    f.clock.advance(UNDO_WINDOW_MS + 1);
+    assert_eq!(due(&f), [DrainAction::Wait], "no invoice number yet");
+
+    number(&f, &order).await;
+    let DrainAction::Send(req) = &due(&f)[0] else {
+        panic!("a numbered receipt is sent");
+    };
+    let (id, ..) = notify_row(&f);
+    assert_eq!(req.outbox_id, id);
+    assert_eq!(req.kind, "receipt");
+    assert_eq!(req.purpose, "transactional");
+    assert_eq!(req.consent_policy_version, "1");
+    assert!(arena_proto::valid_e164(&req.recipient), "{}", req.recipient);
+    assert_eq!(req.params["receipt_no"], number_of(&f, &order).unwrap());
+    assert!(req.params.contains_key("name"));
+}
+
+#[tokio::test]
+async fn withdrawn_consent_skips_the_row_and_nothing_is_posted() {
+    let f = bootstrapped().await;
+    let (order, player, _) = whatsapp_order(&f).await;
+    f.clock.advance(UNDO_WINDOW_MS + 1);
+    number(&f, &order).await;
+    let at = f.clock.now_ms();
+    reopen(&f)
+        .write_tx(|tx| {
+            arena_store::insert_consent(
+                tx,
+                "withdrawn",
+                &player,
+                arena_proto::CONSENT_TRANSACTIONAL,
+                "2",
+                false,
+                at,
+            )
+        })
+        .unwrap();
+    assert_eq!(due(&f), [DrainAction::Skip("consent_withdrawn".into())]);
+}
+
+#[tokio::test]
+async fn a_row_unsent_after_seven_days_expires() {
+    let f = bootstrapped().await;
+    whatsapp_order(&f).await;
+    f.clock.advance(UNDO_WINDOW_MS + NOTIFY_EXPIRY_MS + 1);
+    assert_eq!(due(&f), [DrainAction::Expire]);
 }

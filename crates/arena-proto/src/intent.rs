@@ -362,6 +362,20 @@ pub enum IntentKind {
     /// "Printer offline" alert is raised.
     #[serde(rename = "receipt.print_failed")]
     ReceiptPrintFailed,
+    /// The drain posted a queued message and the cloud sent it (system only; Story 8.29). The
+    /// forward action can no longer be undone.
+    #[serde(rename = "notify.sent")]
+    NotifySent,
+    /// The cloud could not send a queued message (system only).
+    #[serde(rename = "notify.failed")]
+    NotifyFailed,
+    /// A queued message will never be sent: its action was reverted or the player no longer
+    /// agrees (system only).
+    #[serde(rename = "notify.skip")]
+    NotifySkip,
+    /// A queued message was still unsent after 7 days (system only).
+    #[serde(rename = "notify.expire")]
+    NotifyExpire,
     /// The print task sent the drawer pulse queued by a cash settle (system only; Story 5.18).
     #[serde(rename = "drawer.kicked")]
     DrawerKicked,
@@ -392,7 +406,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 123] = [
+    pub const ALL: [IntentKind; 127] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -509,6 +523,10 @@ impl IntentKind {
         Self::ReceiptReprint,
         Self::ReceiptPrinted,
         Self::ReceiptPrintFailed,
+        Self::NotifySent,
+        Self::NotifyFailed,
+        Self::NotifySkip,
+        Self::NotifyExpire,
         Self::DrawerKicked,
         Self::DrawerKickFailed,
         Self::AlertRaise,
@@ -636,6 +654,10 @@ impl IntentKind {
             Self::ReceiptReprint => "receipt.reprint",
             Self::ReceiptPrinted => "receipt.printed",
             Self::ReceiptPrintFailed => "receipt.print_failed",
+            Self::NotifySent => "notify.sent",
+            Self::NotifyFailed => "notify.failed",
+            Self::NotifySkip => "notify.skip",
+            Self::NotifyExpire => "notify.expire",
             Self::DrawerKicked => "drawer.kicked",
             Self::DrawerKickFailed => "drawer.kick_failed",
             Self::SessionAssignPlayer => "session.assign_player",
@@ -739,6 +761,10 @@ impl IntentKind {
             | Self::ReceiptReprint
             | Self::ReceiptPrinted
             | Self::ReceiptPrintFailed
+            | Self::NotifySent
+            | Self::NotifyFailed
+            | Self::NotifySkip
+            | Self::NotifyExpire
             | Self::DrawerKicked
             | Self::DrawerKickFailed
             | Self::OrderLineCancel
@@ -816,6 +842,10 @@ impl IntentKind {
             | Self::InvoiceIssue
             | Self::ReceiptPrinted
             | Self::ReceiptPrintFailed
+            | Self::NotifySent
+            | Self::NotifyFailed
+            | Self::NotifySkip
+            | Self::NotifyExpire
             | Self::KotPrinted
             | Self::KotPrintFailed
             | Self::KdsPair
@@ -1048,6 +1078,10 @@ impl IntentKind {
             | Self::ReceiptReprint
             | Self::ReceiptPrinted
             | Self::ReceiptPrintFailed
+            | Self::NotifySent
+            | Self::NotifyFailed
+            | Self::NotifySkip
+            | Self::NotifyExpire
             | Self::DrawerKicked
             | Self::DrawerKickFailed
             | Self::SessionRateFlip
@@ -1709,6 +1743,14 @@ pub enum IntentPayload {
     ReceiptPrinted(crate::ReceiptPrinted),
     #[serde(rename = "receipt.print_failed")]
     ReceiptPrintFailed(crate::ReceiptPrintFailed),
+    #[serde(rename = "notify.sent")]
+    NotifySent(crate::NotifySent),
+    #[serde(rename = "notify.failed")]
+    NotifyFailed(crate::NotifyFailed),
+    #[serde(rename = "notify.skip")]
+    NotifySkip(crate::NotifySkipped),
+    #[serde(rename = "notify.expire")]
+    NotifyExpire(crate::NotifyExpired),
     #[serde(rename = "drawer.kicked")]
     DrawerKicked(crate::DrawerKicked),
     #[serde(rename = "drawer.kick_failed")]
@@ -1845,6 +1887,10 @@ impl IntentPayload {
             Self::ReceiptReprint(_) => IntentKind::ReceiptReprint,
             Self::ReceiptPrinted(_) => IntentKind::ReceiptPrinted,
             Self::ReceiptPrintFailed(_) => IntentKind::ReceiptPrintFailed,
+            Self::NotifySent(_) => IntentKind::NotifySent,
+            Self::NotifyFailed(_) => IntentKind::NotifyFailed,
+            Self::NotifySkip(_) => IntentKind::NotifySkip,
+            Self::NotifyExpire(_) => IntentKind::NotifyExpire,
             Self::DrawerKicked(_) => IntentKind::DrawerKicked,
             Self::DrawerKickFailed(_) => IntentKind::DrawerKickFailed,
             Self::SessionAssignPlayer(_) => IntentKind::SessionAssignPlayer,
@@ -2168,6 +2214,10 @@ mod tests {
                 | "invoice.issue"
                 | "receipt.printed"
                 | "receipt.print_failed"
+                | "notify.sent"
+                | "notify.failed"
+                | "notify.skip"
+                | "notify.expire"
                 | "kot.printed"
                 | "kot.print_failed"
                 | "kds.pair"

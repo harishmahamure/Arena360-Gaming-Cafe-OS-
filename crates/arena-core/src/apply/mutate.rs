@@ -602,6 +602,13 @@ pub(super) fn mutate(
             Target::Receipt(t) => super::receipt_print::mutate(tx, intent, t, now_ms),
             _ => Err(mismatch()),
         },
+        IntentPayload::NotifySent(_)
+        | IntentPayload::NotifyFailed(_)
+        | IntentPayload::NotifySkip(_)
+        | IntentPayload::NotifyExpire(_) => match target {
+            Target::Notify(t) => super::notify_drain::mutate(tx, intent, t, now_ms),
+            _ => Err(mismatch()),
+        },
         IntentPayload::KotReprint(_)
         | IntentPayload::KotPrinted(_)
         | IntentPayload::KotPrintFailed(_) => match target {

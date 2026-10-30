@@ -74,6 +74,56 @@ pub fn skip_notify(conn: &Connection, id: &str) -> Result<bool, AppError> {
     Ok(n == 1)
 }
 
+/// The queued rows whose `not_before` has passed at `now_ms`, in `not_before` order (the order
+/// they are sent in).
+pub fn list_due_notify(
+    conn: &Connection,
+    now_ms: i64,
+    limit: i64,
+) -> Result<Vec<NotifyRow>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, purpose, kind, order_id, player_id, consent_policy_version, not_before, state
+             FROM notify_outbox WHERE state = 'queued' AND not_before <= ?1
+             ORDER BY not_before, id LIMIT ?2",
+        )
+        .map_err(db_error)?;
+    stmt.query_map(params![now_ms, limit], |r| {
+        Ok(NotifyRow {
+            id: r.get(0)?,
+            purpose: r.get(1)?,
+            kind: r.get(2)?,
+            order_id: r.get(3)?,
+            player_id: r.get(4)?,
+            consent_policy_version: r.get(5)?,
+            not_before: r.get(6)?,
+            state: r.get(7)?,
+        })
+    })
+    .map_err(db_error)?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(db_error)
+}
+
+/// How a queued row ended: its new `state` and what goes with it. False when it was not queued.
+pub fn finish_notify(
+    conn: &Connection,
+    id: &str,
+    state: &str,
+    channel: Option<&str>,
+    error_code: Option<&str>,
+    reason: Option<&str>,
+) -> Result<bool, AppError> {
+    let n = conn
+        .execute(
+            "UPDATE notify_outbox SET state = ?2, channel = ?3, error_code = ?4, reason = ?5
+             WHERE id = ?1 AND state = 'queued'",
+            params![id, state, channel, error_code, reason],
+        )
+        .map_err(db_error)?;
+    Ok(n == 1)
+}
+
 /// What the latest receipt message of `order_id` came to (`queued`, `sent`, `failed`, `skipped`).
 pub fn latest_receipt_state(conn: &Connection, order_id: &str) -> Result<Option<String>, AppError> {
     conn.query_row(
@@ -170,6 +220,40 @@ mod tests {
         assert_eq!(find_notify(&conn, "N2").unwrap().unwrap().state, "queued");
     }
 
+    #[test]
+    fn due_rows_come_in_not_before_order_and_settle_once() {
+        let conn = conn();
+        let mut late = new("N1", "O1");
+        late.not_before = 9_000;
+        insert_notify(&conn, &late).unwrap();
+        insert_notify(&conn, &new("N2", "O2")).unwrap();
+        let mut early = new("N3", "O3");
+        early.not_before = 7_000;
+        insert_notify(&conn, &early).unwrap();
+
+        assert!(list_due_notify(&conn, 6_999, 10).unwrap().is_empty());
+        let ids = |now| -> Vec<String> {
+            list_due_notify(&conn, now, 10)
+                .unwrap()
+                .into_iter()
+                .map(|r| r.id)
+                .collect()
+        };
+        assert_eq!(ids(8_000), ["N3", "N2"]);
+        assert_eq!(ids(9_000), ["N3", "N2", "N1"]);
+        assert_eq!(list_due_notify(&conn, 9_000, 1).unwrap().len(), 1);
+
+        assert!(finish_notify(&conn, "N3", "sent", Some("sms"), None, None).unwrap());
+        assert!(
+            !finish_notify(&conn, "N3", "failed", None, Some("X"), None).unwrap(),
+            "a settled row stays settled"
+        );
+        assert_eq!(ids(9_000), ["N2", "N1"]);
+        assert!(finish_notify(&conn, "N2", "expired", None, None, None).unwrap());
+        assert!(finish_notify(&conn, "N1", "skipped", None, None, Some("order_reverted")).unwrap());
+        assert_eq!(find_notify(&conn, "N2").unwrap().unwrap().state, "expired");
+        assert!(ids(9_000).is_empty());
+    }
     #[test]
     fn the_table_only_takes_a_transactional_receipt() {
         let conn = conn();

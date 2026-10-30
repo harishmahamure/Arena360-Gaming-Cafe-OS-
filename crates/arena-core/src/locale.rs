@@ -407,7 +407,7 @@ pub(crate) fn format_number(minor: u64, exponent: usize, format: NumberFormat) -
     }
 }
 
-fn format_minor(
+pub(crate) fn format_minor(
     minor: i64,
     exponent: usize,
     symbol: &str,

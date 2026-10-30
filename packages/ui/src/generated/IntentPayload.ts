@@ -60,6 +60,10 @@ import type { LibraryDismiss } from "./LibraryDismiss";
 import type { LibraryDismissClear } from "./LibraryDismissClear";
 import type { LibraryUpsert } from "./LibraryUpsert";
 import type { LicenceApply } from "./LicenceApply";
+import type { NotifyExpired } from "./NotifyExpired";
+import type { NotifyFailed } from "./NotifyFailed";
+import type { NotifySent } from "./NotifySent";
+import type { NotifySkipped } from "./NotifySkipped";
 import type { OrderLineCancel } from "./OrderLineCancel";
 import type { OrderLineServed } from "./OrderLineServed";
 import type { OrderPlace } from "./OrderPlace";
@@ -240,6 +244,10 @@ export type IntentPayload =
   | ({ kind: "receipt.reprint" } & ReceiptReprint)
   | ({ kind: "receipt.printed" } & ReceiptPrinted)
   | ({ kind: "receipt.print_failed" } & ReceiptPrintFailed)
+  | ({ kind: "notify.sent" } & NotifySent)
+  | ({ kind: "notify.failed" } & NotifyFailed)
+  | ({ kind: "notify.skip" } & NotifySkipped)
+  | ({ kind: "notify.expire" } & NotifyExpired)
   | ({ kind: "drawer.kicked" } & DrawerKicked)
   | ({ kind: "drawer.kick_failed" } & DrawerKickFailed)
   | ({ kind: "session.assign_player" } & SessionAssignPlayer)

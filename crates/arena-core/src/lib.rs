@@ -24,6 +24,7 @@ pub mod invoice;
 pub mod launch_times;
 pub mod locale;
 pub mod media_cache;
+pub mod notify_drain;
 pub mod pairing;
 mod pdf;
 pub mod player_account;

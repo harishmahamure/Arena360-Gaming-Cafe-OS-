@@ -619,6 +619,22 @@ async fn run(
             .run(),
         )
     });
+    // The notification drain (Story 8.29): primary and paid only, sends through the cloud.
+    let notify_job = writer.clone().map(|w| {
+        tokio::spawn(
+            arena_tasks::NotifyDrainTask::new(
+                cloud.clone(),
+                Arc::clone(&keystore),
+                w,
+                Arc::clone(&snapshots),
+                Arc::clone(&clock),
+                pair_gate.clone(),
+                status_tx.clone(),
+            )
+            .with_player_kek(Arc::clone(&player_kek))
+            .run(),
+        )
+    });
     let mut cloud_pairer = CloudPairer::new(
         cloud,
         writer.clone(),
@@ -782,6 +798,10 @@ async fn run(
         let _ = job.await;
     }
     if let Some(job) = invoice_job {
+        job.abort();
+        let _ = job.await;
+    }
+    if let Some(job) = notify_job {
         job.abort();
         let _ = job.await;
     }

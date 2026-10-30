@@ -156,8 +156,8 @@ pub use library_installs::{
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
 pub use notify::{
-    NewNotify, NotifyRow, find_notify, insert_notify, latest_receipt_state, order_player_id,
-    queued_notify_ids, skip_notify,
+    NewNotify, NotifyRow, find_notify, finish_notify, insert_notify, latest_receipt_state,
+    list_due_notify, order_player_id, queued_notify_ids, skip_notify,
 };
 pub use outbox::{
     KIND_DRAWER, KIND_KOT, KIND_PRINT, OutboxRow, ReceiptHead, ReceiptLineRow, ReceiptPaymentRow,
@@ -1352,6 +1352,22 @@ impl Store {
             return Ok(None);
         }
         latest_consent(&self.conn, player_id, purpose)
+    }
+
+    /// Queued notification rows whose `not_before` has passed, in sending order (Story 8.29).
+    pub fn due_notify(&self, now_ms: i64, limit: i64) -> Result<Vec<NotifyRow>, AppError> {
+        if !self.table_exists("notify_outbox")? {
+            return Ok(Vec::new());
+        }
+        list_due_notify(&self.conn, now_ms, limit)
+    }
+
+    /// The order a notification is about, with its invoice number once it has one.
+    pub fn invoice_order(&self, order_id: &str) -> Result<Option<InvoiceOrder>, AppError> {
+        if !self.table_exists("orders")? {
+            return Ok(None);
+        }
+        find_invoice_order(&self.conn, order_id)
     }
 
     pub fn lots(&self, product_id: &str) -> Result<Vec<LotRow>, AppError> {

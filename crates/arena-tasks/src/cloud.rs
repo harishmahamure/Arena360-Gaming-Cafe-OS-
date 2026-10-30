@@ -6,8 +6,8 @@ use arena_core::{Clock, HubPairer, PairFuture, PairGate, WriterHandle};
 use arena_proto::{
     AppError, CATALOG_MANIFEST_PATH, CatalogManifest, CommandResult, CommandResultAck,
     CommandsPage, ErrorCode, HeartbeatRequest, HeartbeatResponse, HubPairRequest, HubPairResponse,
-    HubPlatform, PresignRequest, PresignResponse, SETUP_MAX_BYTES, SetupTemplateOutcome,
-    SetupTemplateStored, UiError, normalize_pairing_code, valid_pairing_code,
+    HubPlatform, NotifyRequest, NotifyResponse, PresignRequest, PresignResponse, SETUP_MAX_BYTES,
+    SetupTemplateOutcome, SetupTemplateStored, UiError, normalize_pairing_code, valid_pairing_code,
 };
 use arena_store::HubIdentity;
 use sha2::{Digest, Sha256};
@@ -211,6 +211,15 @@ impl CloudClient {
             .bearer_auth(token)
             .body(file);
         self.send(call).await
+    }
+
+    /// Asks the cloud to send one player message, once per `outbox_id` (Story 8.28).
+    pub async fn notify(
+        &self,
+        token: &str,
+        req: &NotifyRequest,
+    ) -> Result<NotifyResponse, CloudFailure> {
+        self.post("/v1/notify", Some(token), req).await
     }
 
     /// Asks for short-lived upload links under the branch's prefix of the data bucket (Story 8.1).

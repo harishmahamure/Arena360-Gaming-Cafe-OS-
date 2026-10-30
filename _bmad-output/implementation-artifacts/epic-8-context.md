@@ -139,3 +139,10 @@ The café owner sees every branch and changes it from a phone or laptop, without
 - **Templates.** `message_templates` has version 1 of `credit_reminder`, `low_balance`, `session_ending`, `console_5min`, `receipt` (placeholder provider ids until approved). A change is a new version via `add_template_version`; a ledger row keeps its version, also on retry.
 - **Adapter.** `Notifier` is Fake (recorded, per-channel `Behaviour`, `GET /v1/dev/notify` under `--dev`), Manual (`ARENA_NOTIFY_MODE=manual`, logs the message for an operator) or Gupshup (WhatsApp template API with `ARENA_GUPSHUP_WA_API_KEY|SOURCE|APP`, SMS through the sign-up account with a per-template DLT id).
 - **Hub side.** The drain, consent re-check, `notify.sent|failed` and the irreversible-effect guard are Story 8.29.
+
+## Story 8.29: The Hub drains its notification outbox after the undo window
+
+- **Task.** `NotifyDrainTask` (primary, paid, paired; every 10 s) takes `SnapshotReader::notify_plan`: each due `notify_outbox` row is `Send`, `Wait`, `Skip(reason)` or `Expire` (> 7 days past `not_before`). Posts go to `/v1/notify` keyed by the row ULID in `not_before` order; the WAN down or a busy cloud leaves rows queued, a cloud `queued` answer (in doubt) is asked again after 60 s.
+- **Rules.** `notify_drain::RULES` is the extendable per-row eligibility list: `player_exists`, `consent_current`, `receipt_ready` (settled order, invoice number present or wait). Story 8.30 and Epic 9 append their rules there.
+- **Results.** System intents `notify.sent` (channel), `notify.failed` (code), `notify.skip` (reason), `notify.expire`; migration 78 adds the `expired` state and `channel`/`error_code`/`reason` columns. `notify.sent` records the irreversible effect `notification_sent` on the row's order, so Undo is refused afterwards.
+- **Receipt params.** `name`, `receipt_no`, `amount` (branch money format) and `cafe` (branch name), as the cloud's `receipt` template names them.

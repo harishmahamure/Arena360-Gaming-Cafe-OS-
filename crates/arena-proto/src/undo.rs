@@ -8,13 +8,15 @@ pub enum EffectKind {
     ReceiptPrinted,
     DrawerKicked,
     InvoiceNumberAssigned,
+    NotificationSent,
 }
 
 impl EffectKind {
-    pub const ALL: [EffectKind; 3] = [
+    pub const ALL: [EffectKind; 4] = [
         Self::ReceiptPrinted,
         Self::DrawerKicked,
         Self::InvoiceNumberAssigned,
+        Self::NotificationSent,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -22,6 +24,7 @@ impl EffectKind {
             Self::ReceiptPrinted => "receipt_printed",
             Self::DrawerKicked => "drawer_kicked",
             Self::InvoiceNumberAssigned => "invoice_number_assigned",
+            Self::NotificationSent => "notification_sent",
         }
     }
 

@@ -2,7 +2,7 @@
 title: 'Story 9.15: Backups are kept for the plan''s retention and GST records for 8 years'
 type: 'feature'
 created: '2026-10-31'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 0
 followup_review_recommended: false
 context:
@@ -88,7 +88,7 @@ Planning is a pure function of (objects with age, retention, now) so every I/O r
 
 ## Auto Run Result
 
-Status: in-review
+Status: done
 
 Implemented per spec. Judgement calls and risks:
 - `changes` is append-only by trigger, so migration 0088 (Hub) replaces `changes_no_delete` with a version that allows a delete only while the one-row `changes_prune_permit` is present and the row is old enough, passed by the upload cursor, not the newest of its epoch, and (for money/tax tables) 8 years old. The prune opens and removes the permit inside its own transaction; a plain `DELETE` is still refused.
@@ -102,3 +102,7 @@ Implemented per spec. Judgement calls and risks:
 - `cargo fmt --check`, `cargo clippy` (proto, store, core, cloud, tasks, api, hub, replay; `--all-targets -D warnings`): clean.
 - `cargo test` on the same crates: all new tests pass. Failing, none in touched code and the same as at the last story: `arena-replay` `replaying_the_seeded_log_reproduces_branch_and_settings`, `arena-tasks` `heartbeat::trusted_time_is_cloud_time_plus_monotonic_elapsed` and `printer::lan::a_printer_that_stops_reading_times_out`, `arena-cloud` `backup::a_hung_run_times_out_with_its_own_code` and `binary::unreachable_at_start_...`. `arena-api` `ui_events::a_component_change_also_reports_the_bundles_that_hold_it` failed once in the full run and passes alone.
 - Export reference (`docs/export-format/reference.md`) regenerated for the new table.
+
+## Code Review (2026-10-31)
+
+Reviewed the implementation commit against the spec: retention planner, grace/lapse state machine, base-snapshot rule, GST 8-year bound, prune trigger/permit, Writer path and housekeeping. No blocking findings. fmt and clippy (`-D warnings`) clean. Remaining test failures (`a_hung_run_times_out_with_its_own_code`, `unreachable_at_start_*`, heartbeat trusted-time, LAN printer timeout) are timing/network tests outside the touched code and were failing before this story.

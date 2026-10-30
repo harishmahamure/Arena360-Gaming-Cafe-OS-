@@ -96,12 +96,29 @@ fn check(body: &NotifyRequest, template: &MessageTemplate) -> Result<Vec<String>
         .collect()
 }
 
-/// `text` with each `{name}` replaced by its value.
+/// `text` with each `{name}` replaced by its value. One pass, so a value is never expanded again.
 fn render(text: &str, names: &[String], values: &[String]) -> String {
-    let mut out = text.to_owned();
-    for (n, v) in names.iter().zip(values) {
-        out = out.replace(&format!("{{{n}}}"), v);
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let tail = &rest[open + 1..];
+        let hit = names.iter().zip(values).find(|(n, _)| {
+            tail.strip_prefix(n.as_str())
+                .is_some_and(|t| t.starts_with('}'))
+        });
+        match hit {
+            Some((n, v)) => {
+                out.push_str(v);
+                rest = &tail[n.len() + 1..];
+            }
+            None => {
+                out.push('{');
+                rest = tail;
+            }
+        }
     }
+    out.push_str(rest);
     out
 }
 
@@ -185,6 +202,16 @@ async fn notify(
         }
         Some(row) if row.state != "queued" || row.in_flight => {
             return Ok(Json(view(&row)));
+        }
+        Some(row)
+            if row.kind != body.kind
+                || row.recipient_hash != st.recipient_hash(&body.recipient) =>
+        {
+            return Err(AppError::new(
+                ErrorCode::IdempotencyConflict,
+                "That outbox id was first sent for another message.",
+            )
+            .into());
         }
         Some(row) => {
             let template = st
@@ -340,6 +367,16 @@ mod tests {
         assert_eq!(
             render("Hi {name} at {cafe}, {name}", &names, &values),
             "Hi Asha at Arena, Asha"
+        );
+    }
+
+    #[test]
+    fn render_does_not_expand_values_again() {
+        let names = vec!["name".to_owned(), "cafe".to_owned()];
+        let values = vec!["{cafe}".to_owned(), "Arena".to_owned()];
+        assert_eq!(
+            render("Hi {name} at {cafe} {x}", &names, &values),
+            "Hi {cafe} at Arena {x}"
         );
     }
 

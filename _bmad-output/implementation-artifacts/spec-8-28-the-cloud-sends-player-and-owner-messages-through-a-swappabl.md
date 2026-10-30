@@ -2,7 +2,7 @@
 title: "Story 8.28: The cloud sends player and owner messages through a swappable messaging adapter, exactly once"
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 baseline_commit: '9c805f4'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -90,3 +90,7 @@ deferred: []
 ## Auto Run Result
 
 Status: in-review. Not run: a send through a live Gupshup account (no credentials here), the code-review pass. Known unrelated failures on Windows: `arena-cloud` `binary` test `unreachable_at_start...` and the timing test `a_hung_run_times_out_with_its_own_code` (also fails on a clean tree).
+
+## Code Review Result
+
+Status: done. Fixed in review: a retry post for a queued row now conflicts (`IDEMPOTENCY_CONFLICT`) when its kind or recipient differs from the stored row; `render` substitutes placeholders in one pass so a parameter value is never expanded again. Tests added for both. fmt, clippy and the story's tests are green; the two known unrelated Windows failures remain.

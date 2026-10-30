@@ -753,3 +753,28 @@ async fn without_an_adapter_the_cloud_says_it_is_unavailable() {
     assert_eq!(r.status, 503, "{}", r.body);
     assert!(h.db.ledger_by_outbox("OUT1").await.unwrap().is_none());
 }
+
+#[tokio::test]
+async fn a_retry_for_another_recipient_or_kind_conflicts_and_sends_nothing() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe(None).await;
+    h.fake()
+        .set_behaviour(Channel::Whatsapp, Behaviour::Transient);
+    assert_eq!(
+        h.notify(&a.token, "OUT1", "receipt").await.body["state"],
+        "queued"
+    );
+    h.fake()
+        .set_behaviour(Channel::Whatsapp, Behaviour::Deliver);
+
+    let mut other = request("OUT1", "receipt");
+    other["recipient"] = json!("+919800000000");
+    let r = h.notify_with(&a.token, other).await;
+    assert_eq!((r.status, r.code()), (409, "IDEMPOTENCY_CONFLICT"));
+    let r = h.notify(&a.token, "OUT1", "low_balance").await;
+    assert_eq!((r.status, r.code()), (409, "IDEMPOTENCY_CONFLICT"));
+    assert!(h.fake().sent().is_empty());
+
+    let r = h.notify(&a.token, "OUT1", "receipt").await;
+    assert_eq!(r.body["state"], "sent");
+}

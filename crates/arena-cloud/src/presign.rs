@@ -296,6 +296,10 @@ impl PutKind {
     }
 }
 
+/// R2 Class A operations (a PUT) in paise per million: 4.50 US dollars at about Rs 83 to the
+/// dollar (Story 8.42). The price list and the rate move, so this is the estimate's one input.
+pub const R2_CLASS_A_PAISE_PER_MILLION: u64 = 37_500;
+
 /// The PUTs one branch was given links for, and the requests refused for its rate.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct PutCounts {
@@ -311,6 +315,13 @@ impl PutCounts {
     /// Every link issued.
     pub fn issued(&self) -> u64 {
         self.batch + self.summary + self.rollup + self.snapshot
+    }
+
+    /// What the links issued cost in R2 Class A operations at `paise_per_million`, in paise (rounded
+    /// up). Links issued stand for the PUTs, so this is the cost estimate the metric publishes.
+    pub fn cost_paise(&self, paise_per_million: u64) -> u64 {
+        let paise = u128::from(self.issued()) * u128::from(paise_per_million);
+        u64::try_from(paise.div_ceil(1_000_000)).unwrap_or(u64::MAX)
     }
 }
 
@@ -345,6 +356,7 @@ impl PutMetrics {
             branch_id,
             kind = kind.as_str(),
             puts_issued = c.issued(),
+            cost_estimate_paise = c.cost_paise(R2_CLASS_A_PAISE_PER_MILLION),
             "presigned PUT issued"
         );
     }
@@ -524,5 +536,17 @@ mod tests {
         assert_eq!(m.counts("T1", "B1").issued(), 3);
         assert_eq!(m.counts("T1", "B2").rollup, 1);
         assert_eq!(m.counts("T2", "B1"), PutCounts::default());
+    }
+
+    #[test]
+    fn the_cost_estimate_is_the_links_issued_at_the_price_per_million_rounded_up() {
+        let c = PutCounts {
+            batch: 2_000,
+            summary: 1_000,
+            ..PutCounts::default()
+        };
+        assert_eq!(c.cost_paise(R2_CLASS_A_PAISE_PER_MILLION), 113);
+        assert_eq!(c.cost_paise(0), 0);
+        assert_eq!(PutCounts::default().cost_paise(1_000_000), 0);
     }
 }

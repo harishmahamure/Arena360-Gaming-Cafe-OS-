@@ -1325,3 +1325,60 @@ async fn the_support_path_needs_a_staff_credential_and_a_reason_and_is_audited()
     assert_eq!(job.state, AuditBuildState::Queued);
     assert_eq!(job.requested_by, "admin:asha");
 }
+
+// ---- Story 8.42: a busy month's first audit results ----
+
+/// A busy branch month (`ARENA_AUDIT_ROWS` changes, 30,000 by default; the release rig runs the
+/// month of a busy café) asked for the first time: the owner's request, the builder replaying the
+/// batches and the first page of the audit answer, in `ARENA_AUDIT_FIRST_MS` (10 s) together.
+#[tokio::test]
+async fn a_busy_month_asked_for_the_first_time_shows_its_first_results_in_under_ten_seconds() {
+    let env = |name: &str, default: i64| -> i64 {
+        std::env::var(name)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    };
+    let rows = env("ARENA_AUDIT_ROWS", 30_000);
+    let budget_ms = env("ARENA_AUDIT_FIRST_MS", 10_000);
+    let h = Harness::new().await;
+    let c = h.paid_cafe().await;
+    let prefix = branch_prefix(&c.tenant, &c.branch);
+    let cache = tempfile::tempdir().unwrap();
+    with_cache(&h, cache.path(), u64::MAX);
+    let log = mixed_log(rows);
+    put_batches(&h.keys, &prefix, &log, arena_store::BATCH_MAX_ROWS, None);
+    let scratch = tempfile::tempdir().unwrap();
+
+    let started = std::time::Instant::now();
+    let queued = request(&h, &c, MONTH).await;
+    assert_eq!(queued.status, 202, "{}", queued.body);
+    let job = builder(&h, scratch.path())
+        .run_one()
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(job.state, AuditBuildState::Ready, "{:?}", job.error);
+    let built_ms = i64::try_from(started.elapsed().as_millis()).unwrap();
+    let first = h.get(&c, &audit_path(&c, "q=recent")).await;
+    assert_eq!(first.status, 200, "{}", first.body);
+    let first_ms = i64::try_from(started.elapsed().as_millis()).unwrap();
+    assert_eq!(seqs(&first.body, "items").len(), 50);
+    assert_eq!(seqs(&first.body, "items")[0], rows, "newest first");
+
+    if let Ok(dir) = std::env::var("ARENA_REMOTE_OUT") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            std::path::Path::new(&dir).join("audit.json"),
+            serde_json::to_vec_pretty(&json!({
+                "rows": rows,
+                "build_ms": built_ms,
+                "first_results_ms": first_ms,
+                "budget_ms": budget_ms,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    assert!(first_ms < budget_ms, "{first_ms} ms for {rows} rows");
+}

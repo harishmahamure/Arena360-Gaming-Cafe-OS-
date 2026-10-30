@@ -123,7 +123,7 @@ pub const TIERS: &[TierDefaults] = &[
         ],
         features: &[],
         upload_interval_s: 300,
-        summary_interval_s: 900,
+        summary_interval_s: 300,
         rollup_schema: 1,
         retention_days: 1095,
         limits: TierLimits {
@@ -204,7 +204,7 @@ mod tests {
                 premium.rollup_schema,
                 premium.retention_days
             ),
-            (300, 900, 1, 1095)
+            (300, 300, 1, 1095)
         );
         assert_eq!(
             premium.limits,

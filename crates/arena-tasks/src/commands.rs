@@ -312,6 +312,14 @@ mod tests {
     const T0: i64 = 1_800_000_000_000;
     const OWN: &str = "01JAAAAAAAAAAAAAAAAAAAAAAA";
 
+    /// Story 8.42: the cloud-side delivery model (`arena-cloud` `remote_experience`) assumes the
+    /// Hub fetches its mailbox once a minute; a command waits a poll at most, so p95 stays under
+    /// the two minutes the owner is promised only while the poll is no longer than that.
+    #[test]
+    fn the_mailbox_poll_keeps_the_delivery_model_true() {
+        assert_eq!(COMMAND_POLL_INTERVAL, Duration::from_secs(60));
+    }
+
     struct Mem(Mutex<Option<Vec<u8>>>);
 
     impl Keystore for Mem {

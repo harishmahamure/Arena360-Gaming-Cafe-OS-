@@ -20,6 +20,11 @@ name: Release benchmark
 # the Kitchen display suite on Chrome on Android and Safari on iPad. `kitchen-report` merges them
 # (scripts/kitchen-report.mjs), fails the release on a missed budget or a missing result and
 # publishes docs/compat/kitchen-display.md. See docs/runbooks/kitchen-bench.md.
+# `remote-*` (Story 8.42) time the owner's remote experience: Today's data age, 200 owner commands,
+# the cloud's side of the catch-up after an 8-hour outage, a month of R2 PUTs per branch and a busy
+# month's first audit results (arena-cloud), and Today's first render on the reference phone
+# (apps/owner). `remote-report` merges them (scripts/remote-report.mjs) and fails the release on a
+# missed budget or a missing result. See docs/runbooks/remote-bench.md.
 # The `soak` input adds the 8-hour WAN-down soak (Story 1.22) and spreads the kitchen soak over 8 h.
 
 on:
@@ -528,6 +533,92 @@ jobs:
           path: |
             target/kitchen/report.md
             docs/compat/kitchen-display.md
+          if-no-files-found: ignore
+
+  remote-cloud:
+    name: owner remote experience, the cloud's side (Today, commands, catch-up, R2 cost, audit)
+    # The full sizes of Story 8.42 against the real router and an in-memory bucket on a simulated
+    # clock; the ordinary suite runs the same tests smaller. See docs/runbooks/remote-bench.md.
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: remote-cloud
+      - name: Today, 200 commands, the catch-up, a month of R2 PUTs
+        env:
+          ARENA_REMOTE_OUT: ${{ github.workspace }}/target/remote-out
+          ARENA_COST_DAYS: "30"
+        run: cargo test --locked --release -p arena-cloud --test remote_experience -- --nocapture
+      - name: A busy month's first audit results
+        env:
+          ARENA_REMOTE_OUT: ${{ github.workspace }}/target/remote-out
+          ARENA_AUDIT_ROWS: "150000"
+        run: cargo test --locked --release -p arena-cloud --test audit_build -- --nocapture busy_month
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: remote-cloud
+          path: target/remote-out/*.json
+          if-no-files-found: ignore
+
+  remote-owner:
+    name: owner app first render on the reference phone
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @arena/owner exec playwright install --with-deps chromium
+      - name: Today's figures on the reference phone (the budget)
+        env:
+          OWNER_JSON: ${{ github.workspace }}/target/remote-out/first-render.json
+        run: pnpm --filter @arena/owner exec playwright test --project=reference-phone
+      - name: The same on a slower link, for the record
+        if: always()
+        continue-on-error: true
+        env:
+          OWNER_JSON: ${{ github.workspace }}/target/remote-out/first-render-slow.json
+          OWNER_RTT_MS: "170"
+          OWNER_DOWN_MBIT: "1.6"
+          OWNER_UP_MBIT: "0.75"
+        run: pnpm --filter @arena/owner exec playwright test --project=reference-phone
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: remote-owner
+          path: target/remote-out/*.json
+          if-no-files-found: ignore
+
+  remote-report:
+    name: owner remote experience report (budgets)
+    needs: [remote-cloud, remote-owner]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: remote-*
+          merge-multiple: true
+          path: target/remote
+      - name: Check every budget; a missing result fails
+        run: node scripts/remote-report.mjs --dir target/remote
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: remote-report
+          path: target/remote/report.md
           if-no-files-found: ignore
 
   soak:

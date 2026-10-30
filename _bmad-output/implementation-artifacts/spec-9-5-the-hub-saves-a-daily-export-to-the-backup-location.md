@@ -2,7 +2,7 @@
 title: 'Story 9.5: The Hub saves a daily export to the backup location'
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 review_loop_iteration: 0
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-9-context.md'
@@ -75,7 +75,7 @@ deferred: []
 
 ## Auto Run Result
 
-Status: review
+Status: done
 
 Implemented per spec. Verified: clippy `-D warnings` clean on proto/store/core/tasks/api/hub; `cargo test` passes for those crates except `heartbeat::trusted_time_is_cloud_time_plus_monotonic_elapsed` and `printer::lan::a_printer_that_stops_reading_times_out`, which fail the same way on the baseline; `check:layers`, `check:strings` clean; `pnpm --filter @arena/hub check` shows only the two baseline `process` errors in `playwright.kitchen.config.ts`; the Playwright spec `backup-export.spec.ts` passes (14 tests).
 
@@ -85,3 +85,7 @@ Judgement calls:
 - The failure alert is in memory (the reader's flags) and clears on the next successful export; after a Hub restart it reappears at the next attempt, not before.
 - A location that is an Android folder URI is skipped quietly (the Hub cannot write it yet, Story 9.4), so no daily alert is raised for something the owner cannot fix.
 - "The last shift close" brings the export forward whenever a shift closes with none open, as the rollup planner does; a day with several shifts can export more than once (pruning keeps 7).
+
+## Code Review
+
+Reviewed the 9.5 diff (planner, task, prune, actor rules, history, UI). No blocking findings; clippy `-D warnings`, tests for proto/store/core/tasks/api, layers and strings checks pass; hub `check` shows only the two baseline `process` errors.

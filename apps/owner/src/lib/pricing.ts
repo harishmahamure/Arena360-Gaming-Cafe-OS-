@@ -226,8 +226,9 @@ export const blankPlan = (): PlanForm => ({
 
 function parseHours(text: string): number | null {
   if (!/^\d{1,4}(\.\d{1,2})?$/.test(text.trim())) return null;
-  const minutes = Number(text.trim()) * 60;
-  return Number.isInteger(minutes) && minutes >= 1 && minutes <= MAX_HOURS * 60 ? minutes : null;
+  // Up to two decimals of an hour, rounded to the minute: 1.1 h is 66 min, not 66.00000000000001.
+  const minutes = Math.round(Number(text.trim()) * 60);
+  return minutes >= 1 && minutes <= MAX_HOURS * 60 ? minutes : null;
 }
 
 export type PlanValues = {
@@ -294,7 +295,7 @@ export function planFormOf(item: Listed): PlanForm {
     kind: (str(f.plan_kind) as PlanKind) ?? "pack",
     name: e.row.name,
     price: priceText(num(f.price_minor) ?? 0, e.data.exponent),
-    hours: minutes === undefined ? "" : String(minutes / 60),
+    hours: minutes === undefined ? "" : String(Number((minutes / 60).toFixed(2))),
     days: num(f.validity_days) === undefined ? "" : String(f.validity_days),
     start: start === undefined ? "" : clock(start),
     end: end === undefined ? "" : clock(end),

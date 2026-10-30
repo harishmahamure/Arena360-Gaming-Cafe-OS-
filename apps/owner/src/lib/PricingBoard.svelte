@@ -22,7 +22,9 @@
   const paid = $derived(showable(shell.branches));
   let branchId = $state(ALL);
   const picked = $derived(
-    branchId === ALL || paid.length < 2 ? paid : paid.filter((b) => b.id === branchId),
+    branchId === ALL || paid.length < 2 || !paid.some((b) => b.id === branchId)
+      ? paid
+      : paid.filter((b) => b.id === branchId),
   );
   // One branch in scope is that branch; several are "all branches".
   const scope = $derived(picked.length === 1 ? picked[0].id : ALL);

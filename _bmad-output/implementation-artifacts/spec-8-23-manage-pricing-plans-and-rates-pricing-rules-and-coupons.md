@@ -2,7 +2,7 @@
 title: "Story 8.23: Manage → Pricing — plans and rates, pricing rules and coupons"
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 baseline_commit: 'af599ed68bb5127a7c0123cf91953d1fc85cf70b'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -74,6 +74,9 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+- Fixed: pack hours parsed by float (1.1 h rejected; 100-minute plan prefilled 1.6666666666666667); stale branch pick left Pricing empty.
+- Deferred: rename collision on edit is caught by the server; partial-failure and no-summary Playwright cases not added.
 
 ## Design Notes
 

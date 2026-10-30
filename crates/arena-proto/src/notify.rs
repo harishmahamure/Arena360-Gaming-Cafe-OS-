@@ -154,7 +154,7 @@ pub struct NotifyRearm {
     pub outbox_id: String,
 }
 
-/// Whether `s` is a phone in E.164:`+`, then 8 to 15 digits, the first not 0.
+/// Whether `s` is a phone in E.164: `+`, then 8 to 15 digits, the first not 0.
 pub fn valid_e164(s: &str) -> bool {
     let Some(d) = s.strip_prefix('+') else {
         return false;

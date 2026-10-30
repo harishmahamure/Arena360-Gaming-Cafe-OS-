@@ -5,7 +5,8 @@
 //! the player no longer agrees), or expire it (still unsent after 7 days). The decision of a row
 //! runs through [`RULES`], one small check each, so a later story adds its rule (the erasure rule
 //! of Epic 9) without touching the drain. Story 8.30 added the "session no longer near its end"
-//! rule for the session and console messages. Nothing here writes: the task applies the result as `notify.*` intents.
+//! rule for the session and console messages. Nothing here writes: the task applies the result as
+//! `notify.*` intents.
 
 use std::collections::BTreeMap;
 

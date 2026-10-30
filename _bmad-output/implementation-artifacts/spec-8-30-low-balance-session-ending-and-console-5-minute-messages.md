@@ -2,7 +2,7 @@
 title: "Story 8.30: Low-balance, session-ending and console 5-minute messages"
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 baseline_commit: '79d0598'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -78,3 +78,7 @@ deferred: []
 - `cargo clippy -p arena-proto -p arena-store -p arena-core -p arena-tasks -p arena-hub --all-targets -- -D warnings`: clean.
 - `cargo test` over those crates plus `arena-api`: all pass except two failures that also fail on the base commit (`arena-tasks` `heartbeat::tests::trusted_time_is_cloud_time_plus_monotonic_elapsed`, `printer::lan::tests::a_printer_that_stops_reading_times_out`).
 - `pnpm run check:protocol`, `check:strings`, prettier on touched files: pass. `check:generated` reports only the uncommitted regenerated files.
+
+## Review (2026-10-30)
+
+Reviewed the implementation commit against the intent contract and acceptance criteria. No blocking findings. Template parameter names (`name`, `balance`, `minutes`, `console`, `cafe`) match the cloud's seeded templates. `wallet_left` matches the kiosk's figure. Fixed two cosmetic items: a dropped space in a doc comment in `arena-proto/src/notify.rs` and an over-long doc line in `arena-core/src/notify_drain.rs`. Clippy and fmt are clean. Tests pass apart from the two failures that also fail on the base commit.

@@ -35,3 +35,4 @@ tempfile.workspace = true
 tracing-subscriber.workspace = true
 tokio = { workspace = true, features = ["net", "test-util"] }
 tower.workspace = true
+arena-proto = { workspace = true, features = ["dev-keys"] }

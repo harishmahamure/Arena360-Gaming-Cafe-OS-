@@ -25,6 +25,7 @@ mod error;
 pub mod gate;
 mod heartbeat;
 mod json;
+mod live;
 mod meta;
 pub mod mfa;
 pub mod notify;
@@ -86,6 +87,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>, commands_only: bool) -> Router {
             .merge(branches::router(Arc::clone(st)))
             .merge(owner_read::router(Arc::clone(st)))
             .merge(audit::router(Arc::clone(st)))
+            .merge(live::router(Arc::clone(st)))
             .merge(admin_audit::router(Arc::clone(st)))
             .merge(alerts::router(Arc::clone(st)))
             .merge(catalog::router(Arc::clone(st)))

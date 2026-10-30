@@ -18,6 +18,9 @@ pub const TUNNEL_DOMAIN: &str = "tunnel.arena360.cloud";
 /// Every other request through the tunnel is answered 404.
 pub const TUNNEL_ORIGIN: &str = "http://127.0.0.1:7403";
 
+/// The port of [`TUNNEL_ORIGIN`]: the Hub's loopback listener for the connector (Story 8.40).
+pub const TUNNEL_PORT: u16 = 7403;
+
 /// The hostname of a branch's tunnel.
 pub fn tunnel_hostname(branch_id: &str) -> String {
     format!("{branch_id}.{TUNNEL_DOMAIN}")
@@ -118,6 +121,11 @@ impl TunnelLine {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_origin_names_the_listener_port() {
+        assert_eq!(TUNNEL_ORIGIN, format!("http://127.0.0.1:{TUNNEL_PORT}"));
+    }
 
     #[test]
     fn the_hostname_is_the_branch_under_the_tunnel_domain() {

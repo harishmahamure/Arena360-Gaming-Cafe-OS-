@@ -127,6 +127,16 @@ impl LicenceSigner {
     }
 
     pub fn sign(&self, claims: &LicenceClaims) -> Result<String, String> {
+        self.sign_any(claims)
+    }
+
+    /// Signs a live view token (Story 8.40) with the licence key: the Hub trusts one key set for
+    /// both, and tells them apart by their claims.
+    pub fn sign_live(&self, claims: &arena_proto::LiveClaims) -> Result<String, String> {
+        self.sign_any(claims)
+    }
+
+    fn sign_any<T: serde::Serialize>(&self, claims: &T) -> Result<String, String> {
         let mut header = Header::new(Algorithm::EdDSA);
         header.kid = Some(self.kid.clone());
         jsonwebtoken::encode(&header, claims, &self.key).map_err(|e| format!("licence sign: {e}"))

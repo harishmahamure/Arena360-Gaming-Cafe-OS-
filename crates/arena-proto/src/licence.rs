@@ -73,6 +73,12 @@ const DEV_SIGNING_KEY_PEM: &str =
 
 #[cfg(any(test, feature = "dev-keys"))]
 pub fn dev_sign(claims: &LicenceClaims) -> Result<String, String> {
+    dev_sign_any(claims)
+}
+
+/// Signs any claims with the dev key (tests and the dev cloud).
+#[cfg(any(test, feature = "dev-keys"))]
+pub fn dev_sign_any<T: Serialize>(claims: &T) -> Result<String, String> {
     use base64::engine::general_purpose::STANDARD;
     let body: String = DEV_SIGNING_KEY_PEM
         .lines()
@@ -145,6 +151,19 @@ pub fn encode_public_key(bytes: &[u8; 32]) -> String {
 }
 
 pub fn verify_claims(token: &str, keys: &[VerifyKey<'_>]) -> Result<LicenceClaims, LicenceError> {
+    let claims: LicenceClaims = decode_signed(token, keys)?;
+    match claims.exp.checked_sub(claims.iat) {
+        Some(life) if life > 0 && life <= LICENCE_TTL_S => Ok(claims),
+        _ => Err(LicenceError::Malformed),
+    }
+}
+
+/// Checks the EdDSA signature of `token` against `keys` (by `kid`) and decodes its claims as
+/// `T`. Time is not checked; the caller applies its own rules (`exp` must be present).
+pub(crate) fn decode_signed<T: serde::de::DeserializeOwned>(
+    token: &str,
+    keys: &[VerifyKey<'_>],
+) -> Result<T, LicenceError> {
     if keys.is_empty() {
         return Err(LicenceError::NoKeys);
     }
@@ -163,17 +182,12 @@ pub fn verify_claims(token: &str, keys: &[VerifyKey<'_>]) -> Result<LicenceClaim
     validation.validate_nbf = false;
     validation.validate_aud = false;
     validation.set_required_spec_claims(&["exp"]);
-    let data =
-        jsonwebtoken::decode::<LicenceClaims>(token, &DecodingKey::from_ed_der(&raw), &validation)
-            .map_err(|e| match e.kind() {
-                jsonwebtoken::errors::ErrorKind::InvalidSignature => LicenceError::BadSignature,
-                _ => LicenceError::Malformed,
-            })?;
-    let claims = data.claims;
-    match claims.exp.checked_sub(claims.iat) {
-        Some(life) if life > 0 && life <= LICENCE_TTL_S => Ok(claims),
-        _ => Err(LicenceError::Malformed),
-    }
+    let data = jsonwebtoken::decode::<T>(token, &DecodingKey::from_ed_der(&raw), &validation)
+        .map_err(|e| match e.kind() {
+            jsonwebtoken::errors::ErrorKind::InvalidSignature => LicenceError::BadSignature,
+            _ => LicenceError::Malformed,
+        })?;
+    Ok(data.claims)
 }
 
 pub fn check_time(claims: &LicenceClaims, now_ms: i64) -> Result<(), LicenceError> {

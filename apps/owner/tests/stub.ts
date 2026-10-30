@@ -175,6 +175,8 @@ export type StubOptions = {
     status: number;
     body: unknown;
   };
+  /** Answers `GET /v1/live/{branch}` (Story 8.40); unset: 404. Each call is recorded in `calls.bodies["live"]`. */
+  liveView?: (branch: string) => { status: number; body: unknown };
   /** Answers a command post instead of the default (queue one row per branch that can take it). */
   post?: (body: Record<string, unknown>) => { status: number; body: unknown } | undefined;
 };
@@ -274,6 +276,15 @@ export async function stubCloud(
       };
       (bodies["audit"] ??= []).push({ ...call, build: !!audit[2], query: call.query.toString() });
       const answer = opts.audit(call);
+      return json(answer.body, answer.status);
+    }
+    const lv = path.match(/^\/v1\/live\/([^/]+)$/);
+    if (lv && req.method() === "GET") {
+      (bodies["live"] ??= []).push(lv[1]);
+      const answer = opts.liveView?.(lv[1]) ?? {
+        status: 404,
+        body: { code: "NOT_FOUND", message: "" },
+      };
       return json(answer.body, answer.status);
     }
     const exp = path.match(/^\/v1\/branches\/([^/]+)\/export$/);

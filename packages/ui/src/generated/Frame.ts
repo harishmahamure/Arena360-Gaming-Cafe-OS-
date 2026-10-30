@@ -8,6 +8,7 @@ import type { HelloOk } from "./HelloOk";
 import type { IntentResult } from "./IntentResult";
 import type { IntentSubmit } from "./IntentSubmit";
 import type { KitchenBoard } from "./KitchenBoard";
+import type { LiveToken } from "./LiveToken";
 import type { MostPlayed } from "./MostPlayed";
 import type { PcAck } from "./PcAck";
 import type { PcSettings } from "./PcSettings";
@@ -107,5 +108,6 @@ export type Frame = {
   | ({ kind: "session.sync_result" } & SessionSync)
   | { kind: "kitchen.board" }
   | ({ kind: "kitchen.board_result" } & KitchenBoard)
+  | ({ kind: "live.token" } & LiveToken)
   | { kind: "ack" }
 );

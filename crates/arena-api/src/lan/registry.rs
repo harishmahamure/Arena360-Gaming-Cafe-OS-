@@ -156,7 +156,7 @@ pub(crate) struct SessionGuard {
 /// and console epics add theirs.
 pub(crate) fn browser_tables(class: ClientClass) -> &'static [&'static str] {
     match class {
-        ClientClass::Paired | ClientClass::Kds | ClientClass::Phone => &[],
+        ClientClass::Paired | ClientClass::Kds | ClientClass::Phone | ClientClass::LiveView => &[],
     }
 }
 
@@ -924,6 +924,59 @@ impl Registry {
         }
     }
 
+    /// Whether a live viewer is connected (Story 8.40).
+    fn has_live_session(&self) -> bool {
+        self.sessions
+            .lock()
+            .is_ok_and(|map| map.values().any(|e| e.class == ClientClass::LiveView))
+    }
+
+    /// The `live.floor` event frame as the Hub sees the floor now: the database read, then each
+    /// device's presence from this registry. `None` when the read failed.
+    pub(crate) async fn live_floor_message(
+        &self,
+        devices: &Arc<DeviceDirectory>,
+    ) -> Option<Message> {
+        let dir = Arc::clone(devices);
+        let read = tokio::task::spawn_blocking(move || dir.live_floor(epoch_ms())).await;
+        let mut floor = match read {
+            Ok(Ok(floor)) => floor,
+            Ok(Err(e)) => {
+                tracing::warn!(code = e.code.as_str(), "live floor read failed");
+                return None;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "live floor read panicked");
+                return None;
+            }
+        };
+        arena_core::live_floor::set_presence(&mut floor, |id| self.status(id).0);
+        Some(event_frame(
+            self.next_rid(),
+            HubEvent::LiveFloor(Box::new(floor)),
+        ))
+    }
+
+    /// Pushes the live floor to every live viewer (Story 8.40). Nothing is read when none is
+    /// connected; a viewer whose queue is full or closed is dropped.
+    async fn push_live_floor(&self, devices: &Arc<DeviceDirectory>) {
+        if !self.has_live_session() {
+            return;
+        }
+        let Some(msg) = self.live_floor_message(devices).await else {
+            return;
+        };
+        let Ok(map) = self.sessions.lock() else {
+            return;
+        };
+        for (id, entry) in map.iter().filter(|(_, e)| e.class == ClientClass::LiveView) {
+            if entry.out.try_send(msg.clone()).is_err() {
+                tracing::warn!(session = id, "session queue full or closed; dropping it");
+                set_kill(&entry.kill, Kill::Drop);
+            }
+        }
+    }
+
     fn has_kds_session(&self) -> bool {
         self.sessions
             .lock()
@@ -1022,10 +1075,17 @@ impl Registry {
         media: Option<Arc<arena_core::media_cache::MediaCache>>,
     ) {
         let mut tick = tokio::time::interval(SESSION_TICK);
+        let mut live_tick =
+            tokio::time::interval(std::time::Duration::from_millis(arena_proto::LIVE_TICK_MS));
+        live_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             let event = tokio::select! {
                 e = events.recv() => e,
+                _ = live_tick.tick() => {
+                    self.push_live_floor(&devices).await;
+                    continue;
+                }
                 _ = tick.tick() => {
                     self.tick_sessions(&devices).await;
                     self.tick_attract(&devices, &media).await;
@@ -1043,6 +1103,14 @@ impl Registry {
                     self.push_remote_exits(&devices, &applied).await;
                     self.push_display_settings(&devices, &applied).await;
                     self.push_kitchen_board(&devices, &applied).await;
+                    if applied.changes.iter().any(|c| {
+                        matches!(
+                            c.tbl.as_str(),
+                            "sessions" | "devices" | "devices_meta" | "floor_zones"
+                        )
+                    }) {
+                        self.push_live_floor(&devices).await;
+                    }
                     self.push_test_sessions(&devices, &applied).await;
                     // A ticket that changes its order's ready mark reaches the PC at once, not on
                     // the next tick (Story 7.11: the HUD shows the copy within 5 s of the tap).

@@ -4,15 +4,17 @@ import { FREE, PAID, cacheCount, stubCloud, t } from "./stub";
 const nav = (page: import("@playwright/test").Page) =>
   page.getByRole("navigation", { name: t("owner.nav.label") });
 
-test("five sections, Today is home and current", async ({ page }) => {
+test("five sections, Today is home and current (Live view joins them in the sidebar)", async ({
+  page,
+}, info) => {
   await stubCloud(page);
   await page.goto("/");
   const links = nav(page).getByRole("link");
-  await expect(links).toHaveText(
-    ["today", "reports", "alerts", "manage", "account"].map((k) =>
-      t(`owner.nav.${k}` as "owner.nav.today"),
-    ),
-  );
+  const sections =
+    info.project.name === "phone"
+      ? ["today", "reports", "alerts", "manage", "account"]
+      : ["today", "live", "reports", "alerts", "manage", "account"];
+  await expect(links).toHaveText(sections.map((k) => t(`owner.nav.${k}` as "owner.nav.today")));
   await expect(nav(page).getByRole("link", { name: t("owner.nav.today") })).toHaveAttribute(
     "aria-current",
     "page",

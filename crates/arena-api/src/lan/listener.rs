@@ -38,6 +38,8 @@ const MAX_HEAD_BYTES: usize = 8 * 1024;
 pub struct LanListeners {
     lan: TcpListener,
     web: TcpListener,
+    /// The loopback listener the Cloudflare Tunnel forwards to (Story 8.40).
+    tunnel: Option<TcpListener>,
 }
 
 impl LanListeners {
@@ -50,6 +52,24 @@ impl LanListeners {
     pub fn web_addr(&self) -> io::Result<SocketAddr> {
         self.web.local_addr()
     }
+
+    /// Also listens on `addr` for the Cloudflare Tunnel's connector (Story 8.40). Only a loopback
+    /// address is accepted, so nothing but the local connector can reach it.
+    pub async fn bind_tunnel(&mut self, addr: SocketAddr) -> io::Result<()> {
+        if !addr.ip().is_loopback() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the tunnel listener is loopback only",
+            ));
+        }
+        self.tunnel = Some(TcpListener::bind(addr).await?);
+        Ok(())
+    }
+
+    /// The tunnel listener's address, once bound.
+    pub fn tunnel_addr(&self) -> Option<SocketAddr> {
+        self.tunnel.as_ref().and_then(|l| l.local_addr().ok())
+    }
 }
 
 /// Binds both LAN listeners on `ip` (the Hub uses `0.0.0.0`; tests use loopback and port 0).
@@ -57,6 +77,7 @@ pub async fn bind_lan(ip: IpAddr, lan_port: u16, web_port: u16) -> io::Result<La
     Ok(LanListeners {
         lan: TcpListener::bind(SocketAddr::new(ip, lan_port)).await?,
         web: TcpListener::bind(SocketAddr::new(ip, web_port)).await?,
+        tunnel: None,
     })
 }
 
@@ -81,7 +102,7 @@ pub async fn serve_lan(
         ))
     });
     let acceptor = TlsAcceptor::from(Arc::clone(&hub.tls));
-    let LanListeners { lan, web } = listeners;
+    let LanListeners { lan, web, tunnel } = listeners;
     let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
     let mut conns = JoinSet::new();
     tokio::pin!(shutdown);
@@ -96,16 +117,20 @@ pub async fn serve_lan(
                 Err(_) => break 'accept,
             },
         };
-        let (tcp, peer, tls_only) = loop {
+        let (tcp, peer, port) = loop {
             tokio::select! {
                 () = &mut shutdown => break 'accept,
                 Some(_) = conns.join_next(), if !conns.is_empty() => {}
                 res = lan.accept() => match res {
-                    Ok((tcp, peer)) => break (tcp, peer, true),
+                    Ok((tcp, peer)) => break (tcp, peer, Port::Lan),
                     Err(e) => accept_failed(e).await,
                 },
                 res = web.accept() => match res {
-                    Ok((tcp, peer)) => break (tcp, peer, false),
+                    Ok((tcp, peer)) => break (tcp, peer, Port::Web),
+                    Err(e) => accept_failed(e).await,
+                },
+                res = accept_tunnel(&tunnel) => match res {
+                    Ok((tcp, peer)) => break (tcp, peer, Port::Tunnel),
                     Err(e) => accept_failed(e).await,
                 },
             }
@@ -113,10 +138,10 @@ pub async fn serve_lan(
         let (acceptor, hub) = (acceptor.clone(), Arc::clone(&hub));
         conns.spawn(async move {
             let _slot = slot;
-            if tls_only {
-                serve_tls(tcp, peer, acceptor, hub, false).await;
-            } else {
-                serve_web(tcp, peer, acceptor, hub).await;
+            match port {
+                Port::Lan => serve_tls(tcp, peer, acceptor, hub, false).await,
+                Port::Web => serve_web(tcp, peer, acceptor, hub).await,
+                Port::Tunnel => serve_tunnel(tcp, peer, hub).await,
             }
         });
     }
@@ -129,6 +154,51 @@ pub async fn serve_lan(
     conns.abort_all();
     if let Some(job) = fan_out {
         job.abort();
+    }
+}
+
+/// Which listener accepted a connection.
+#[derive(Clone, Copy)]
+enum Port {
+    Lan,
+    Web,
+    Tunnel,
+}
+
+/// Accepts on the tunnel listener, or never when there is none.
+async fn accept_tunnel(tunnel: &Option<TcpListener>) -> io::Result<(TcpStream, SocketAddr)> {
+    match tunnel {
+        Some(l) => l.accept().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// The upgrade callback for the tunnel listener: the WebSocket lives at `/` or `/live` only.
+#[allow(clippy::result_large_err)]
+fn only_live(req: &Request, resp: Response) -> Result<Response, ErrorResponse> {
+    match req.uri().path() {
+        "/" | arena_proto::LIVE_PATH => Ok(resp),
+        _ => {
+            let mut err = ErrorResponse::new(Some("not found".into()));
+            *err.status_mut() = StatusCode::NOT_FOUND;
+            Err(err)
+        }
+    }
+}
+
+/// The Cloudflare Tunnel's connector, from loopback (Story 8.40): a WebSocket for live viewers
+/// and nothing else.
+async fn serve_tunnel(tcp: TcpStream, peer: SocketAddr, hub: Arc<LanHub>) {
+    if !peer.ip().is_loopback() {
+        return;
+    }
+    let _ = tcp.set_nodelay(true);
+    let upgrade =
+        tokio_tungstenite::accept_hdr_async_with_config(tcp, only_live, Some(ws_config()));
+    match timeout(HANDSHAKE_TIMEOUT, upgrade).await {
+        Ok(Ok(ws)) => session::run(ws, Transport::Tunnel, peer, hub).await,
+        Ok(Err(e)) => tracing::debug!(error = %e, "tunnel websocket upgrade failed"),
+        Err(_) => tracing::debug!("tunnel websocket upgrade timed out"),
     }
 }
 

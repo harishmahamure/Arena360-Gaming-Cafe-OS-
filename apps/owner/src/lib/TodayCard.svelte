@@ -2,6 +2,7 @@
   import { Button, Card, StatusBadge, formatMoney, t } from "@arena/ui";
   import type { OwnerBranch } from "@arena/ui/generated";
   import { fetchWaiting, queuedText, waiting, whatOf } from "./commands.svelte";
+  import { entryOf } from "./live";
   import MetricFigure from "./MetricFigure.svelte";
   import { age } from "./shell.svelte";
   import { LATE_MS, fetchLive, live, moneyLocale } from "./today.svelte";
@@ -13,6 +14,7 @@
   const summary = $derived(data?.summary ?? null);
   const offline = $derived(!!data && !data.branch_online);
   const queued = $derived(waiting[branch.id] ?? []);
+  const entry = $derived(entryOf(branch));
 
   // An offline branch lists what it has yet to apply; re-read whenever its figures are.
   $effect(() => {
@@ -112,6 +114,14 @@
         />
       </dl>
     {/if}
+    {#if entry === "platform"}
+      <p class="type-hub-label live-note">{t("owner.live.needs_windows")}</p>
+    {:else}
+      <!-- On a phone the sidebar entry is not there: the card carries the way in. -->
+      <div class="live-phone">
+        <a href="/live?branch={branch.id}">{t("owner.live.open")}</a>
+      </div>
+    {/if}
     {#if offline && queued.length}
       <div class="waiting">
         <h3 class="type-hub-label">{t("owner.cmd.today.waiting")}</h3>
@@ -154,6 +164,13 @@
     display: grid;
     gap: var(--space-1);
   }
+  .live-note {
+    margin: 0;
+    color: var(--text-muted);
+  }
+  .live-phone {
+    justify-self: start;
+  }
   .offline h2 {
     color: var(--text-muted);
   }
@@ -178,6 +195,9 @@
     color: var(--text-muted);
   }
   @media (min-width: 768px) {
+    .live-phone {
+      display: none;
+    }
     .figures {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }

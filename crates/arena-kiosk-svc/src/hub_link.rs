@@ -331,7 +331,13 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
                         crate::test_session::begin(ctx, lock_after_ms);
                     }
                     Some(HubEvent::Attract(view)) => crate::attract::push(ctx, *view),
-                    Some(HubEvent::Applied(_) | HubEvent::CatalogChanged { .. }) => {}
+                    // Kitchen boards and the live floor go to other classes; a kiosk never gets them.
+                    Some(
+                        HubEvent::Applied(_)
+                        | HubEvent::CatalogChanged { .. }
+                        | HubEvent::KitchenBoard(_)
+                        | HubEvent::LiveFloor(_),
+                    ) => {}
                     None => events = None,
                 }
             }

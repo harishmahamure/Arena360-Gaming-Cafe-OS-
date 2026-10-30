@@ -3,4 +3,4 @@
 /**
  * The kind of client on the other end of a LAN session.
  */
-export type ClientClass = "paired" | "kds" | "phone";
+export type ClientClass = "paired" | "kds" | "phone" | "live_view";

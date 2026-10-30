@@ -35,6 +35,7 @@ mod kiosk_pairing;
 mod kitchen;
 mod library;
 pub mod licence;
+pub mod live;
 mod matching;
 mod notify;
 mod operating;
@@ -245,6 +246,11 @@ pub use library::{
     library_rules_with_installs, parse_kiosk_library, tags_from_json, tags_to_json,
 };
 pub use licence::{LicenceClaims, LicenceError, VerifyKey};
+pub use live::{
+    LIVE_PATH, LIVE_TICK_MS, LIVE_TOKEN_AUD, LIVE_TOKEN_TTL_S, LiveClaims, LiveFloor, LiveGrant,
+    LiveTile, LiveTileSession, LiveTileState, LiveToken, LiveTokenError, LiveZone,
+    verify_live_token,
+};
 pub use matching::{
     GameMatch, GameMatched, LibraryDismiss, LibraryDismissClear, MAX_DISMISS_KEYS, MAX_DISMISSED,
     MAX_MATCHES, MAX_PROPOSAL_KEY_CHARS, ProposalDevice, ProposalView, ProposalsView,
@@ -511,8 +517,8 @@ pub use test_session::{
 };
 pub use tier::{EntitlementSource, TIERS, Tier, TierDefaults, TierLimits};
 pub use tunnel::{
-    TUNNEL_DOMAIN, TUNNEL_FLAG, TUNNEL_ORIGIN, TunnelAnswer, TunnelLine, TunnelReport, TunnelState,
-    tunnel_hostname,
+    TUNNEL_DOMAIN, TUNNEL_FLAG, TUNNEL_ORIGIN, TUNNEL_PORT, TunnelAnswer, TunnelLine, TunnelReport,
+    TunnelState, tunnel_hostname,
 };
 pub use ui_auth::{
     ElevateDrop, ElevateOk, ElevateRequest, ElevationItem, MAX_STAFF_PASSWORD_CHARS,

@@ -23,6 +23,9 @@ pub enum ClientClass {
     Kds,
     /// A guest phone in a browser: anonymous until per-console tokens arrive, `:7401/ws` only.
     Phone,
+    /// The owner's live view through the tunnel: a cloud-signed token, read-only, `live_view`
+    /// on the tunnel listener only (Story 8.40).
+    LiveView,
 }
 
 impl ClientClass {
@@ -32,12 +35,13 @@ impl ClientClass {
             Self::Paired => "paired",
             Self::Kds => "kds",
             Self::Phone => "phone",
+            Self::LiveView => "live_view",
         }
     }
 
     /// The class with this wire form, if any.
     pub fn parse(s: &str) -> Option<Self> {
-        [Self::Paired, Self::Kds, Self::Phone]
+        [Self::Paired, Self::Kds, Self::Phone, Self::LiveView]
             .into_iter()
             .find(|c| c.as_str() == s)
     }
@@ -67,6 +71,8 @@ const KDS_SCOPE: &[IntentKind] = &[
     IntentKind::KitchenAdvanceReverted,
 ];
 const PHONE_SCOPE: &[IntentKind] = &[IntentKind::ConsolePlanRequested];
+/// A live viewer submits no intent at all (Story 8.40).
+const LIVE_VIEW_SCOPE: &[IntentKind] = &[];
 
 /// The intent kinds a session of `class` may submit.
 pub fn class_scope(class: ClientClass) -> &'static [IntentKind] {
@@ -74,6 +80,7 @@ pub fn class_scope(class: ClientClass) -> &'static [IntentKind] {
         ClientClass::Paired => PAIRED_SCOPE,
         ClientClass::Kds => KDS_SCOPE,
         ClientClass::Phone => PHONE_SCOPE,
+        ClientClass::LiveView => LIVE_VIEW_SCOPE,
     }
 }
 
@@ -266,7 +273,12 @@ mod tests {
 
     #[test]
     fn classes_round_trip() {
-        for class in [ClientClass::Paired, ClientClass::Kds, ClientClass::Phone] {
+        for class in [
+            ClientClass::Paired,
+            ClientClass::Kds,
+            ClientClass::Phone,
+            ClientClass::LiveView,
+        ] {
             assert_eq!(
                 serde_json::to_string(&class).unwrap(),
                 format!("\"{}\"", class.as_str())
@@ -275,5 +287,19 @@ mod tests {
         }
         assert!(ClientClass::Kds.uses_device_token());
         assert!(!ClientClass::Phone.uses_device_token());
+        assert!(!ClientClass::LiveView.uses_device_token());
+    }
+
+    #[test]
+    fn a_live_viewer_may_submit_nothing_and_read_no_setting() {
+        assert!(class_scope(ClientClass::LiveView).is_empty());
+        for kind in IntentKind::ALL {
+            assert!(!in_scope(ClientClass::LiveView, kind), "{}", kind.as_str());
+        }
+        assert!(!may_read_setting(
+            ClientClass::LiveView,
+            "kiosk.x",
+            Some("d")
+        ));
     }
 }

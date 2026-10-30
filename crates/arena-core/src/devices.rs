@@ -266,6 +266,24 @@ impl DeviceDirectory {
         })
     }
 
+    /// The live floor at `now_ms` (Story 8.40), presence not yet set.
+    pub fn live_floor(&self, now_ms: i64) -> Result<arena_proto::LiveFloor, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?;
+        crate::live_floor::read_live_floor(&store, now_ms)
+    }
+
+    /// This branch's id and whether its licence carries the `tunnel` flag (Story 8.40).
+    pub fn live_gate(&self) -> Result<Option<(String, bool)>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| internal("device directory lock poisoned"))?;
+        crate::live_floor::read_live_gate(&store)
+    }
+
     pub fn session_screens(
         &self,
         now_ms: i64,

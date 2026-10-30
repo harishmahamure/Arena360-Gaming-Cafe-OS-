@@ -88,7 +88,8 @@ test("System with forced colors keeps every control visible and focusable", asyn
   expect(await page.evaluate(() => matchMedia("(forced-colors: active)").matches)).toBe(true);
   await expect(html(page)).not.toHaveAttribute("data-theme", "hc");
   await expect(page.getByRole("button", { name: t("owner.account.sign_out") })).toBeVisible();
-  const controls = page.locator("a, button");
+  // Live view is a sidebar entry only: on a phone it is not on the screen.
+  const controls = page.locator("a:visible, button:visible");
   const n = await controls.count();
   expect(n).toBeGreaterThan(5);
   for (let i = 0; i < n; i++) {

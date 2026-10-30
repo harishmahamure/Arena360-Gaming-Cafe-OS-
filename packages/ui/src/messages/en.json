@@ -3867,5 +3867,15 @@
   "owner.audit.elevated.mfa": "Owner MFA",
   "owner.audit.orphaned": "Not applied (orphaned)",
   "owner.audit.orphaned.note": "Made at the branch but left out when its records were restored from a backup.",
-  "owner.audit.load_more_failed": "Couldn’t load more. Try again."
+  "owner.audit.load_more_failed": "Couldn’t load more. Try again.",
+  "owner.nav.live": "Live view",
+  "owner.live.branch": "Branch",
+  "owner.live.connecting": "Connecting to the branch…",
+  "owner.live.back": "Back to Today",
+  "owner.live.live": "Live",
+  "owner.live.updated": "Updated {n} s ago",
+  "owner.live.empty": "No devices on this floor yet.",
+  "owner.live.player": "Player {id}",
+  "owner.live.needs_windows": "Needs the Windows Hub",
+  "owner.live.open": "Live view"
 }

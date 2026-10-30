@@ -23,6 +23,7 @@ pub mod import_products;
 pub mod import_starter;
 pub mod invoice;
 pub mod launch_times;
+pub mod live_floor;
 pub mod locale;
 pub mod media_cache;
 pub mod notify_drain;

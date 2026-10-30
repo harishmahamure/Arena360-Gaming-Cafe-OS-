@@ -16,6 +16,7 @@ use crate::error::{AppError, ErrorCode};
 use crate::intent::Intent;
 use crate::kiosk::MostPlayed;
 use crate::kitchen::KitchenBoard;
+use crate::live::{LiveFloor, LiveToken};
 use crate::pc_command::{LockReason, PcAck, PcAction};
 use crate::pc_settings::{PcSettings, PlayerPcSettingsResult, PlayerPcSettingsSetResult};
 use crate::player_login::{PlayerAuthResult, PlayerAuthenticate};
@@ -212,13 +213,17 @@ pub enum FrameBody {
     /// The open tickets, the recently served and cancelled ones, and the Hub's clock.
     #[serde(rename = "kitchen.board_result")]
     KitchenBoardResult(Box<KitchenBoard>),
+    /// A live viewer presents a fresh token before its current one expires (`live_view` sessions
+    /// only; Story 8.40). The Hub answers `ack`.
+    #[serde(rename = "live.token")]
+    LiveToken(LiveToken),
     /// The Hub's empty reply to a request that has nothing to return.
     #[serde(rename = "ack")]
     Ack,
 }
 
 /// Every known `kind`.
-pub const FRAME_KINDS: [&str; 55] = [
+pub const FRAME_KINDS: [&str; 56] = [
     "hello",
     "hello.ok",
     "intent.submit",
@@ -273,6 +278,7 @@ pub const FRAME_KINDS: [&str; 55] = [
     "session.sync_result",
     "kitchen.board",
     "kitchen.board_result",
+    "live.token",
     "ack",
 ];
 
@@ -334,6 +340,7 @@ impl FrameBody {
             Self::SessionSyncResult(_) => "session.sync_result",
             Self::KitchenBoardRequest => "kitchen.board",
             Self::KitchenBoardResult(_) => "kitchen.board_result",
+            Self::LiveToken(_) => "live.token",
             Self::Ack => "ack",
         }
     }
@@ -501,6 +508,10 @@ pub enum HubEvent {
     /// whole board, so a display never has to merge changes.
     #[serde(rename = "kitchen.board")]
     KitchenBoard(Box<crate::KitchenBoard>),
+    /// The whole live floor (`live_view` sessions only; Story 8.40): on connect, on every floor
+    /// change and at least every second.
+    #[serde(rename = "live.floor")]
+    LiveFloor(Box<LiveFloor>),
 }
 
 /// The body of an `event` frame.

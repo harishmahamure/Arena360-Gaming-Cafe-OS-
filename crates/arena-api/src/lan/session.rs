@@ -90,6 +90,8 @@ pub(crate) enum Transport {
     Tls,
     /// Plain HTTP `GET /ws` on `:7401`.
     Plain,
+    /// The loopback tunnel listener (Story 8.40): `live_view` only.
+    Tunnel,
 }
 
 type Sink<S> = SplitSink<WebSocketStream<S>, Message>;
@@ -169,6 +171,8 @@ struct Authed {
     class: ClientClass,
     device: Option<VerifiedDevice>,
     actor: Actor,
+    /// A live viewer's token expiry (epoch seconds); the session ends then unless it refreshes.
+    live_exp_s: Option<i64>,
 }
 
 impl Authed {
@@ -184,7 +188,9 @@ async fn authenticate(
     hello: &Hello,
 ) -> Result<Authed, AppError> {
     let class = hello.class;
-    if hub.throttle.is_blocked(peer.ip(), Instant::now()) {
+    // The tunnel's peer is always the local connector, so the per-address throttle would
+    // lock out every viewer at once; a live token is a signature check, not a guessable secret.
+    if transport != Transport::Tunnel && hub.throttle.is_blocked(peer.ip(), Instant::now()) {
         return Err(app(
             ErrorCode::TokenInvalid,
             "the device token is not valid",
@@ -192,7 +198,14 @@ async fn authenticate(
     }
     match (class, transport) {
         (ClientClass::Paired, Transport::Tls)
-        | (ClientClass::Kds | ClientClass::Phone, Transport::Plain) => {}
+        | (ClientClass::Kds | ClientClass::Phone, Transport::Plain)
+        | (ClientClass::LiveView, Transport::Tunnel) => {}
+        (ClientClass::LiveView, _) | (_, Transport::Tunnel) => {
+            return Err(app(
+                ErrorCode::Forbidden,
+                "live view connects through the tunnel only",
+            ));
+        }
         (ClientClass::Paired, Transport::Plain) => {
             return Err(app(
                 ErrorCode::Forbidden,
@@ -205,6 +218,18 @@ async fn authenticate(
                 "kds and phone clients connect on :7401/ws",
             ));
         }
+    }
+    if class == ClientClass::LiveView {
+        let exp = verify_live(hub, &hello.credential).await?;
+        return Ok(Authed {
+            class,
+            device: None,
+            actor: Actor {
+                kind: ActorKind::System,
+                id: format!("live-view:{}", ulid::Ulid::generate()),
+            },
+            live_exp_s: Some(exp),
+        });
     }
     let device = if class.uses_device_token() {
         let dir = Arc::clone(&hub.devices);
@@ -262,7 +287,45 @@ async fn authenticate(
         class,
         device,
         actor,
+        live_exp_s: None,
     })
+}
+
+/// Checks a live view token for this Hub (Story 8.40) and returns its expiry in epoch seconds:
+/// the Hub must be primary, the token signed by a licence key, for this branch and unexpired
+/// (by trusted time), and the licence must carry the `tunnel` flag. Every token fault is
+/// `TOKEN_INVALID`.
+async fn verify_live(hub: &LanHub, token: &str) -> Result<i64, AppError> {
+    let invalid = || app(ErrorCode::TokenInvalid, "the live view token is not valid");
+    if !hub.is_primary() {
+        return Err(app(ErrorCode::NotPrimary, "this hub is not the primary"));
+    }
+    let dir = Arc::clone(&hub.devices);
+    let gate = tokio::task::spawn_blocking(move || dir.live_gate())
+        .await
+        .map_err(|e| app(ErrorCode::Internal, format!("branch read failed: {e}")))??;
+    let Some((branch_id, tunnel)) = gate else {
+        return Err(app(ErrorCode::NotPrimary, "this hub has no branch yet"));
+    };
+    let now_ms = hub.status.borrow().trusted_now(hub.clock.now_ms());
+    let claims = arena_proto::verify_live_token(token, &hub.live_keys, &branch_id, now_ms)
+        .map_err(|e| {
+            tracing::info!(reason = %e, "live view token refused");
+            invalid()
+        })?;
+    if !tunnel {
+        return Err(app(
+            ErrorCode::FeatureNotEntitled,
+            "live view is not part of this branch's plan",
+        ));
+    }
+    Ok(claims.exp)
+}
+
+/// How long until `exp_s` (epoch seconds) by trusted time.
+fn until_expiry(hub: &LanHub, exp_s: i64) -> Duration {
+    let now_ms = hub.status.borrow().trusted_now(hub.clock.now_ms());
+    Duration::from_millis(exp_s.saturating_mul(1000).saturating_sub(now_ms).max(0) as u64)
 }
 
 /// Records the device's reported version when it changed (system actor, best effort).
@@ -524,6 +587,16 @@ pub(crate) async fn run<S>(
         out: &out_tx,
         conn,
     };
+    // A live viewer sees the floor at once, then on every change and tick (Story 8.40), and
+    // is closed when its token runs out unless it refreshes.
+    let mut live_deadline = authed
+        .live_exp_s
+        .map(|exp| Instant::now() + until_expiry(&hub, exp));
+    if authed.class == ClientClass::LiveView
+        && let Some(msg) = hub.registry.live_floor_message(&hub.devices).await
+    {
+        let _ = out_tx.try_send(msg);
+    }
     let mut keepalive = tokio::time::interval_at(Instant::now() + PING_INTERVAL, PING_INTERVAL);
     keepalive.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut last_inbound = Instant::now();
@@ -533,6 +606,19 @@ pub(crate) async fn run<S>(
             _ = kill.changed() => break,
             _ = &mut writer => break,
             Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
+            () = async {
+                match live_deadline {
+                    Some(at) => tokio::time::sleep_until(at).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                tracing::info!("live view token expired; closing");
+                set_kill(&kill_tx, Kill::Error(app(
+                    ErrorCode::TokenInvalid,
+                    "the live view token has expired",
+                )));
+                break;
+            }
             _ = keepalive.tick() => {
                 if last_inbound.elapsed() >= IDLE_TIMEOUT {
                     tracing::info!(device_id = authed.device_id().unwrap_or("-"), "lan session idle; closing");
@@ -553,6 +639,19 @@ pub(crate) async fn run<S>(
                 last_inbound = Instant::now();
                 match msg {
                     Some(Ok(Message::Text(t))) => {
+                        if authed.class == ClientClass::LiveView
+                            && let Ok(Frame { rid, body: FrameBody::LiveToken(fresh), .. }) = parse_frame(t.as_str())
+                        {
+                            match verify_live(&hub, &fresh.token).await {
+                                Ok(exp) => {
+                                    live_deadline = Some(Instant::now() + until_expiry(&hub, exp));
+                                    ctx.reply(Frame::new(rid, FrameBody::Ack)).await;
+                                }
+                                // The old token stays good until it runs out.
+                                Err(e) => ctx.reply(Frame::error(rid, e)).await,
+                            }
+                            continue;
+                        }
                         ctx.handle(t.as_str(), &permits, &mut tasks).await;
                     }
                     Some(Ok(Message::Binary(_))) => {
@@ -625,6 +724,15 @@ impl Ctx<'_> {
             Err(e) => return self.reply(e.to_frame()).await,
         };
         let rid = env.rid.to_owned();
+        // Story 8.40: a live viewer only keeps the connection alive. Everything else is
+        // `FORBIDDEN`, and the session stays open.
+        if self.authed.class == ClientClass::LiveView
+            && !matches!(env.kind, "ping" | "pong" | "hello")
+        {
+            let e = app(ErrorCode::Forbidden, "live view is read-only");
+            tracing::warn!(kind = env.kind, "live viewer sent a frame it may not");
+            return self.reply(Frame::error(rid, e)).await;
+        }
         match env.kind {
             "ping" => self.reply(Frame::new(rid, FrameBody::Pong)).await,
             "pong" => {}

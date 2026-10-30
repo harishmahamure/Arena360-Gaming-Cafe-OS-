@@ -343,6 +343,7 @@ pub(super) fn mutate_register(
         ClientClass::Paired => "paired",
         ClientClass::Kds => "kds",
         ClientClass::Phone => return Err(invalid("class", "phones are not registered")),
+        ClientClass::LiveView => return Err(invalid("class", "live viewers are not registered")),
     };
     insert_device(
         tx,

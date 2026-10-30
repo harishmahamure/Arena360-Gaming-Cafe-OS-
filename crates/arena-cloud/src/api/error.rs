@@ -55,6 +55,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::OneFreeBranch
         | ErrorCode::StepNotReady
         | ErrorCode::HubNotPaired
+        | ErrorCode::PlatformUnsupported
         | ErrorCode::GroupNotEmpty
         | ErrorCode::GroupKindMismatch
         | ErrorCode::ZoneNotEmpty
@@ -333,6 +334,7 @@ mod tests {
             (ErrorCode::PairCodeInvalid, 401),
             (ErrorCode::PairCodeExpired, 401),
             (ErrorCode::FeatureNotEntitled, 403),
+            (ErrorCode::PlatformUnsupported, 409),
             (ErrorCode::MfaRequired, 403),
             (ErrorCode::PayloadTooLarge, 413),
             (ErrorCode::Fenced, 409),

@@ -16,6 +16,12 @@
       label: "owner.nav.today",
       d: "M3,11l9-8,9,8v9a1,1,0,0,1-1,1h-5v-6H9v6H4a1,1,0,0,1-1-1z",
     },
+    {
+      href: "/live",
+      label: "owner.nav.live",
+      d: "M12,5C7,5,2.7,8.1,1,12.5,2.7,16.9,7,20,12,20s9.3-3.1,11-7.5C21.3,8.1,17,5,12,5zm0,12.5a5,5,0,1,1,0-10,5,5,0,0,1,0,10zm0-8a3,3,0,1,0,0,6,3,3,0,0,0,0-6z",
+      wide: true,
+    },
     { href: "/reports", label: "owner.nav.reports", d: "M4,20V10h4v10zm6,0V4h4v16zm6,0v-7h4v7z" },
     {
       href: "/alerts",
@@ -28,7 +34,7 @@
       label: "owner.nav.account",
       d: "M12,12a4,4,0,1,0,0-8,4,4,0,0,0,0,8zm-8,9a8,8,0,0,1,16,0z",
     },
-  ] as const satisfies readonly { href: string; label: MessageKey; d: string }[];
+  ] as const satisfies readonly { href: string; label: MessageKey; d: string; wide?: boolean }[];
 
   const current = (href: string) =>
     href === "/"
@@ -68,6 +74,7 @@
       <a
         class="item ui-interactive"
         class:active={current(item.href)}
+        class:wide={"wide" in item}
         href={item.href}
         aria-current={current(item.href) ? "page" : undefined}
       >
@@ -171,6 +178,11 @@
     color: var(--text-muted);
   }
 
+  /* Live view is a desktop screen: phones reach it from the Today card. */
+  .item.wide {
+    display: none;
+  }
+
   .item.active {
     background-color: var(--owner-nav-item-active);
     color: var(--text);
@@ -201,6 +213,10 @@
       padding: var(--space-4) 0;
       border-top: 0;
       border-right: var(--owner-nav-sidebar-border);
+    }
+
+    .item.wide {
+      display: flex;
     }
 
     .item {

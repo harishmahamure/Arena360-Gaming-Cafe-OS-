@@ -300,7 +300,7 @@ async fn run(
         .await
         .map_err(|e| internal(format!("bind 127.0.0.1:{}: {e}", cfg.health_port)))?;
     let any = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
-    let lan_listeners = bind_lan(any, cfg.lan_port, cfg.web_port)
+    let mut lan_listeners = bind_lan(any, cfg.lan_port, cfg.web_port)
         .await
         .map_err(|e| {
             internal(format!(
@@ -308,6 +308,15 @@ async fn run(
                 cfg.lan_port, cfg.web_port
             ))
         })?;
+    // Live view (Story 8.40): the connector forwards to this loopback listener. Only the Windows
+    // Hub runs a tunnel; a port that cannot be bound costs the live view, never the trading.
+    if cfg.platform == arena_proto::HubPlatform::Windows {
+        let addr =
+            std::net::SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), arena_proto::TUNNEL_PORT);
+        if let Err(e) = lan_listeners.bind_tunnel(addr).await {
+            tracing::warn!(error = %e, %addr, "could not bind the tunnel listener; live view is off");
+        }
+    }
 
     let lease = LeaseTask::start(
         store,
@@ -394,6 +403,12 @@ async fn run(
         })
         .refusing_while_lost(pair_gate.clone()),
     );
+    let verify_keys = [
+        arena_proto::licence::LICENCE_VERIFY_KEYS,
+        #[cfg(feature = "dev-fixtures")]
+        arena_proto::licence::DEV_LICENCE_VERIFY_KEYS,
+    ]
+    .concat();
     let mut lan_hub = LanHub::new(
         writer.clone(),
         status_rx.clone(),
@@ -403,6 +418,7 @@ async fn run(
         env!("CARGO_PKG_VERSION"),
     )
     .with_staff(Arc::clone(&staff))
+    .with_live_view(verify_keys.clone())
     .with_player_kek(Arc::clone(&player_kek))
     .with_pairing(Arc::clone(&pairing))
     .with_kds_pairing(Arc::clone(&kds_pairing))
@@ -468,12 +484,6 @@ async fn run(
         Some(s) => Arc::clone(&s.token),
         None => Arc::from(platform_keystore(&cfg.data_dir)),
     };
-    let verify_keys = [
-        arena_proto::licence::LICENCE_VERIFY_KEYS,
-        #[cfg(feature = "dev-fixtures")]
-        arena_proto::licence::DEV_LICENCE_VERIFY_KEYS,
-    ]
-    .concat();
     let command_poke = Arc::new(Notify::new());
     let setup_templates = arena_tasks::SetupTemplateInbox::new();
     let resend = arena_tasks::ResendInbox::new();

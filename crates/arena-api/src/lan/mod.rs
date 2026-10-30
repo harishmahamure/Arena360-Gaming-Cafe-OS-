@@ -8,6 +8,8 @@
 //!   answers as before. Every other plain path, and a `/kitchen*` request carrying a bearer token that
 //!   is not a live `kds` one, is `FORBIDDEN` (403). `POST /pair` and `GET /media/<sha256>` are
 //!   answered on TLS only.
+//! - Loopback `TUNNEL_PORT` (optional, Story 8.40): the Cloudflare Tunnel's connector forwards the owner's
+//!   live view here; `GET /` or `/live` upgrades to a WebSocket for the read-only `live_view` class only.
 //!
 //! Every session starts with `hello` (see [`session`]); class scopes come from `arena-proto`.
 //! Only a primary Hub serves intents; a follower answers `hello` and refuses every intent with
@@ -255,6 +257,9 @@ pub struct LanHub {
     /// Opens a player's sealed name for `player.authenticate`; without it that frame is
     /// `UNSUPPORTED` (Story 6.8).
     pub player_kek: Option<Arc<dyn arena_core::players::Kek>>,
+    /// The licence verify keys that also sign live view tokens (Story 8.40); empty refuses every
+    /// live viewer.
+    live_keys: Vec<arena_proto::licence::VerifyKey<'static>>,
     registry: Arc<registry::Registry>,
     /// Bounds concurrent argon2id token checks across all connections.
     verify_permits: Arc<tokio::sync::Semaphore>,
@@ -294,6 +299,7 @@ impl LanHub {
             kitchen_dir: None,
             media: None,
             player_kek: None,
+            live_keys: Vec::new(),
             registry: Arc::new(registry::Registry::default()),
             verify_permits: Arc::new(tokio::sync::Semaphore::new(VERIFY_CONCURRENCY)),
             throttle: throttle::HelloThrottle::default(),
@@ -304,6 +310,12 @@ impl LanHub {
             player_logins: player_login::LoginRecords::default(),
             next_conn: std::sync::atomic::AtomicU64::new(1),
         }
+    }
+
+    /// Admits live viewers whose tokens `keys` verify (Story 8.40).
+    pub fn with_live_view(mut self, keys: Vec<arena_proto::licence::VerifyKey<'static>>) -> Self {
+        self.live_keys = keys;
+        self
     }
 
     /// Checks kiosk admin-exit PINs against `staff` (Story 1.20).

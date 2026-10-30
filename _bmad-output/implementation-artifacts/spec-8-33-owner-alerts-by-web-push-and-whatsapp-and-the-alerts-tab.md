@@ -2,7 +2,7 @@
 title: "Story 8.33: Owner alerts by web push and WhatsApp, and the Alerts tab"
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 baseline_commit: '74a399aeb8904f74fa54675b399f53d46251d17d'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -82,6 +82,8 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+Code review (2026-10-30): patched push-subscription takeover bypassing the 10-per-owner limit; per-subscription claim/outcome errors no longer abort the push loop; push title capped; `localhost.` rejected; service-worker tap falls back to openWindow and parses the URL for origin; malformed Today hash no longer throws; stale-VAPID subscription is replaced and a pre-existing subscription is kept on server failure; tests added for hub-posted `owner_alert`, CORS PATCH, prod dev-route 404. Deferred: HttpPush status-mapping test, worker-behaviour test, `.wa` outbox id reservation, per-alert rate cap. Pre-existing unrelated failures: backup `a_hung_run_times_out`, binary `unreachable_at_start`.
 
 ## Design Notes
 

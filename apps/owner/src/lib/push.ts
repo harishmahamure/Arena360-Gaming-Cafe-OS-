@@ -30,6 +30,9 @@ function keyBytes(b64url: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(raw, (c) => c.charCodeAt(0));
 }
 
+const sameBytes = (a: Uint8Array, b: Uint8Array) =>
+  a.length === b.length && a.every((v, i) => v === b[i]);
+
 const registration = () => navigator.serviceWorker.ready;
 
 /** The subscription this browser holds, if any. */
@@ -63,16 +66,24 @@ export async function enablePush(key: string | null): Promise<PushState | "faile
   if (permission !== "granted") return "denied";
   try {
     const pushManager = (await registration()).pushManager;
-    const sub =
-      (await pushManager.getSubscription()) ??
-      (await pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) }));
+    const applicationServerKey = keyBytes(key);
+    let sub = await pushManager.getSubscription();
+    // A subscription made under another VAPID key can never be delivered to: start again.
+    const held = sub?.options?.applicationServerKey;
+    if (sub && held && !sameBytes(new Uint8Array(held), applicationServerKey)) {
+      await sub.unsubscribe().catch(() => false);
+      sub = null;
+    }
+    const created = !sub;
+    sub ??= await pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
     const { endpoint, keys } = sub.toJSON();
     const sent = await send("POST", "/alerts/push", {
       endpoint,
       keys: { p256dh: keys?.p256dh, auth: keys?.auth },
     });
     if (sent.ok) return "on";
-    await sub.unsubscribe().catch(() => false);
+    // Only a subscription made here is undone; one the server may already hold stays.
+    if (created) await sub.unsubscribe().catch(() => false);
     return "failed";
   } catch {
     return "failed";

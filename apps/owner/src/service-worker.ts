@@ -71,14 +71,23 @@ sw.addEventListener("notificationclick", (e) => {
   e.notification.close();
   const wanted = (e.notification.data as { url?: unknown } | null)?.url;
   // Only a path in this app: never another site.
-  const path = typeof wanted === "string" && /^\/(?!\/)/.test(wanted) ? wanted : "/alerts";
-  const target = new URL(path, sw.location.origin).href;
+  const asked = typeof wanted === "string" ? new URL(wanted, sw.location.origin) : null;
+  const target = (
+    asked && asked.origin === sw.location.origin ? asked : new URL("/alerts", sw.location.origin)
+  ).href;
   e.waitUntil(
     sw.clients.matchAll({ type: "window", includeUncontrolled: true }).then(async (all) => {
       const open = all.find((c) => new URL(c.url).origin === sw.location.origin);
-      if (!open) return void (await sw.clients.openWindow(target));
-      await open.focus();
-      await open.navigate(target);
+      if (open) {
+        try {
+          await open.focus();
+          await open.navigate(target);
+          return;
+        } catch {
+          // An uncontrolled window cannot be navigated: open one at the page instead.
+        }
+      }
+      await sw.clients.openWindow(target);
     }),
   );
 });

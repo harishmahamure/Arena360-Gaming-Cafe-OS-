@@ -887,6 +887,15 @@ async fn the_dev_outbox_is_served_only_in_dev() {
     let prod = Harness::new(false).await;
     let r = prod.call("GET", "/v1/dev/sms", None, &[]).await;
     assert_eq!((r.status, r.code()), (404, "NOT_FOUND"));
+    let r = prod
+        .call(
+            "POST",
+            "/v1/dev/owner-alerts",
+            Some(json!({"branch_id": "b", "kind": "test", "params": {}})),
+            &[],
+        )
+        .await;
+    assert_eq!(r.status, 404, "{}", r.body);
 }
 
 /// A `MakeWriter` into a shared buffer.

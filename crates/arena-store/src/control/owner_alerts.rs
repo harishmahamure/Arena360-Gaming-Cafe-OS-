@@ -211,7 +211,8 @@ impl ControlDb {
                 "INSERT INTO push_subscriptions \
                  (id, owner_user_id, endpoint, p256dh, auth, user_agent, created_at) \
                  SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7 \
-                 WHERE EXISTS (SELECT 1 FROM push_subscriptions WHERE endpoint = ?3) \
+                 WHERE EXISTS (SELECT 1 FROM push_subscriptions \
+                               WHERE endpoint = ?3 AND owner_user_id = ?2) \
                     OR (SELECT COUNT(*) FROM push_subscriptions WHERE owner_user_id = ?2) < ?8 \
                  ON CONFLICT (endpoint) DO UPDATE SET owner_user_id = excluded.owner_user_id, \
                     p256dh = excluded.p256dh, auth = excluded.auth, \

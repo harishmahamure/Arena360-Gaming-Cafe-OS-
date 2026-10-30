@@ -616,6 +616,8 @@ async fn bad_shapes_are_validation_failures_that_record_and_send_nothing() {
         with(&|b| b["outbox_id"] = json!("a/b")),
         with(&|b| b["outbox_id"] = json!("")),
         with(&|b| b["kind"] = json!("newsletter")),
+        // The owner alert is the cloud's own message: a Hub cannot post it.
+        with(&|b| b["kind"] = json!("owner_alert")),
         with(&|b| b["purpose"] = json!("")),
         with(&|b| b["consent_policy_version"] = json!("")),
         with(&|b| {

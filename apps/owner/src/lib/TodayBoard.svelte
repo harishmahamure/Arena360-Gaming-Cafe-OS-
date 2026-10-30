@@ -112,7 +112,12 @@
     jump();
   });
   afterNavigate(() => {
-    const id = decodeURIComponent(page.url.hash.slice(1));
+    let id = "";
+    try {
+      id = decodeURIComponent(page.url.hash.slice(1));
+    } catch {
+      // A malformed escape is not a card.
+    }
     target = id.startsWith("today-") ? id : "";
     jump();
   });

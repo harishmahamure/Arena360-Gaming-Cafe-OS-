@@ -139,6 +139,7 @@ fn endpoint_ok(endpoint: &str) -> bool {
         && url.password().is_none()
         && url
             .domain()
+            .map(|d| d.trim_end_matches('.'))
             .is_some_and(|d| d != "localhost" && !d.ends_with(".localhost"))
 }
 

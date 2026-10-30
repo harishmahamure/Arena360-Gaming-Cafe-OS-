@@ -1025,7 +1025,7 @@ async fn cors_preflight_allows_put_and_delete() {
         .to_str()
         .unwrap();
     assert!(
-        methods.contains("PUT") && methods.contains("DELETE"),
+        methods.contains("PUT") && methods.contains("DELETE") && methods.contains("PATCH"),
         "{methods}"
     );
 }

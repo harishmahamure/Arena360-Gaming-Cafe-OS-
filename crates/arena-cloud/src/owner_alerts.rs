@@ -25,6 +25,8 @@ const WA_KIND: &str = "owner_alert";
 const WA_CONSENT: &str = "owner";
 /// The longest alert id (the ledger id `<id>.wa` must stay a 64-character token).
 const ID_MAX: usize = 60;
+/// The longest push title, in characters.
+const TITLE_MAX: usize = 80;
 
 /// An alert to raise.
 #[derive(Debug, Clone)]
@@ -181,7 +183,8 @@ async fn push_all(
         return Ok(());
     };
     let payload = serde_json::to_vec(&OwnerAlertPush {
-        title: view.branch_name.clone(),
+        // A long branch name must not push the payload past one record.
+        title: view.branch_name.chars().take(TITLE_MAX).collect(),
         body: view.text.clone(),
         url: view.url.clone(),
         tag: view.id.clone(),
@@ -189,8 +192,13 @@ async fn push_all(
     .unwrap_or_default();
     let mut claimed = Vec::new();
     for sub in st.db.push_subscriptions(owner_id).await? {
-        if st.db.owner_alert_claim(&view.id, &sub.id).await? {
-            claimed.push(sub);
+        // A claim that fails leaves that one unsent; the others still go out.
+        match st.db.owner_alert_claim(&view.id, &sub.id).await {
+            Ok(true) => claimed.push(sub),
+            Ok(false) => {}
+            Err(e) => {
+                tracing::error!(alert_id = %view.id, subscription_id = %sub.id, error = %e, "owner alert: push claim failed");
+            }
         }
     }
     let sends = claimed.iter().map(|sub| {
@@ -212,11 +220,15 @@ async fn push_all(
     for (sub_id, outcome) in futures_util::future::join_all(sends).await {
         match outcome {
             PushOutcome::Delivered => {
-                st.db.push_subscription_succeeded(sub_id, now).await?;
+                if let Err(e) = st.db.push_subscription_succeeded(sub_id, now).await {
+                    tracing::error!(alert_id = %view.id, subscription_id = %sub_id, error = %e, "owner alert: push outcome not recorded");
+                }
             }
             PushOutcome::Gone => {
                 tracing::info!(alert_id = %view.id, subscription_id = %sub_id, "owner alert: subscription gone");
-                st.db.push_subscription_delete(sub_id).await?;
+                if let Err(e) = st.db.push_subscription_delete(sub_id).await {
+                    tracing::error!(alert_id = %view.id, subscription_id = %sub_id, error = %e, "owner alert: gone subscription not deleted");
+                }
             }
             PushOutcome::Failed(code) => {
                 tracing::warn!(alert_id = %view.id, subscription_id = %sub_id, code = %code, "owner alert: push failed, not retried");

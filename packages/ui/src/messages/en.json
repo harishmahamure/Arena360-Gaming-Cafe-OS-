@@ -3829,6 +3829,7 @@
   "owner.audit.search": "Search",
   "owner.audit.problem.intent": "Type an action like settings.set: lowercase letters, numbers, dots and underscores.",
   "owner.audit.problem.player": "Type a player id.",
+  "owner.audit.problem.month": "Pick a month that has started.",
   "owner.audit.module.session": "Sessions",
   "owner.audit.module.wallet": "Wallet",
   "owner.audit.module.credit": "Credit",
@@ -3856,6 +3857,5 @@
   "owner.audit.elevated.mfa": "Owner MFA",
   "owner.audit.orphaned": "Not applied (orphaned)",
   "owner.audit.orphaned.note": "Made at the branch but left out when its records were restored from a backup.",
-  "owner.audit.load_more_failed": "Couldn’t load more. Try again.",
-  "owner.audit.branches.none": "No branch can be searched yet."
+  "owner.audit.load_more_failed": "Couldn’t load more. Try again."
 }

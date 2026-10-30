@@ -50,7 +50,7 @@
   let moreFailed = $state(false);
   let announcement = $state("");
   // The search the results belong to; "Load more" and polling keep using it.
-  let ran: { branchId: string; month: string; query: AuditQuery } | null = null;
+  let ran: { branchId: string; month: string; query: AuditQuery } | null = $state(null);
   let ticket = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -63,6 +63,10 @@
     stop();
   });
 
+  // Rows are shown in the zone of the branch that was searched, not the one now picked.
+  const zone = $derived(
+    branches.find((b) => b.id === (ran?.branchId ?? branchId))?.timezone ?? branch?.timezone,
+  );
   const time = (ms: number) => {
     const options = {
       day: "2-digit",
@@ -75,7 +79,7 @@
     try {
       return new Intl.DateTimeFormat("en-GB", {
         ...options,
-        timeZone: branch?.timezone ?? "UTC",
+        timeZone: zone ?? "UTC",
       }).format(ms);
     } catch {
       return new Intl.DateTimeFormat("en-GB", { ...options, timeZone: "UTC" }).format(ms);
@@ -92,7 +96,7 @@
 
   // One step: ask, then act on the answer. A month that is not ready is asked about again
   // every few seconds until its first page arrives; a month never built is started first.
-  async function step(mine: number, answer: AuditAnswer) {
+  async function step(mine: number, answer: AuditAnswer, built = false) {
     if (mine !== ticket) return;
     if (answer.state === "signed-out") {
       await refresh();
@@ -108,7 +112,14 @@
       view = { kind: "error", message: answer.message };
       return;
     }
-    if (answer.state === "missing") return step(mine, await buildAudit(branchId, month));
+    if (answer.state === "missing") {
+      // A month still missing right after its build was started is not coming: stop, don't loop.
+      if (built || !ran) {
+        view = { kind: "error", message: "owner.audit.error.generic" };
+        return;
+      }
+      return step(mine, await buildAudit(ran.branchId, ran.month), true);
+    }
     if (view.kind !== "preparing") announcement = t("owner.audit.preparing");
     view = { kind: "preparing", progress: answer.progress };
     timer = setTimeout(async () => {
@@ -119,7 +130,9 @@
 
   async function search() {
     problem = queryProblem(query);
-    if (problem || !branch || !/^\d{4}-\d{2}$/.test(month)) return;
+    if (!problem && (!/^\d{4}-\d{2}$/.test(month) || month > thisMonth))
+      problem = "owner.audit.problem.month";
+    if (problem || !branch) return;
     stop();
     const mine = ++ticket;
     ran = { branchId, month, query: { ...query } };
@@ -127,6 +140,7 @@
     orphaned = [];
     cursor = null;
     moreFailed = false;
+    more = false;
     view = { kind: "preparing", progress: 0 };
     await step(mine, await searchAudit(branchId, month, query));
   }

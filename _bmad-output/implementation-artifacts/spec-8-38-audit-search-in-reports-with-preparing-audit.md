@@ -2,7 +2,7 @@
 title: 'Story 8.38: Audit search in Reports with "Preparing audit…"'
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 baseline_commit: '7d346cc1'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -45,5 +45,18 @@ deferred: []
 
 ## Auto Run Result
 
-Status: review
+Status: done
 Implemented: `AuditPanel.svelte` and `audit.ts` (catalogue params, build/poll flow, labels) in the owner app; Audit tab in `ReportsBoard` (shared range controls and exports hidden for it); `api.probe` (status-keeping, uncached read); `owner.audit.*` strings. Tests: `apps/owner/tests/audit.spec.ts` (9 cases on desktop and phone: first search with preparing then page, ready month without build, failed build with Retry, row content with PIN/MFA and orphaned section, Load more cursor, each filter's parameters, pre-send validation, empty and refused answers, axe and overflow). Known unrelated failures: `pnpm check:tokens-used` (`--ad-reserved` in the Hub floor page) and `test:scripts` `check-deploy` (no kubectl).
+
+### Review Findings
+
+- [x] [Review][Patch] Build for a missing month used the live form branch/month, not the searched one [AuditPanel.svelte] — fixed: uses `ran`
+- [x] [Review][Patch] Missing month right after its build looped build→search forever [AuditPanel.svelte] — fixed: stops with a generic error
+- [x] [Review][Patch] Empty/future month was refused silently [AuditPanel.svelte] — fixed: `owner.audit.problem.month` alert
+- [x] [Review][Patch] Rows re-rendered in the newly picked branch's zone [AuditPanel.svelte] — fixed: zone follows the searched branch
+- [x] [Review][Patch] Stale `more` flag after a new search; unused `owner.audit.branches.none` key — fixed
+- [x] [Review][Patch] Test gap: own controls on the Audit tab and cleared-month refusal — added
+- [x] [Review][Defer] Poll without cap/backoff, single failed poll ends waiting, 401 tests, duplicate keys on load more — deferred: low impact, fail visibly
+
+#### Rejected
+- `probe` signed-out on failed rotation: identical to `load()` semantics. Kind note only for staff/device: fixed-name actors already self-describe.

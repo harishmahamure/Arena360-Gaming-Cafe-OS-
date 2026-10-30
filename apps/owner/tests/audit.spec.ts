@@ -279,3 +279,15 @@ test("Audit has no serious accessibility violations while preparing and with res
     ),
   ).toBe(false);
 });
+
+test("the Audit tab has its own controls and a cleared month is refused before sending", async ({
+  page,
+}) => {
+  const log = await stubCloud(page, ONE, { audit: () => ok(pageOf([item(1)])) });
+  await openAudit(page);
+  await expect(page.getByLabel(t("owner.reports.range"), { exact: true })).toHaveCount(0);
+  await page.getByLabel(t("owner.audit.month")).fill("");
+  await search(page);
+  await expect(page.getByRole("alert")).toContainText(t("owner.audit.problem.month"));
+  expect(searches(log)).toHaveLength(0);
+});

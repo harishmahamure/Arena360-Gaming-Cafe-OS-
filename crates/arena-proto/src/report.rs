@@ -468,3 +468,41 @@ pub struct StaffReport {
     pub to: String,
     pub staff: Vec<StaffRow>,
 }
+
+/// One player on the Hub's overdue credit list (Story 8.31), oldest unpaid spend first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OverdueRow {
+    pub player_id: String,
+    /// Empty when the player's key is gone (`erased`).
+    pub name: String,
+    pub erased: bool,
+    #[ts(type = "number")]
+    pub outstanding_minor: i64,
+    /// The business day of the oldest spend still unpaid (first in, first out).
+    pub oldest_unpaid_day: String,
+    #[ts(type = "number")]
+    pub age_days: i64,
+    /// The aging bucket of that spend: `0_7`, `8_14` or `15_plus`.
+    pub bucket: String,
+    /// The player's latest consent to service messages: granted, withdrawn, or `None` for none.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub consent: Option<bool>,
+    /// The business day of the last credit reminder the cloud sent (paid branches only).
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub last_reminder_day: Option<String>,
+}
+
+/// `GET /ui/players/overdue` (Story 8.31): players with credit outstanding, oldest unpaid spend
+/// first. `reminders` is false on a Free branch, which shows the list with a tier lock and never
+/// queues a reminder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OverdueView {
+    /// The business day credit is aged as of.
+    pub as_of_day: String,
+    pub reminders: bool,
+    pub rows: Vec<OverdueRow>,
+}

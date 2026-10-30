@@ -421,7 +421,9 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         | P::NotifySkip(_)
         | P::NotifyExpire(_)
         | P::NotifyRequested(_)
-        | P::NotifyRearm(_) => Target::Notify(Box::new(notify_drain::load(tx, &intent.payload)?)),
+        | P::NotifyRearm(_) => {
+            Target::Notify(Box::new(notify_drain::load(tx, &intent.payload, now)?))
+        }
         P::KotReprint(_) | P::KotPrinted(_) | P::KotPrintFailed(_) => {
             Target::Kot(Box::new(kot::load(tx, &intent.payload)?))
         }

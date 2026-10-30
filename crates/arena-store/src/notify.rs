@@ -21,6 +21,8 @@ pub struct NewNotify<'a> {
     pub not_before: i64,
     /// The raw template values, a JSON object of text.
     pub params: Option<&'a str>,
+    /// The business day a `credit_reminder` is raised for (at most one per player per day).
+    pub reminder_day: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,10 +38,11 @@ pub struct NotifyRow {
     pub state: String,
     pub params: Option<String>,
     pub rearmed_at: Option<i64>,
+    pub reminder_day: Option<String>,
 }
 
 const ROW_COLUMNS: &str = "id, purpose, kind, order_id, session_id, player_id, \
-     consent_policy_version, not_before, state, params, rearmed_at";
+     consent_policy_version, not_before, state, params, rearmed_at, reminder_day";
 
 fn row_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<NotifyRow> {
     Ok(NotifyRow {
@@ -54,15 +57,16 @@ fn row_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<NotifyRow> {
         state: r.get(8)?,
         params: r.get(9)?,
         rearmed_at: r.get(10)?,
+        reminder_day: r.get(11)?,
     })
 }
 
 pub fn insert_notify(conn: &Connection, n: &NewNotify<'_>) -> Result<(), AppError> {
     conn.execute(
         "INSERT INTO notify_outbox (id, purpose, kind, order_id, session_id, player_id,
-                                    consent_policy_version, not_before, state, params, rev,
-                                    created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, 0, 0)",
+                                    consent_policy_version, not_before, state, params,
+                                    reminder_day, rev, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, 0, 0)",
         params![
             n.id,
             n.purpose,
@@ -74,6 +78,7 @@ pub fn insert_notify(conn: &Connection, n: &NewNotify<'_>) -> Result<(), AppErro
             n.not_before,
             NOTIFY_STATE_QUEUED,
             n.params,
+            n.reminder_day,
         ],
     )
     .map_err(db_error)?;
@@ -209,6 +214,36 @@ pub fn rearm_notify(conn: &Connection, id: &str, now_ms: i64) -> Result<bool, Ap
     Ok(n == 1)
 }
 
+/// Whether `player_id` already has a credit reminder for the business day `day`, whatever became
+/// of it: a player is reminded at most once a day.
+pub fn credit_reminder_exists(
+    conn: &Connection,
+    player_id: &str,
+    day: &str,
+) -> Result<bool, AppError> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM notify_outbox
+                        WHERE player_id = ?1 AND kind = 'credit_reminder' AND reminder_day = ?2)",
+        params![player_id, day],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}
+
+/// The business day of the latest credit reminder of `player_id` the cloud sent.
+pub fn last_credit_reminder_sent(
+    conn: &Connection,
+    player_id: &str,
+) -> Result<Option<String>, AppError> {
+    conn.query_row(
+        "SELECT MAX(reminder_day) FROM notify_outbox
+         WHERE player_id = ?1 AND kind = 'credit_reminder' AND state = 'sent'",
+        [player_id],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}
+
 /// The player an order was sold to, if any.
 pub fn order_player_id(conn: &Connection, order_id: &str) -> Result<Option<String>, AppError> {
     conn.query_row(
@@ -246,6 +281,7 @@ mod tests {
             consent_policy_version: "1",
             not_before: 8_000,
             params: None,
+            reminder_day: None,
         }
     }
 
@@ -260,6 +296,7 @@ mod tests {
             consent_policy_version: "1",
             not_before: 8_000,
             params: Some("{}"),
+            reminder_day: None,
         }
     }
 
@@ -335,7 +372,7 @@ mod tests {
             )
         };
         assert!(bad("marketing", "receipt").is_err());
-        assert!(bad("transactional", "credit_reminder").is_err());
+        assert!(bad("transactional", "newsletter").is_err());
         assert!(bad("transactional", "low_balance").is_ok());
     }
 
@@ -379,6 +416,57 @@ mod tests {
         assert_eq!(
             latest_low_balance(&conn, "P1").unwrap(),
             Some(("N2".into(), Some(5)))
+        );
+    }
+    fn credit<'a>(id: &'a str, player: &'a str, day: Option<&'a str>) -> NewNotify<'a> {
+        NewNotify {
+            id,
+            purpose: "transactional",
+            kind: "credit_reminder",
+            order_id: None,
+            session_id: None,
+            player_id: player,
+            consent_policy_version: "1",
+            not_before: 8_000,
+            params: Some(r#"{"amount_minor":"6000"}"#),
+            reminder_day: day,
+        }
+    }
+
+    #[test]
+    fn a_player_has_one_credit_reminder_per_business_day() {
+        let conn = conn();
+        assert!(!credit_reminder_exists(&conn, "P1", "2027-01-18").unwrap());
+        assert_eq!(last_credit_reminder_sent(&conn, "P1").unwrap(), None);
+        insert_notify(&conn, &credit("N1", "P1", Some("2027-01-18"))).unwrap();
+        assert!(credit_reminder_exists(&conn, "P1", "2027-01-18").unwrap());
+        assert!(!credit_reminder_exists(&conn, "P2", "2027-01-18").unwrap());
+        assert!(!credit_reminder_exists(&conn, "P1", "2027-01-19").unwrap());
+        assert!(
+            insert_notify(&conn, &credit("N2", "P1", Some("2027-01-18"))).is_err(),
+            "the same day twice is refused"
+        );
+        // A settled row still counts for its day.
+        finish_notify(&conn, "N1", "skipped", None, None, Some("credit_cleared")).unwrap();
+        assert!(credit_reminder_exists(&conn, "P1", "2027-01-18").unwrap());
+        assert!(
+            insert_notify(&conn, &credit("N3", "P1", None)).is_err(),
+            "a credit reminder without a day is not a row"
+        );
+
+        // Only a reminder that was sent is "the last reminder", by its day.
+        assert_eq!(last_credit_reminder_sent(&conn, "P1").unwrap(), None);
+        insert_notify(&conn, &credit("N4", "P1", Some("2027-01-22"))).unwrap();
+        insert_notify(&conn, &credit("N5", "P1", Some("2027-01-29"))).unwrap();
+        finish_notify(&conn, "N4", "sent", Some("sms"), None, None).unwrap();
+        assert_eq!(
+            last_credit_reminder_sent(&conn, "P1").unwrap().as_deref(),
+            Some("2027-01-22")
+        );
+        finish_notify(&conn, "N5", "sent", Some("sms"), None, None).unwrap();
+        assert_eq!(
+            last_credit_reminder_sent(&conn, "P1").unwrap().as_deref(),
+            Some("2027-01-29")
         );
     }
 }

@@ -119,7 +119,7 @@ async fn a_pc_session_five_minutes_from_its_end_queues_one_session_ending_row() 
     let row = &rows(&f)[0];
     assert_eq!(row.kind, "session_ending");
     assert_eq!(row.order_id, None);
-    assert_eq!(row.session_id.as_deref(), Some(r.session_id.as_str()));
+    assert_eq!(row.session_id.as_deref(), r.session_id.as_deref());
     assert_eq!(row.state, "queued");
     assert_eq!(row.not_before, f.clock.now_ms() + UNDO_WINDOW_MS);
     assert_eq!(row.params.as_deref(), Some(r#"{"minutes":"5"}"#));
@@ -208,7 +208,7 @@ async fn a_guest_a_missing_consent_a_free_branch_or_a_message_turned_off_queues_
         Trigger::Request(NotifyRequested {
             kind: "session_ending".into(),
             player_id: p,
-            session_id: text(&sessions(&f)[0], "id"),
+            session_id: Some(text(&sessions(&f)[0], "id")),
             params: [("minutes".to_owned(), "4".to_owned())].into(),
         }),
     )

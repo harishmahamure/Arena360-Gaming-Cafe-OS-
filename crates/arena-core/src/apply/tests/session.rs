@@ -2412,7 +2412,7 @@ async fn billed_for(f: &Fixture, player: &str, rate: i64, minutes: i64) -> (Stri
     (text(&o, "id"), int(&o, "rev"))
 }
 
-fn settle_on_credit(order: &str, rev: i64, amount: i64, over: bool) -> Intent {
+pub(super) fn settle_on_credit(order: &str, rev: i64, amount: i64, over: bool) -> Intent {
     let mut i = settle_intent(
         order,
         Some(rev),

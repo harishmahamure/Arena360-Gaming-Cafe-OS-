@@ -1,5 +1,6 @@
-//! Messages a running session asks for (Story 8.30): system intents that queue one
-//! `notify_outbox` row about a session, or mark a low-balance crossing as over.
+//! Messages a running session or the daily credit check asks for (Stories 8.30 and 8.31): system
+//! intents that queue one `notify_outbox` row about a session or a player's credit, or mark a
+//! low-balance crossing as over.
 //!
 //! * `notify.requested` (kind `low_balance`, `session_ending` or `console_5min`) is refused unless
 //!   the branch is on a paid tier with that message switched on, the session is running for the
@@ -7,6 +8,9 @@
 //!   player who did not agree, a Free branch or a switched-off message writes no row. A session
 //!   has one `session_ending` and one `console_5min` row for good (an Extend never repeats it) and
 //!   a wallet one `low_balance` row per crossing. The row is due at the end of the Undo window.
+//! * A `credit_reminder` is about a player, not a session: the player must owe credit, and at most
+//!   one row is queued per player per business day, whoever asks. It names what the player owes
+//!   when the row is queued.
 //! * `notify.rearm` marks the latest `low_balance` row as left behind by a wallet that rose above
 //!   the level again, so the next fall below it queues a new row.
 
@@ -14,12 +18,14 @@ use std::collections::BTreeMap;
 
 use arena_proto::{
     AppError, CONSENT_TRANSACTIONAL, ErrorCode, Intent, IntentPayload, KEY_LICENCE_TIER,
-    NOTIFY_KIND_LOW_BALANCE, NOTIFY_PARAM_MAX_CHARS, NOTIFY_PURPOSE_TRANSACTIONAL, NotifyRequested,
-    SESSION_NOTIFY_KINDS, UNDO_WINDOW_MS, WhatsappRefusal, whatsapp_refusal,
+    NOTIFY_KIND_CREDIT_REMINDER, NOTIFY_KIND_LOW_BALANCE, NOTIFY_PARAM_MAX_CHARS,
+    NOTIFY_PURPOSE_TRANSACTIONAL, NotifyRequested, SESSION_NOTIFY_KINDS, UNDO_WINDOW_MS,
+    WhatsappRefusal, whatsapp_refusal,
 };
 use arena_store::{
-    ChangeOp, LiveSession, NewNotify, RowKey, StoreTx, find_notify, find_session, find_setting,
-    insert_notify, latest_consent, latest_low_balance, rearm_notify, session_notice_exists,
+    ChangeOp, CreditRow, LiveSession, NewNotify, RowKey, StoreTx, credit_reminder_exists,
+    find_credit, find_notify, find_session, find_setting, insert_notify, latest_consent,
+    latest_low_balance, rearm_notify, session_notice_exists,
 };
 
 use super::mutate::Written;
@@ -33,28 +39,46 @@ pub(crate) struct Ask {
     switch_on: bool,
     consent: Option<(bool, String)>,
     session: Option<LiveSession>,
-    /// A row of this message already exists for the session (or the crossing).
+    /// For a `credit_reminder`: the player's credit and the business day it is raised for.
+    credit: Option<(CreditRow, String)>,
+    /// A row of this message already exists for the session, the crossing or the day.
     already: bool,
     /// For a rearm: the row, if it is a `low_balance` row not yet rearmed.
     rearmable: Option<bool>,
 }
 
-pub(super) fn load(tx: &StoreTx<'_>, payload: &IntentPayload) -> Result<Ask, AppError> {
+pub(super) fn load(
+    tx: &StoreTx<'_>,
+    payload: &IntentPayload,
+    now_ms: i64,
+) -> Result<Ask, AppError> {
     match payload {
         IntentPayload::NotifyRequested(p) => {
             let Some(key) = switch_key(&p.kind) else {
                 return Ok(Ask::default());
             };
-            let already = if p.kind == NOTIFY_KIND_LOW_BALANCE {
-                latest_low_balance(tx, &p.player_id)?.is_some_and(|(_, rearmed)| rearmed.is_none())
+            let session_id = p.session_id.as_deref().unwrap_or_default();
+            let (already, credit) = if p.kind == NOTIFY_KIND_CREDIT_REMINDER {
+                let today = crate::locale::stamp(tx, now_ms)?.map(|(day, _)| day);
+                let credit = find_credit(tx, &p.player_id)?.zip(today);
+                let already = match &credit {
+                    Some((_, day)) => credit_reminder_exists(tx, &p.player_id, day)?,
+                    None => false,
+                };
+                (already, credit)
+            } else if p.kind == NOTIFY_KIND_LOW_BALANCE {
+                let open = latest_low_balance(tx, &p.player_id)?
+                    .is_some_and(|(_, rearmed)| rearmed.is_none());
+                (open, None)
             } else {
-                session_notice_exists(tx, &p.session_id, &p.kind)?
+                (session_notice_exists(tx, session_id, &p.kind)?, None)
             };
             Ok(Ask {
                 tier: find_setting(tx, KEY_LICENCE_TIER)?.map(|s| s.value),
                 switch_on: find_setting(tx, key)?.is_some_and(|s| s.value == "true"),
                 consent: latest_consent(tx, &p.player_id, CONSENT_TRANSACTIONAL)?,
-                session: find_session(tx, &p.session_id)?,
+                session: find_session(tx, session_id)?,
+                credit,
                 already,
                 rearmable: None,
             })
@@ -112,16 +136,38 @@ pub(super) fn validate(intent: &Intent, a: &Ask) -> Result<(), AppError> {
             ));
         }
     };
-    if !SESSION_NOTIFY_KINDS.contains(&p.kind.as_str()) {
-        return Err(invalid("kind", "this message is not about a session"));
+    let credit_reminder = p.kind == NOTIFY_KIND_CREDIT_REMINDER;
+    if !credit_reminder && !SESSION_NOTIFY_KINDS.contains(&p.kind.as_str()) {
+        return Err(invalid(
+            "kind",
+            "this message is not about a session or credit",
+        ));
     }
     params_ok(p)?;
-    let session =
-        a.session.as_ref().filter(|s| running(s)).ok_or_else(|| {
+    if credit_reminder {
+        if p.session_id.is_some() {
+            return Err(invalid(
+                "session_id",
+                "a credit reminder is not about a session",
+            ));
+        }
+        if a.credit
+            .as_ref()
+            .is_none_or(|(c, _)| c.outstanding_minor <= 0)
+        {
+            return Err(AppError::with_field(
+                ErrorCode::Stale,
+                "player_id",
+                "this player owes no credit",
+            ));
+        }
+    } else {
+        let session = a.session.as_ref().filter(|s| running(s)).ok_or_else(|| {
             AppError::with_field(ErrorCode::Stale, "session_id", "no such session")
         })?;
-    if session.player_id.as_deref() != Some(p.player_id.as_str()) {
-        return Err(invalid("player_id", "this session is not the player's"));
+        if session.player_id.as_deref() != Some(p.player_id.as_str()) {
+            return Err(invalid("player_id", "this session is not the player's"));
+        }
     }
     if let Some(refusal) = whatsapp_refusal(
         a.tier.as_deref(),
@@ -170,11 +216,18 @@ pub(super) fn mutate(
                 ));
             };
             let id = ulid::Ulid::generate().to_string();
-            let params: BTreeMap<&str, &str> = p
+            let mut params: BTreeMap<&str, &str> = p
                 .params
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.trim()))
                 .collect();
+            let owed = a
+                .credit
+                .as_ref()
+                .map(|(c, _)| c.outstanding_minor.to_string());
+            if let Some(owed) = &owed {
+                params.insert("amount_minor", owed);
+            }
             let params = serde_json::to_string(&params).map_err(|e| {
                 AppError::new(ErrorCode::Internal, format!("message parameters: {e}"))
             })?;
@@ -185,11 +238,12 @@ pub(super) fn mutate(
                     purpose: NOTIFY_PURPOSE_TRANSACTIONAL,
                     kind: &p.kind,
                     order_id: None,
-                    session_id: Some(&p.session_id),
+                    session_id: p.session_id.as_deref(),
                     player_id: &p.player_id,
                     consent_policy_version: policy_version,
                     not_before: now_ms + UNDO_WINDOW_MS,
                     params: Some(&params),
+                    reminder_day: a.credit.as_ref().map(|(_, day)| day.as_str()),
                 },
             )?;
             Ok(vec![Written {

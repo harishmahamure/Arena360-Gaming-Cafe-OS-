@@ -21,7 +21,7 @@ use tokio::sync::watch;
 
 pub const NOTIFY_TRIGGER_TICK: Duration = Duration::from_secs(NOTIFY_TRIGGER_INTERVAL_S);
 
-fn intent(payload: IntentPayload, now: i64) -> Intent {
+pub(crate) fn intent(payload: IntentPayload, now: i64) -> Intent {
     Intent {
         intent_id: ulid::Ulid::generate().to_string(),
         kind: payload.kind(),

@@ -30,14 +30,18 @@ pub(crate) struct NotifyTarget {
     ask: notify_request::Ask,
 }
 
-pub(super) fn load(tx: &StoreTx<'_>, payload: &IntentPayload) -> Result<NotifyTarget, AppError> {
+pub(super) fn load(
+    tx: &StoreTx<'_>,
+    payload: &IntentPayload,
+    now_ms: i64,
+) -> Result<NotifyTarget, AppError> {
     if matches!(
         payload,
         IntentPayload::NotifyRequested(_) | IntentPayload::NotifyRearm(_)
     ) {
         return Ok(NotifyTarget {
             row: None,
-            ask: notify_request::load(tx, payload)?,
+            ask: notify_request::load(tx, payload, now_ms)?,
         });
     }
     let id = match payload {

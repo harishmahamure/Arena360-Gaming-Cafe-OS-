@@ -16,6 +16,7 @@ import type {
   PlayerHit,
   PlayerPasswordForm,
   PlayerProfile,
+  OverdueView,
   WalletView,
   ReasonCode,
   SessionListView,
@@ -35,6 +36,7 @@ export const INTENT_URL = "http://127.0.0.1:7409/ui/intent";
 export const PLAYERS_URL = "http://127.0.0.1:7409/ui/players";
 export const PLAYER_PROFILE_URL = "http://127.0.0.1:7409/ui/players/profile";
 export const PLAYER_WALLET_URL = "http://127.0.0.1:7409/ui/players/wallet";
+export const PLAYER_OVERDUE_URL = "http://127.0.0.1:7409/ui/players/overdue";
 export const SESSIONS_URL = "http://127.0.0.1:7409/ui/sessions";
 export const MEDIA_CACHE_URL = "http://127.0.0.1:7409/ui/media-cache";
 export const SESSION_CONVERT_URL = "http://127.0.0.1:7409/ui/sessions/convert";
@@ -419,6 +421,9 @@ export const loadPlayer = (id: string) =>
   getJson<PlayerProfile>(withQuery(PLAYER_PROFILE_URL, { id }));
 
 export const loadWallet = (id: string) => getJson<WalletView>(withQuery(PLAYER_WALLET_URL, { id }));
+
+/** `GET /ui/players/overdue`: players with credit outstanding, oldest unpaid first (Story 8.31). */
+export const loadOverdue = () => getJson<OverdueView>(PLAYER_OVERDUE_URL);
 
 export const loadSessions = () => getJson<SessionListView>(SESSIONS_URL);
 

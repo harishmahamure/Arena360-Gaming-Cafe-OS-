@@ -4,6 +4,7 @@ pub mod catalog;
 pub mod cloud;
 pub mod commands;
 pub mod connectivity;
+pub mod credit_reminder;
 pub mod disk;
 pub mod heartbeat;
 pub mod housekeeping;
@@ -29,6 +30,7 @@ pub use connectivity::{
     PROBE_INTERVAL, PROBE_TIMEOUT, Prober, decide, default_internet_endpoints,
     parse_internet_endpoints,
 };
+pub use credit_reminder::{CREDIT_REMINDER_TICK, CreditReminderTask};
 pub use heartbeat::HeartbeatTask;
 pub use housekeeping::{
     DEDUPE_RETENTION_MS, HOUSEKEEPING_INTERVAL, Housekeeping, HousekeepingTask,

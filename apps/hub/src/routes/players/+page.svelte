@@ -8,6 +8,7 @@
   import type { MessageKey } from "@arena/ui/messages";
   import CreditBlock from "../../lib/players/CreditBlock.svelte";
   import OutstandingSection from "../../lib/players/OutstandingSection.svelte";
+  import OverdueList from "../../lib/players/OverdueList.svelte";
   import CreateProfile from "../../lib/players/CreateProfile.svelte";
   import EditProfile from "../../lib/players/EditProfile.svelte";
   import PlayerLookup from "../../lib/players/PlayerLookup.svelte";
@@ -21,6 +22,9 @@
   import { sessionStaff } from "../../lib/operating";
 
   let open = $state(false);
+  let view: "lookup" | "overdue" = $state(
+    page.url.searchParams.get("view") === "overdue" ? "overdue" : "lookup",
+  );
   let prefill = $state("+91");
   let profile: PlayerProfile | null = $state(null);
   let guest = $state(false);
@@ -122,6 +126,33 @@
   <p class="intro type-hub-body">{t("hub.players.intro")}</p>
 
   {#if hasPermission(staff, "player.view")}
+    <div class="views" role="group" aria-label={t("hub.players.view.label")}>
+      <button
+        type="button"
+        class="ui-interactive view type-hub-body"
+        aria-pressed={view === "lookup"}
+        data-testid="players-view-lookup"
+        onclick={() => (view = "lookup")}
+      >
+        {t("hub.players.view.lookup")}
+      </button>
+      <button
+        type="button"
+        class="ui-interactive view type-hub-body"
+        aria-pressed={view === "overdue"}
+        data-testid="players-view-overdue"
+        onclick={() => (view = "overdue")}
+      >
+        {t("hub.players.view.overdue")}
+      </button>
+    </div>
+  {/if}
+
+  {#if hasPermission(staff, "player.view") && view === "overdue"}
+    <OverdueList onpick={(id) => void pick(id)} />
+  {/if}
+
+  {#if hasPermission(staff, "player.view") && view === "lookup"}
     <PlayerLookup
       bind:this={lookup}
       onpick={(hit) => void pick(hit.player_id)}
@@ -336,6 +367,28 @@
 
   dd {
     margin: 0;
+  }
+
+  .views {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .view {
+    --ui-bg: var(--button-secondary-background);
+    min-height: var(--space-touch-min);
+    padding: var(--space-2) var(--space-4);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    color: var(--button-secondary-foreground);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .view[aria-pressed="true"] {
+    border-width: 2px;
+    border-color: var(--accent);
   }
 
   .status {

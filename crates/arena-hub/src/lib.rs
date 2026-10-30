@@ -648,6 +648,19 @@ async fn run(
             .run(),
         )
     });
+    // The daily credit reminders (Story 8.31): from 11:00 branch time, one per player on a cycle
+    // day, queued in the same outbox.
+    let credit_reminder_job = writer.clone().map(|w| {
+        tokio::spawn(
+            arena_tasks::CreditReminderTask::new(
+                w,
+                Arc::clone(&snapshots),
+                Arc::clone(&clock),
+                status_tx.clone(),
+            )
+            .run(),
+        )
+    });
     let mut cloud_pairer = CloudPairer::new(
         cloud,
         writer.clone(),
@@ -819,6 +832,10 @@ async fn run(
         let _ = job.await;
     }
     if let Some(job) = notify_trigger_job {
+        job.abort();
+        let _ = job.await;
+    }
+    if let Some(job) = credit_reminder_job {
         job.abort();
         let _ = job.await;
     }

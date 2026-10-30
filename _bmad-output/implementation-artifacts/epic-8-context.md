@@ -153,3 +153,10 @@ The café owner sees every branch and changes it from a phone or laptop, without
 - **Rows.** Migration 79: `order_id` nullable, `session_id`, `params` (JSON of raw values: `amount_minor`, `minutes`, `console`), `rearmed_at`; unique `(session_id, kind)` for `session_ending`/`console_5min` (an Extend never repeats them). `low_balance` is once per crossing, closed by `rearmed_at`.
 - **Switches.** `notify.low_balance` for low balance; `notify.session_ending` covers both the PC and the console message. No console-specific setting.
 - **Drain.** `RULES` gains `session_near_end` (skip `session_changed`); the drain adds `balance` (branch money format) for `low_balance` and `cafe` for every kind. A sent session message registers no irreversible effect.
+
+## Story 8.31: Credit reminders go out on cycle days, and Free shows an overdue list
+
+- **Check.** `CreditReminderTask` (primary, every 5 min) takes `credit_reminder::due`: from 11:00 branch time, each player with credit outstanding whose oldest unpaid spend is exactly as old as one of their `reminder_days` (FIFO aging), on a paid branch with `notify.credit_reminder` on and transactional consent granted. Each is a `notify.requested` system intent (kind `credit_reminder`, no `session_id`, `amount_minor`).
+- **Once a day.** Migration 80 adds `notify_outbox.reminder_day` and a unique index on `(player_id, reminder_day)` for credit reminders: repeats, restarts and a late start the same business day queue nothing twice, and a missed day is never made up. 8.32's `credit.remind` shares the rule.
+- **Drain.** `RULES` gains `credit_still_owed` (skip `credit_cleared`); the `amount` parameter is what the player owes at send time.
+- **Overdue.** `GET /ui/players/overdue` (`player.view`) answers `OverdueView {as_of_day, reminders, rows}`: oldest unpaid first, `bucket` of the oldest spend (`0_7`, `8_14`, `15_plus`), `consent` (true, false or none) and `last_reminder_day` (latest `sent` row, paid branches only). Players has a view switch (`?view=overdue`); Free shows a lock line and no reminder column.

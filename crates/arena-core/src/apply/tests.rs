@@ -26,6 +26,7 @@ mod commands;
 mod console;
 mod counter_order;
 mod coupon;
+mod credit_reminder;
 mod discount;
 mod extend;
 mod force_end;

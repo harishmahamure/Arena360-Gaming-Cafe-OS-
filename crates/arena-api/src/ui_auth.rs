@@ -3080,6 +3080,13 @@ async fn player_profile(
     .await
 }
 
+/// `GET /ui/players/overdue` (Story 8.31): players with credit outstanding, oldest unpaid spend
+/// first. Names are opened with the branch key, so it needs `player.view`.
+async fn player_overdue(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+    let now_ms = auth.clock.now_ms();
+    player_read(auth, headers, move |_, r, k| r.overdue(k, now_ms)).await
+}
+
 async fn player_wallet(
     State(auth): State<Arc<UiAuth>>,
     headers: HeaderMap,
@@ -3368,6 +3375,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/players", post(players).get(player_search))
         .route("/ui/players/profile", get(player_profile))
         .route("/ui/players/wallet", get(player_wallet))
+        .route("/ui/players/overdue", get(player_overdue))
         .route("/ui/sessions", get(sessions_today))
         .route("/ui/sessions/convert", post(session_convert))
         .route("/ui/players/update", post(player_update))

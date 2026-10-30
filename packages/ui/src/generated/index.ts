@@ -294,6 +294,8 @@ export type { OrderReady } from "./OrderReady";
 export type { OrderStatus } from "./OrderStatus";
 export type { OrderVoid } from "./OrderVoid";
 export type { OrderVoidEvent } from "./OrderVoidEvent";
+export type { OverdueRow } from "./OverdueRow";
+export type { OverdueView } from "./OverdueView";
 export type { OverwrittenChange } from "./OverwrittenChange";
 export type { OwnedPlanView } from "./OwnedPlanView";
 export type { OwnerBranch } from "./OwnerBranch";

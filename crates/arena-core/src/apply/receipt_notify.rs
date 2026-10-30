@@ -108,6 +108,7 @@ pub(super) fn queue_on_settle(
             consent_policy_version: &policy_version,
             not_before: now_ms + UNDO_WINDOW_MS,
             params: None,
+            reminder_day: None,
         },
     )?;
     written.push(Written {

@@ -17,9 +17,10 @@ use std::collections::{BTreeMap, HashSet};
 
 use arena_proto::{
     AppError, CONSENT_TRANSACTIONAL, KEY_BILLING_LOW_BALANCE, KEY_LICENCE_TIER,
-    KEY_NOTIFY_LOW_BALANCE, KEY_NOTIFY_SESSION_ENDING, NOTIFY_KIND_CONSOLE_5MIN,
-    NOTIFY_KIND_LOW_BALANCE, NOTIFY_KIND_SESSION_ENDING, NotifyRequested, SESSION_NEAR_END_MS,
-    low_balance_from, whatsapp_refusal,
+    KEY_NOTIFY_CREDIT_REMINDER, KEY_NOTIFY_LOW_BALANCE, KEY_NOTIFY_SESSION_ENDING,
+    NOTIFY_KIND_CONSOLE_5MIN, NOTIFY_KIND_CREDIT_REMINDER, NOTIFY_KIND_LOW_BALANCE,
+    NOTIFY_KIND_SESSION_ENDING, NotifyRequested, SESSION_NEAR_END_MS, low_balance_from,
+    whatsapp_refusal,
 };
 use arena_store::{LiveSession, SettingRow, Store};
 
@@ -31,6 +32,7 @@ use crate::session_screen::wallet_left;
 pub fn switch_key(kind: &str) -> Option<&'static str> {
     match kind {
         NOTIFY_KIND_LOW_BALANCE => Some(KEY_NOTIFY_LOW_BALANCE),
+        NOTIFY_KIND_CREDIT_REMINDER => Some(KEY_NOTIFY_CREDIT_REMINDER),
         NOTIFY_KIND_SESSION_ENDING | NOTIFY_KIND_CONSOLE_5MIN => Some(KEY_NOTIFY_SESSION_ENDING),
         _ => None,
     }
@@ -39,7 +41,7 @@ pub fn switch_key(kind: &str) -> Option<&'static str> {
 /// The raw values a `notify.requested` of this kind carries, by name.
 pub fn param_names(kind: &str) -> &'static [&'static str] {
     match kind {
-        NOTIFY_KIND_LOW_BALANCE => &["amount_minor"],
+        NOTIFY_KIND_LOW_BALANCE | NOTIFY_KIND_CREDIT_REMINDER => &["amount_minor"],
         NOTIFY_KIND_SESSION_ENDING => &["minutes"],
         NOTIFY_KIND_CONSOLE_5MIN => &["console"],
         _ => &[],
@@ -66,7 +68,7 @@ fn request(kind: &str, s: &LiveSession, player_id: &str, param: (&str, String)) 
     Trigger::Request(NotifyRequested {
         kind: kind.to_owned(),
         player_id: player_id.to_owned(),
-        session_id: s.id.clone(),
+        session_id: Some(s.id.clone()),
         params: BTreeMap::from([(param.0.to_owned(), param.1)]),
     })
 }

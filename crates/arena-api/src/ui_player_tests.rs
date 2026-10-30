@@ -343,6 +343,22 @@ async fn lookup_needs_a_session_that_may_view_players() {
     assert_eq!(err["code"], "SESSION_LOCKED", "{status} {err}");
 }
 
+#[tokio::test]
+async fn the_overdue_list_needs_player_view_and_is_empty_with_no_credit() {
+    let hub = hub().await;
+    let (status, err) = call(&hub, "GET", "/ui/players/overdue", None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{err}");
+    let kitchen = token_for(&hub, "kitchen", "k-pass").await;
+    let (status, err) = call(&hub, "GET", "/ui/players/overdue", Some(&kitchen), None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{err}");
+    assert_eq!(err["code"], "PERMISSION_DENIED");
+    let counter = token_for(&hub, "counter", "c-pass").await;
+    let (status, view) = call(&hub, "GET", "/ui/players/overdue", Some(&counter), None).await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    assert_eq!(view["rows"], json!([]));
+    assert_eq!(view["reminders"], json!(false));
+}
+
 async fn profile_of(hub: &Hub, token: &str, phone_digits: &str) -> Value {
     let (_, hits) = call(
         hub,

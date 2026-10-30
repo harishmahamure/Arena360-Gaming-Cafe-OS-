@@ -5,15 +5,15 @@
 //! the player no longer agrees), or expire it (still unsent after 7 days). The decision of a row
 //! runs through [`RULES`], one small check each, so a later story adds its rule (the erasure rule
 //! of Epic 9) without touching the drain. Story 8.30 added the "session no longer near its end"
-//! rule for the session and console messages. Nothing here writes: the task applies the result as
-//! `notify.*` intents.
+//! rule for the session and console messages, and Story 8.31 the "credit still owed" rule for the
+//! credit reminder. Nothing here writes: the task applies the result as `notify.*` intents.
 
 use std::collections::BTreeMap;
 
 use arena_proto::{
-    AppError, NOTIFY_EXPIRY_MS, NOTIFY_KIND_CONSOLE_5MIN, NOTIFY_KIND_LOW_BALANCE,
-    NOTIFY_KIND_RECEIPT, NOTIFY_KIND_SESSION_ENDING, NotifyRequest, SESSION_NEAR_END_MS,
-    SnapshotLocale, valid_e164,
+    AppError, NOTIFY_EXPIRY_MS, NOTIFY_KIND_CONSOLE_5MIN, NOTIFY_KIND_CREDIT_REMINDER,
+    NOTIFY_KIND_LOW_BALANCE, NOTIFY_KIND_RECEIPT, NOTIFY_KIND_SESSION_ENDING, NotifyRequest,
+    SESSION_NEAR_END_MS, SnapshotLocale, valid_e164,
 };
 use arena_store::{InvoiceOrder, LiveSession, NotifyRow, PlayerRow, Store};
 
@@ -45,6 +45,8 @@ pub struct RowContext<'a> {
     pub order: Option<&'a InvoiceOrder>,
     /// The session a session message is about, while it is still running.
     pub session: Option<&'a LiveSession>,
+    /// What the player owes on credit now (0 when nothing, or no credit).
+    pub owed_minor: i64,
     pub now_ms: i64,
 }
 
@@ -57,6 +59,7 @@ pub const RULES: &[Rule] = &[
     consent_current,
     receipt_ready,
     session_near_end,
+    credit_still_owed,
 ];
 
 fn player_exists(c: &RowContext<'_>) -> Verdict {
@@ -111,6 +114,16 @@ fn session_near_end(c: &RowContext<'_>) -> Verdict {
     }
 }
 
+/// A credit reminder goes out only while the player still owes credit: one who paid within the
+/// Undo window, or since, is skipped.
+fn credit_still_owed(c: &RowContext<'_>) -> Verdict {
+    if c.row.kind == NOTIFY_KIND_CREDIT_REMINDER && c.owed_minor <= 0 {
+        Verdict::Skip("credit_cleared")
+    } else {
+        Verdict::Pass
+    }
+}
+
 /// What the drain does with one row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DrainAction {
@@ -126,8 +139,9 @@ pub enum DrainAction {
 pub struct DrainItem {
     pub id: String,
     pub action: DrainAction,
-    /// The money a message names: the total of the order a receipt is for (the `amount`
-    /// parameter) or the wallet balance of a low-balance message (the `balance` parameter).
+    /// The money a message names: the total of the order a receipt is for, or what a credit
+    /// reminder says is owed now (the `amount` parameter), or the wallet balance of a low-balance
+    /// message (the `balance` parameter).
     total_minor: i64,
 }
 
@@ -199,7 +213,15 @@ pub fn plan(
                 Some(id) => store.invoice_order(id)?,
                 None => None,
             };
+            let owed_minor = if row.kind == NOTIFY_KIND_CREDIT_REMINDER {
+                store
+                    .credit(&row.player_id)?
+                    .map_or(0, |c| c.outstanding_minor)
+            } else {
+                0
+            };
             total_minor = match row.kind.as_str() {
+                NOTIFY_KIND_CREDIT_REMINDER => owed_minor,
                 NOTIFY_KIND_LOW_BALANCE => stored_params(&row)
                     .get("amount_minor")
                     .and_then(|v| v.parse().ok())
@@ -216,6 +238,7 @@ pub fn plan(
                 consent,
                 order: order.as_ref(),
                 session,
+                owed_minor,
                 now_ms,
             };
             match (decide(&ctx), &player) {
@@ -251,7 +274,7 @@ fn complete(item: &mut DrainItem, cafe: &str, locale: Option<&SnapshotLocale>) {
         return;
     };
     let money = match req.kind.as_str() {
-        NOTIFY_KIND_RECEIPT => Some("amount"),
+        NOTIFY_KIND_RECEIPT | NOTIFY_KIND_CREDIT_REMINDER => Some("amount"),
         NOTIFY_KIND_LOW_BALANCE => Some("balance"),
         _ => None,
     };

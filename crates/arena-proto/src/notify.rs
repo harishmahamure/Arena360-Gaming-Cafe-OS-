@@ -86,6 +86,14 @@ pub const NOTIFY_KIND_LOW_BALANCE: &str = "low_balance";
 pub const NOTIFY_KIND_SESSION_ENDING: &str = "session_ending";
 /// The message kind of a console session five minutes from its end (Story 8.30).
 pub const NOTIFY_KIND_CONSOLE_5MIN: &str = "console_5min";
+/// The message kind of a player's unpaid credit (Story 8.31).
+pub const NOTIFY_KIND_CREDIT_REMINDER: &str = "credit_reminder";
+/// The minute of the branch's local day (11:00) at which the daily credit check starts.
+pub const CREDIT_REMINDER_MINUTE: u32 = 11 * 60;
+/// How often a primary Hub looks for credit reminders to queue, in seconds. The check itself is
+/// once per business day per player; the interval only bounds how late a Hub that was off at 11:00
+/// catches up.
+pub const CREDIT_REMINDER_INTERVAL_S: u64 = 300;
 /// The kinds a running session raises through `notify.requested`.
 pub const SESSION_NOTIFY_KINDS: [&str; 3] = [
     NOTIFY_KIND_LOW_BALANCE,
@@ -129,18 +137,21 @@ pub struct NotifyExpired {
     pub outbox_id: String,
 }
 
-/// The payload of `notify.requested` (system, Story 8.30): a running session, or a wallet that ran
-/// low during one, asks for a player message. It queues one `notify_outbox` row for the end of the
-/// Undo window. `params` holds the raw values the drain turns into template parameters:
-/// `amount_minor` for `low_balance`, `minutes` for `session_ending`, `console` (the TV name) for
-/// `console_5min`.
+/// The payload of `notify.requested` (system, Stories 8.30 and 8.31): a running session, a wallet
+/// that ran low during one, or the daily credit check asks for a player message. It queues one
+/// `notify_outbox` row for the end of the Undo window. `params` holds the raw values the drain turns
+/// into template parameters: `amount_minor` for `low_balance` and `credit_reminder`, `minutes` for
+/// `session_ending`, `console` (the TV name) for `console_5min`. `session_id` names the session of
+/// the three session messages and is absent for a `credit_reminder`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct NotifyRequested {
     pub kind: String,
     pub player_id: String,
-    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub session_id: Option<String>,
     #[serde(default)]
     pub params: BTreeMap<String, String>,
 }

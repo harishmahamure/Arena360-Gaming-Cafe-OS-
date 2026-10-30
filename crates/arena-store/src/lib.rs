@@ -156,9 +156,9 @@ pub use library_installs::{
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
 pub use notify::{
-    NewNotify, NotifyRow, find_notify, finish_notify, insert_notify, latest_low_balance,
-    latest_receipt_state, list_due_notify, order_player_id, queued_notify_ids, rearm_notify,
-    session_notice_exists, skip_notify,
+    NewNotify, NotifyRow, credit_reminder_exists, find_notify, finish_notify, insert_notify,
+    last_credit_reminder_sent, latest_low_balance, latest_receipt_state, list_due_notify,
+    order_player_id, queued_notify_ids, rearm_notify, session_notice_exists, skip_notify,
 };
 pub use outbox::{
     KIND_DRAWER, KIND_KOT, KIND_PRINT, OutboxRow, ReceiptHead, ReceiptLineRow, ReceiptPaymentRow,
@@ -1218,6 +1218,14 @@ impl Store {
         credit_aging(&self.conn, player_id, today)
     }
 
+    /// Every player with credit outstanding, aged as of the business day `today` (Story 8.31).
+    pub fn debtors(&self, today: &str) -> Result<Vec<reports::DebtorRow>, AppError> {
+        if !self.table_exists("credit_balances")? {
+            return Ok(Vec::new());
+        }
+        reports::debtors(&self.conn, today)
+    }
+
     pub fn credit_debtors(&self) -> Result<Vec<CreditRow>, AppError> {
         if !self.table_exists("credit_balances")? {
             return Ok(Vec::new());
@@ -1381,6 +1389,22 @@ impl Store {
             return Ok(false);
         }
         session_notice_exists(&self.conn, session_id, kind)
+    }
+
+    /// Whether a player already has a credit reminder for the business day (Story 8.31).
+    pub fn credit_reminder_exists(&self, player_id: &str, day: &str) -> Result<bool, AppError> {
+        if !self.table_exists("notify_outbox")? {
+            return Ok(false);
+        }
+        credit_reminder_exists(&self.conn, player_id, day)
+    }
+
+    /// The business day of the player's latest credit reminder that was sent (Story 8.31).
+    pub fn last_credit_reminder_sent(&self, player_id: &str) -> Result<Option<String>, AppError> {
+        if !self.table_exists("notify_outbox")? {
+            return Ok(None);
+        }
+        last_credit_reminder_sent(&self.conn, player_id)
     }
 
     /// The order a notification is about, with its invoice number once it has one.

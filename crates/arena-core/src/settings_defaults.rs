@@ -25,7 +25,10 @@ use arena_proto::{
     BOOSTER_PRIORITIES, DEFAULT_BOOSTER_CLOSE, DEFAULT_BOOSTER_POWER_PLAN,
     DEFAULT_BOOSTER_PRIORITY, KEY_BOOSTER_CLOSE, KEY_BOOSTER_POWER_PLAN, KEY_BOOSTER_PRIORITY,
 };
-use arena_proto::{DEFAULT_BACKUP_LAST_EXPORT, KEY_BACKUP_LAST_EXPORT};
+use arena_proto::{
+    DEFAULT_BACKUP_LAST_EXPORT, DEFAULT_BACKUP_LAST_RESTORE, KEY_BACKUP_LAST_EXPORT,
+    KEY_BACKUP_LAST_RESTORE,
+};
 use arena_proto::{DEFAULT_DISPLAY_MODES, KEY_DISPLAY_MODES};
 use arena_proto::{
     DEFAULT_INVENTORY_TAKE_STOCK_AT, DEFAULT_STOCK_EXPIRY_WARN_DAYS, KEY_INVENTORY_TAKE_STOCK_AT,
@@ -139,6 +142,8 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     (KEY_BACKUP_DIR, DEFAULT_BACKUP_DIR),
     // Story 9.4: the last export that finished, written only by `backup.export`.
     (KEY_BACKUP_LAST_EXPORT, DEFAULT_BACKUP_LAST_EXPORT),
+    // Story 9.7: the last restore that finished, written only by `ops.restore`.
+    (KEY_BACKUP_LAST_RESTORE, DEFAULT_BACKUP_LAST_RESTORE),
     (KEY_ADS_CONSENT, DEFAULT_ADS_CONSENT),
     (KEY_ADS_RATING, DEFAULT_ADS_RATING),
     (KEY_PRINTER_SELECTED, DEFAULT_PRINTER_SELECTED),
@@ -178,7 +183,7 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     (KEY_DISPLAY_MODES, DEFAULT_DISPLAY_MODES),
 ];
 
-pub const SYSTEM_MANAGED_KEYS: [&str; 8] = [
+pub const SYSTEM_MANAGED_KEYS: [&str; 9] = [
     KEY_KIOSK_LIBRARY,
     KEY_BRANCH_CODE_LOCKED_AT,
     KEY_OPENING_HOURS_SET,
@@ -187,6 +192,7 @@ pub const SYSTEM_MANAGED_KEYS: [&str; 8] = [
     KEY_LICENCE_FLAGS,
     KEY_TEST_SESSION,
     KEY_BACKUP_LAST_EXPORT,
+    KEY_BACKUP_LAST_RESTORE,
 ];
 
 pub const KEYED_FIELD_KEYS: [&str; 37] = [
@@ -275,6 +281,8 @@ pub enum SettingRule {
     PrinterStatus,
     /// `backup.last_export`: empty, or the JSON of a [`arena_proto::BackupExport`].
     BackupLastExport,
+    /// `backup.last_restore`: empty, or the JSON of a [`arena_proto::OpsRestore`].
+    BackupLastRestore,
     TestSession,
     Tax,
     BranchCode,
@@ -374,6 +382,7 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
     ),
     (KEY_PRINTER_STATUS, SettingRule::PrinterStatus),
     (KEY_BACKUP_LAST_EXPORT, SettingRule::BackupLastExport),
+    (KEY_BACKUP_LAST_RESTORE, SettingRule::BackupLastRestore),
     (KEY_LICENCE_FLAGS, SettingRule::Text),
     (KEY_KITCHEN_KOT_MODE, SettingRule::OneOf(KITCHEN_KOT_MODES)),
     (KEY_KITCHEN_KOT_PRINTER, SettingRule::PrinterSelected),
@@ -507,6 +516,9 @@ impl SettingRule {
             Self::PrinterStatus => arena_proto::PrinterStatus::parse(value).is_some(),
             Self::BackupLastExport => {
                 value.is_empty() || arena_proto::BackupExport::parse(value).is_some()
+            }
+            Self::BackupLastRestore => {
+                value.is_empty() || arena_proto::OpsRestore::parse(value).is_some()
             }
             Self::TestSession => arena_proto::TestSessionStatus::parse(value).is_some(),
             Self::Tax => TaxSettings::parse(value).is_some_and(|t| t.check().is_ok()),

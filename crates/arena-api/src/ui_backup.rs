@@ -247,3 +247,203 @@ async fn run(
     }
     Response::from_parts(parts, axum::body::Body::from(bytes))
 }
+
+// ---- restore from a file (Story 9.7) ----
+
+/// The answer for an `AppError` of a restore route: a refused file is 422 (including a newer
+/// schema, which the general map answers 500), anything else as elsewhere.
+fn restore_fail(e: AppError) -> Response {
+    let status = match e.code {
+        ErrorCode::RestoreWrongBranch | ErrorCode::RestoreCorrupt | ErrorCode::SchemaTooNew => {
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY
+        }
+        other => crate::ui_auth::status_of(other),
+    };
+    (status, Json(ui_error(e))).into_response()
+}
+
+fn path_error(reason: &str) -> AppError {
+    AppError::with_field(ErrorCode::ValidationFailed, "path", reason)
+}
+
+/// The file the Owner named: set, and absolute (a service has no useful working directory).
+fn restore_path(path: &str) -> Result<PathBuf, AppError> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Err(path_error("not_set"));
+    }
+    if arena_proto::is_backup_tree_uri(path) {
+        return Err(path_error("unsupported"));
+    }
+    let path = PathBuf::from(path);
+    if !path.is_absolute() {
+        return Err(path_error("not_absolute"));
+    }
+    Ok(path)
+}
+
+/// A Windows Hub only: the Android Hub cannot restart its own process (Story 9.13 and Epic 10).
+fn restore_supported(auth: &UiAuth) -> Result<(), AppError> {
+    let android = auth
+        .status()
+        .is_some_and(|s| s.borrow().platform == arena_proto::HubPlatform::Android);
+    if android {
+        return Err(AppError::new(
+            ErrorCode::Unsupported,
+            "restoring from a file needs the Windows Hub",
+        ));
+    }
+    Ok(())
+}
+
+fn not_primary() -> AppError {
+    AppError::new(ErrorCode::NotPrimary, "this hub is not the primary writer")
+}
+
+/// `POST /ui/backup/restore/check {path, pin?}` answers a [`arena_proto::RestoreCheck`]: what the
+/// file holds and what a restore of it would set aside. Writes nothing. The Owner checks with
+/// their session; any other member must give the Owner's PIN.
+pub(crate) async fn restore_check(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(token) = bearer(&headers).map(str::to_owned) else {
+        return fail(auth_failed());
+    };
+    let me = match auth.acting_session(&token).await {
+        Ok(me) => me,
+        Err(e) => return fail(e),
+    };
+    let Ok(request) = serde_json::from_slice::<arena_proto::RestoreCheckRequest>(&body) else {
+        return fail(bad_frame("the body must be {\"path\", \"pin\"?}"));
+    };
+    if let Err(e) = restore_supported(&auth) {
+        return restore_fail(e);
+    }
+    if auth.writer().is_none() {
+        return restore_fail(not_primary());
+    }
+    if !(me.permissions.contains(&Permission::OpsRestore) && request.pin.is_none())
+        && let Err(e) = auth.restore_owner(&me, request.pin.clone()).await
+    {
+        return fail(e);
+    }
+    let path = match restore_path(&request.path) {
+        Ok(p) => p,
+        Err(e) => return restore_fail(e),
+    };
+    let now = auth.clock().now_ms();
+    let reader = Arc::clone(auth.reader());
+    let made = tokio::task::spawn_blocking(move || {
+        let found = reader.inspect_restore(&path)?;
+        let tz = reader
+            .locale(now)?
+            .map_or_else(|| "UTC".to_owned(), |l| l.tz);
+        let code = reader.branch()?.map(|b| b.branch_code).unwrap_or_default();
+        Ok::<_, AppError>((found, tz, code, path))
+    })
+    .await;
+    let (found, tz, branch_code, path) = match made {
+        Ok(Ok(done)) => done,
+        Ok(Err(e)) => return restore_fail(e),
+        Err(_) => return fail(internal()),
+    };
+    let free = auth
+        .status()
+        .is_some_and(|s| s.borrow().tier == Some(arena_proto::Tier::Free));
+    let erased_may_reappear = free && !found.has_tombstones;
+    let header = found.header;
+    Json(arena_proto::RestoreCheck {
+        branch_name: found.branch_name,
+        branch_code,
+        file_name: path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        bytes: i64::try_from(found.file_bytes).unwrap_or(i64::MAX),
+        exported_at: header.exported_at,
+        epoch: header.epoch,
+        last_seq: header.last_seq,
+        schema_version: header.schema_version,
+        rows_set_aside: found.rows_set_aside,
+        warning: arena_proto::restore_warning(header.exported_at, &tz, erased_may_reappear),
+        erased_may_reappear,
+    })
+    .into_response()
+}
+
+/// `POST /ui/backup/restore {path, pin, branch_code}` (Story 9.7): checks the Owner's PIN and the
+/// typed branch code, checks the file again, stages it and stops the Hub. The restore itself runs
+/// at the next start, before the writer opens. A refusal stages nothing.
+pub(crate) async fn restore(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(token) = bearer(&headers).map(str::to_owned) else {
+        return fail(auth_failed());
+    };
+    let me = match auth.acting_session(&token).await {
+        Ok(me) => me,
+        Err(e) => return fail(e),
+    };
+    let Ok(request) = serde_json::from_slice::<arena_proto::RestoreRequest>(&body) else {
+        return fail(bad_frame(
+            "the body must be {\"path\", \"pin\", \"branch_code\"}",
+        ));
+    };
+    if let Err(e) = restore_supported(&auth) {
+        return restore_fail(e);
+    }
+    if auth.writer().is_none() {
+        return restore_fail(not_primary());
+    }
+    let owner = match auth.restore_owner(&me, Some(request.pin.clone())).await {
+        Ok(owner) => owner,
+        Err(e) => return fail(e),
+    };
+    let reader = Arc::clone(auth.reader());
+    let code = {
+        let reader = Arc::clone(&reader);
+        match tokio::task::spawn_blocking(move || reader.branch()).await {
+            Ok(Ok(branch)) => branch.map(|b| b.branch_code).unwrap_or_default(),
+            Ok(Err(e)) => return fail(ui_error(e)),
+            Err(_) => return fail(internal()),
+        }
+    };
+    if code.is_empty() || request.branch_code.trim() != code {
+        return restore_fail(AppError::with_field(
+            ErrorCode::ValidationFailed,
+            "branch_code",
+            "the branch code does not match",
+        ));
+    }
+    let path = match restore_path(&request.path) {
+        Ok(p) => p,
+        Err(e) => return restore_fail(e),
+    };
+
+    // One disk-heavy job at a time, and one staged restore.
+    let _single = auth.export_lock().lock().await;
+    let staged = tokio::task::spawn_blocking(move || reader.stage_restore(&path, &owner)).await;
+    let found = match staged {
+        Ok(Ok(found)) => found,
+        Ok(Err(e)) => return restore_fail(e),
+        Err(_) => return fail(internal()),
+    };
+    tracing::warn!(
+        staff_id = %me.staff_id,
+        last_seq = found.header.last_seq,
+        rows_set_aside = found.rows_set_aside,
+        "restore staged; the hub is restarting"
+    );
+    if let Some(restart) = auth.restart_hook() {
+        // Let the answer reach the browser first.
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            restart();
+        });
+    }
+    Json(arena_proto::RestoreStaged { restarting: true }).into_response()
+}

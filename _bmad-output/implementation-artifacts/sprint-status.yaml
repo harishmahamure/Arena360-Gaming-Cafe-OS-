@@ -273,7 +273,7 @@ development_status:
   9-4-one-tap-full-database-export-to-a-folder-or-usb-drive: done
   9-5-the-hub-saves-a-daily-export-to-the-backup-location: done
   9-6-the-export-format-is-documented-and-every-report-exports-alo: done
-  9-7-restore-a-branch-from-an-export-file-as-a-new-epoch: backlog
+  9-7-restore-a-branch-from-an-export-file-as-a-new-epoch: review
   9-8-owner-replaces-a-failed-hub-and-gets-a-new-pairing-code: backlog
   9-9-a-replacement-hub-opens-in-restore-this-branch-and-serves-no: backlog
   9-10-owner-releases-the-branch-key-to-the-replacement-hub: backlog

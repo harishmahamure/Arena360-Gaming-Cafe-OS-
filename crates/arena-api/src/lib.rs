@@ -25,6 +25,8 @@ mod ui_printer;
 mod ui_refund;
 mod ui_report;
 #[cfg(test)]
+mod ui_restore_tests;
+#[cfg(test)]
 mod ui_setup_tests;
 mod ui_shift;
 mod ui_tunnel;

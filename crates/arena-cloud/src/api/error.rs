@@ -111,6 +111,9 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         ErrorCode::AuditBuilding => StatusCode::ACCEPTED,
         ErrorCode::AuditBuildFailed => StatusCode::BAD_GATEWAY,
         ErrorCode::KeyErased => StatusCode::GONE,
+        ErrorCode::RestoreWrongBranch | ErrorCode::RestoreCorrupt => {
+            StatusCode::UNPROCESSABLE_ENTITY
+        }
         ErrorCode::SchemaTooNew | ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }

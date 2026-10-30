@@ -1848,6 +1848,24 @@ impl SnapshotReader {
         self.export_named(folder, now_ms, false)
     }
 
+    /// Checks the export file at `path` against this branch (Story 9.7): `RESTORE_CORRUPT`,
+    /// `RESTORE_WRONG_BRANCH` or `SCHEMA_TOO_NEW` when it cannot be restored here. Writes nothing.
+    /// Blocking (disk).
+    pub fn inspect_restore(&self, path: &Path) -> Result<arena_store::Inspection, AppError> {
+        arena_store::inspect_export(&self.db_path()?, path)
+    }
+
+    /// Checks the export file at `path` again and stages it for the restore at the next start,
+    /// confirmed by the Owner `confirmed_by` (Story 9.7). A refused file stages nothing. Blocking
+    /// (disk).
+    pub fn stage_restore(
+        &self,
+        path: &Path,
+        confirmed_by: &str,
+    ) -> Result<arena_store::Inspection, AppError> {
+        arena_store::stage_export(&self.db_path()?, path, confirmed_by)
+    }
+
     /// The daily auto export (Story 9.5): as [`Self::export_to_folder`], under the auto file name
     /// (`<branch_code>-auto-<yyyy-mm-dd-hhmm>.a360`).
     pub fn auto_export_to_folder(

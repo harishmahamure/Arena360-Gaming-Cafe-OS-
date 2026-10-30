@@ -109,6 +109,8 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::ControllersUnchecked
         | ErrorCode::EraseBlocked
         | ErrorCode::KeyErased
+        | ErrorCode::RestoreWrongBranch
+        | ErrorCode::RestoreCorrupt
         | ErrorCode::DeviceUnassigned => true,
         ErrorCode::AuditBuilding | ErrorCode::AuditBuildFailed => false,
         ErrorCode::BadFrame

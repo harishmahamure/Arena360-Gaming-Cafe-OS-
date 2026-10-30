@@ -100,6 +100,14 @@ fn is_auto_export(intent: &Intent) -> bool {
         )
 }
 
+/// The Hub recording a restore as itself, when the Owner who confirmed it is not in the restored
+/// database (Story 9.7).
+fn is_restore_record(intent: &Intent) -> bool {
+    intent.actor.kind == ActorKind::System
+        && intent.actor.id == arena_proto::RESTORE_SYSTEM_ACTOR
+        && matches!(&intent.payload, arena_proto::IntentPayload::OpsRestore(_))
+}
+
 pub fn is_pairing(intent: &Intent) -> bool {
     intent.actor.kind == ActorKind::System
         && intent.actor.id == arena_proto::PAIR_SYSTEM_ACTOR
@@ -306,7 +314,9 @@ pub fn check(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
         Requirement::Perm(p) => match actor.kind {
             ActorKind::Owner => true,
             ActorKind::Staff => staff_allows(tx, &actor.id, p)?,
-            ActorKind::System => is_pairing(intent) || is_auto_export(intent),
+            ActorKind::System => {
+                is_pairing(intent) || is_auto_export(intent) || is_restore_record(intent)
+            }
             ActorKind::Admin => false,
             ActorKind::Device => {
                 device_starts_own_session(p, intent)

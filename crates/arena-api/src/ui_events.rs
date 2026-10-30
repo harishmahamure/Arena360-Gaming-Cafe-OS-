@@ -45,6 +45,9 @@
 //! - `event: entitlement.changed`, data [`EntitlementChangedEvent`](arena_proto::EntitlementChangedEvent):
 //!   the Hub's effective tier moved (a licence applied, expired or failed its check; `tier: null` when
 //!   unpaired); sent once per change, never on open (the snapshot carries `tier`).
+//! - `event: epoch.changed`, data [`EpochChangedEvent`](arena_proto::EpochChangedEvent): the epoch
+//!   of this Hub's lease changed (a restore, a promote or a lease taken over); sent once per change,
+//!   never on open (the status carries the epoch).
 //! - `event: resync`, data `{}`: this stream fell behind and missed events, or the Hub's role
 //!   changed (the stream then closes so the client reopens it). The view reloads the snapshot.
 //!
@@ -343,6 +346,20 @@ fn tier_of(status: &Option<watch::Receiver<HubStatus>>) -> Option<arena_proto::T
     status.as_ref().and_then(|s| s.borrow().tier)
 }
 
+/// The epoch the Hub's lease holds, as `epoch.changed` announces it.
+fn epoch_of(status: &Option<watch::Receiver<HubStatus>>) -> Option<arena_proto::EpochChangedEvent> {
+    status.as_ref().and_then(|s| {
+        s.borrow()
+            .lease
+            .as_ref()
+            .map(|l| arena_proto::EpochChangedEvent {
+                epoch: format!("{}:{}", l.counter, l.hub_instance_id),
+                counter: l.counter,
+                provisional: l.provisional,
+            })
+    })
+}
+
 fn connectivity_of(
     status: &Option<watch::Receiver<HubStatus>>,
 ) -> Option<arena_proto::Connectivity> {
@@ -390,6 +407,7 @@ impl HubTask {
         let mut link = connectivity_of(&self.status).map(|c| c.state);
         let mut tier = tier_of(&self.status);
         let mut lan = lan_of(&self.status);
+        let mut epoch = epoch_of(&self.status).map(|e| e.epoch);
         let (mut waiting, mut rollover) = match self.read().await {
             Some((locale, at, _)) => (pending_keys(locale.as_ref()), at),
             None => (Vec::new(), None),
@@ -679,6 +697,14 @@ impl HubTask {
                     if now_lan != lan {
                         lan = now_lan;
                         self.send("devices.changed", "{}".into(), false);
+                    }
+                    let now_epoch = epoch_of(&self.status);
+                    if now_epoch.as_ref().map(|e| &e.epoch) != epoch.as_ref() {
+                        epoch = now_epoch.as_ref().map(|e| e.epoch.clone());
+                        if let Some(event) = &now_epoch {
+                            let data = serde_json::to_string(event).unwrap_or_default();
+                            self.send("epoch.changed", data, false);
+                        }
                     }
                     let now_tier = tier_of(&self.status);
                     if now_tier != tier {
@@ -2112,6 +2138,41 @@ mod tests {
                 serde_json::json!({"tier": null}),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn a_lease_epoch_change_pushes_epoch_changed_once_and_a_renewal_does_not() {
+        let hub = hub().await;
+        let token = token_for(&hub, "manager", "m-pass").await;
+        let (_, mut frames) = open(&hub, Some(&token)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let lease = |counter: i64, instance: &str, expires_at: i64| arena_core::LeaseInfo {
+            counter,
+            hub_instance_id: instance.into(),
+            provisional: true,
+            expires_at,
+        };
+        // A renewal keeps the epoch and pushes nothing.
+        hub._status
+            .send_modify(|s| s.lease = Some(lease(1, "01JHUB", 5)));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        // A restore opens a new provisional epoch.
+        hub._status
+            .send_modify(|s| s.lease = Some(lease(4, "01JHUB", 9)));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        hub._status
+            .send_modify(|s| s.lease = Some(lease(4, "01JHUB", 12)));
+        // Another connectivity-style status change after it proves nothing else was queued.
+        hub._status
+            .send_modify(|s| s.tier = Some(arena_proto::Tier::Basic));
+        let (event, data) = next_event(&mut frames).await.unwrap();
+        assert_eq!(event, "epoch.changed");
+        assert_eq!(
+            data,
+            serde_json::json!({"epoch": "4:01JHUB", "counter": 4, "provisional": true})
+        );
+        let (event, _) = next_event(&mut frames).await.unwrap();
+        assert_eq!(event, "entitlement.changed", "no second epoch.changed");
     }
 
     #[tokio::test]

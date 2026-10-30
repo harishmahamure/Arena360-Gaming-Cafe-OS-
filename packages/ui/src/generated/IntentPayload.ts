@@ -67,6 +67,7 @@ import type { NotifyRearm } from "./NotifyRearm";
 import type { NotifyRequested } from "./NotifyRequested";
 import type { NotifySent } from "./NotifySent";
 import type { NotifySkipped } from "./NotifySkipped";
+import type { OpsRestore } from "./OpsRestore";
 import type { OrderLineCancel } from "./OrderLineCancel";
 import type { OrderLineServed } from "./OrderLineServed";
 import type { OrderPlace } from "./OrderPlace";
@@ -263,4 +264,5 @@ export type IntentPayload =
   | ({ kind: "controller.check" } & ControllerCheck)
   | ({ kind: "ad.impression_recorded" } & AdImpressionRecorded)
   | ({ kind: "ad.request_recorded" } & AdRequestRecorded)
-  | ({ kind: "backup.export" } & BackupExport);
+  | ({ kind: "backup.export" } & BackupExport)
+  | ({ kind: "ops.restore" } & OpsRestore);

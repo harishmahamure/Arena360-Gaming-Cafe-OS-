@@ -64,6 +64,7 @@ mod receipt;
 mod refund;
 mod report;
 mod report_export;
+mod restore;
 mod rollup;
 mod scan;
 mod scope;
@@ -433,6 +434,11 @@ pub use report::{
     ZReference, ZReferenceGroup, ZRefund, ZReport, ZVoid, ZWaste,
 };
 pub use report_export::{EXPORT_REPORTS, ExportFormat, ReportExportRequest, ReportExported};
+pub use restore::{
+    DEFAULT_BACKUP_LAST_RESTORE, EpochChangedEvent, KEY_BACKUP_LAST_RESTORE, ORPHAN_KEEP_DAYS,
+    OpsRestore, RESTORE_SYSTEM_ACTOR, RestoreCheck, RestoreCheckRequest, RestoreRequest,
+    RestoreStaged, restore_time_text, restore_warning,
+};
 pub use rollup::{
     ROLLUP_MIN_SCHEMA, ROLLUP_PLAYERS_CAP, ROLLUP_SCHEMA, RollupAged, RollupAmount, RollupByMethod,
     RollupByType, RollupCredit, RollupCreditPlayer, RollupExpiring, RollupPlayHours, RollupPublish,

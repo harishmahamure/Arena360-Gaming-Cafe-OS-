@@ -422,6 +422,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
             if matches!(
                 intent.payload,
                 arena_proto::IntentPayload::PrinterStatus(_)
+                    | arena_proto::IntentPayload::OpsRestore(_)
                     | arena_proto::IntentPayload::BackupExport(_)
             ) =>
         {

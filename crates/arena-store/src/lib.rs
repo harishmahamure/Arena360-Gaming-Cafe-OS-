@@ -40,6 +40,7 @@ mod products;
 mod reference;
 mod refunds;
 mod reports;
+mod restore;
 mod rollup;
 mod sessions;
 mod shifts;
@@ -212,6 +213,10 @@ pub use refunds::{
 pub use reports::{
     DebtorRow, GuestSalesRow, PlayerSalesRow, ReceivedRow, ReportDevice, SalesLineRow,
     SalesOrderRow, SegmentSpan, SessionReportRow, StaffCountRow, StaffShiftRow,
+};
+pub use restore::{
+    Inspection, ORPHANED_DIR, PENDING_DIR, RESULT_FILE, RestoreOutcome, apply_pending,
+    clear_outcome, has_pending, inspect_export, read_outcome, stage_export, sweep_orphaned,
 };
 pub use rollup::{
     ChangedRow, ROLLUP_LEDGER_TABLES, RollupDebtorRow, RollupFacts, RollupLotRow, RollupPaymentRow,

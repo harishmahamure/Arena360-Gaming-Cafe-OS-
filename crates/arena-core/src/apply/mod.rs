@@ -62,6 +62,7 @@ mod maintenance;
 mod mutate;
 mod notify_drain;
 mod notify_request;
+mod ops_restore;
 mod order_line;
 mod order_place;
 mod order_ready;
@@ -285,6 +286,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::AdsConsent(_) => Target::Setting(ads_consent::load(tx)?),
         P::PrinterStatus(_) => Target::Setting(printer_status::load(tx)?),
         P::BackupExport(_) => Target::Setting(backup_export::load(tx)?),
+        P::OpsRestore(_) => Target::Setting(ops_restore::load(tx)?),
         P::DeviceRegister(d) => devices::load_register(tx, d)?,
         P::DeviceRevoke(d) => devices::load_device(tx, &d.device_id)?,
         P::DeviceVersionReported(d) => devices::load_device(tx, &d.device_id)?,

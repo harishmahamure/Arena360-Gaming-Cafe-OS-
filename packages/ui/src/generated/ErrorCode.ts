@@ -104,4 +104,6 @@ export type ErrorCode =
   | "AUDIT_BUILDING"
   | "AUDIT_BUILD_FAILED"
   | "ERASE_BLOCKED"
-  | "KEY_ERASED";
+  | "KEY_ERASED"
+  | "RESTORE_WRONG_BRANCH"
+  | "RESTORE_CORRUPT";

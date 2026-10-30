@@ -210,6 +210,8 @@ export function connectEvents(token: string, handlers: EventHandlers): () => voi
         // A malformed event is ignored: the next snapshot carries the tier.
       }
     });
+    // `epoch.changed`: this Hub opened a new epoch (a restore); reload what the screens show.
+    es.addEventListener("epoch.changed", () => handlers.onResync());
     es.addEventListener("session.locked", () => handlers.onSessionLocked?.());
     es.addEventListener("session.unlocked", (ev) => {
       try {

@@ -532,6 +532,14 @@ enum Op {
         bad: bool,
         seq: i64,
     },
+    /// `ops.restore` (Story 9.7) by the Owner, a Manager or a Counter, with sound facts or ones of
+    /// another branch: only the Owner may record it, another branch's file is refused, and a good
+    /// record sets `backup.last_restore` to those facts with one change row.
+    OpsRestore {
+        by: u8,
+        other_branch: bool,
+        rows: i64,
+    },
     /// A controller check of a session that may be running, on a PC, ended or already marked: it
     /// applies once for an ended console session and otherwise writes nothing.
     ControllerCheck {
@@ -986,6 +994,8 @@ fn op() -> impl Strategy<Value = Op> {
         1 => (0..4u8).prop_map(|pick| Op::DeactivateRefused { pick }),
         2 => (0..3u8, prop::bool::weighted(0.3), 0..=1_000_000i64)
             .prop_map(|(by, bad, seq)| Op::BackupExport { by, bad, seq }),
+        1 => (0..3u8, prop::bool::weighted(0.3), 0..=100_000i64)
+            .prop_map(|(by, other_branch, rows)| Op::OpsRestore { by, other_branch, rows }),
         3 => (
             0..4u8,
             prop::bool::ANY,
@@ -6216,6 +6226,77 @@ b"
             } else {
                 prop_assert_eq!(hub.change_count(), before);
                 prop_assert_eq!(hub.setting("backup.last_export"), was);
+            }
+        }
+        Op::OpsRestore {
+            by,
+            other_branch,
+            rows,
+        } => {
+            let Some(who) = hub.staff.get(usize::from(*by)).cloned() else {
+                return Ok(());
+            };
+            let Some(row) = hub.setting("backup.last_restore") else {
+                return Ok(());
+            };
+            let RowValue::Text(branch_id) = row["branch_id"].clone() else {
+                return Err(TestCaseError::fail("branch_id is not text"));
+            };
+            let facts = arena_proto::OpsRestore {
+                file_name: "DEV01-2027-01-15-1330.a360".into(),
+                header: arena_proto::ExportHeader {
+                    format_version: arena_proto::EXPORT_FORMAT_VERSION,
+                    branch_id: if *other_branch {
+                        "01JOTHERBRANCH".into()
+                    } else {
+                        branch_id
+                    },
+                    branch_code: "DEV01".into(),
+                    epoch: "1:proptest".into(),
+                    last_seq: 5,
+                    schema_version: 84,
+                    exported_at: hub.clock_now(),
+                    sha256: "ab".repeat(32),
+                },
+                old_epoch: "2:proptest".into(),
+                new_epoch: "3:proptest".into(),
+                rows_set_aside: *rows,
+                erasures_reapplied: 0,
+                orphaned_file: "2-proptest-20270115T133000.db".into(),
+                restored_at: hub.clock_now(),
+                by: None,
+            };
+            let before = hub.change_count();
+            let was = hub.setting("backup.last_restore");
+            let mut intent = hub.intent(IntentPayload::OpsRestore(facts.clone()), None);
+            intent.actor = Actor {
+                kind: ActorKind::Staff,
+                id: who,
+            };
+            let out = hub.submit_new(intent);
+            if *by != 0 {
+                prop_assert_eq!(code(&out).map(|c| c.0), Some(ErrorCode::PermissionDenied));
+            } else if *other_branch {
+                prop_assert_eq!(
+                    code(&out),
+                    Some((ErrorCode::ValidationFailed, Some("header")))
+                );
+            } else {
+                prop_assert!(out.is_ok(), "{:?}", out);
+            }
+            if out.is_ok() {
+                prop_assert_eq!(hub.change_count(), before + 1);
+                let RowValue::Text(json) =
+                    hub.setting("backup.last_restore").unwrap()["value"].clone()
+                else {
+                    return Err(TestCaseError::fail("backup.last_restore is not text"));
+                };
+                let kept = arena_proto::OpsRestore::parse(&json).expect("a consistent record");
+                prop_assert!(kept.by.is_some());
+                prop_assert_eq!(arena_proto::OpsRestore { by: None, ..kept }, facts);
+            } else {
+                prop_assert_eq!(hub.change_count(), before);
+                prop_assert_eq!(hub.setting("backup.last_restore"), was);
             }
         }
         Op::ControllerCheck { slot, missing } => {

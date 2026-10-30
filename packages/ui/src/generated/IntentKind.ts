@@ -134,4 +134,5 @@ export type IntentKind =
   | "controller.check"
   | "ad.impression_recorded"
   | "ad.request_recorded"
-  | "backup.export";
+  | "backup.export"
+  | "ops.restore";

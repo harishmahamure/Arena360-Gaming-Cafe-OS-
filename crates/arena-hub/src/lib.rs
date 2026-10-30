@@ -11,6 +11,7 @@ mod config;
 #[cfg(feature = "dev-fixtures")]
 mod dev;
 mod logs;
+pub mod restore;
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -80,7 +81,8 @@ pub async fn start_with(
     args: impl Iterator<Item = std::ffi::OsString>,
     options: StartOptions,
 ) -> ExitCode {
-    let cfg = match config::parse(args, |k| std::env::var_os(k), cfg!(windows)) {
+    let args: Vec<std::ffi::OsString> = args.collect();
+    let cfg = match config::parse(args.iter().cloned(), |k| std::env::var_os(k), cfg!(windows)) {
         Ok(config::Command::Run(cfg)) => cfg,
         #[cfg(feature = "dev-fixtures")]
         Ok(config::Command::DevSeed(cfg, opts)) => return dev_seed(cfg, opts).await,
@@ -122,8 +124,15 @@ pub async fn start_with(
         .with_writer(Arc::new(ring))
         .try_init();
 
+    let windows = cfg.platform == arena_proto::HubPlatform::Windows;
     match run(cfg, clock, options).await {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(()) => {
+            // The Owner confirmed a restore: the next start applies it (Story 9.7).
+            if windows && restore::restart_requested() {
+                restore::relaunch(&args);
+            }
+            ExitCode::SUCCESS
+        }
         Err(e) if e.code == ErrorCode::SchemaTooNew => {
             tracing::error!(
                 code = e.code.as_str(),
@@ -237,6 +246,13 @@ async fn run(
 ) -> Result<(), AppError> {
     let stop_signal = Arc::new(Notify::new());
     *STOP.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&stop_signal));
+    // A restore the Owner staged is applied before the database is opened (Story 9.7).
+    let restored = restore::apply_at_start(
+        cfg.db_path(),
+        cfg.platform == arena_proto::HubPlatform::Windows,
+        clock.now_ms(),
+    )
+    .await;
     let mut store = Store::open(cfg.db_path(), clock.now_ms())?;
     let schema_version = store.schema_version()?;
     let instance_id = load_or_mint_instance_id(&mut store)?;
@@ -326,6 +342,9 @@ async fn run(
     )
     .await?;
     let writer = lease.writer();
+    let restore_job = restored.and_then(|outcome| {
+        restore::spawn_record(writer.clone(), Arc::clone(&clock), cfg.db_path(), outcome)
+    });
     // Housekeeping (dedupe prune) runs at start and daily while primary; it ends once the
     // writer closes.
     let housekeeping = writer.clone().map(|w| {
@@ -467,7 +486,8 @@ async fn run(
     .with_pairing(pairing)
     .with_kds_pairing(kds_pairing)
     .with_pair_gate(pair_gate.clone())
-    .with_player_kek(Arc::clone(&player_kek));
+    .with_player_kek(Arc::clone(&player_kek))
+    .with_restart(Arc::new(restore::request_restart));
     if let Some(folder) = &backup_folder {
         ui_auth = ui_auth.with_backup_folder(Arc::clone(folder));
     }
@@ -917,6 +937,10 @@ async fn run(
         let _ = job.await;
     }
     if let Some(job) = daily_export_job {
+        job.abort();
+        let _ = job.await;
+    }
+    if let Some(job) = restore_job {
         job.abort();
         let _ = job.await;
     }

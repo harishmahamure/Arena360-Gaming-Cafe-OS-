@@ -96,6 +96,7 @@ const INTENT_LABELS: Record<string, MessageKey> = {
   "ads.consent": "hub.audit.intent.ads.consent",
   "printer.status": "hub.audit.intent.printer.status",
   "backup.export": "hub.audit.intent.backup.export",
+  "ops.restore": "hub.audit.intent.ops.restore",
   "order.place": "hub.audit.intent.order.place",
   "order.place.reverted": "hub.audit.intent.order.place.reverted",
   "order.line_served": "hub.audit.intent.order.line_served",

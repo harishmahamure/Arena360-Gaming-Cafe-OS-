@@ -423,7 +423,13 @@ pub struct UiAuth {
     kek: Option<Arc<dyn arena_core::players::Kek>>,
     player_index: Arc<Mutex<arena_core::players::PlayerIndex>>,
     media: Option<Arc<arena_core::media_cache::MediaCache>>,
+    /// Stops the Hub so it restarts onto a staged restore (Story 9.7); without it a confirmed
+    /// restore stays staged until the Hub is next started.
+    restart: Option<RestartHook>,
 }
+
+/// Asks the host process to stop and start again.
+pub type RestartHook = Arc<dyn Fn() + Send + Sync>;
 
 pub type BackupProbe =
     Arc<dyn Fn(&std::path::Path) -> Result<(), arena_proto::BackupDirProblem> + Send + Sync>;
@@ -479,8 +485,19 @@ impl UiAuth {
             kek: None,
             player_index: Arc::default(),
             media: None,
+            restart: None,
             streams: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Calls `restart` once a restore is staged (Story 9.7): it must stop the Hub and start it again.
+    pub fn with_restart(mut self, restart: RestartHook) -> Self {
+        self.restart = Some(restart);
+        self
+    }
+
+    pub(crate) fn restart_hook(&self) -> Option<RestartHook> {
+        self.restart.clone()
     }
 
     /// Answers `GET /ui/media-cache` from `cache` (Story 6.2).
@@ -997,6 +1014,9 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         ErrorCode::AuditBuilding => StatusCode::ACCEPTED,
         ErrorCode::AuditBuildFailed => StatusCode::BAD_GATEWAY,
         ErrorCode::KeyErased => StatusCode::GONE,
+        ErrorCode::RestoreWrongBranch | ErrorCode::RestoreCorrupt => {
+            StatusCode::UNPROCESSABLE_ENTITY
+        }
         ErrorCode::HubIncompatible => StatusCode::CONFLICT,
         ErrorCode::PairPinPaused => StatusCode::TOO_MANY_REQUESTS,
         ErrorCode::TokenRevoked | ErrorCode::TokenInvalid => StatusCode::UNAUTHORIZED,
@@ -1796,6 +1816,92 @@ fn item_key(intent: &arena_proto::Intent) -> Option<&str> {
         _ => None,
     }
 }
+impl UiAuth {
+    /// Whose PIN `pin` is, for a restore (Story 9.7): the Owner's own when the signed-in member
+    /// holds `ops.restore`, else the PIN of another member who does. Answers that Owner's staff id.
+    /// No PIN, or the signed-in member's own PIN when they are not the Owner, is
+    /// `PERMISSION_DENIED`; a wrong PIN is `PIN_INVALID`. Attempts count against the elevation
+    /// lockout of the signed-in member, like `staff_deactivate`.
+    pub(crate) async fn restore_owner(
+        &self,
+        me: &SessionStaff,
+        pin: Option<String>,
+    ) -> Result<String, UiError> {
+        let Some(pin) = pin else {
+            return Err(ui_error(arena_core::rbac::denied()));
+        };
+        let requester = me.staff_id.clone();
+        let reserved = self
+            .elevate_lockout
+            .lock()
+            .map_err(|_| internal())?
+            .begin(&requester, self.clock.now_ms());
+        if let Err(retry_after_s) = reserved {
+            tracing::warn!(staff_id = %requester, "restore refused: paused");
+            return Err(locked(retry_after_s));
+        }
+        let settle = |matched: Option<bool>| -> Option<u32> {
+            let now = self.clock.now_ms();
+            let mut l = self.elevate_lockout.lock().ok()?;
+            match matched {
+                Some(true) => l.finish(&requester, now, true),
+                None => l.release(&requester, now),
+                Some(false) => {
+                    l.finish(&requester, now, false);
+                    return l.paused_for(&requester, now);
+                }
+            }
+            None
+        };
+        let Ok(permit) = Arc::clone(&self.pin_checks).acquire_owned().await else {
+            settle(None);
+            return Err(internal());
+        };
+        let is_owner = me.permissions.contains(&Permission::OpsRestore);
+        let staff = Arc::clone(&self.staff);
+        let id = requester.clone();
+        let found = tokio::task::spawn_blocking(move || -> Result<Option<(String, bool)>, _> {
+            let _permit = permit;
+            if is_owner {
+                return Ok(staff.verify_own_pin(&id, &pin)?.then(|| (id.clone(), true)));
+            }
+            if let Some((owner, _)) = staff.match_pin(&[Permission::OpsRestore], &id, &pin)? {
+                return Ok(Some((owner, true)));
+            }
+            // Their own PIN is right, but they are not the Owner.
+            Ok(staff
+                .verify_own_pin(&id, &pin)?
+                .then(|| (id.clone(), false)))
+        })
+        .await;
+        match found {
+            Ok(Ok(Some((owner, true)))) => {
+                settle(Some(true));
+                Ok(owner)
+            }
+            Ok(Ok(Some((_, false)))) => {
+                settle(Some(true));
+                Err(ui_error(arena_core::rbac::denied()))
+            }
+            Ok(Ok(None)) => {
+                let paused = settle(Some(false));
+                tracing::warn!(staff_id = %requester, "restore: wrong owner pin");
+                Err(match paused {
+                    Some(retry) => locked(retry),
+                    None => ui_error(pin_rejected()),
+                })
+            }
+            Ok(Err(e)) => {
+                settle(None);
+                Err(ui_error(e))
+            }
+            Err(_) => {
+                settle(None);
+                Err(internal())
+            }
+        }
+    }
+}
 
 impl UiAuth {
     /// Whether `ticket` would be redeemed for an intent of `kind` by `requester` in the session
@@ -2134,6 +2240,12 @@ async fn intent(
         return fail(ui_error(AppError::new(
             ErrorCode::Unsupported,
             "an export is made from Settings → System, which records it",
+        )));
+    }
+    if matches!(intent.payload, arena_proto::IntentPayload::OpsRestore(_)) {
+        return fail(ui_error(AppError::new(
+            ErrorCode::Unsupported,
+            "a restore is made from Settings → System, which records it",
         )));
     }
     run_intent(&auth, &token, &me, intent, elevation_ticket).await
@@ -3609,6 +3721,11 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         )
         .route("/ui/backup/export", post(crate::ui_backup::export))
         .route(
+            "/ui/backup/restore/check",
+            post(crate::ui_backup::restore_check),
+        )
+        .route("/ui/backup/restore", post(crate::ui_backup::restore))
+        .route(
             "/ui/backup/export-everything",
             post(crate::ui_backup::export_everything),
         )
@@ -3744,6 +3861,8 @@ pub(crate) mod tests {
         pub(crate) pairing: Arc<crate::pairing::Pairing>,
         pub(crate) kds_pairing: Arc<crate::pairing::Pairing>,
         pub(crate) media: Arc<arena_core::media_cache::MediaCache>,
+        /// How many times the restart hook was called (Story 9.7).
+        pub(crate) restarts: Arc<std::sync::atomic::AtomicUsize>,
     }
 
     pub(crate) const TEST_KEK: [u8; 32] = [4; 32];
@@ -3907,6 +4026,8 @@ pub(crate) mod tests {
                 .unwrap()
                 .with_tick(std::time::Duration::from_millis(10)),
         );
+        let restarts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let hook_count = Arc::clone(&restarts);
         let kds_pairing = Arc::new(crate::pairing::Pairing::new(clock.clone()).unwrap());
         let auth = UiAuth::new(
             Arc::new(StaffDirectory::open(&path).unwrap()),
@@ -3919,13 +4040,17 @@ pub(crate) mod tests {
         .with_presence(crate::lan::Presence::of(Arc::clone(&lan)))
         .with_media_cache(Arc::clone(&media))
         .with_pairing(Arc::clone(&pairing))
-        .with_kds_pairing(Arc::clone(&kds_pairing));
+        .with_kds_pairing(Arc::clone(&kds_pairing))
+        .with_restart(Arc::new(move || {
+            hook_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
         let auth = Arc::new(if with_kek {
             auth.with_player_kek(Arc::new(TestKek))
         } else {
             auth
         });
         Hub {
+            restarts,
             lan,
             pairing,
             kds_pairing,

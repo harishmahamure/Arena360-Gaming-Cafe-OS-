@@ -198,6 +198,10 @@ pub enum ErrorCode {
     EraseBlocked,
     /// A player ciphertext whose key was shredded by an erasure cannot be opened (Story 9.1).
     KeyErased,
+    /// A restore file belongs to another branch (Story 9.7).
+    RestoreWrongBranch,
+    /// A restore file is damaged: its header, size or sha256 is wrong (Story 9.7).
+    RestoreCorrupt,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -316,6 +320,8 @@ impl ErrorCode {
             Self::AuditBuildFailed => "AUDIT_BUILD_FAILED",
             Self::EraseBlocked => "ERASE_BLOCKED",
             Self::KeyErased => "KEY_ERASED",
+            Self::RestoreWrongBranch => "RESTORE_WRONG_BRANCH",
+            Self::RestoreCorrupt => "RESTORE_CORRUPT",
         }
     }
 }
@@ -495,6 +501,8 @@ mod tests {
             (ErrorCode::AuditBuildFailed, "AUDIT_BUILD_FAILED"),
             (ErrorCode::EraseBlocked, "ERASE_BLOCKED"),
             (ErrorCode::KeyErased, "KEY_ERASED"),
+            (ErrorCode::RestoreWrongBranch, "RESTORE_WRONG_BRANCH"),
+            (ErrorCode::RestoreCorrupt, "RESTORE_CORRUPT"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

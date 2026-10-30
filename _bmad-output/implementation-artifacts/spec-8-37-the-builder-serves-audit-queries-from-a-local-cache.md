@@ -2,7 +2,7 @@
 title: "Story 8.37: The builder serves audit queries from a local cache"
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 baseline_commit: '0ec525af'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -47,5 +47,9 @@ The local copy is named `<month>-<built_at>.db`, so a rebuilt month never reads 
 
 ## Auto Run Result
 
-Status: review
+Status: done
 Implemented: `arena-proto` query catalogue (`AuditSearch`, `AuditQueryKind`, `AuditSearchPage`); `arena-store` `AuditFilter` intent/table/row filters and `list_orphaned`; cloud `audit_query` (local LRU cache, search), `GET /v1/branches/{id}/audit`, `admin` credentials and `/v1/admin/branches/{id}/audit[/build]` with `admin_audit` rows, `request_rebuild`; control Deployment audit-cache volume and optional data-bucket/admin env. Tests: proto catalogue unit tests, store filter test, admin token unit tests and 7 new cases in `crates/arena-cloud/tests/audit_build.rs` (catalogue queries and paging, unsupported shapes, build states, orphans, gone object, LRU eviction and refetch, support path and audit rows). Known unrelated failures: arena-replay `replaying_the_seeded_log_reproduces_branch_and_settings`, arena-cloud `unreachable_at_start_retries_then_exits_1_without_logging_the_token` (and `a_hung_run_times_out_with_its_own_code` on a slow run). `check:deploy` could not run (no kubectl).
+
+## Review Result
+
+Code review passed. One blocking finding fixed: `the_support_path_needs_a_staff_credential_and_a_reason_and_is_audited` was flaky because the test clock is fixed and `admin_audit_rows` orders by `(at, id)` with random ULIDs; the test now advances the clock between recorded calls. fmt, clippy (-D warnings), arena-proto/store/cloud tests and `pnpm check:generated/strings/pins` are green. Noted, not blocking: an in-flight search can lose its cache file to eviction or a rebuild of the same month (it answers a 500 and the next call refetches).

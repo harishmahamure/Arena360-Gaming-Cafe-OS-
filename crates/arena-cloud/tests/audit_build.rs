@@ -1274,6 +1274,8 @@ async fn the_support_path_needs_a_staff_credential_and_a_reason_and_is_audited()
     // Searching before a build is a recorded call that finds nothing.
     let r = admin(&h, "GET", &search, None, STAFF_TOKEN).await;
     assert_eq!(r.status, 404, "{}", r.body);
+    // The clock is fixed: move it on so the rows order by time, not by their random ids.
+    h.advance(1);
     let r = admin(
         &h,
         "POST",
@@ -1294,6 +1296,7 @@ async fn the_support_path_needs_a_staff_credential_and_a_reason_and_is_audited()
         .unwrap()
         .unwrap();
     assert_eq!(built.state, AuditBuildState::Ready);
+    h.advance(1);
     let r = admin(&h, "GET", &search, None, STAFF_TOKEN).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(seqs(&r.body, "items").len(), 6);

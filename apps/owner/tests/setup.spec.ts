@@ -138,7 +138,11 @@ test("branch-scoped screens say a branch in setup is available after it goes liv
       "href",
       "https://start.arena360.cloud/setup?branch=b2",
     );
-    const open = page.getByRole("listitem").filter({ hasText: PAID[0].name });
-    await expect(open.getByText(t("owner.section.soon"))).toBeVisible();
+    if (path === "/manage") {
+      await expect(page.getByRole("heading", { name: t("owner.cmd.list.title") })).toBeVisible();
+    } else {
+      const open = page.getByRole("listitem").filter({ hasText: PAID[0].name });
+      await expect(open.getByText(t("owner.section.soon"))).toBeVisible();
+    }
   }
 });

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { Button, Card, StatusBadge, formatMoney, t } from "@arena/ui";
   import type { OwnerBranch } from "@arena/ui/generated";
+  import { fetchWaiting, queuedText, waiting, whatOf } from "./commands.svelte";
   import MetricFigure from "./MetricFigure.svelte";
   import { age } from "./shell.svelte";
   import { LATE_MS, fetchLive, live, moneyLocale } from "./today.svelte";
@@ -11,6 +12,13 @@
   const data = $derived(state?.data ?? null);
   const summary = $derived(data?.summary ?? null);
   const offline = $derived(!!data && !data.branch_online);
+  const queued = $derived(waiting[branch.id] ?? []);
+
+  // An offline branch lists what it has yet to apply; re-read whenever its figures are.
+  $effect(() => {
+    void state;
+    if (offline) void fetchWaiting(branch.id);
+  });
   const money = $derived(moneyLocale(summary?.currency ?? data?.currency ?? "INR"));
 
   const ago = (ms: number) => {
@@ -104,6 +112,16 @@
         />
       </dl>
     {/if}
+    {#if offline && queued.length}
+      <div class="waiting">
+        <h3 class="type-hub-label">{t("owner.cmd.today.waiting")}</h3>
+        <ul>
+          {#each queued as c (c.id)}
+            <li class="type-hub-micro">{whatOf(c.kind, c.payload)} · {queuedText(c, now)}</li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
   </section>
 </Card>
 
@@ -126,6 +144,15 @@
     grid-template-columns: minmax(0, 1fr);
     gap: var(--space-4);
     margin: 0;
+  }
+  .waiting h3 {
+    margin: 0 0 var(--space-2);
+  }
+  .waiting ul {
+    margin: 0;
+    padding-left: var(--space-5);
+    display: grid;
+    gap: var(--space-1);
   }
   .offline h2 {
     color: var(--text-muted);

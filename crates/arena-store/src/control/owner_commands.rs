@@ -12,6 +12,7 @@ pub struct OwnerCommandRow {
     pub group_id: Option<String>,
     pub idempotency_key: String,
     pub kind: String,
+    pub payload: String,
     pub status: CommandStatus,
     pub error: Option<String>,
     pub issued_by: String,
@@ -31,7 +32,7 @@ pub struct OwnerCommandFilter<'a> {
 }
 
 const COLUMNS: &str = "c.id, c.branch_id, c.group_id, c.idempotency_key, c.kind, c.status, \
-     c.error, c.issued_by, c.created_at, c.resolved_at";
+     c.error, c.issued_by, c.created_at, c.resolved_at, c.payload";
 
 fn row_from(row: &[SqlValue]) -> Result<OwnerCommandRow, ControlError> {
     let status = col_text(row, 5)?;
@@ -47,6 +48,7 @@ fn row_from(row: &[SqlValue]) -> Result<OwnerCommandRow, ControlError> {
         issued_by: col_text(row, 7)?,
         created_at: col_int(row, 8)?,
         resolved_at: col_opt_int(row, 9)?,
+        payload: col_text(row, 10)?,
     })
 }
 

@@ -1,5 +1,12 @@
 import type { Page } from "@playwright/test";
-import type { BranchSummary, OwnerBranch, OwnerLive, OwnerRange } from "@arena/ui/generated";
+import type {
+  BranchSummary,
+  OwnerBranch,
+  OwnerCommandPreview,
+  OwnerCommandView,
+  OwnerLive,
+  OwnerRange,
+} from "@arena/ui/generated";
 import { t } from "../../../packages/ui/src/messages/index.js";
 
 export { t };
@@ -139,7 +146,26 @@ export type StubOptions = {
   live?: Record<string, OwnerLive | (() => OwnerLive)>;
   /** The status the export route answers with (default 200, with a small CSV). */
   exportStatus?: number;
+  /** The commands the cloud holds at the start (the stub adds what the app posts). */
+  commands?: OwnerCommandView[];
+  /** Branch ids whose Hub is offline in a preview (default: all online). */
+  offline?: string[];
+  /** Answers a command post instead of the default (queue one row per branch that can take it). */
+  post?: (body: Record<string, unknown>) => { status: number; body: unknown } | undefined;
 };
+
+/** A command row as the cloud lists it, `ageMs` old. */
+export function commandOf(over: Partial<OwnerCommandView> = {}, ageMs = 120_000): OwnerCommandView {
+  return {
+    id: 1,
+    branch_id: "b1",
+    kind: "rate.upsert",
+    status: "pending",
+    payload: { group_id: "g1", price_per_hour_minor: 6000 },
+    queued_at: Date.now() - ageMs,
+    ...over,
+  };
+}
 
 /** The CSV the stubbed export route answers with. */
 export const EXPORT_CSV = "Report,Revenue\r\nRange,2026-10-26 to 2026-10-30\r\n";
@@ -153,6 +179,8 @@ export async function stubCloud(
   const calls: string[] = [];
   const bodies: Record<string, unknown[]> = {};
   const exports: string[] = [];
+  const commands: OwnerCommandView[] = [...(opts.commands ?? [])];
+  let nextId = Math.max(0, ...commands.map((c) => c.id));
   await page.route("**/v1/**", (route) => {
     const req = route.request();
     const path = new URL(req.url()).pathname;
@@ -203,13 +231,56 @@ export async function stubCloud(
       (bodies[age[1]] ??= []).push(req.postDataJSON());
       return route.fulfill({ status: 204 });
     }
+    if (path === "/v1/commands/preview" && req.method() === "POST") {
+      const body = req.postDataJSON();
+      const picked =
+        body.branch_id === "all" ? list() : list().filter((b) => b.id === body.branch_id);
+      const preview: OwnerCommandPreview = {
+        targets: picked.map((b) => ({
+          branch_id: b.id,
+          name: b.name,
+          online: !opts.offline?.includes(b.id),
+          offered: b.tier !== "free",
+          ...(b.tier === "free" ? { error: { code: "FEATURE_NOT_ENTITLED", message: "" } } : {}),
+        })),
+      };
+      return json(preview);
+    }
+    if (path === "/v1/commands" && req.method() === "GET") {
+      const branch = new URL(req.url()).searchParams.get("branch");
+      const rows = commands.filter((c) => !branch || c.branch_id === branch);
+      return json({ commands: rows.sort((x, y) => y.id - x.id) });
+    }
+    if (path === "/v1/commands" && req.method() === "POST") {
+      const body = req.postDataJSON();
+      (bodies["POST /v1/commands"] ??= []).push(body);
+      const answer = opts.post?.(body);
+      if (answer) return json(answer.body, answer.status);
+      const all = body.branch_id === "all";
+      const made = list()
+        .filter((b) => b.tier !== "free" && (all || b.id === body.branch_id))
+        .map((b): OwnerCommandView => ({
+          id: ++nextId,
+          branch_id: b.id,
+          ...(all ? { group_id: body.idempotency_key } : {}),
+          kind: body.kind,
+          status: "pending",
+          payload: {
+            ...body.payload,
+            ...(body.base_rev === undefined ? {} : { base_rev: body.base_rev }),
+          },
+          queued_at: Date.now(),
+        }));
+      commands.push(...made);
+      return json({ commands: made, skipped: [] });
+    }
     if (path === "/v1/meta/timezones") return json(["Asia/Dubai", "Asia/Kolkata"]);
     if (path === "/v1/wizard/install-hub/code")
       return json({ code: "ABCD2345", expires_at: Date.now() + 900_000, server_now: Date.now() });
     if (path === "/v1/signout") return json(null, 200);
     return json({ code: "NOT_FOUND", message: "" }, 404);
   });
-  return Object.assign(calls, { bodies, exports });
+  return Object.assign(calls, { bodies, exports, commands });
 }
 
 export const cacheCount = (page: Page) =>

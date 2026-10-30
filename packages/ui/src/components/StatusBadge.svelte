@@ -2,14 +2,33 @@
   import { t, type MessageKey } from "../messages/index.js";
   import { STATUS_LABELS, type Status } from "../status.js";
 
-  /** Hub-only: dark and HC themes. The state is always written out, never colour alone. */
-  let { state, label }: { state: Status; label?: MessageKey } = $props();
+  /**
+   * Hub-only: dark and HC themes. The state is always written out, never colour alone. The owner
+   * app's command states take a `tone` and their own `text` instead of a Hub state.
+   */
+  let {
+    state,
+    tone,
+    label,
+    text,
+  }: {
+    state?: Status;
+    tone?: "info" | "ok" | "danger" | "muted";
+    label?: MessageKey;
+    text?: string;
+  } = $props();
+  const TONES = {
+    info: "tone-info",
+    ok: "tone-ok",
+    danger: "tone-danger",
+    muted: "tone-muted",
+  } as const;
+  const cls = $derived(tone ? TONES[tone] : "state-" + state);
+  const shown = $derived(text ?? (label ? t(label) : state ? t(STATUS_LABELS[state]) : ""));
 </script>
 
-<span class="badge type-hub-micro state-{state}" data-component="status-badge"
-  >{#if state === "paused"}<span aria-hidden="true">⏸</span>&nbsp;{/if}{t(
-    label ?? STATUS_LABELS[state],
-  )}</span
+<span class="badge type-hub-micro {cls}" data-component="status-badge"
+  >{#if state === "paused"}<span aria-hidden="true">⏸</span>&nbsp;{/if}{shown}</span
 >
 
 <style>
@@ -23,6 +42,19 @@
     background-color: var(--status-badge-background);
     text-transform: uppercase;
     overflow-wrap: anywhere;
+  }
+
+  .tone-info {
+    color: var(--info);
+  }
+  .tone-ok {
+    color: var(--ok);
+  }
+  .tone-danger {
+    color: var(--danger);
+  }
+  .tone-muted {
+    color: var(--text-muted);
   }
 
   .state-free {

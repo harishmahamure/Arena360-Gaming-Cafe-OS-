@@ -12,6 +12,10 @@ export type OwnerCommandView = {
   kind: string;
   status: CommandStatus;
   /**
+   * What was sent (with `base_rev` beside its fields), so Retry and Resend can send it again.
+   */
+  payload: unknown;
+  /**
    * Why the Hub refused it, when it did.
    */
   error?: AppError;

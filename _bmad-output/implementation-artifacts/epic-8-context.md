@@ -81,3 +81,13 @@ The café owner sees every branch and changes it from a phone or laptop, without
 - **Sweeper.** `arena-cloud --role jobs --task command-sweep` (CronJob every minute): `pending` older than 7 days -> `expired` with `COMMAND_EXPIRED` (owner list filter `status=expired`), then `fetched` with no answer for 10 minutes -> `pending`. It logs `command_backlog_pending|fetched|oldest_age_s` per branch (the exporter is deferred).
 - **Mailbox.** A Hub fetch returns every `pending` row regardless of `after`, plus `fetched` rows past it; the Hub no longer drops rows at or below its cursor (the `applied_commands` dedupe re-reports the stored result).
 - **Fence.** Fetch or result at an epoch below `branch_fence` is `FENCED` (message names the fence); a refused result re-queues its `fetched` command. A result records `applied_epoch`. `ControlDb::move_branch_fence(branch, epoch, hub, fork_seq, now)` returns commands applied at the old epoch past `fork_seq`, and unanswered `fetched` ones, to `pending`; nothing calls it until Story 9.3. The Hub closes its writer and becomes a follower on `FENCED`.
+
+## Story 8.21: Preview the target branches and follow each command row to Applied
+
+- **Preview.** `POST /v1/commands/preview {branch_id|"all", kind}` answers `{targets}` with `online` (heartbeat within 3 min), `offered` and, when not offered, `error` (`FEATURE_NOT_ENTITLED`, `BRANCH_UPDATE_REQUIRED`); it uses the post's `refusal`, writes nothing and is not rate limited.
+- **Payload.** `OwnerCommandView.payload` carries what was sent so Retry / Resend can send it again; the app drops the old `base_rev` and takes the current `rev` from the branch's newest summary catalogue (plans, rules, coupons, products by `id`), else keeps the old one. A rate has none.
+- **Seam.** No Manage form exists, so `arena:propose-command` (a window `CustomEvent` whose `detail` is a `CommandDraft`) opens the preview; Story 8.23 calls `propose()` in `commands.svelte.ts` directly. One idempotency key per proposed change.
+- **Rows.** `pending`/`fetched` show "Waiting for branch · age", `applied` "Applied · time" in the branch zone, `rejected` "Device/Hub revoked" (`TOKEN_REVOKED`, no action) or "Couldn't apply at branch" with Retry, `expired` "Expired" with Resend. Today / Earlier by the day in the branch zone. The list is the newest 50 rows, polled every 10 s while visible.
+- **Manage.** `scope="all"`: one list for the café; Free and setup branches get a `TierLock` / `SetupGate` entry beside it.
+- **Today.** An offline branch's card lists its waiting commands (read with each live fetch).
+- **Badge.** `StatusBadge` takes `tone` and `text` for command states.

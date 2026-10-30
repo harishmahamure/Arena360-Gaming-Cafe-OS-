@@ -1036,3 +1036,115 @@ async fn a_fence_moved_during_a_burst_of_100_applies_every_command_exactly_once(
         70
     );
 }
+
+impl Harness {
+    /// The Hub checks in now.
+    async fn beat(&self, c: &Cafe) {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/heartbeat")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", c.token))
+            .body(Body::from(
+                json!({"epoch": "3:HUBA", "version": "0.2.0", "schema_version": 12, "last_seq_uploaded": 0})
+                    .to_string(),
+            ))
+            .unwrap();
+        let r = reply(self.app.clone().oneshot(req).await.unwrap()).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+    }
+
+    async fn preview(&self, c: &Cafe, branch: &str, kind: &str) -> Reply {
+        self.call(
+            "POST",
+            "/v1/commands/preview",
+            Some(json!({"branch_id": branch, "kind": kind})),
+            &c.access,
+        )
+        .await
+    }
+}
+
+#[tokio::test]
+async fn the_preview_lists_each_target_with_its_online_state_and_why_one_is_not_offered() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    let two = h.extra_branch(&a, "Arena Two", Some(Tier::Premium)).await;
+    let free = h.extra_branch(&a, "Free Arena", None).await;
+    let hub = h.db.active_hub(&a.branch).await.unwrap().unwrap();
+    h.db.record_command_schema(&hub.id, 0).await.unwrap();
+
+    let r = h.preview(&a, "all", "rate.upsert").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let targets = r.body["targets"].as_array().unwrap();
+    assert_eq!(targets.len(), 3);
+    let of = |id: &str| targets.iter().find(|t| t["branch_id"] == id).unwrap();
+    assert_eq!(of(&a.branch)["offered"], false);
+    assert_eq!(of(&a.branch)["error"]["code"], "BRANCH_UPDATE_REQUIRED");
+    assert_eq!(of(&two)["offered"], true);
+    assert!(of(&two).get("error").is_none());
+    assert_eq!(of(&free)["offered"], false);
+    assert_eq!(of(&free)["error"]["code"], "FEATURE_NOT_ENTITLED");
+    assert_eq!(of(&two)["name"], "Arena Two");
+    assert_eq!(h.rows(), 0, "a preview queues nothing");
+}
+
+#[tokio::test]
+async fn the_preview_marks_a_branch_online_only_while_its_hub_is_heard_from() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    let heard = |r: &Reply| r.body["targets"][0]["online"].as_bool().unwrap();
+
+    let r = h.preview(&a, &a.branch, "plan.upsert").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(!heard(&r), "never heard from");
+    assert!(r.body["targets"][0].get("last_heartbeat_at").is_none());
+
+    h.beat(&a).await;
+    h.advance(60_000);
+    let r = h.preview(&a, &a.branch, "plan.upsert").await;
+    assert!(heard(&r));
+    assert_eq!(r.body["targets"][0]["last_heartbeat_at"], T0);
+    h.advance(4 * 60_000);
+    assert!(!heard(&h.preview(&a, &a.branch, "plan.upsert").await));
+}
+
+#[tokio::test]
+async fn the_preview_refuses_unknown_kinds_other_cafes_and_signed_out_callers() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    let b = h.cafe(PHONE_B, "Other Arena", "198.51.100.5").await;
+    let r = h.preview(&a, &a.branch, "nope").await;
+    assert_eq!((r.status, r.code()), (400, "UNSUPPORTED"));
+    let r = h.preview(&a, &a.branch, "hub.revoke").await;
+    assert_eq!(r.code(), "UNSUPPORTED");
+    let r = h.preview(&a, &b.branch, "rate.upsert").await;
+    assert_eq!((r.status, r.code()), (404, "NOT_FOUND"));
+    let r = h
+        .call(
+            "POST",
+            "/v1/commands/preview",
+            Some(json!({"branch_id": a.branch, "kind": "rate.upsert"})),
+            "",
+        )
+        .await;
+    assert_eq!(r.status, 401);
+}
+
+#[tokio::test]
+async fn the_owner_list_carries_the_payload_so_a_retry_can_send_it_again() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    let body = json!({
+        "branch_id": a.branch, "idempotency_key": K1, "kind": "rate.upsert",
+        "payload": rate(), "base_rev": 4,
+    });
+    let r = h.send(&a, body).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["commands"][0]["payload"]["base_rev"], 4);
+    let r = h.get(&a, "/v1/commands").await;
+    let p = &r.body["commands"][0]["payload"];
+    assert_eq!(p["group_id"], "g1");
+    assert_eq!(p["price_per_hour_minor"], 6000);
+    assert_eq!(p["base_rev"], 4);
+}

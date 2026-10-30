@@ -220,6 +220,9 @@ pub struct OwnerCommandView {
     pub group_id: Option<String>,
     pub kind: String,
     pub status: crate::CommandStatus,
+    /// What was sent (with `base_rev` beside its fields), so Retry and Resend can send it again.
+    #[ts(type = "unknown")]
+    pub payload: serde_json::Value,
     /// Why the Hub refused it, when it did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -230,6 +233,39 @@ pub struct OwnerCommandView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub done_at: Option<i64>,
+}
+
+/// `POST /v1/commands/preview`: which branches a change of this kind would reach (Story 8.21).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OwnerCommandPreviewRequest {
+    /// A branch id, or `all`.
+    pub branch_id: String,
+    pub kind: String,
+}
+
+/// One branch of a preview: whether its Hub was heard from lately and whether it can take the kind.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OwnerCommandTarget {
+    pub branch_id: String,
+    pub name: String,
+    pub online: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub last_heartbeat_at: Option<i64>,
+    /// `false` when the branch cannot take the kind; `error` says why (`FEATURE_NOT_ENTITLED`,
+    /// `BRANCH_UPDATE_REQUIRED`).
+    pub offered: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<AppError>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OwnerCommandPreview {
+    pub targets: Vec<OwnerCommandTarget>,
 }
 
 /// A branch an "all branches" post did not reach, and why.

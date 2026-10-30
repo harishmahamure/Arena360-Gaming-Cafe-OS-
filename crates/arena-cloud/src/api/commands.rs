@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
 use arena_proto::{
-    AppError, COMMAND_PAYLOAD_MAX, COMMAND_SCHEMA_VERSION, COMMANDS_PAGE, CommandResult,
-    CommandResultAck, CommandStatus, CommandWire, CommandsPage, ErrorCode, OWNER_ALL_BRANCHES,
-    OWNER_COMMAND_POSTS_PER_MIN, OWNER_COMMANDS_PAGE, OWNER_COMMANDS_PAGE_MAX, OwnerCommandKind,
-    OwnerCommandList, OwnerCommandPost, OwnerCommandPosted, OwnerCommandSkip, OwnerCommandView,
+    AppError, BRANCH_ONLINE_WINDOW_MS, COMMAND_PAYLOAD_MAX, COMMAND_SCHEMA_VERSION, COMMANDS_PAGE,
+    CommandResult, CommandResultAck, CommandStatus, CommandWire, CommandsPage, ErrorCode,
+    OWNER_ALL_BRANCHES, OWNER_COMMAND_POSTS_PER_MIN, OWNER_COMMANDS_PAGE, OWNER_COMMANDS_PAGE_MAX,
+    OwnerCommandKind, OwnerCommandList, OwnerCommandPost, OwnerCommandPosted, OwnerCommandPreview,
+    OwnerCommandPreviewRequest, OwnerCommandSkip, OwnerCommandTarget, OwnerCommandView,
     SETTINGS_COMMAND_KEYS, Tier, accepted_owner_kind, is_setup_command, validate_owner_payload,
 };
 use arena_store::control::{
@@ -268,6 +269,7 @@ fn view(row: OwnerCommandRow) -> OwnerCommandView {
         group_id: row.group_id,
         kind: row.kind,
         status: row.status,
+        payload: serde_json::from_str(&row.payload).unwrap_or(serde_json::Value::Null),
         error: row.error.and_then(|e| serde_json::from_str(&e).ok()),
         queued_at: row.created_at,
         done_at: row.resolved_at,
@@ -281,6 +283,7 @@ fn view_of(row: CommandRow, group_id: Option<String>) -> OwnerCommandView {
         group_id,
         idempotency_key: row.idempotency_key,
         kind: row.kind,
+        payload: row.payload,
         status: row.status,
         error: row.error,
         issued_by: row.issued_by,
@@ -400,6 +403,61 @@ async fn post_command(
     Ok(Json(OwnerCommandPosted { commands, skipped }))
 }
 
+/// `POST /v1/commands/preview {branch_id | "all", kind}` from a signed-in owner (Story 8.21): the
+/// branches a post of this kind would reach, each with its online state from the Hub's last
+/// heartbeat and, where the branch cannot take the kind, the reason a post would give. Writes
+/// nothing and does not count against the post limit.
+async fn preview_command(
+    State(st): State<Arc<AuthState>>,
+    RequireSetupComplete(signed): RequireSetupComplete,
+    ApiJson(body): ApiJson<OwnerCommandPreviewRequest>,
+) -> Result<Json<OwnerCommandPreview>, ApiError> {
+    let now = st.now();
+    let tenant = st
+        .db
+        .tenant_of_owner(&signed.owner.id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(ApiError::not_found)?;
+    let kind = accepted_owner_kind(&body.kind)?;
+    let branches = st
+        .db
+        .branches_of_tenant(&tenant.id)
+        .await
+        .map_err(ApiError::internal)?;
+    let targets: Vec<Branch> = if body.branch_id == OWNER_ALL_BRANCHES {
+        branches
+    } else {
+        let b = branches
+            .into_iter()
+            .find(|b| b.id == body.branch_id)
+            .ok_or_else(|| {
+                tracing::warn!(owner_id = %signed.owner.id, "owner command preview: branch outside the tenant");
+                ApiError::not_found()
+            })?;
+        vec![b]
+    };
+    let mut out = Vec::with_capacity(targets.len());
+    for b in &targets {
+        let last_heartbeat_at = st
+            .db
+            .active_hub(&b.id)
+            .await
+            .map_err(ApiError::internal)?
+            .and_then(|h| h.last_seen_at);
+        let error = refusal(&st, b, kind).await?;
+        out.push(OwnerCommandTarget {
+            branch_id: b.id.clone(),
+            name: b.name.clone(),
+            online: last_heartbeat_at.is_some_and(|t| now - t <= BRANCH_ONLINE_WINDOW_MS),
+            last_heartbeat_at,
+            offered: error.is_none(),
+            error,
+        });
+    }
+    Ok(Json(OwnerCommandPreview { targets: out }))
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct ListQuery {
     status: Option<String>,
@@ -481,6 +539,7 @@ async fn get_commands(
 pub(super) fn router(st: Arc<AuthState>) -> Router {
     Router::new()
         .route("/commands", get(get_commands).post(post_command))
+        .route("/commands/preview", post(preview_command))
         .route("/commands/{id}/result", post(result))
         .with_state(st)
 }

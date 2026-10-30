@@ -200,22 +200,22 @@ async fn request(
 }
 
 /// `(counter, instance)` of an epoch `counter:instance`.
-fn epoch_order(epoch: &str) -> Option<(i64, &str)> {
+pub(crate) fn epoch_order(epoch: &str) -> Option<(i64, &str)> {
     let (c, id) = epoch.split_once(':')?;
     Some((c.parse().ok()?, id))
 }
 
 /// One change-log batch in the bucket.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct BatchKey {
-    epoch: String,
-    first: i64,
-    last: i64,
-    key: String,
+pub(crate) struct BatchKey {
+    pub(crate) epoch: String,
+    pub(crate) first: i64,
+    pub(crate) last: i64,
+    pub(crate) key: String,
 }
 
 /// Every batch under `<prefix>changes/`, in log order. Keys of any other shape are ignored.
-fn batch_keys(prefix: &str, keys: &[String]) -> Vec<BatchKey> {
+pub(crate) fn batch_keys(prefix: &str, keys: &[String]) -> Vec<BatchKey> {
     let root = format!("{prefix}changes/");
     let mut out: Vec<BatchKey> = keys
         .iter()

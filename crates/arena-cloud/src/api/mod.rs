@@ -36,6 +36,7 @@ mod owner_read;
 mod pair;
 mod panic;
 pub mod presign;
+mod restore;
 pub mod security;
 pub mod session;
 mod setup_start;
@@ -98,6 +99,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>, commands_only: bool) -> Router {
             .merge(fence::router(Arc::clone(st)))
             .merge(presign::router(Arc::clone(st)))
             .merge(kek::router(Arc::clone(st)))
+            .merge(restore::router(Arc::clone(st)))
             .merge(notify::router(Arc::clone(st)))
             .merge(setup_template::router(Arc::clone(st)))
             .merge(setup_start::router(Arc::clone(st)))

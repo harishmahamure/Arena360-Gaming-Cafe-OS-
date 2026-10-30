@@ -267,6 +267,30 @@ impl Presigner {
         }))
     }
 
+    /// A GET URL for `key`, valid for [`PRESIGN_TTL_S`] seconds from now (Story 9.12: the restore
+    /// plan). Signing is local; nothing is read from the bucket.
+    pub async fn presign_get(&self, key: &str) -> Result<String, String> {
+        let cfg = PresigningConfig::expires_in(Duration::from_secs(PRESIGN_TTL_S))
+            .map_err(|e| format!("presign config: {e}"))?;
+        let req = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .presigned(cfg)
+            .await
+            .map_err(|e| {
+                let mut msg = format!("presign {key}: {}", DisplayErrorContext(e));
+                for secret in &self.redact {
+                    if !secret.is_empty() {
+                        msg = msg.replace(secret.as_str(), "[redacted]");
+                    }
+                }
+                msg
+            })?;
+        Ok(req.uri().to_owned())
+    }
+
     /// A PUT URL for `key`, valid for [`PRESIGN_TTL_S`] seconds from now.
     pub async fn presign_put(&self, key: &str) -> Result<String, String> {
         let cfg = PresigningConfig::expires_in(Duration::from_secs(PRESIGN_TTL_S))

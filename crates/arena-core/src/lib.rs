@@ -43,6 +43,7 @@ pub mod printer;
 pub mod rbac;
 pub mod report_export;
 mod reports;
+pub mod restore_fetch;
 pub mod rollup;
 pub mod rollup_plan;
 mod session_screen;
@@ -79,6 +80,7 @@ pub use devices::{DeviceDirectory, LoginCandidate, VerifiedDevice};
 pub use game_plays::MostPlayedCache;
 pub use pairing::{HubPairer, PairFuture, PairGate};
 pub use pricing::{Resolved, conflicts as rule_conflicts, resolve as resolve_rate};
+pub use restore_fetch::RestoreFetchControl;
 pub use session_screen::{session_screens, session_sync};
 pub use session_timer::{TimedSession, TimerAction, TimerEngine, TimerEvent};
 pub use settings_defaults::{

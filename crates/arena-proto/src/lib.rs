@@ -65,6 +65,7 @@ mod refund;
 mod report;
 mod report_export;
 mod restore;
+mod restore_plan;
 mod rollup;
 mod scan;
 mod scope;
@@ -441,6 +442,10 @@ pub use restore::{
     DEFAULT_BACKUP_LAST_RESTORE, EpochChangedEvent, KEY_BACKUP_LAST_RESTORE, ORPHAN_KEEP_DAYS,
     OpsRestore, RESTORE_SYSTEM_ACTOR, RestoreCheck, RestoreCheckRequest, RestoreRequest,
     RestoreStaged, restore_time_text, restore_warning,
+};
+pub use restore_plan::{
+    RestoreFetchPhase, RestoreFetchView, RestoreGapView, RestorePlan, RestorePlanBatch,
+    RestorePlanRequest, RestorePlanSnapshot, RestorePosition, RestoreReadyView,
 };
 pub use rollup::{
     ROLLUP_MIN_SCHEMA, ROLLUP_PLAYERS_CAP, ROLLUP_SCHEMA, RollupAged, RollupAmount, RollupByMethod,

@@ -231,6 +231,38 @@ fn copy_and_pack(db_path: &Path, scratch: &Path, packed: &Path) -> Result<(Strin
     Ok((epoch, last_seq))
 }
 
+/// The last change `(epoch, seq)` a downloaded snapshot (`packed`, zstd) holds, or `None` when it
+/// holds no change row (Story 9.12). The file is unpacked to `scratch`, which is deleted again; an
+/// error means the file is not a zstd copy of a branch database. Blocking (disk).
+pub fn packed_snapshot_position(
+    packed: &Path,
+    scratch: &Path,
+) -> Result<Option<(String, i64)>, AppError> {
+    let read = (|| {
+        let mut input = File::open(packed).map_err(|e| io_error("open the snapshot", &e))?;
+        let mut output =
+            File::create(scratch).map_err(|e| io_error("create the unpacked snapshot", &e))?;
+        zstd::stream::copy_decode(&mut input, &mut output)
+            .map_err(|e| io_error("unpack the snapshot", &e))?;
+        drop(output);
+        let copy = Connection::open_with_flags(
+            scratch,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(db_error)?;
+        copy.query_row(
+            "SELECT epoch, seq FROM changes
+             ORDER BY epoch_counter DESC, epoch DESC, seq DESC LIMIT 1",
+            [],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+        )
+        .optional()
+        .map_err(db_error)
+    })();
+    let _ = fs::remove_file(scratch);
+    read
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,6 +287,24 @@ mod tests {
         )
         .unwrap();
         path
+    }
+
+    #[test]
+    fn a_packed_snapshot_reports_its_last_change_and_leaves_no_scratch_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = database(dir.path());
+        let out = tempfile::tempdir().unwrap();
+        let file = build_snapshot_file(&db, out.path(), "2026-10-29").unwrap();
+        let scratch = out.path().join("unpacked.db");
+        assert_eq!(
+            packed_snapshot_position(file.path(), &scratch).unwrap(),
+            Some(("2:b".to_owned(), 1))
+        );
+        assert!(!scratch.exists());
+        let junk = out.path().join("junk.zst");
+        fs::write(&junk, b"not zstd").unwrap();
+        assert!(packed_snapshot_position(&junk, &scratch).is_err());
+        assert!(!scratch.exists());
     }
 
     #[test]

@@ -943,6 +943,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::MfaRequired
         | ErrorCode::TierLocked
         | ErrorCode::FeatureNotInTier
+        | ErrorCode::KeyNotReleased
         | ErrorCode::DeviceLimit
         | ErrorCode::UserLimit => StatusCode::FORBIDDEN,
         ErrorCode::CloudUnreachable => StatusCode::SERVICE_UNAVAILABLE,
@@ -1003,6 +1004,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::ControllersUnchecked
         | ErrorCode::EraseBlocked
         | ErrorCode::KeyAlreadyReleased
+        | ErrorCode::RestoreGap
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::NotPrimary
         | ErrorCode::HubSlow

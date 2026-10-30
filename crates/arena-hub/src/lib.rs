@@ -628,6 +628,16 @@ async fn run(
         )
         .run(),
     );
+    // "Restore from cloud backup" downloads the paid branch's backup into a staging folder while
+    // the Hub waits (Story 9.12).
+    let restore_fetch: Arc<dyn arena_core::RestoreFetchControl> =
+        Arc::new(arena_tasks::RestoreFetcher::new(
+            cloud.clone(),
+            Arc::clone(&keystore),
+            instance_id.clone(),
+            &cfg.data_dir,
+            status_rx.clone(),
+        ));
     let command_job = tokio::spawn(
         CommandTask::new(
             cloud.clone(),
@@ -829,7 +839,8 @@ async fn run(
             Some(pair_gate.clone()),
         ))
         .merge(arena_api::ui_auth_router(ui_auth))
-        .merge(arena_api::ui_pair_router(pairer, pair_gate));
+        .merge(arena_api::ui_pair_router(pairer, pair_gate))
+        .merge(arena_api::ui_restore_fetch_router(restore_fetch));
     #[cfg(feature = "dev-fixtures")]
     let router = router.merge(arena_api::health::dev_router(
         writer.clone(),

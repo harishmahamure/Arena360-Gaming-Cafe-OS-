@@ -171,6 +171,19 @@ fn request_from(r: &[SqlValue]) -> Result<KeyRequestRow, ControlError> {
 }
 
 impl ControlDb {
+    /// Whether the owner released the branch key to `hub_instance_id` and that Hub took it
+    /// (Story 9.12: the cloud backup is handed out only then).
+    pub async fn key_released_to(
+        &self,
+        branch_id: &str,
+        hub_instance_id: &str,
+    ) -> Result<bool, ControlError> {
+        Ok(self
+            .key_request(branch_id, hub_instance_id)
+            .await?
+            .is_some_and(|r| r.state == KeyRequestState::Approved && r.fetched_at.is_some()))
+    }
+
     /// The request of `hub_instance_id` for `branch_id`, if it made one.
     pub async fn key_request(
         &self,
@@ -509,6 +522,41 @@ mod tests {
         db.put_key_request(id, "B1", instance, key, Some("FRONT-DESK"), now)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_key_counts_as_released_only_once_it_was_approved_and_taken() {
+        let (db, _dir) = db().await;
+        assert!(!db.key_released_to("B1", "I1").await.unwrap(), "no request");
+        put(&db, "R1", "I1", "age1a", 10).await;
+        assert!(!db.key_released_to("B1", "I1").await.unwrap(), "pending");
+        db.transact(vec![
+            Stmt::new(
+                "UPDATE key_requests SET state = 'approved', decided_at = 30, decided_by = 'O1' \n                 WHERE branch_id = 'B1'",
+                vec![],
+            )
+            .expect(1),
+        ])
+        .await
+        .unwrap();
+        assert!(
+            !db.key_released_to("B1", "I1").await.unwrap(),
+            "not fetched"
+        );
+        db.transact(vec![
+            Stmt::new(
+                "UPDATE key_requests SET fetched_at = 40 WHERE branch_id = 'B1'",
+                vec![],
+            )
+            .expect(1),
+        ])
+        .await
+        .unwrap();
+        assert!(db.key_released_to("B1", "I1").await.unwrap());
+        assert!(
+            !db.key_released_to("B1", "I2").await.unwrap(),
+            "another instance"
+        );
     }
 
     #[tokio::test]

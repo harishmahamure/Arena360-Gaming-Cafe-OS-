@@ -88,6 +88,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::ControllersUnchecked
         | ErrorCode::EraseBlocked
         | ErrorCode::KeyAlreadyReleased
+        | ErrorCode::RestoreGap
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired | ErrorCode::SetupCodeInvalid => {
             StatusCode::UNAUTHORIZED
@@ -96,6 +97,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::MfaRequired
         | ErrorCode::TierLocked
         | ErrorCode::FeatureNotInTier
+        | ErrorCode::KeyNotReleased
         | ErrorCode::DeviceLimit
         | ErrorCode::UserLimit => StatusCode::FORBIDDEN,
         ErrorCode::CloudUnreachable => StatusCode::SERVICE_UNAVAILABLE,

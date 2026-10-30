@@ -106,3 +106,126 @@ test("once the owner releases the branch key the option is on and the waiting co
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations).toEqual([]);
 });
+
+// ---- Story 9.12: Restore from cloud backup ----
+
+type CloudView = Record<string, unknown> | null;
+
+const DOWNLOADING = {
+  phase: "downloading",
+  done: 3,
+  total: 41,
+  bytes: 2_500_000,
+  percent: 7,
+};
+const GAP = {
+  phase: "gap",
+  done: 2,
+  total: 41,
+  bytes: 1000,
+  percent: 4,
+  gap: { epoch: "3:H", from_seq: 6, to_seq: 10, last_good_seq: 5, lost: 37 },
+};
+const READY = {
+  phase: "ready",
+  done: 4,
+  total: 4,
+  bytes: 5000,
+  percent: 100,
+  ready: { snapshot_date: "2026-10-29", batches: 1, last_seq: 5, partial: true },
+};
+
+/** The Hub's loopback API with the cloud-restore routes stubbed: `view` is what GET answers. */
+async function openCloud(page: Page, tier: string, start: { view: CloudView }) {
+  const posts: string[] = [];
+  await page.route(`${HUB}/**`, async (route) => {
+    const req = route.request();
+    if (req.method() === "OPTIONS") return route.fulfill({ status: 204, headers: CORS });
+    const url = new URL(req.url());
+    switch (url.pathname) {
+      case "/ui/snapshot":
+        return json(route, 200, { ...snapshot(true), tier });
+      case "/ui/me":
+        return json(route, 401, { code: "AUTH_FAILED", message: "sign in" });
+      case "/ui/events":
+        return route.fulfill({
+          status: 200,
+          contentType: "text/event-stream",
+          headers: CORS,
+          body: `retry: 300\n\n`,
+        });
+      case "/ui/restore/cloud":
+        if (req.method() === "POST") {
+          posts.push("start");
+          start.view = DOWNLOADING;
+        }
+        return json(route, 200, start.view);
+      case "/ui/restore/cloud/cancel":
+        posts.push("cancel");
+        start.view = null;
+        return json(route, 200, null);
+      case "/ui/restore/cloud/partial":
+        posts.push("partial");
+        start.view = READY;
+        return json(route, 200, READY);
+      default:
+        return route.fulfill({ status: 404, headers: CORS });
+    }
+  });
+  await page.goto("/floor");
+  await expect(page.getByTestId("hub-restore-pending")).toBeVisible();
+  return posts;
+}
+
+test("on Free the cloud backup option is not shown", async ({ page }) => {
+  await openCloud(page, "free", { view: null });
+  const screen = page.getByTestId("hub-restore-pending");
+  await expect(
+    screen.getByRole("button", { name: en["hub.restore_pending.option"] }),
+  ).toBeVisible();
+  await expect(
+    screen.getByRole("button", { name: en["hub.restore_pending.cloud_option"] }),
+  ).toHaveCount(0);
+});
+
+test("a paid Hub with the key released confirms, downloads with progress and can cancel", async ({
+  page,
+}) => {
+  const posts = await openCloud(page, "basic", { view: null });
+  const screen = page.getByTestId("hub-restore-pending");
+  const option = screen.getByRole("button", { name: en["hub.restore_pending.cloud_option"] });
+  await expect(option).toBeEnabled();
+  await option.click();
+  await expect(screen.getByTestId("cloud-confirm")).toContainText("Pixel Arena Gaming");
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+
+  await screen.getByRole("button", { name: en["hub.restore_pending.cloud_download"] }).click();
+  const progress = screen.getByTestId("cloud-progress");
+  await expect(progress).toContainText("Downloading 3 of 41");
+  await expect(progress).toContainText("7%");
+  await expect(progress.getByRole("progressbar")).toHaveAttribute("value", "7");
+  expect(posts).toEqual(["start"]);
+
+  await progress.getByRole("button", { name: en["hub.restore_pending.cloud_cancel"] }).click();
+  await expect(screen.getByTestId("cloud-progress")).toHaveCount(0);
+  await expect(option).toBeVisible();
+  expect(posts).toEqual(["start", "cancel"]);
+  // Still nothing else: the branch is not restored.
+  await expect(page.locator("nav")).toHaveCount(0);
+});
+
+test("a gap names the range, the cost and offers to stop before it", async ({ page }) => {
+  const posts = await openCloud(page, "basic", { view: GAP });
+  const screen = page.getByTestId("hub-restore-pending");
+  const gap = screen.getByTestId("cloud-gap");
+  await expect(gap).toContainText("Changes 6 to 10 are missing or damaged.");
+  await expect(gap).toContainText("up to change 5 would lose 37 changes");
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+  await gap.getByRole("button", { name: en["hub.restore_pending.cloud_gap_partial"] }).click();
+  const ready = screen.getByTestId("cloud-ready");
+  await expect(ready).toContainText("snapshot of 2026-10-29");
+  await expect(ready).toContainText(en["hub.restore_pending.cloud_ready_partial"]);
+  expect(posts).toEqual(["partial"]);
+});

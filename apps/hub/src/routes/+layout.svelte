@@ -778,6 +778,7 @@
       <RestoreBranch
         branchName={restoring}
         released={data.hub.ok && data.hub.snapshot.restore_key_released === true}
+        tier={data.hub.ok ? (data.hub.snapshot.tier ?? null) : null}
       />
     </main>
   </div>

@@ -19,6 +19,7 @@ pub mod notify;
 pub mod notify_trigger;
 pub mod printer;
 pub mod receipts;
+pub mod restore_fetch;
 pub mod restore_wait;
 pub mod session_timer;
 pub mod template;
@@ -59,6 +60,7 @@ pub use mdns::{
 pub use notify::{IN_DOUBT_RETRY_MS, NOTIFY_TICK, NotifyDrainTask};
 pub use notify_trigger::{NOTIFY_TRIGGER_TICK, NotifyTriggerTask};
 pub use receipts::{PRINT_BATCH, PRINT_TICK, ReceiptPrintTask};
+pub use restore_fetch::{RestoreFetcher, STAGING_DIR as RESTORE_STAGING_DIR};
 pub use restore_wait::{KeyRequestTask, restore_public_key};
 pub use session_timer::{SessionTimerTask, TIMER_EVENTS_DEPTH, TIMER_TICK};
 pub use template::{NOT_ENTITLED_RETRY, SetupTemplateTask, TIER_RECHECK, UPLOAD_DEBOUNCE};

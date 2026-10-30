@@ -260,7 +260,7 @@ pub use shifts::{
 };
 pub use snapshot::{
     SnapshotFile, SnapshotLogRow, build_snapshot_file, database_bytes, find_snapshot_log,
-    latest_snapshot_date, write_snapshot_log,
+    latest_snapshot_date, packed_snapshot_position, write_snapshot_log,
 };
 pub use staff::{
     PinCandidate, RoleRow, StaffListing, StaffRow, StaffWrite, count_active_staff,

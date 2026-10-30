@@ -8,8 +8,9 @@ use arena_proto::{
     CommandsPage, ErrorCode, FenceClaimRequest, FenceClaimResponse, HeartbeatRequest,
     HeartbeatResponse, HubPairRequest, HubPairResponse, HubPlatform, KekEscrowRequest,
     KekEscrowResponse, KekFetchRequest, KekFetchResponse, KekRequest, KekRequestResponse,
-    NotifyRequest, NotifyResponse, PresignRequest, PresignResponse, SETUP_MAX_BYTES,
-    SetupTemplateOutcome, SetupTemplateStored, UiError, normalize_pairing_code, valid_pairing_code,
+    NotifyRequest, NotifyResponse, PresignRequest, PresignResponse, RestorePlan,
+    RestorePlanRequest, SETUP_MAX_BYTES, SetupTemplateOutcome, SetupTemplateStored, UiError,
+    normalize_pairing_code, valid_pairing_code,
 };
 use arena_store::HubIdentity;
 use sha2::{Digest, Sha256};
@@ -89,6 +90,16 @@ pub enum CloudFailure {
         retry_after_s: Option<u32>,
     },
     Unreachable(String),
+}
+
+/// Why a presigned download (Story 9.12) did not produce a file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ObjectFailure {
+    /// No answer, the stream broke, or the file could not be written: try again.
+    Unreachable(String),
+    /// The bucket answered this status (a redirect is refused and lands here too). 403 is an
+    /// expired link; 404 and 410 are a missing object.
+    Status(u16),
 }
 
 /// Why a media download did not produce a verified file.
@@ -259,6 +270,49 @@ impl CloudClient {
         req: &KekFetchRequest,
     ) -> Result<KekFetchResponse, CloudFailure> {
         self.post("/v1/kek/fetch", Some(token), req).await
+    }
+
+    /// Asks for read links to the branch's cloud backup (Story 9.12).
+    pub async fn restore_plan(
+        &self,
+        token: &str,
+        req: &RestorePlanRequest,
+    ) -> Result<RestorePlan, CloudFailure> {
+        self.post("/v1/restore/plan", Some(token), req).await
+    }
+
+    /// Streams the object a presigned `url` leads to into `dest` (created or truncated) and
+    /// returns its size (Story 9.12). The link is the proof, so no token is sent and redirects are
+    /// refused. A dropped stream is a failure; `dest` then holds a partial file.
+    pub async fn download_object(&self, url: &str, dest: &Path) -> Result<u64, ObjectFailure> {
+        use tokio::io::AsyncWriteExt;
+        let mut res = self
+            .media
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| ObjectFailure::Unreachable(e.without_url().to_string()))?;
+        let status = res.status();
+        if !status.is_success() {
+            return Err(ObjectFailure::Status(status.as_u16()));
+        }
+        let io = |what: &str, e: std::io::Error| ObjectFailure::Unreachable(format!("{what}: {e}"));
+        let mut file = tokio::fs::File::create(dest)
+            .await
+            .map_err(|e| io("create the file", e))?;
+        let mut size = 0u64;
+        while let Some(chunk) = res
+            .chunk()
+            .await
+            .map_err(|e| ObjectFailure::Unreachable(e.without_url().to_string()))?
+        {
+            size += chunk.len() as u64;
+            file.write_all(&chunk)
+                .await
+                .map_err(|e| io("write the file", e))?;
+        }
+        file.sync_all().await.map_err(|e| io("write the file", e))?;
+        Ok(size)
     }
 
     /// Asks for short-lived upload links under the branch's prefix of the data bucket (Story 8.1).

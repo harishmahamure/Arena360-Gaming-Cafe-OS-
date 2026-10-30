@@ -206,6 +206,10 @@ pub enum ErrorCode {
     RestorePending,
     /// This branch key was already released to this request or Hub (Story 9.10).
     KeyAlreadyReleased,
+    /// The owner has not released the branch key to this Hub, so no cloud backup is handed out (Story 9.12).
+    KeyNotReleased,
+    /// A batch of the cloud backup is missing or damaged; the message names the seq range (Story 9.12).
+    RestoreGap,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -328,6 +332,8 @@ impl ErrorCode {
             Self::RestoreCorrupt => "RESTORE_CORRUPT",
             Self::RestorePending => "RESTORE_PENDING",
             Self::KeyAlreadyReleased => "KEY_ALREADY_RELEASED",
+            Self::KeyNotReleased => "KEY_NOT_RELEASED",
+            Self::RestoreGap => "RESTORE_GAP",
         }
     }
 }
@@ -511,6 +517,8 @@ mod tests {
             (ErrorCode::RestoreCorrupt, "RESTORE_CORRUPT"),
             (ErrorCode::RestorePending, "RESTORE_PENDING"),
             (ErrorCode::KeyAlreadyReleased, "KEY_ALREADY_RELEASED"),
+            (ErrorCode::KeyNotReleased, "KEY_NOT_RELEASED"),
+            (ErrorCode::RestoreGap, "RESTORE_GAP"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

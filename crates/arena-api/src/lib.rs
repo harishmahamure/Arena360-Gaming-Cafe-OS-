@@ -24,6 +24,7 @@ mod ui_player_tests;
 mod ui_printer;
 mod ui_refund;
 mod ui_report;
+mod ui_restore_fetch;
 #[cfg(test)]
 mod ui_restore_tests;
 #[cfg(test)]
@@ -37,3 +38,4 @@ pub use health::{
 };
 pub use ui_auth::{UiAuth, ui_auth_router};
 pub use ui_pair::ui_pair_router;
+pub use ui_restore_fetch::ui_restore_fetch_router;

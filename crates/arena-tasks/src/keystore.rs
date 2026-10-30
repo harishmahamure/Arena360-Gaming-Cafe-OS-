@@ -11,6 +11,10 @@ pub const ENTROPY_FILE: &str = "hub-token.entropy";
 pub trait Keystore: Send + Sync {
     fn put(&self, secret: &[u8]) -> io::Result<()>;
     fn get(&self) -> io::Result<Option<Vec<u8>>>;
+    /// Removes the secret. The default overwrites it with nothing; file stores remove the file.
+    fn delete(&self) -> io::Result<()> {
+        self.put(&[])
+    }
 }
 
 pub const KEK_FILE: &str = "branch-kek.bin";
@@ -24,6 +28,10 @@ impl<T: Keystore + ?Sized> Keystore for Arc<T> {
 
     fn get(&self) -> io::Result<Option<Vec<u8>>> {
         (**self).get()
+    }
+
+    fn delete(&self) -> io::Result<()> {
+        (**self).delete()
     }
 }
 
@@ -47,6 +55,14 @@ fn read_optional(path: &Path) -> io::Result<Option<Vec<u8>>> {
     match std::fs::read(path) {
         Ok(b) => Ok(Some(b)),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+fn remove_optional(path: &Path) -> io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e),
     }
 }
@@ -106,6 +122,10 @@ impl Keystore for FileKeystore {
 
     fn get(&self) -> io::Result<Option<Vec<u8>>> {
         read_optional(&self.path)
+    }
+
+    fn delete(&self) -> io::Result<()> {
+        remove_optional(&self.path)
     }
 }
 
@@ -243,6 +263,10 @@ impl Keystore for WrappedKeystore {
                 WrapError::Failed(detail) => io::Error::other(format!("unwrap: {detail}")),
             })
     }
+
+    fn delete(&self) -> io::Result<()> {
+        remove_optional(&self.path)
+    }
 }
 
 /// The Android Hub's keystore: files holding bytes wrapped by a non-exportable Android Keystore
@@ -262,6 +286,10 @@ impl Keystore for AndroidKeystore {
 
     fn get(&self) -> io::Result<Option<Vec<u8>>> {
         self.0.get()
+    }
+
+    fn delete(&self) -> io::Result<()> {
+        self.0.delete()
     }
 }
 
@@ -410,6 +438,10 @@ mod dpapi {
                 None => Ok(None),
                 Some(sealed) => unprotect(&sealed, &entropy(&self.path)?).map(Some),
             }
+        }
+
+        fn delete(&self) -> io::Result<()> {
+            remove_optional(&self.path)
         }
     }
 }

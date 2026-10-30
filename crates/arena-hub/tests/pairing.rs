@@ -143,6 +143,7 @@ async fn start_cloud() -> Cloud {
         mfa_key: MfaKey::from_bytes([0xa5; 32]),
         licence: arena_cloud::licence::LicenceSigner::dev(),
         billing_enabled: false,
+        escrow_key: None,
     };
     let st = auth_state(Arc::clone(&db), &cfg, clock).unwrap();
     let (_tx, rx) = watch::channel(Reachability {
@@ -674,4 +675,183 @@ async fn wait_for_request(
         assert!(Instant::now() < deadline, "the hub never asked for the key");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_released_branch_key_reaches_the_waiting_hub_once_and_survives_a_restart() {
+    use age::secrecy::ExposeSecret;
+    use base64::Engine as _;
+    let cloud = start_cloud().await;
+    let branch = cloud.branch_at_step_3().await;
+    let first_code = cloud.code(&branch).await;
+    let old_data = tempfile::tempdir().unwrap();
+    let (old, port) = start_hub(old_data.path(), &cloud.url, "android").await;
+    let (s, _) = request(
+        port,
+        "POST",
+        "/ui/pair-hub",
+        Some(json!({"code": first_code})),
+    )
+    .await;
+    assert_eq!(s, 200);
+    old.stop();
+    let (row, _) = cloud
+        .db
+        .apply_hub_revoke(&arena_store::control::NewCommand {
+            branch_id: &branch,
+            idempotency_key: "01HREVOKE",
+            kind: "hub.revoke",
+            schema_version: 1,
+            payload: "{}",
+            issued_by: "o1",
+            group_id: None,
+            elevated_by: Some("o1"),
+            now: now_ms(),
+        })
+        .await
+        .unwrap();
+    assert!(row.is_some());
+    let code = cloud.code(&branch).await;
+    let data = tempfile::tempdir().unwrap();
+    let (hub, port) = start_hub(data.path(), &cloud.url, "android").await;
+    let (s, _) = request(port, "POST", "/ui/pair-hub", Some(json!({"code": code}))).await;
+    assert_eq!(s, 200);
+    let live = cloud.db.active_hub(&branch).await.unwrap().unwrap();
+    let asked = wait_for_request(&cloud, &branch, &live.hub_instance_id, 0).await;
+    assert!(
+        asked.pc_name.as_deref().is_some_and(|n| !n.is_empty()),
+        "the Hub names its PC: {asked:?}"
+    );
+    let (_, snap) = request(port, "GET", "/ui/snapshot", None).await;
+    assert!(snap.get("restore_key_released").is_none(), "{snap}");
+    assert!(
+        arena_tasks::named_keystore(data.path(), arena_tasks::KEK_FILE)
+            .get()
+            .unwrap()
+            .is_none(),
+        "a waiting Hub makes no branch key"
+    );
+
+    // The old Hub escrowed its branch key; the owner approves, as the control role would.
+    let kek = [0x42u8; 32];
+    let escrow = age::x25519::Identity::generate();
+    let escrowed = arena_cloud::backup::encrypt(&kek, &[escrow.to_public()]).unwrap();
+    cloud
+        .db
+        .put_kek_escrow(
+            &branch,
+            "01OLDINSTANCE",
+            &base64::engine::general_purpose::STANDARD.encode(escrowed.clone()),
+            now_ms(),
+            &arena_store::control::NewAdminAudit {
+                id: "A-ESCROW",
+                at: now_ms(),
+                actor_kind: "system",
+                actor_id: "old",
+                action: "kek.escrow.write",
+                target_kind: "branch",
+                target_id: &branch,
+                reason: None,
+                summary: "{}",
+                request_id: "r",
+            },
+        )
+        .await
+        .unwrap();
+    let escrow_key =
+        arena_cloud::config::EscrowKey::parse(escrow.to_string().expose_secret()).unwrap();
+    let blob = arena_cloud::key_release::rewrap(&escrow_key, &escrowed, &asked.public_key).unwrap();
+    let command = arena_store::control::NewCommand {
+        branch_id: &branch,
+        idempotency_key: "01HRELEASE",
+        kind: "backup.restore",
+        schema_version: 1,
+        payload: r#"{"decision":"approve"}"#,
+        issued_by: "o1",
+        group_id: None,
+        elevated_by: Some("o1"),
+        now: now_ms(),
+    };
+    let outcome = cloud
+        .db
+        .apply_key_release(&arena_store::control::KeyDecision {
+            command: &command,
+            request_id: &asked.id,
+            approve: true,
+            wrapped_kek: Some(&base64::engine::general_purpose::STANDARD.encode(blob)),
+            audit: &arena_store::control::NewAdminAudit {
+                id: "A-RELEASE",
+                at: now_ms(),
+                actor_kind: "system",
+                actor_id: "o1",
+                action: "kek.release",
+                target_kind: "branch",
+                target_id: &branch,
+                reason: None,
+                summary: "{}",
+                request_id: "r2",
+            },
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        arena_store::control::KeyDecisionOutcome::Applied(_)
+    ));
+
+    // The Hub takes it within its poll interval, stores it and enables "Restore from a file".
+    let deadline = Instant::now() + Duration::from_secs(90);
+    loop {
+        let (_, snap) = request(port, "GET", "/ui/snapshot", None).await;
+        if snap["restore_key_released"] == true {
+            assert_eq!(snap["restore_pending"], "Pixel Arena Gaming", "{snap}");
+            break;
+        }
+        assert!(Instant::now() < deadline, "the key never reached the Hub");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    let stored = arena_tasks::named_keystore(data.path(), arena_tasks::KEK_FILE)
+        .get()
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored, kek);
+    assert!(
+        arena_tasks::named_keystore(data.path(), arena_tasks::RESTORE_KEY_FILE)
+            .get()
+            .unwrap()
+            .is_none(),
+        "the one-time key is deleted"
+    );
+    let fetched = cloud
+        .db
+        .key_request(&branch, &live.hub_instance_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(fetched.fetched_at.is_some());
+    let db_file = std::fs::read(data.path().join("branch.db")).unwrap();
+    assert!(
+        !db_file.windows(kek.len()).any(|w| w == kek),
+        "the key is never in the database"
+    );
+    {
+        let store = arena_store::Store::open_reader(data.path().join("branch.db")).unwrap();
+        assert!(store.restore_pending().unwrap().is_some(), "still waiting");
+        assert!(store.changes().unwrap().is_empty(), "nothing is written");
+    }
+
+    // A restart finds the key in the keystore and the option still on, with no new request.
+    hub.stop();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let (_hub, port) = start_hub(data.path(), &cloud.url, "android").await;
+    let (_, snap) = request(port, "GET", "/ui/snapshot", None).await;
+    assert_eq!(snap["restore_key_released"], true, "{snap}");
+    assert_eq!(snap["restore_pending"], "Pixel Arena Gaming", "{snap}");
+    assert!(
+        arena_tasks::named_keystore(data.path(), arena_tasks::RESTORE_KEY_FILE)
+            .get()
+            .unwrap()
+            .is_none(),
+        "no new one-time key after the release"
+    );
 }

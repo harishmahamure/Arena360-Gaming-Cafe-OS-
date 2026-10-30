@@ -4,7 +4,7 @@
   import type { OwnerBranch, OwnerCommandView, PairingCodeIssued } from "@arena/ui/generated";
   import { load, send, setupUrl } from "./api";
   import CommandRow from "./CommandRow.svelte";
-  import { revokeHub } from "./commands.svelte";
+  import { denyKey, releaseKey, revokeHub } from "./commands.svelte";
   import { age, refresh } from "./shell.svelte";
   import { ulid } from "./ulid";
 
@@ -28,6 +28,11 @@
   let replaceKey = ulid();
   let replaceError = $state(false);
   let replaced: OwnerCommandView | null = $state(null);
+  /** One idempotency key per request and decision, so a retry of the same tap is the same post. */
+  const keyKeys = new Map<string, string>();
+  let keyBusy = $state(false);
+  let keyError: MessageKey | null = $state(null);
+  let keyDecided: OwnerCommandView | null = $state(null);
 
   const seen = $derived.by(() => {
     const at = branch.hub.last_seen_at;
@@ -86,6 +91,26 @@
     replaceKey = ulid();
     replaceError = false;
     replacing = true;
+  }
+
+  async function answer(decision: "approve" | "deny") {
+    const ask = branch.key_request;
+    if (!ask) return;
+    const slot = `${ask.id}:${decision}`; // i18n-ignore
+    const key = keyKeys.get(slot) ?? ulid();
+    keyKeys.set(slot, key);
+    keyBusy = true;
+    keyError = null;
+    const res = await (decision === "approve" ? releaseKey : denyKey)(branch.id, key, ask.id);
+    keyBusy = false;
+    if (res === "declined") return;
+    if (res === "failed" || res === "refused") {
+      keyError = res === "failed" ? "owner.branches.key.failed" : "owner.branches.key.refused";
+      if (res === "refused") await refresh();
+      return;
+    }
+    keyDecided = res;
+    await refresh();
   }
 
   async function replace() {
@@ -170,6 +195,40 @@
         <a class="link" href={setupUrl(branch.id)}>{t("owner.branches.continue")}</a>
       {/if}
     </div>
+    {#if branch.key_request}
+      {@const ask = branch.key_request}
+      {@const [ageKey, ageN] = age(new Date(ask.requested_at).toISOString())}
+      <div class="replace" role="group" aria-labelledby="{id}-key" data-testid="key-request">
+        <p id="{id}-key" class="type-hub-label">
+          {t("owner.branches.key.title", {
+            pc: ask.pc_name ?? t("owner.branches.key.pc_fallback"),
+          })}
+        </p>
+        <p class="hint">{t("owner.branches.key.asked", { age: t(ageKey, { n: ageN }) })}</p>
+        <p>{t("owner.branches.key.note")}</p>
+        {#if keyError}<p role="alert">{t(keyError)}</p>{/if}
+        <div class="actions">
+          <Button
+            label="owner.branches.key.approve"
+            onclick={() => answer("approve")}
+            disabled={keyBusy}
+            disabledReason="owner.branches.key.working"
+          />
+          <Button
+            label="owner.branches.key.deny"
+            variant="secondary"
+            onclick={() => answer("deny")}
+            disabled={keyBusy}
+            disabledReason="owner.branches.key.working"
+          />
+        </div>
+      </div>
+    {/if}
+    {#if keyDecided}
+      <ul class="replaced">
+        <CommandRow row={keyDecided} now={Date.now()} />
+      </ul>
+    {/if}
     {#if replacing}
       <div class="replace" role="group" aria-labelledby="{id}-replace">
         <p id="{id}-replace" class="type-hub-label">{t("owner.branches.replace.title")}</p>

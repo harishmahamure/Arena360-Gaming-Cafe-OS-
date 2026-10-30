@@ -227,9 +227,10 @@ pub use intent::{
 #[cfg(any(test, feature = "dev-keys"))]
 pub use kek::DEV_KEK_ESCROW_RECIPIENTS;
 pub use kek::{
-    AGE_MAGIC, KEK_ESCROW_MAX_BYTES, KEK_ESCROW_RECIPIENTS, KEY_REQUEST_PUBLIC_KEY_LEN,
-    KEYS_OBJECT_KEY, KekEscrowRequest, KekEscrowResponse, KekRequest, KekRequestResponse,
-    KeyRequestState, PRESIGN_KIND_KEYS, valid_age_recipient,
+    AGE_MAGIC, KEK_ESCROW_MAX_BYTES, KEK_ESCROW_RECIPIENTS, KEY_REQUEST_EXPIRY_MS,
+    KEY_REQUEST_PC_NAME_MAX, KEY_REQUEST_PUBLIC_KEY_LEN, KEYS_OBJECT_KEY, KekEscrowRequest,
+    KekEscrowResponse, KekFetchRequest, KekFetchResponse, KekRequest, KekRequestResponse,
+    KeyRequestState, PRESIGN_KIND_KEYS, PendingKeyRequest, sanitise_pc_name, valid_age_recipient,
 };
 pub use kiosk::{
     GameMediaRef, KioskGameLaunched, KioskGamePlayRecorded, KioskHubState, KioskHubStatus,
@@ -307,12 +308,13 @@ pub use owner_alert::{
     PUSH_TTL_S, PushKeys, PushRemove, PushSubscribe,
 };
 pub use owner_commands::{
-    CreditRemind, DEVICE_REVOKE_REASONS, OWNER_COMMAND_KINDS, OWNER_COMMAND_POSTS_PER_MIN,
-    OWNER_COMMANDS_PAGE, OWNER_COMMANDS_PAGE_MAX, OWNER_UPDATES, OverwrittenChange,
-    OwnerCommandKind, OwnerCommandList, OwnerCommandPost, OwnerCommandPosted, OwnerCommandPreview,
-    OwnerCommandPreviewRequest, OwnerCommandSkip, OwnerCommandTarget, OwnerCommandView,
-    OwnerDeviceRevoke, OwnerStaffUpsert, OwnerUpdate, StaffSetupCode, UpdatedByOwnerEvent,
-    accepted_owner_kind, owner_command_kind, owner_update_for_table, validate_owner_payload,
+    CreditRemind, DEVICE_REVOKE_REASONS, KeyRelease, KeyReleaseDecision, OWNER_COMMAND_KINDS,
+    OWNER_COMMAND_POSTS_PER_MIN, OWNER_COMMANDS_PAGE, OWNER_COMMANDS_PAGE_MAX, OWNER_UPDATES,
+    OverwrittenChange, OwnerCommandKind, OwnerCommandList, OwnerCommandPost, OwnerCommandPosted,
+    OwnerCommandPreview, OwnerCommandPreviewRequest, OwnerCommandSkip, OwnerCommandTarget,
+    OwnerCommandView, OwnerDeviceRevoke, OwnerStaffUpsert, OwnerUpdate, StaffSetupCode,
+    UpdatedByOwnerEvent, accepted_owner_kind, owner_command_kind, owner_update_for_table,
+    validate_owner_payload,
 };
 pub use owner_export::{ExportReport, major, owner_csv, utc_minute};
 pub use owner_read::{

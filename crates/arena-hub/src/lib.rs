@@ -303,10 +303,21 @@ async fn run(
     let snapshots = Arc::new(SnapshotReader::open(cfg.db_path())?);
     let staff = Arc::new(StaffDirectory::open(cfg.db_path())?);
 
+    // The branch key's store: the player key reads it, and a replacement Hub is handed the key
+    // into it by the owner's release (Story 9.10).
+    let kek_store: Arc<dyn Keystore> = match &secrets {
+        Some(s) => Arc::clone(&s.kek),
+        None => Arc::from(arena_tasks::named_keystore(
+            &cfg.data_dir,
+            arena_tasks::KEK_FILE,
+        )),
+    };
     let mut initial = HubStatus::opened(schema_version, instance_id.clone());
     initial.tls_fingerprint = Some(cert.fingerprint.clone());
     // A replacement Hub that restarts is still waiting: nothing is written until it is restored.
     initial.restore_pending = store.restore_pending()?.map(|r| r.branch_name);
+    initial.restore_key_released = initial.restore_pending.is_some()
+        && arena_tasks::restore_wait::holds_released_key(kek_store.as_ref());
     initial.lan_ports = Some((cfg.lan_port, cfg.web_port));
     // The effective tier is unknown until the heartbeat task has evaluated the cached licence
     // against trusted time (Story 4.15): the tier recorded at pairing is not it. A paid Android
@@ -423,11 +434,8 @@ async fn run(
         });
     // The player key: opens profiles for the Hub UI and a player's name for a kiosk login.
     let player_kek: Arc<dyn arena_core::players::Kek> = Arc::new(
-        arena_tasks::KeystoreKek::new(match &secrets {
-            Some(s) => Box::new(Arc::clone(&s.kek)),
-            None => arena_tasks::named_keystore(&cfg.data_dir, arena_tasks::KEK_FILE),
-        })
-        .refusing_while_lost(pair_gate.clone()),
+        arena_tasks::KeystoreKek::new(Box::new(Arc::clone(&kek_store)))
+            .refusing_while_lost(pair_gate.clone()),
     );
     let verify_keys = [
         arena_proto::licence::LICENCE_VERIFY_KEYS,
@@ -435,6 +443,8 @@ async fn run(
         arena_proto::licence::DEV_LICENCE_VERIFY_KEYS,
     ]
     .concat();
+    // The Hub PC's name, shown to the owner in "Release branch key to <PC name>" (Story 9.10).
+    let pc_name = hub_name.clone();
     let mut lan_hub = LanHub::new(
         writer.clone(),
         status_rx.clone(),
@@ -610,7 +620,9 @@ async fn run(
             cloud.clone(),
             Arc::clone(&keystore),
             Arc::clone(&restore_key),
+            Arc::clone(&kek_store),
             instance_id.clone(),
+            &pc_name,
             pair_gate.clone(),
             status_tx.clone(),
         )

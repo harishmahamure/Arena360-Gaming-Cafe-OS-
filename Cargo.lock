@@ -253,6 +253,7 @@ dependencies = [
 name = "arena-hub"
 version = "0.1.0"
 dependencies = [
+ "age",
  "arena-api",
  "arena-cloud",
  "arena-core",
@@ -261,6 +262,7 @@ dependencies = [
  "arena-store",
  "arena-tasks",
  "axum",
+ "base64 0.22.1",
  "rusqlite",
  "rustls 0.23.46",
  "serde",

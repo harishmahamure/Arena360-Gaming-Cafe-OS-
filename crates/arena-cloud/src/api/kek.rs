@@ -3,16 +3,19 @@
 //!
 //! The branch and the Hub come from the device token. The cloud checks that the body is an age
 //! file of a sane size (so a bare key can never be stored), stores it in `gz_control.kek_escrow`
-//! and writes an `admin_audit` row in the same transaction. Nothing in this release reads the
-//! wrapped key back, and the answer says only that it was stored.
+//! and writes an `admin_audit` row in the same transaction. No endpoint returns the wrapped key
+//! and the answer says only that it was stored; the one reader is the owner's key release
+//! (`backup.restore`, Story 9.10), which re-wraps it for a replacement Hub.
+//! `POST /v1/kek/request` and `POST /v1/kek/fetch` serve that Hub (Stories 9.9 and 9.10).
 
 use std::sync::Arc;
 
 use arena_proto::{
-    AGE_MAGIC, KEK_ESCROW_MAX_BYTES, KekEscrowRequest, KekEscrowResponse, KekRequest,
-    KekRequestResponse, valid_age_recipient,
+    AGE_MAGIC, AppError, ErrorCode, KEK_ESCROW_MAX_BYTES, KekEscrowRequest, KekEscrowResponse,
+    KekFetchRequest, KekFetchResponse, KekRequest, KekRequestResponse, KeyRequestState,
+    sanitise_pc_name, valid_age_recipient,
 };
-use arena_store::control::{NewAdminAudit, RateRule};
+use arena_store::control::{KeyFetch, NewAdminAudit, RateRule};
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::routing::post;
@@ -162,6 +165,10 @@ async fn request(
             &hub.branch_id,
             &hub.hub_instance_id,
             &body.public_key,
+            body.pc_name
+                .as_deref()
+                .and_then(sanitise_pc_name)
+                .as_deref(),
             now,
         )
         .await
@@ -175,10 +182,81 @@ async fn request(
     Ok(Json(KekRequestResponse { state }))
 }
 
+/// Fetches an hour per Hub: the waiting Hub asks about every minute, with room to spare.
+const FETCH_HOURLY_LIMIT: u64 = 120;
+const FETCH_RATE_PREFIX: &str = "kekfetch:";
+
+/// `POST /v1/kek/fetch` (Story 9.10): the waiting Hub asks how its request stands. The re-wrapped
+/// key is handed out once, for an `approved` request not fetched before; asking again is
+/// `KEY_ALREADY_RELEASED`. A pending, denied or expired request answers its state and no key.
+async fn fetch(
+    State(st): State<Arc<AuthState>>,
+    headers: HeaderMap,
+    ApiJson(body): ApiJson<KekFetchRequest>,
+) -> Result<Json<KekFetchResponse>, ApiError> {
+    let now = st.now();
+    let hub = authenticate(&st, &headers, now).await?;
+    if body.hub_instance_id != hub.hub_instance_id {
+        return Err(ApiError::validation(
+            "hub_instance_id",
+            "That is not this Hub's instance.",
+        ));
+    }
+    let key = format!("{FETCH_RATE_PREFIX}{}", hub.branch_id);
+    let rule = RateRule {
+        key: &key,
+        prune_prefix: FETCH_RATE_PREFIX,
+        bucket_ms: 1,
+        window_ms: WINDOW_MS,
+        limit: FETCH_HOURLY_LIMIT,
+    };
+    if let Err(wait_ms) = st
+        .db
+        .rate_reserve(&[rule], now)
+        .await
+        .map_err(ApiError::internal)?
+    {
+        return Err(ApiError::rate_limited(ceil_s(wait_ms)));
+    }
+    st.db
+        .expire_key_requests(&hub.branch_id, now)
+        .await
+        .map_err(ApiError::internal)?;
+    let found = st
+        .db
+        .fetch_key_release(&hub.branch_id, &hub.hub_instance_id, now)
+        .await
+        .map_err(ApiError::internal)?;
+    match found {
+        KeyFetch::NoRequest => Err(ApiError::not_found()),
+        KeyFetch::AlreadyFetched => Err(AppError::new(
+            ErrorCode::KeyAlreadyReleased,
+            "The branch key was already sent to this Hub.",
+        )
+        .into()),
+        KeyFetch::State(state) => Ok(Json(KekFetchResponse {
+            state,
+            wrapped_kek: None,
+        })),
+        KeyFetch::Released(wrapped) => {
+            tracing::info!(
+                hub_id = %hub.id,
+                branch_id = %hub.branch_id,
+                "branch key handed to the replacement hub"
+            );
+            Ok(Json(KekFetchResponse {
+                state: KeyRequestState::Approved,
+                wrapped_kek: Some(wrapped),
+            }))
+        }
+    }
+}
+
 pub(super) fn router(st: Arc<AuthState>) -> Router {
     Router::new()
         .route("/kek/escrow", post(escrow))
         .route("/kek/request", post(request))
+        .route("/kek/fetch", post(fetch))
         .with_state(st)
 }
 

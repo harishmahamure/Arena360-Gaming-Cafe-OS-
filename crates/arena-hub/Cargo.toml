@@ -37,3 +37,5 @@ rusqlite.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true
 sha2.workspace = true
+age.workspace = true
+base64.workspace = true

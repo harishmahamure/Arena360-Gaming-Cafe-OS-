@@ -350,6 +350,11 @@ pub struct OwnerBranch {
     pub setup: BranchSetupProgress,
     pub hub: BranchHub,
     pub waiting: bool,
+    /// A replacement Hub is waiting for the owner to release the branch key to it (Story 9.10):
+    /// the newest unexpired pending request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub key_request: Option<crate::PendingKeyRequest>,
 }
 
 /// How far a branch's setup wizard has come (Story 8.14): steps no longer pending, of ten, and the

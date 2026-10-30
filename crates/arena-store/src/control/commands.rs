@@ -402,6 +402,18 @@ impl ControlDb {
         Ok(!rows.is_empty())
     }
 
+    /// The row a post with `idempotency_key` made on `branch_id`, if it was taken.
+    pub async fn command_by_key(
+        &self,
+        branch_id: &str,
+        idempotency_key: &str,
+    ) -> Result<Option<CommandRow>, ControlError> {
+        let rows = self
+            .query(SELECT_BY_KEY, vec![text(branch_id), text(idempotency_key)])
+            .await?;
+        rows.first().map(|r| command_from(r)).transpose()
+    }
+
     pub async fn command(&self, id: i64) -> Result<Option<CommandRow>, ControlError> {
         let rows = self
             .query(SELECT_BY_ID, vec![SqlValue::Integer(id)])

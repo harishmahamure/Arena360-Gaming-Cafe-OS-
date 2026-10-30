@@ -69,6 +69,7 @@ fn config() -> AuthConfig {
         mfa_key: MfaKey::from_bytes([0xa5; 32]),
         licence: arena_cloud::licence::LicenceSigner::dev(),
         billing_enabled: false,
+        escrow_key: None,
     }
 }
 

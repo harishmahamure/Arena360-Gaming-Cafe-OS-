@@ -1,7 +1,8 @@
 <script lang="ts">
   import { Button, t } from "@arena/ui";
 
-  let { branchName }: { branchName: string } = $props();
+  /** `released`: the owner released the branch key to this PC and it holds the key (Story 9.10). */
+  let { branchName, released = false }: { branchName: string; released?: boolean } = $props();
 </script>
 
 <svelte:head>
@@ -15,10 +16,13 @@
   </p>
   <p class="type-hub-body">{t("hub.restore_pending.replaces")}</p>
   <p class="type-hub-body">{t("hub.restore_pending.serves_nothing")}</p>
-  <!-- The key is released by the owner in Story 9.10; until then the one option is off. -->
+  {#if released}
+    <p class="type-hub-body" data-testid="restore-released">{t("hub.restore_pending.released")}</p>
+  {/if}
+  <!-- The one option is off until the owner releases the branch key (Story 9.10). -->
   <Button
     label="hub.restore_pending.option"
-    disabled={true}
+    disabled={!released}
     disabledReason="hub.restore_pending.waiting"
   />
 </section>

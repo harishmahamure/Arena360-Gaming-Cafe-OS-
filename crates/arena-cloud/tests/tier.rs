@@ -74,6 +74,7 @@ impl Harness {
             mfa_key: MfaKey::from_bytes([0xa5; 32]),
             licence: arena_cloud::licence::LicenceSigner::dev(),
             billing_enabled,
+            escrow_key: None,
         };
         let st = auth_state(Arc::clone(&db), &cfg, clock).unwrap();
         let (_tx, rx) = watch::channel(Reachability {

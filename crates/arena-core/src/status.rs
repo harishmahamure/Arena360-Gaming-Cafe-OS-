@@ -103,6 +103,9 @@ pub struct HubStatus {
     /// The branch name while this Hub replaces another and waits to be restored (Story 9.9): it
     /// writes nothing and serves no device until a restore completes.
     pub restore_pending: Option<String>,
+    /// The owner released the branch key to this waiting Hub and it holds the key (Story 9.10):
+    /// "Restore from a file" is offered. Never set while the Hub is not waiting.
+    pub restore_key_released: bool,
     pub cloud_time: Option<CloudTime>,
     pub live: bool,
     pub licence: Option<arena_proto::LicenceStanding>,
@@ -158,6 +161,7 @@ impl HubStatus {
             tier: None,
             pairing: PairingState::Active,
             restore_pending: None,
+            restore_key_released: false,
             cloud_time: None,
             live: false,
             licence: None,

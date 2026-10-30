@@ -775,7 +775,10 @@
 {:else if restoring !== null}
   <div class="pair-screen" data-theme="dark">
     <main class="hub-main" bind:this={mainEl}>
-      <RestoreBranch branchName={restoring} />
+      <RestoreBranch
+        branchName={restoring}
+        released={data.hub.ok && data.hub.snapshot.restore_key_released === true}
+      />
     </main>
   </div>
 {:else if unpaired}

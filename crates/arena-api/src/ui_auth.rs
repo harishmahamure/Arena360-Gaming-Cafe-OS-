@@ -1002,6 +1002,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::BundleShort
         | ErrorCode::ControllersUnchecked
         | ErrorCode::EraseBlocked
+        | ErrorCode::KeyAlreadyReleased
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::NotPrimary
         | ErrorCode::HubSlow

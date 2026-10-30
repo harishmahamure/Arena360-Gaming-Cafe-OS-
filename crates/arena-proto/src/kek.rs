@@ -88,6 +88,11 @@ impl KeyRequestState {
 pub struct KekRequest {
     pub hub_instance_id: String,
     pub public_key: String,
+    /// The Hub PC's name, as the owner sees it in "Release branch key to <PC name>" (Story 9.10).
+    /// The cloud sanitises it; the app says "the new PC" without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pc_name: Option<String>,
 }
 
 /// The request as the cloud now holds it.
@@ -96,6 +101,57 @@ pub struct KekRequest {
 pub struct KekRequestResponse {
     pub state: KeyRequestState,
 }
+
+/// The longest PC name a key request keeps, in characters.
+pub const KEY_REQUEST_PC_NAME_MAX: usize = 40;
+
+/// A host name fit to show the owner: control characters dropped, spaces collapsed, cut to
+/// [`KEY_REQUEST_PC_NAME_MAX`] characters. `None` when nothing printable is left.
+pub fn sanitise_pc_name(name: &str) -> Option<String> {
+    let cleaned: String = name
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let cleaned = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    let cut: String = cleaned.chars().take(KEY_REQUEST_PC_NAME_MAX).collect();
+    let cut = cut.trim().to_owned();
+    (!cut.is_empty()).then_some(cut)
+}
+
+/// `POST /v1/kek/fetch` (Story 9.10): the waiting Hub asks whether its request was decided.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KekFetchRequest {
+    pub hub_instance_id: String,
+}
+
+/// Where the request stands. `wrapped_kek` (an age file for the request's one-time public key,
+/// standard base64) is present only once, for an `approved` request not fetched before.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KekFetchResponse {
+    pub state: KeyRequestState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub wrapped_kek: Option<String>,
+}
+
+/// A pending request as the owner app shows it (Story 9.10).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PendingKeyRequest {
+    pub id: String,
+    /// The PC's name; the app says "the new PC" without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pc_name: Option<String>,
+    /// When the Hub asked (cloud clock, ms).
+    #[ts(type = "number")]
+    pub requested_at: i64,
+}
+
+/// A pending request older than this becomes `expired` (7 days).
+pub const KEY_REQUEST_EXPIRY_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
 /// Whether `key` looks like an age X25519 public key: `age1` and 58 bech32 characters.
 pub fn valid_age_recipient(key: &str) -> bool {
@@ -133,5 +189,24 @@ mod request_tests {
         ] {
             assert_eq!(KeyRequestState::parse(s.as_str()), Some(s));
         }
+    }
+
+    #[test]
+    fn a_pc_name_is_cleaned_and_cut_for_the_owner() {
+        assert_eq!(
+            sanitise_pc_name("FRONT-DESK").as_deref(),
+            Some("FRONT-DESK")
+        );
+        assert_eq!(
+            sanitise_pc_name(" Front\u{7}\n  desk ").as_deref(),
+            Some("Front desk")
+        );
+        assert_eq!(sanitise_pc_name(""), None);
+        assert_eq!(sanitise_pc_name(" \u{7}\t "), None);
+        let long = "x".repeat(KEY_REQUEST_PC_NAME_MAX + 20);
+        assert_eq!(
+            sanitise_pc_name(&long).unwrap().chars().count(),
+            KEY_REQUEST_PC_NAME_MAX
+        );
     }
 }

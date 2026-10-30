@@ -7,9 +7,9 @@ use arena_proto::{
     AppError, CATALOG_MANIFEST_PATH, CatalogManifest, CommandResult, CommandResultAck,
     CommandsPage, ErrorCode, FenceClaimRequest, FenceClaimResponse, HeartbeatRequest,
     HeartbeatResponse, HubPairRequest, HubPairResponse, HubPlatform, KekEscrowRequest,
-    KekEscrowResponse, KekRequest, KekRequestResponse, NotifyRequest, NotifyResponse,
-    PresignRequest, PresignResponse, SETUP_MAX_BYTES, SetupTemplateOutcome, SetupTemplateStored,
-    UiError, normalize_pairing_code, valid_pairing_code,
+    KekEscrowResponse, KekFetchRequest, KekFetchResponse, KekRequest, KekRequestResponse,
+    NotifyRequest, NotifyResponse, PresignRequest, PresignResponse, SETUP_MAX_BYTES,
+    SetupTemplateOutcome, SetupTemplateStored, UiError, normalize_pairing_code, valid_pairing_code,
 };
 use arena_store::HubIdentity;
 use sha2::{Digest, Sha256};
@@ -249,6 +249,16 @@ impl CloudClient {
         req: &KekRequest,
     ) -> Result<KekRequestResponse, CloudFailure> {
         self.post("/v1/kek/request", Some(token), req).await
+    }
+
+    /// Asks whether the owner decided the key request, and takes the re-wrapped key once it is
+    /// approved (Story 9.10).
+    pub async fn kek_fetch(
+        &self,
+        token: &str,
+        req: &KekFetchRequest,
+    ) -> Result<KekFetchResponse, CloudFailure> {
+        self.post("/v1/kek/fetch", Some(token), req).await
     }
 
     /// Asks for short-lived upload links under the branch's prefix of the data bucket (Story 8.1).

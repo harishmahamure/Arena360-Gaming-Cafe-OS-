@@ -4,4 +4,12 @@
  * `POST /v1/kek/request`: a replacement Hub asks the owner to release the branch key to it,
  * naming the one-time public key (age X25519, `age1…`) the key is to be wrapped for.
  */
-export type KekRequest = { hub_instance_id: string; public_key: string };
+export type KekRequest = {
+  hub_instance_id: string;
+  public_key: string;
+  /**
+   * The Hub PC's name, as the owner sees it in "Release branch key to <PC name>" (Story 9.10).
+   * The cloud sanitises it; the app says "the new PC" without one.
+   */
+  pc_name?: string;
+};

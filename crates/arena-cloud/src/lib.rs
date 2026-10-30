@@ -30,6 +30,7 @@ pub mod data_age;
 pub mod gaps;
 pub mod gstin;
 pub mod health;
+pub mod key_release;
 pub mod licence;
 pub mod messaging;
 pub mod offline_watch;

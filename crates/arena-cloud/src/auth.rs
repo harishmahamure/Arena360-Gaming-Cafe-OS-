@@ -49,6 +49,9 @@ pub struct AuthState {
     pub dummy_verifies: std::sync::atomic::AtomicU64,
     pub licence: crate::licence::LicenceSigner,
     pub billing_enabled: bool,
+    /// Opens the escrowed branch key for a release to a replacement Hub (Story 9.10); `None` until
+    /// `ARENA_KEK_ESCROW_KEY` is set.
+    pub escrow_key: Option<crate::config::EscrowKey>,
     pub hub_tokens: std::sync::Mutex<std::collections::HashMap<[u8; 32], i64>>,
     pub wizard_tx: tokio::sync::broadcast::Sender<String>,
     /// Where setup templates are kept (Story 5.37); set once by `serve`.
@@ -94,6 +97,7 @@ impl AuthState {
             dummy_verifies: std::sync::atomic::AtomicU64::new(0),
             licence: cfg.licence.clone(),
             billing_enabled: cfg.billing_enabled,
+            escrow_key: cfg.escrow_key.clone(),
             hub_tokens: std::sync::Mutex::default(),
             wizard_tx: tokio::sync::broadcast::channel(64).0,
             templates: std::sync::OnceLock::new(),
@@ -385,6 +389,7 @@ mod tests {
             mfa_key: crate::crypto::MfaKey::from_bytes([0; 32]),
             licence: crate::licence::LicenceSigner::dev(),
             billing_enabled: false,
+            escrow_key: None,
         };
         // A database these tests never touch.
         let rt = tokio::runtime::Builder::new_current_thread()

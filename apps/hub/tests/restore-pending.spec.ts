@@ -15,7 +15,7 @@ const CORS = {
   "access-control-allow-headers": "authorization, content-type",
 };
 
-function snapshot(): HubSnapshot {
+function snapshot(released: boolean): HubSnapshot {
   return {
     branch: null,
     devices: [],
@@ -24,6 +24,7 @@ function snapshot(): HubSnapshot {
     connectivity: { state: "online", checked_at: 1_800_000_000_000 },
     paired: true,
     restore_pending: "Pixel Arena Gaming",
+    ...(released ? { restore_key_released: true } : {}),
   } as unknown as HubSnapshot;
 }
 
@@ -36,7 +37,7 @@ function json(route: Route, status: number, body: unknown) {
   });
 }
 
-async function open(page: Page) {
+async function open(page: Page, released = false) {
   const asked: string[] = [];
   await page.route(`${HUB}/**`, async (route) => {
     const req = route.request();
@@ -45,7 +46,7 @@ async function open(page: Page) {
     asked.push(url.pathname);
     switch (url.pathname) {
       case "/ui/snapshot":
-        return json(route, 200, snapshot());
+        return json(route, 200, snapshot(released));
       case "/ui/me":
         return json(route, 401, { code: "AUTH_FAILED", message: "sign in" });
       case "/ui/events":
@@ -85,6 +86,23 @@ test("a replacement Hub shows only Restore this branch with the option off and t
 
 test("the Restore this branch screen meets the accessibility floor", async ({ page }) => {
   await open(page);
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+});
+
+test("once the owner releases the branch key the option is on and the waiting copy is gone", async ({
+  page,
+}) => {
+  await open(page, true);
+  const screen = page.getByTestId("hub-restore-pending");
+  await expect(screen.getByTestId("restore-released")).toHaveText(
+    en["hub.restore_pending.released"],
+  );
+  const option = screen.getByRole("button", { name: en["hub.restore_pending.option"] });
+  await expect(option).toBeEnabled();
+  await expect(screen).not.toContainText(en["hub.restore_pending.waiting"]);
+  // Still nothing else: restoring is a later step.
+  await expect(page.locator("nav")).toHaveCount(0);
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations).toEqual([]);
 });

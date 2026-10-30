@@ -98,7 +98,8 @@ pub const OWNER_COMMAND_KINDS: [OwnerCommandKind; 17] = [
     // The alert limits (Story 8.34): `settings.set` of `owner_alert.thresholds` only.
     handled("settings.set"),
     cloud_applied("hub.revoke"),
-    reserved("backup.restore"),
+    // Releases the escrowed branch key to a replacement Hub (Story 9.10): the cloud applies it.
+    cloud_applied("backup.restore"),
 ];
 
 pub fn owner_command_kind(kind: &str) -> Option<&'static OwnerCommandKind> {
@@ -127,6 +128,26 @@ pub struct OwnerStaffUpsert {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub setup_code: Option<bool>,
+}
+
+/// The owner's decision on a replacement Hub's request for the branch key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+#[serde(rename_all = "lowercase")]
+pub enum KeyReleaseDecision {
+    Approve,
+    Deny,
+}
+
+/// The payload of an owner `backup.restore` (Story 9.10): the key request and the decision on it.
+/// The cloud applies it: on `approve` it re-wraps the escrowed branch key for the request's
+/// one-time public key. The payload never carries key material.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct KeyRelease {
+    pub request_id: String,
+    pub decision: KeyReleaseDecision,
 }
 
 /// The reasons an owner gives for revoking a device (the Hub's `device.revoke` list).
@@ -216,6 +237,8 @@ pub fn validate_owner_payload(kind: &str, payload: &serde_json::Value) -> Result
         "product.upsert" => parses::<ProductUpsert>(&fields),
         "stock.threshold" => parses::<StockThreshold>(&fields),
         "backup.now" | "hub.revoke" => fields.as_object().is_some_and(|f| f.is_empty()),
+        "backup.restore" => serde_json::from_value::<KeyRelease>(fields)
+            .is_ok_and(|r| !r.request_id.trim().is_empty()),
         "settings.set" => return validate_alert_limits(fields),
         "staff.upsert" => parses::<OwnerStaffUpsert>(&fields),
         "staff.deactivate" => parses::<StaffDeactivate>(&fields),
@@ -498,11 +521,27 @@ mod tests {
             assert!(!kind.sensitive && kind.handled, "{k}");
             assert_eq!(kind.schema_version, COMMAND_SCHEMA_VERSION);
         }
-        assert!(owner_command_kind("backup.restore").unwrap().sensitive);
-        assert_eq!(
-            accepted_owner_kind("backup.restore").unwrap_err().code,
-            ErrorCode::Unsupported
-        );
+        // Story 9.10: the key release is applied by the cloud, still sensitive, never by a Hub.
+        let release = accepted_owner_kind("backup.restore").unwrap();
+        assert!(release.sensitive && release.cloud && !release.handled);
+        assert_eq!(release.min_tier, Tier::Free);
+        assert_eq!(release.flag, None);
+        let ok = |d: &str| json!({"request_id": "R1", "decision": d});
+        assert!(validate_owner_payload("backup.restore", &ok("approve")).is_ok());
+        assert!(validate_owner_payload("backup.restore", &ok("deny")).is_ok());
+        for bad in [
+            ok("maybe"),
+            json!({"request_id": "R1"}),
+            json!({"decision": "approve"}),
+            json!({"request_id": " ", "decision": "approve"}),
+            json!({"request_id": "R1", "decision": "approve", "public_key": "age1x"}),
+            json!({}),
+        ] {
+            assert!(
+                validate_owner_payload("backup.restore", &bad).is_err(),
+                "{bad}"
+            );
+        }
         assert_eq!(
             accepted_owner_kind("pricing.set").unwrap_err().code,
             ErrorCode::Unsupported

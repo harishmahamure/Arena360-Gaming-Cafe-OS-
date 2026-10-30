@@ -204,6 +204,8 @@ pub enum ErrorCode {
     RestoreCorrupt,
     /// A replacement Hub is waiting for the branch to be restored and serves nothing (Story 9.9).
     RestorePending,
+    /// This branch key was already released to this request or Hub (Story 9.10).
+    KeyAlreadyReleased,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -325,6 +327,7 @@ impl ErrorCode {
             Self::RestoreWrongBranch => "RESTORE_WRONG_BRANCH",
             Self::RestoreCorrupt => "RESTORE_CORRUPT",
             Self::RestorePending => "RESTORE_PENDING",
+            Self::KeyAlreadyReleased => "KEY_ALREADY_RELEASED",
         }
     }
 }
@@ -507,6 +510,7 @@ mod tests {
             (ErrorCode::RestoreWrongBranch, "RESTORE_WRONG_BRANCH"),
             (ErrorCode::RestoreCorrupt, "RESTORE_CORRUPT"),
             (ErrorCode::RestorePending, "RESTORE_PENDING"),
+            (ErrorCode::KeyAlreadyReleased, "KEY_ALREADY_RELEASED"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

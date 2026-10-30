@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use arena_proto::{
     AddBranch, AppError, BranchCodeSet, BranchHub, BranchSetupProgress, ErrorCode, OwnerBranch,
-    SetBranchCode, Tier, UpdateBranch, valid_branch_code,
+    PendingKeyRequest, SetBranchCode, Tier, UpdateBranch, valid_branch_code,
 };
 use arena_store::control::{Branch, BranchCodeOutcome, BranchProfile};
 use axum::extract::State;
@@ -29,6 +29,22 @@ pub(super) async fn tier_of(st: &AuthState, branch_id: &str) -> Result<Tier, Api
 }
 
 async fn row(st: &AuthState, b: &Branch) -> Result<OwnerBranch, ApiError> {
+    // A request pending past 7 days expires before the owner is offered it (Story 9.10).
+    let now = st.now();
+    st.db
+        .expire_key_requests(&b.id, now)
+        .await
+        .map_err(ApiError::internal)?;
+    let key_request = st
+        .db
+        .pending_key_request(&b.id, now)
+        .await
+        .map_err(ApiError::internal)?
+        .map(|r| PendingKeyRequest {
+            id: r.id,
+            pc_name: r.pc_name,
+            requested_at: r.requested_at,
+        });
     let tier = tier_of(st, &b.id).await?;
     let hub = st.db.active_hub(&b.id).await.map_err(ApiError::internal)?;
     let states: Vec<_> = st
@@ -64,6 +80,7 @@ async fn row(st: &AuthState, b: &Branch) -> Result<OwnerBranch, ApiError> {
             .settings_pending(&b.id)
             .await
             .map_err(ApiError::internal)?,
+        key_request,
     })
 }
 

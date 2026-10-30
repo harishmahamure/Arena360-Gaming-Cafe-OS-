@@ -64,6 +64,7 @@ fn config() -> AuthConfig {
         mfa_key: MfaKey::from_bytes([0xa5; 32]),
         licence: arena_cloud::licence::LicenceSigner::dev(),
         billing_enabled: false,
+        escrow_key: None,
     }
 }
 
@@ -449,7 +450,7 @@ async fn a_credit_reminder_names_only_the_player_and_needs_no_step_up() {
 async fn kinds_outside_the_catalogue_or_reserved_are_unsupported() {
     let h = Harness::new().await;
     let a = h.paid_cafe().await;
-    for kind in ["backup.restore", "pricing.set", "branch.go_live"] {
+    for kind in ["pricing.set", "branch.go_live", "backup.verify"] {
         let r = h.send(&a, post(&a.branch, K1, kind, json!({}))).await;
         assert_eq!(r.status, 400, "{kind}: {}", r.body);
         assert_eq!(r.code(), "UNSUPPORTED", "{kind}");
@@ -1205,7 +1206,7 @@ async fn the_preview_refuses_unknown_kinds_other_cafes_and_signed_out_callers() 
     let b = h.cafe(PHONE_B, "Other Arena", "198.51.100.5").await;
     let r = h.preview(&a, &a.branch, "nope").await;
     assert_eq!((r.status, r.code()), (400, "UNSUPPORTED"));
-    let r = h.preview(&a, &a.branch, "backup.restore").await;
+    let r = h.preview(&a, &a.branch, "branch.go_live").await;
     assert_eq!(r.code(), "UNSUPPORTED");
     let r = h.preview(&a, &b.branch, "rate.upsert").await;
     assert_eq!((r.status, r.code()), (404, "NOT_FOUND"));

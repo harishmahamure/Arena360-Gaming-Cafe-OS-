@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use arena_cloud::auth::AuthState;
-use arena_cloud::config::{AuthConfig, Role, SmsProviderConfig};
+use arena_cloud::config::{AuthConfig, EscrowKey, Role, SmsProviderConfig};
 use arena_cloud::crypto::MfaKey;
 use arena_cloud::health::Reachability;
 use arena_cloud::{Clock, app_with_auth, auth_state, totp};
@@ -115,6 +115,10 @@ async fn reply(res: axum::response::Response) -> Reply {
 
 impl Harness {
     async fn new() -> Self {
+        Self::with_escrow(None).await
+    }
+
+    async fn with_escrow(escrow_key: Option<EscrowKey>) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let db = ControlDb::open_local(&dir.path().join("gz_control.db"))
             .await
@@ -132,6 +136,7 @@ impl Harness {
             mfa_key: MfaKey::from_bytes([0xa5; 32]),
             licence: arena_cloud::licence::LicenceSigner::dev(),
             billing_enabled: false,
+            escrow_key,
         };
         let st = auth_state(Arc::clone(&db), &cfg, clock).unwrap();
         st.extra_kinds.lock().unwrap().push(OwnerCommandKind {
@@ -1378,4 +1383,511 @@ async fn a_key_request_is_refused_for_a_first_hub_a_bad_key_a_foreign_instance_a
         )
         .await;
     assert_eq!(none.status, 401);
+}
+
+// ---- Story 9.10: the owner releases the branch key to the replacement Hub ----
+
+const K4: &str = "01JBQ6W3Y8Z9X0A1B2C3D4E5F9";
+const K5: &str = "01JBQ6W3Y8Z9X0A1B2C3D4E5FA";
+const KEK: [u8; 32] = [0x5a; 32];
+
+/// What the replacement Hub holds while it waits.
+struct Waiting {
+    token: String,
+    instance: String,
+    hub_key: age::x25519::Identity,
+    request_id: String,
+}
+
+fn escrow_pair() -> (EscrowKey, age::x25519::Identity) {
+    use age::secrecy::ExposeSecret;
+    let identity = age::x25519::Identity::generate();
+    let key = EscrowKey::parse(identity.to_string().expose_secret()).unwrap();
+    (key, identity)
+}
+
+fn same_identity(identity: &age::x25519::Identity) -> age::x25519::Identity {
+    use age::secrecy::ExposeSecret;
+    use std::str::FromStr;
+    age::x25519::Identity::from_str(identity.to_string().expose_secret()).unwrap()
+}
+
+fn open_with(identity: &age::x25519::Identity, b64: &str) -> Vec<u8> {
+    use base64::Engine as _;
+    use std::io::Read;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .unwrap();
+    let d = age::Decryptor::new_buffered(&bytes[..]).unwrap();
+    let mut r = d
+        .decrypt(std::iter::once(identity as &dyn age::Identity))
+        .unwrap();
+    let mut out = Vec::new();
+    r.read_to_end(&mut out).unwrap();
+    out
+}
+
+impl Harness {
+    async fn kek_fetch(&self, token: &str, instance: &str) -> Reply {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/v1/kek/fetch")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::from(json!({"hub_instance_id": instance}).to_string()))
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(SocketAddr::new(
+            "198.51.100.4".parse().unwrap(),
+            40000,
+        )));
+        reply(self.app.clone().oneshot(req).await.unwrap()).await
+    }
+
+    /// The first Hub's escrowed branch key, wrapped for `escrow` as `put_kek_escrow` stores it.
+    async fn escrow_row(&self, c: &Cafe, escrow: &age::x25519::Identity) {
+        use base64::Engine as _;
+        let wrapped = arena_cloud::backup::encrypt(&KEK, &[escrow.to_public()]).unwrap();
+        self.db
+            .put_kek_escrow(
+                &c.branch,
+                "01HUBINSTANCE",
+                &base64::engine::general_purpose::STANDARD.encode(wrapped),
+                self.now(),
+                &arena_store::control::NewAdminAudit {
+                    id: &format!("escrow-{}", self.now()),
+                    at: self.now(),
+                    actor_kind: "system",
+                    actor_id: "hub",
+                    action: "kek.escrow.write",
+                    target_kind: "branch",
+                    target_id: &c.branch,
+                    reason: None,
+                    summary: "{}",
+                    request_id: "r",
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    /// Replaces the Hub (a fresh step-up), pairs `instance` and has it ask for the key with a new
+    /// one-time pair (or the given one).
+    async fn wait_for_release(
+        &self,
+        c: &Cafe,
+        revoke_key: &str,
+        instance: &str,
+        hub_key: Option<age::x25519::Identity>,
+    ) -> Waiting {
+        self.advance(STEP_MS);
+        let paired = self.replace(c, revoke_key, instance).await;
+        assert_eq!(paired.status, 200, "{}", paired.body);
+        let token = paired.body["token"].as_str().unwrap().to_owned();
+        let hub_key = hub_key.unwrap_or_else(age::x25519::Identity::generate);
+        let asked = self
+            .kek_request(
+                &token,
+                json!({
+                    "hub_instance_id": instance,
+                    "public_key": hub_key.to_public().to_string(),
+                    "pc_name": "FRONT-DESK",
+                }),
+            )
+            .await;
+        assert_eq!(asked.status, 200, "{}", asked.body);
+        let row = self
+            .db
+            .key_request(&c.branch, instance)
+            .await
+            .unwrap()
+            .unwrap();
+        Waiting {
+            token,
+            instance: instance.to_owned(),
+            hub_key,
+            request_id: row.id,
+        }
+    }
+
+    async fn decide(&self, c: &Cafe, key: &str, w: &Waiting, decision: &str) -> Reply {
+        self.post(
+            c,
+            key,
+            "backup.restore",
+            json!({"request_id": w.request_id, "decision": decision}),
+        )
+        .await
+    }
+
+    async fn branches(&self, c: &Cafe) -> Value {
+        let r = self.call("GET", "/v1/branches", None, &c.access).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        r.body
+    }
+
+    async fn key_audit(&self) -> Vec<arena_store::control::AdminAuditRow> {
+        self.db
+            .admin_audit_rows()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.action.starts_with("kek.") && r.action != "kek.escrow.write")
+            .collect()
+    }
+
+    fn request_state(&self, branch: &str, instance: &str) -> String {
+        rusqlite::Connection::open(self._dir.path().join("gz_control.db"))
+            .unwrap()
+            .query_row(
+                "SELECT state FROM key_requests WHERE branch_id = ? AND hub_instance_id = ?",
+                [branch, instance],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+}
+
+#[tokio::test]
+async fn the_owner_approves_and_the_hub_fetches_the_key_once_wrapped_for_its_own_key() {
+    let (escrow_key, escrow) = escrow_pair();
+    let h = Harness::with_escrow(Some(escrow_key)).await;
+    let c = h.cafe().await;
+    let owner = h.owner().await;
+    h.escrow_row(&c, &escrow).await;
+    let w = h.wait_for_release(&c, K1, "01REPLACEMENT", None).await;
+
+    // The owner sees the prompt with the PC name and the time of the request.
+    let list = h.branches(&c).await;
+    let ask = &list[0]["key_request"];
+    assert_eq!(ask["id"], w.request_id.as_str());
+    assert_eq!(ask["pc_name"], "FRONT-DESK");
+    assert_eq!(ask["requested_at"].as_i64(), Some(h.now()));
+    // The Hub is told it waits: no blob.
+    let waiting = h.kek_fetch(&w.token, &w.instance).await;
+    assert_eq!(waiting.status, 200, "{}", waiting.body);
+    assert_eq!(waiting.body, json!({"state": "pending"}));
+
+    // The step-up proof is five minutes old at most.
+    h.advance(STEPUP_TTL_MS + 1);
+    let stale = h.decide(&c, K4, &w, "approve").await;
+    assert_eq!((stale.status, stale.code()), (403, "MFA_REQUIRED"));
+    assert_eq!(h.request_state(&c.branch, &w.instance), "pending");
+    assert!(h.key_audit().await.is_empty());
+
+    h.advance(STEP_MS);
+    assert_eq!(h.stepup(&c, "totp", &h.totp(&c)).await.status, 204);
+    let done = h.decide(&c, K4, &w, "approve").await;
+    assert_eq!(done.status, 200, "{}", done.body);
+    let view = &done.body["commands"][0];
+    assert_eq!(
+        (view["kind"].as_str(), view["status"].as_str()),
+        (Some("backup.restore"), Some("applied"))
+    );
+    let row =
+        h.db.command(view["id"].as_i64().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+    assert_eq!(row.elevated_by.as_deref(), Some(owner.id.as_str()));
+    assert_eq!(h.request_state(&c.branch, &w.instance), "approved");
+    assert!(h.branches(&c).await[0].get("key_request").is_none());
+
+    // One audit row: the owner, the branch, the Hub instance and the outcome; no key anywhere.
+    let audit = h.key_audit().await;
+    assert_eq!(audit.len(), 1);
+    assert_eq!(audit[0].action, "kek.release");
+    assert_eq!(
+        (audit[0].actor_kind.as_str(), audit[0].actor_id.as_str()),
+        ("system", owner.id.as_str())
+    );
+    assert_eq!(audit[0].target_id, c.branch);
+    assert!(audit[0].summary.contains("01REPLACEMENT"));
+    assert!(audit[0].summary.contains("released"));
+
+    // The same post again answers its first row and changes nothing.
+    let again = h.decide(&c, K4, &w, "approve").await;
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert_eq!(again.body["commands"][0]["id"], view["id"]);
+    assert_eq!(h.key_audit().await.len(), 1);
+
+    // The Hub fetches the re-wrapped key once, and only its own key opens it.
+    let got = h.kek_fetch(&w.token, &w.instance).await;
+    assert_eq!(got.status, 200, "{}", got.body);
+    assert_eq!(got.body["state"], "approved");
+    let blob = got.body["wrapped_kek"].as_str().unwrap();
+    assert_eq!(open_with(&w.hub_key, blob), KEK);
+    assert!(
+        !done.body.to_string().contains(blob),
+        "the owner's answer never carries the key"
+    );
+    let second = h.kek_fetch(&w.token, &w.instance).await;
+    assert_eq!(
+        (second.status, second.code()),
+        (409, "KEY_ALREADY_RELEASED")
+    );
+    assert!(second.body.get("wrapped_kek").is_none());
+    let row =
+        h.db.key_request(&c.branch, &w.instance)
+            .await
+            .unwrap()
+            .unwrap();
+    assert!(row.fetched_at.is_some());
+}
+
+#[tokio::test]
+async fn a_denial_is_audited_and_the_hub_never_gets_a_key() {
+    let (escrow_key, escrow) = escrow_pair();
+    let h = Harness::with_escrow(Some(escrow_key)).await;
+    let c = h.cafe().await;
+    h.escrow_row(&c, &escrow).await;
+    let w = h.wait_for_release(&c, K1, "01REPLACEMENT", None).await;
+
+    let denied = h.decide(&c, K4, &w, "deny").await;
+    assert_eq!(denied.status, 200, "{}", denied.body);
+    assert_eq!(denied.body["commands"][0]["status"], "applied");
+    assert_eq!(h.request_state(&c.branch, &w.instance), "denied");
+    assert!(h.branches(&c).await[0].get("key_request").is_none());
+    let audit = h.key_audit().await;
+    assert_eq!(audit.len(), 1);
+    assert_eq!(audit[0].action, "kek.deny");
+
+    let fetched = h.kek_fetch(&w.token, &w.instance).await;
+    assert_eq!(fetched.status, 200, "{}", fetched.body);
+    assert_eq!(fetched.body, json!({"state": "denied"}));
+    // A denied request stays decided, even when the Hub asks again and the owner tries to approve.
+    let asked = h
+        .kek_request(
+            &w.token,
+            json!({
+                "hub_instance_id": w.instance,
+                "public_key": w.hub_key.to_public().to_string(),
+            }),
+        )
+        .await;
+    assert_eq!(asked.body["state"], "denied");
+    let late = h.decide(&c, K5, &w, "approve").await;
+    assert_eq!((late.status, late.code()), (409, "STEP_NOT_READY"));
+    assert_eq!(h.key_audit().await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_request_not_answered_in_seven_days_expires_with_one_audit_row_and_cannot_be_approved() {
+    let (escrow_key, escrow) = escrow_pair();
+    let h = Harness::with_escrow(Some(escrow_key)).await;
+    let c = h.cafe().await;
+    h.escrow_row(&c, &escrow).await;
+    let w = h.wait_for_release(&c, K1, "01REPLACEMENT", None).await;
+    // The Hub asked eight days ago.
+    rusqlite::Connection::open(h._dir.path().join("gz_control.db"))
+        .unwrap()
+        .execute(
+            "UPDATE key_requests SET requested_at = requested_at - ?",
+            [8 * DAY],
+        )
+        .unwrap();
+
+    let list = h.branches(&c).await;
+    assert!(list[0].get("key_request").is_none(), "{list}");
+    assert_eq!(h.request_state(&c.branch, &w.instance), "expired");
+    let audit = h.key_audit().await;
+    assert_eq!(audit.len(), 1);
+    assert_eq!(audit[0].action, "kek.request.expire");
+    assert_eq!(audit[0].actor_kind, "system");
+
+    let late = h.decide(&c, K4, &w, "approve").await;
+    assert_eq!((late.status, late.code()), (409, "STEP_NOT_READY"));
+    let fetched = h.kek_fetch(&w.token, &w.instance).await;
+    assert_eq!(fetched.body, json!({"state": "expired"}));
+    assert_eq!(
+        h.key_audit().await.len(),
+        1,
+        "the sweep writes its row once"
+    );
+}
+
+#[tokio::test]
+async fn a_public_key_already_released_on_the_branch_is_never_released_again() {
+    let (escrow_key, escrow) = escrow_pair();
+    let h = Harness::with_escrow(Some(escrow_key)).await;
+    let c = h.cafe().await;
+    h.escrow_row(&c, &escrow).await;
+    let first = h.wait_for_release(&c, K1, "01FIRST", None).await;
+    assert_eq!(h.decide(&c, K4, &first, "approve").await.status, 200);
+
+    // The owner replaces the Hub again; the next instance asks with the very same public key.
+    let again = h
+        .wait_for_release(&c, K2, "01SECOND", Some(same_identity(&first.hub_key)))
+        .await;
+    h.advance(STEP_MS);
+    assert_eq!(h.stepup(&c, "totp", &h.totp(&c)).await.status, 204);
+    let replay = h.decide(&c, K5, &again, "approve").await;
+    assert_eq!(
+        (replay.status, replay.code()),
+        (409, "KEY_ALREADY_RELEASED")
+    );
+    assert_eq!(h.request_state(&c.branch, &again.instance), "pending");
+    assert_eq!(h.key_audit().await.len(), 1);
+    // The released request cannot be approved twice either.
+    let twice = h.decide(&c, K3, &first, "approve").await;
+    assert_eq!((twice.status, twice.code()), (409, "KEY_ALREADY_RELEASED"));
+}
+
+#[tokio::test]
+async fn a_revoked_hub_gets_no_key_and_another_cafes_request_is_not_found() {
+    let (escrow_key, escrow) = escrow_pair();
+    let h = Harness::with_escrow(Some(escrow_key)).await;
+    let c = h.cafe().await;
+    h.escrow_row(&c, &escrow).await;
+    let old = h.wait_for_release(&c, K1, "01FIRST", None).await;
+    // The owner replaced the Hub once more before approving the first request.
+    let _new = h.wait_for_release(&c, K2, "01SECOND", None).await;
+    h.advance(STEP_MS);
+    assert_eq!(h.stepup(&c, "totp", &h.totp(&c)).await.status, 204);
+
+    let refused = h.decide(&c, K4, &old, "approve").await;
+    assert_eq!((refused.status, refused.code()), (401, "TOKEN_REVOKED"));
+    assert_eq!(h.request_state(&c.branch, &old.instance), "pending");
+    let fetched = h.kek_fetch(&old.token, &old.instance).await;
+    assert_eq!((fetched.status, fetched.code()), (401, "TOKEN_REVOKED"));
+    assert!(h.key_audit().await.is_empty());
+
+    // A branch of the same café does not know the request; a branch of another café does not exist.
+    let other = h.extra_branch(&c, "Annex").await;
+    for branch in [other.as_str(), "01JBQ6W3Y8Z9X0A1B2C3D4E5FZ"] {
+        let r = h
+            .call(
+                "POST",
+                "/v1/commands",
+                Some(json!({
+                    "branch_id": branch, "idempotency_key": K5, "kind": "backup.restore",
+                    "payload": {"request_id": old.request_id, "decision": "deny"},
+                })),
+                &c.access,
+            )
+            .await;
+        assert_eq!((r.status, r.code()), (404, "NOT_FOUND"), "{branch}");
+    }
+    assert_eq!(h.request_state(&c.branch, &old.instance), "pending");
+}
+
+#[tokio::test]
+async fn without_an_escrow_key_or_an_escrowed_key_approve_changes_nothing() {
+    // No ARENA_KEK_ESCROW_KEY.
+    let h = Harness::new().await;
+    let c = h.cafe().await;
+    let w = h.wait_for_release(&c, K1, "01REPLACEMENT", None).await;
+    let rows = h.rows();
+    let r = h.decide(&c, K4, &w, "approve").await;
+    assert_eq!((r.status, r.code()), (409, "STEP_NOT_READY"));
+    assert_eq!(h.request_state(&c.branch, &w.instance), "pending");
+    assert_eq!((h.rows(), h.key_audit().await.len()), (rows, 0));
+
+    // The key is configured but the branch never escrowed one.
+    let (escrow_key, _escrow) = escrow_pair();
+    let h = Harness::with_escrow(Some(escrow_key)).await;
+    let c = h.cafe().await;
+    let w = h.wait_for_release(&c, K1, "01REPLACEMENT", None).await;
+    let rows = h.rows();
+    let r = h.decide(&c, K4, &w, "approve").await;
+    assert_eq!((r.status, r.code()), (409, "STEP_NOT_READY"));
+    assert_eq!((h.rows(), h.key_audit().await.len()), (rows, 0));
+
+    // A key that cannot open the escrowed one is refused the same way, nothing written.
+    let (_, someone_else) = escrow_pair();
+    h.escrow_row(&c, &someone_else).await;
+    let r = h.decide(&c, K4, &w, "approve").await;
+    assert_eq!((r.status, r.code()), (409, "STEP_NOT_READY"));
+    assert_eq!(h.request_state(&c.branch, &w.instance), "pending");
+    assert_eq!((h.rows(), h.key_audit().await.len()), (rows, 0));
+    // Deny needs no key.
+    assert_eq!(h.decide(&c, K5, &w, "deny").await.status, 200);
+}
+
+#[tokio::test]
+async fn a_key_release_post_is_for_one_branch_and_a_known_decision() {
+    let (escrow_key, _escrow) = escrow_pair();
+    let h = Harness::with_escrow(Some(escrow_key)).await;
+    let c = h.cafe().await;
+    assert_eq!(h.stepup(&c, "totp", &h.totp(&c)).await.status, 204);
+    for payload in [
+        json!({}),
+        json!({"request_id": "R"}),
+        json!({"request_id": "R", "decision": "maybe"}),
+        json!({"request_id": "R", "decision": "approve", "public_key": AGE_ONE}),
+    ] {
+        let r = h.post(&c, K1, "backup.restore", payload).await;
+        assert_eq!((r.status, r.code()), (422, "VALIDATION_FAILED"));
+    }
+    let all = h
+        .call(
+            "POST",
+            "/v1/commands",
+            Some(json!({
+                "branch_id": "all", "idempotency_key": K1, "kind": "backup.restore",
+                "payload": {"request_id": "R", "decision": "deny"},
+            })),
+            &c.access,
+        )
+        .await;
+    assert_eq!((all.status, all.code()), (422, "VALIDATION_FAILED"));
+    let unknown = h
+        .post(
+            &c,
+            K1,
+            "backup.restore",
+            json!({"request_id": "NOPE", "decision": "deny"}),
+        )
+        .await;
+    assert_eq!((unknown.status, unknown.code()), (404, "NOT_FOUND"));
+    assert_eq!(h.rows(), 0);
+}
+
+#[tokio::test]
+async fn the_hub_fetch_is_for_its_own_instance_and_needs_a_request() {
+    let h = Harness::new().await;
+    let c = h.cafe().await;
+    let instance = "01HUBINSTANCE";
+    let none = h.kek_fetch(&c.token, instance).await;
+    assert_eq!((none.status, none.code()), (404, "NOT_FOUND"));
+    let foreign = h.kek_fetch(&c.token, "01SOMEONEELSE").await;
+    assert_eq!((foreign.status, foreign.code()), (422, "VALIDATION_FAILED"));
+    let nobody = h.kek_fetch("hub_nope.nope", "x").await;
+    assert_eq!(nobody.status, 401);
+}
+
+#[tokio::test]
+async fn the_pc_name_is_cleaned_and_optional() {
+    let h = Harness::new().await;
+    let c = h.cafe().await;
+    let paired = h.replace(&c, K1, "01REPLACEMENT").await;
+    let token = paired.body["token"].as_str().unwrap().to_owned();
+    let asked = h
+        .kek_request(
+            &token,
+            json!({
+                "hub_instance_id": "01REPLACEMENT", "public_key": AGE_ONE,
+                "pc_name": "  Front\u{7}  desk\n  ",
+            }),
+        )
+        .await;
+    assert_eq!(asked.status, 200, "{}", asked.body);
+    let row =
+        h.db.key_request(&c.branch, "01REPLACEMENT")
+            .await
+            .unwrap()
+            .unwrap();
+    assert_eq!(row.pc_name.as_deref(), Some("Front desk"));
+    let asked = h
+        .kek_request(
+            &token,
+            json!({"hub_instance_id": "01REPLACEMENT", "public_key": AGE_ONE}),
+        )
+        .await;
+    assert_eq!(asked.status, 200, "{}", asked.body);
+    let row =
+        h.db.key_request(&c.branch, "01REPLACEMENT")
+            .await
+            .unwrap()
+            .unwrap();
+    assert_eq!(row.pc_name, None);
 }

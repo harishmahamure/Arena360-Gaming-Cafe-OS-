@@ -3,6 +3,7 @@
 use std::ffi::OsString;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::time::Duration;
 
 pub const USAGE: &str =
@@ -85,6 +86,9 @@ environment (not with --dev):
   ARENA_ADMIN_TOKENS      <staff-id>:<sha256 hex of the staff token>,... who may call /v1/admin/*;
                           unset: that API answers 404
   ARENA_BILLING_ENABLED   unset or false: billing is not available in this build (true exits 64)
+  ARENA_KEK_ESCROW_KEY    the AGE-SECRET-KEY-1... private half of the branch key escrow (a SOPS secret):
+                          opens the escrowed branch key to release it to a replacement Hub. Unset: the
+                          owner's Approve of a key release answers STEP_NOT_READY
   ARENA_GUPSHUP_ENDPOINT, ARENA_GUPSHUP_USERID, ARENA_GUPSHUP_PASSWORD, ARENA_GUPSHUP_SENDER,
   ARENA_GUPSHUP_DLT_TEMPLATE_ID  the Gupshup Enterprise SMS account (gupshup only)
 environment (--task control-backup, ops restore-control --from-key):
@@ -770,6 +774,64 @@ pub const DEV_OTP_PEPPER: &str = "arena-dev-otp-pepper-not-for-production-use";
 /// server).
 pub const DEV_WEB_ORIGIN: &str = "http://localhost:5179";
 
+/// The private half of the cloud's key escrow, an `AGE-SECRET-KEY-1…` string (a secret: never
+/// logged). Unset: the owner's Approve of a branch key release answers `STEP_NOT_READY`.
+pub const KEK_ESCROW_KEY_ENV: &str = "ARENA_KEK_ESCROW_KEY";
+
+/// The escrow private key (Story 9.10). A secret: held zeroizing and in memory only, `Debug`
+/// never prints it, and the only use is [`crate::key_release::rewrap`].
+#[derive(Clone)]
+pub struct EscrowKey(std::sync::Arc<age::secrecy::SecretString>);
+
+impl EscrowKey {
+    /// Parses an `AGE-SECRET-KEY-1…` string. The error never echoes the text.
+    pub fn parse(s: &str) -> Result<Self, String> {
+        let s = s.trim();
+        age::x25519::Identity::from_str(s)
+            .map_err(|_| "is not an age secret key (AGE-SECRET-KEY-1…)".to_owned())?;
+        Ok(Self(std::sync::Arc::new(age::secrecy::SecretString::from(
+            s.to_owned(),
+        ))))
+    }
+
+    /// The identity, made fresh for each use so it is dropped (and zeroized) right after.
+    pub(crate) fn identity(&self) -> Result<age::x25519::Identity, String> {
+        use age::secrecy::ExposeSecret;
+        age::x25519::Identity::from_str(self.0.expose_secret())
+            .map_err(|_| "the escrow key is not an age secret key".to_owned())
+    }
+
+    /// The public half (`age1…`).
+    pub fn public(&self) -> Result<String, String> {
+        self.identity().map(|i| i.to_public().to_string())
+    }
+}
+
+impl std::fmt::Debug for EscrowKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("EscrowKey([redacted])")
+    }
+}
+
+impl PartialEq for EscrowKey {
+    fn eq(&self, other: &Self) -> bool {
+        use age::secrecy::ExposeSecret;
+        self.0.expose_secret() == other.0.expose_secret()
+    }
+}
+
+impl Eq for EscrowKey {}
+
+/// The escrow key from `ARENA_KEK_ESCROW_KEY`, or none when it is unset or empty.
+pub fn escrow_key_from_env(
+    env: &impl Fn(&str) -> Option<OsString>,
+) -> Result<Option<EscrowKey>, String> {
+    get_env(env, KEK_ESCROW_KEY_ENV)
+        .filter(|v| !v.is_empty())
+        .map(|v| EscrowKey::parse(&v).map_err(|e| format!("{KEK_ESCROW_KEY_ENV} {e}")))
+        .transpose()
+}
+
 /// Which SMS provider sends codes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SmsProviderConfig {
@@ -791,6 +853,9 @@ pub struct AuthConfig {
     pub mfa_key: crate::crypto::MfaKey,
     pub licence: crate::licence::LicenceSigner,
     pub billing_enabled: bool,
+    /// Opens the escrowed branch key to release it to a replacement Hub (Story 9.10). `None`:
+    /// Approve answers `STEP_NOT_READY`.
+    pub escrow_key: Option<EscrowKey>,
 }
 
 impl std::fmt::Debug for AuthConfig {
@@ -803,6 +868,7 @@ impl std::fmt::Debug for AuthConfig {
             .field("mfa_key", &self.mfa_key)
             .field("licence", &self.licence)
             .field("billing_enabled", &self.billing_enabled)
+            .field("escrow_key", &self.escrow_key)
             .finish()
     }
 }
@@ -819,6 +885,7 @@ impl AuthConfig {
             mfa_key: crate::crypto::MfaKey::from_bytes(*DEV_MFA_KEY),
             licence: crate::licence::LicenceSigner::dev(),
             billing_enabled: false,
+            escrow_key: None,
         }
     }
 }
@@ -909,6 +976,7 @@ pub fn auth_from_env(
     if dev {
         let mut cfg = AuthConfig::dev();
         cfg.billing_enabled = billing;
+        cfg.escrow_key = escrow_key_from_env(env)?;
         if let Some(v) = origins {
             cfg.web_origins = parse_origins(&v)?;
         }
@@ -971,6 +1039,7 @@ pub fn auth_from_env(
         mfa_key,
         licence,
         billing_enabled: billing,
+        escrow_key: escrow_key_from_env(env)?,
     })
 }
 
@@ -990,6 +1059,37 @@ mod auth_tests {
     const PEPPER: &str = "pepper-SECRET-0123456789abcdef0123456789";
     /// base64 of 32 bytes.
     const MFA_KEY: &str = "c2VjcmV0LW1mYS1rZXktMDEyMzQ1Njc4OWFiY2RlZmc=";
+
+    #[test]
+    fn the_escrow_key_is_optional_parsed_and_never_printed() {
+        use age::secrecy::ExposeSecret;
+        let unset = auth_from_env(true, &env_of(&[])).unwrap();
+        assert!(unset.escrow_key.is_none());
+        let identity = age::x25519::Identity::generate();
+        let secret: &'static str = Box::leak(identity.to_string().expose_secret().into());
+        let pairs: &'static [(&'static str, &'static str)] =
+            Box::leak(vec![("ARENA_KEK_ESCROW_KEY", secret)].into());
+        let set = auth_from_env(true, &env_of(pairs)).unwrap();
+        let key = set.escrow_key.clone().unwrap();
+        assert_eq!(key.public().unwrap(), identity.to_public().to_string());
+        assert!(!format!("{set:?}").contains(secret));
+        assert!(!format!("{set:?}").contains("AGE-SECRET-KEY"));
+        let bad: &'static [(&'static str, &'static str)] =
+            Box::leak(vec![("ARENA_KEK_ESCROW_KEY", "AGE-SECRET-KEY-1NOTAREALKEY")].into());
+        let e = auth_from_env(true, &env_of(bad)).unwrap_err();
+        assert!(
+            e.contains("ARENA_KEK_ESCROW_KEY") && !e.contains("NOTAREALKEY"),
+            "{e}"
+        );
+        let blank: &'static [(&'static str, &'static str)] =
+            Box::leak(vec![("ARENA_KEK_ESCROW_KEY", "  ")].into());
+        assert!(
+            auth_from_env(true, &env_of(blank))
+                .unwrap()
+                .escrow_key
+                .is_none()
+        );
+    }
 
     #[test]
     fn the_fake_provider_is_refused_outside_dev_and_the_global_cap_parses() {

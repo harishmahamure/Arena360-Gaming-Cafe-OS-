@@ -148,6 +148,7 @@ const KINDS: Record<string, { label: MessageKey; catalogue?: (keyof SummaryCatal
   "device.assign": { label: "owner.cmd.kind.assign" },
   "device.revoke": { label: "owner.cmd.kind.revoke" },
   "hub.revoke": { label: "owner.cmd.kind.hub_revoke" },
+  "backup.restore": { label: "owner.cmd.kind.key_release" },
   "backup.now": { label: "owner.cmd.kind.backup" },
   "credit.remind": { label: "owner.cmd.kind.credit_remind" },
   // The only settings.set an owner sends: the alert limits (Story 8.34).
@@ -467,23 +468,28 @@ export async function sendNow(
   return "sent";
 }
 
+/** Codes that say the request itself can no longer be answered, not that the call failed. */
+const CLOUD_REFUSED = new Set([
+  "STEP_NOT_READY",
+  "KEY_ALREADY_RELEASED",
+  "TOKEN_REVOKED",
+  "NOT_FOUND",
+]);
+
 /**
- * Replaces a branch's Hub (Story 9.8): the cloud revokes the old Hub's token as it applies the
- * change, after the code prompt, so the change is never queued on this device. The same `key`
- * sent again finds the first row. `"declined"` means the owner cancelled the code prompt.
+ * A change the cloud applies itself (Stories 9.8, 9.10), after the code prompt, so it is never
+ * queued on this device. The same `key` sent again finds the first row. `"declined"` means the
+ * owner cancelled the code prompt; `"refused"` that the cloud will not apply it (any more).
  */
-export async function revokeHub(
+async function postCloud(
   branchId: string,
   key: string,
-): Promise<OwnerCommandView | "declined" | "failed"> {
-  const res = await post({
-    branch_id: branchId,
-    idempotency_key: key,
-    kind: "hub.revoke",
-    payload: {},
-  });
+  kind: string,
+  payload: Record<string, unknown>,
+): Promise<OwnerCommandView | "declined" | "failed" | "refused"> {
+  const res = await post({ branch_id: branchId, idempotency_key: key, kind, payload });
   if (res === "declined") return "declined";
-  if (!res.ok) return "failed";
+  if (!res.ok) return CLOUD_REFUSED.has(res.code) ? "refused" : "failed";
   const row = res.data.commands[0];
   if (!row) return "failed";
   cmd.rows = merge(cmd.rows, res.data.commands);
@@ -491,6 +497,37 @@ export async function revokeHub(
   cmd.sent++;
   return row;
 }
+
+/**
+ * Replaces a branch's Hub (Story 9.8): the cloud revokes the old Hub's token as it applies the
+ * change. `"declined"` means the owner cancelled the code prompt.
+ */
+export async function revokeHub(
+  branchId: string,
+  key: string,
+): Promise<OwnerCommandView | "declined" | "failed"> {
+  const res = await postCloud(branchId, key, "hub.revoke", {});
+  return res === "refused" ? "failed" : res;
+}
+
+/**
+ * Approves (`approve`) or denies a replacement Hub's request for the branch key (Story 9.10): the
+ * cloud re-wraps the escrowed key for that PC, or only records the denial.
+ */
+export const answerKeyRequest = (
+  branchId: string,
+  key: string,
+  requestId: string,
+  decision: "approve" | "deny",
+) => postCloud(branchId, key, "backup.restore", { request_id: requestId, decision });
+
+/** Releases the branch key to the replacement Hub that asked (`backup.restore`, approve). */
+export const releaseKey = (branchId: string, key: string, requestId: string) =>
+  answerKeyRequest(branchId, key, requestId, "approve");
+
+/** Refuses a replacement Hub's request for the branch key (`backup.restore`, deny). */
+export const denyKey = (branchId: string, key: string, requestId: string) =>
+  answerKeyRequest(branchId, key, requestId, "deny");
 
 /**
  * The `rev` the branch holds now for the row a command changes, from its newest summary; the

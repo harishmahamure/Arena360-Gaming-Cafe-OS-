@@ -486,6 +486,7 @@ mod tests {
             "branch.bootstrap",
             "rule.delete",
             "hub.revoke",
+            "backup.restore",
         ] {
             let e = command_intent(&cmd(kind, json!({})), 1).unwrap_err();
             assert_eq!(e.code, ErrorCode::Unsupported, "{kind}");

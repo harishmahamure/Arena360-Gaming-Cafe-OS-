@@ -3,15 +3,17 @@ use std::sync::Arc;
 use arena_proto::{
     AppError, BRANCH_ONLINE_WINDOW_MS, COMMAND_PAYLOAD_MAX, COMMAND_SCHEMA_VERSION, COMMANDS_PAGE,
     CommandResult, CommandResultAck, CommandStatus, CommandWire, CommandsPage, ErrorCode,
-    OWNER_ALL_BRANCHES, OWNER_COMMAND_POSTS_PER_MIN, OWNER_COMMANDS_PAGE, OWNER_COMMANDS_PAGE_MAX,
-    OwnerCommandKind, OwnerCommandList, OwnerCommandPost, OwnerCommandPosted, OwnerCommandPreview,
-    OwnerCommandPreviewRequest, OwnerCommandSkip, OwnerCommandTarget, OwnerCommandView,
-    OwnerStaffUpsert, PRODUCT_COMMAND_PAYLOAD_MAX, SETTINGS_COMMAND_KEYS, SETUP_CODE_HUB_TTL_MS,
-    STEPUP_TTL_MS, StaffSetupCode, Tier, command_payload_max, is_setup_command, owner_command_kind,
+    KeyRelease, KeyReleaseDecision, OWNER_ALL_BRANCHES, OWNER_COMMAND_POSTS_PER_MIN,
+    OWNER_COMMANDS_PAGE, OWNER_COMMANDS_PAGE_MAX, OwnerCommandKind, OwnerCommandList,
+    OwnerCommandPost, OwnerCommandPosted, OwnerCommandPreview, OwnerCommandPreviewRequest,
+    OwnerCommandSkip, OwnerCommandTarget, OwnerCommandView, OwnerStaffUpsert,
+    PRODUCT_COMMAND_PAYLOAD_MAX, SETTINGS_COMMAND_KEYS, SETUP_CODE_HUB_TTL_MS, STEPUP_TTL_MS,
+    StaffSetupCode, Tier, command_payload_max, is_setup_command, owner_command_kind,
     validate_owner_payload,
 };
 use arena_store::control::{
-    Branch, CommandRow, NewCommand, OwnerCommandFilter, OwnerCommandRow, RateRule,
+    Branch, CommandRow, KeyDecision, KeyDecisionOutcome, KeyRefusal, NewAdminAudit, NewCommand,
+    OwnerCommandFilter, OwnerCommandRow, RateRule,
 };
 use axum::extract::{DefaultBodyLimit, FromRequestParts, Path, Query, State};
 use axum::handler::Handler;
@@ -35,7 +37,11 @@ use super::signup::ceil_s;
 
 /// The body of an owner command post: a product image rides in the payload (Story 8.24).
 const OWNER_POST_BODY_LIMIT: usize = PRODUCT_COMMAND_PAYLOAD_MAX + 16 * 1024;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
+
 use crate::auth::{AuthState, valid_phone, valid_text};
+use crate::key_release::rewrap;
 use crate::pairing_code::new_pairing_code;
 use crate::passwords::hash_secret;
 use crate::presign::{Epoch, is_fenced};
@@ -584,7 +590,7 @@ async fn post_cloud_command(
     if body.branch_id == OWNER_ALL_BRANCHES {
         return Err(ApiError::validation(
             "branch_id",
-            "Choose one branch to replace the Hub of.",
+            "Choose one branch for this change.",
         ));
     }
     let branch = st
@@ -598,6 +604,9 @@ async fn post_cloud_command(
             tracing::warn!(owner_id = %owner_id, "owner command: branch outside the tenant");
             ApiError::not_found()
         })?;
+    if kind.kind == "backup.restore" {
+        return post_key_release(st, owner_id, &branch, body, kind, elevated, payload, now).await;
+    }
     let (row, revoked) = st
         .db
         .apply_hub_revoke(&NewCommand {
@@ -629,6 +638,161 @@ async fn post_cloud_command(
         setup_codes: None,
     };
     Ok(([(CACHE_CONTROL, "no-store")], Json(posted)).into_response())
+}
+
+/// A refusal of a key release as the API answers it.
+fn release_refusal(why: KeyRefusal) -> ApiError {
+    match why {
+        KeyRefusal::NotFound => ApiError::not_found(),
+        KeyRefusal::NotPending => AppError::new(
+            ErrorCode::StepNotReady,
+            "This request was already answered or has expired.",
+        )
+        .into(),
+        KeyRefusal::AlreadyReleased => AppError::new(
+            ErrorCode::KeyAlreadyReleased,
+            "The branch key was already released for this request.",
+        )
+        .into(),
+        KeyRefusal::HubRevoked => AppError::new(
+            ErrorCode::TokenRevoked,
+            "That Hub is no longer paired. Replace the Hub again to get a fresh request.",
+        )
+        .into(),
+    }
+}
+
+fn not_ready(message: &str) -> ApiError {
+    AppError::new(ErrorCode::StepNotReady, message).into()
+}
+
+/// `backup.restore` (Story 9.10): the owner's decision on a replacement Hub's request for the
+/// branch key. Approve opens the escrowed key with the escrow identity and re-wraps it for the
+/// request's one-time public key; the command row (`applied`, `elevated_by` the owner), the
+/// request's new state and one `admin_audit` row commit together. Deny only decides the row.
+/// The same post sent again answers its first row.
+#[allow(clippy::too_many_arguments)]
+async fn post_key_release(
+    st: &AuthState,
+    owner_id: &str,
+    branch: &Branch,
+    body: &OwnerCommandPost,
+    kind: &OwnerCommandKind,
+    elevated: bool,
+    payload: &str,
+    now: i64,
+) -> Result<Response, ApiError> {
+    let release: KeyRelease = serde_json::from_value(body.payload.clone())
+        .map_err(|_| ApiError::validation("payload", "Send the request and your decision."))?;
+    let approve = release.decision == KeyReleaseDecision::Approve;
+    let respond = |row: CommandRow| {
+        let posted = OwnerCommandPosted {
+            commands: vec![view_of(row, None)],
+            skipped: Vec::new(),
+            setup_codes: None,
+        };
+        Ok(([(CACHE_CONTROL, "no-store")], Json(posted)).into_response())
+    };
+    // A post taken before answers its first row, whatever has happened to the request since.
+    if let Some(row) = st
+        .db
+        .command_by_key(&branch.id, &body.idempotency_key)
+        .await
+        .map_err(ApiError::internal)?
+    {
+        return respond(row);
+    }
+    st.db
+        .expire_key_requests(&branch.id, now)
+        .await
+        .map_err(ApiError::internal)?;
+    let request = st
+        .db
+        .checked_key_request(&branch.id, &release.request_id, approve)
+        .await
+        .map_err(ApiError::internal)?
+        .map_err(release_refusal)?;
+    let wrapped = if approve {
+        let Some(escrow_key) = st.escrow_key.as_ref() else {
+            tracing::warn!(branch_id = %branch.id, "key release: no escrow key is configured");
+            return Err(not_ready("The branch key can't be released yet."));
+        };
+        let Some(escrowed) = st
+            .db
+            .latest_kek_escrow(&branch.id)
+            .await
+            .map_err(ApiError::internal)?
+        else {
+            return Err(not_ready(
+                "No branch key is held for this branch. Restore from a file instead.",
+            ));
+        };
+        let escrowed = STANDARD
+            .decode(escrowed.trim())
+            .map_err(|_| not_ready("The branch key can't be released yet."))?;
+        let blob = rewrap(escrow_key, &escrowed, &request.public_key).map_err(|e| {
+            tracing::error!(branch_id = %branch.id, error = %e, "key release: re-wrap failed");
+            not_ready("The branch key can't be released yet.")
+        })?;
+        Some(STANDARD.encode(blob))
+    } else {
+        None
+    };
+    let summary = serde_json::json!({
+        "outcome": if approve { "released" } else { "denied" },
+        "request_id": request.id,
+        "hub_instance_id": request.hub_instance_id,
+        "owner_id": owner_id,
+    })
+    .to_string();
+    let audit_id = ulid::Ulid::generate().to_string();
+    let audit_request_id = ulid::Ulid::generate().to_string();
+    let command = NewCommand {
+        branch_id: &branch.id,
+        idempotency_key: &body.idempotency_key,
+        kind: kind.kind,
+        schema_version: kind.schema_version,
+        payload,
+        issued_by: owner_id,
+        group_id: None,
+        elevated_by: elevated.then_some(owner_id),
+        now,
+    };
+    let outcome = st
+        .db
+        .apply_key_release(&KeyDecision {
+            command: &command,
+            request_id: &request.id,
+            approve,
+            wrapped_kek: wrapped.as_deref(),
+            audit: &NewAdminAudit {
+                id: &audit_id,
+                at: now,
+                actor_kind: "system",
+                actor_id: owner_id,
+                action: if approve { "kek.release" } else { "kek.deny" },
+                target_kind: "branch",
+                target_id: &branch.id,
+                reason: None,
+                summary: &summary,
+                request_id: &audit_request_id,
+            },
+        })
+        .await
+        .map_err(ApiError::internal)?;
+    match outcome {
+        KeyDecisionOutcome::Applied(row) => {
+            tracing::info!(
+                owner_id = %owner_id,
+                branch_id = %branch.id,
+                approved = approve,
+                "branch key request decided by the owner"
+            );
+            respond(row)
+        }
+        KeyDecisionOutcome::Replayed(row) => respond(row),
+        KeyDecisionOutcome::Refused(why) => Err(release_refusal(why)),
+    }
 }
 
 /// The owner's fields of a `staff.upsert`, checked the way the wizard checks an invitation. A

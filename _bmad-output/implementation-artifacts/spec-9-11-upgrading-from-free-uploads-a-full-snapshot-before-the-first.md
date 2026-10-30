@@ -2,7 +2,7 @@
 title: 'Story 9.11: Upgrading from Free uploads a full snapshot before the first batch'
 type: 'feature'
 created: '2026-10-31'
-status: 'in-review'
+status: 'done'
 baseline_revision: 'b8317ac3184156eb99946f405f2043ffdda3f800'
 review_loop_iteration: 0
 context:
@@ -77,6 +77,8 @@ deferred: []
 
 ## Review Triage Log
 
+Code review (2026-10-31): no blocking findings; fmt, clippy and tests re-run green apart from the four unrelated failures listed above.
+
 Self-review (2026-10-31): fmt, clippy `-D warnings` on the touched crates, cargo tests for proto/store/core/cloud/tasks/api/hub, `check:protocol/layers/strings`, `format:check` green. `check:generated` reports only the uncommitted regenerated `HeartbeatRequest.ts`.
 
 ## Design Notes
@@ -91,7 +93,7 @@ The cursor is the "has uploaded" marker, so setting it in the snapshot's own tra
 
 ## Auto Run Result
 
-Status: in-review
+Status: done
 
 Implemented per spec. Failures not caused by this story (they fail the same way without it): `arena-cloud` `backup::a_hung_run_times_out_with_its_own_code` and `binary::unreachable_at_start...`, `arena-tasks` `heartbeat::trusted_time...` and `printer::lan::a_printer_that_stops_reading_times_out`; `arena-e2e` does not compile on Windows; clippy errors in `arena-kiosk-svc` tests.
 

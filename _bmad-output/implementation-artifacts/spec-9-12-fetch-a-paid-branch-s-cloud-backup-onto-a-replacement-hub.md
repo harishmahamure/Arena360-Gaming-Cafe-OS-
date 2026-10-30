@@ -2,7 +2,7 @@
 title: "Story 9.12: Fetch a paid branch's cloud backup onto a replacement Hub"
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: '4b548cfeea4789c82e64219eb301a7bfb15588f4'
 review_loop_iteration: 0
 context:
@@ -113,3 +113,7 @@ Judgement calls and risks:
 - The gap check covers a batch missing from the bucket, a batch that fails its check, and a hole inside one epoch's chain; a hole between epochs is not detected (a new epoch's numbering after a fork is not fixed by this story).
 - A `Gap` is held in memory: after a Hub restart the screen is idle and Start finds the gap again from the staged files.
 - A failed local write (disk full) is retried like a network failure rather than shown as a distinct error.
+
+## Code Review Result
+
+Reviewed the implementation commit (cloud plan endpoint, downloader, loopback routes, screen). No blocking findings; no code changes. fmt, clippy `-D warnings` and tests green for the touched crates, except the failures recorded above that also fail without this story (`backup::a_hung_run_times_out_with_its_own_code`, `binary::unreachable_at_start...`, `heartbeat::trusted_time...`, `printer::lan::a_printer_that_stops_reading_times_out`). Status: done.

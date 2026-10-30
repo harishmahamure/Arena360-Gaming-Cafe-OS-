@@ -2,7 +2,7 @@
 title: 'Story 9.8: Owner replaces a failed Hub and gets a new pairing code'
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 baseline_revision: 'e1dbb8a1384ab4acc08a5ced0bae3f30b4849109'
 review_loop_iteration: 0
 context:
@@ -87,7 +87,7 @@ The command row is written `applied` with `resolved_at` = now so the Owner app's
 
 ## Auto Run Result
 
-Status: review
+Status: done
 
 Implemented per spec. Verified: fmt, clippy `-D warnings`, `cargo test` for proto/store/cloud/core, `check:strings/layers/protocol`, `format:check`, owner `svelte-check`, owner Playwright (replace-hub, branches, commands, stepup, devices, a11y, queue) and the Hub `connectivity` revoked-banner test all pass.
 
@@ -98,3 +98,7 @@ Judgement calls and risks:
 - Commands still waiting for the old Hub are rejected `TOKEN_REVOKED` by the existing sweeper (within a minute) even if a replacement pairs soon after.
 - `TOKEN_INVALID` also sets the Hub's revoked state, so the new alert text also appears for an unknown token.
 - The disk was full during the run; the regenerable, git-ignored `target/debug/incremental` build cache (124 GB) was deleted to continue.
+
+## Code Review (2026-10-30)
+
+Reviewed commit 341e074b against the spec: no blocking findings. The apply_hub_revoke transaction is atomic and idempotent (a replayed key rolls back and never revokes the replacement Hub), the cloud kind skips only the tier/flag/schema refusal while step-up, tenant and "all" checks still apply, and the UI flow reuses the existing pairing-code card. Re-verified: fmt, clippy -D warnings, proto/store/cloud (stepup, owner_commands) tests, check:strings, format:check, owner svelte-check all green.

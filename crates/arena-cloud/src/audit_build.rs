@@ -4,8 +4,8 @@
 //! ([`request_build`]); the `builder` role ([`AuditBuilder`]) claims queued rows one at a time,
 //! downloads the nearest snapshot on or before the month start and every change-log batch after
 //! it, replays them with `arena-replay` into a temporary SQLite file, packs it as
-//! `audit-cache/<yyyy-mm>.db.zst` (the bucket's 24-hour lifecycle rule expires it) and marks the
-//! job `ready`. A missing batch or a batch that does not match its checksum fails the job; asking
+//! `audit-cache/<yyyy-mm>.db.zst` (the builder's own sweep deletes it after 24 hours) and marks
+//! the job `ready`. A missing batch or a batch that does not match its checksum fails the job; asking
 //! again starts a new attempt. The cloud keeps no standing copy: the file is the only trace and
 //! it expires.
 
@@ -277,6 +277,17 @@ impl AuditBuilder {
                     reason = %reason,
                     "audit build failed"
                 );
+                // A re-queued, expired cache is still in the bucket; a failed rebuild must not
+                // leave it past its 24 hours.
+                if let Ok(Some(b)) = self.db.branch(&job.branch_id).await
+                    && !has_path_chars(&b.tenant_id)
+                    && !has_path_chars(&b.id)
+                {
+                    let key = cache_key(&branch_prefix(&b.tenant_id, &b.id), &job.month);
+                    if let Err(e) = self.data.delete(&key).await {
+                        tracing::warn!(%key, error = %e, "stale audit cache not deleted");
+                    }
+                }
                 self.db
                     .fail_builder_job(&job.branch_id, &job.month, job.attempt, &reason, self.now())
                     .await?;

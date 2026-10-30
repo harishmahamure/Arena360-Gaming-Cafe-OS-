@@ -108,7 +108,7 @@ impl ControlDb {
         Ok(n > 0)
     }
 
-    /// Takes the oldest job (its `attempt` goes up by one, which fences a builder that died) that is `queued` or `building` and untouched since `stale_before`,
+    /// Takes the oldest job that is `queued` or `building` and untouched since `stale_before`,
     /// marking it `building` with progress 0 and counting a new attempt (which fences the writes
     /// of a builder that died). `None` when there is none, or another builder won the race.
     pub async fn claim_builder_job(

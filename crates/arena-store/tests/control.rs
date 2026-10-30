@@ -25,6 +25,7 @@ const ALL_TABLES: &[&str] = &[
     "branch_template_choice",
     "branch_watch",
     "branches",
+    "builder_jobs",
     "catalog_exe_signatures",
     "catalog_games",
     "catalog_media",

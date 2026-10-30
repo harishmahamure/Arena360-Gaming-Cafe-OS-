@@ -2,7 +2,7 @@
 title: "Story 8.36: The audit builder rebuilds a branch month on demand"
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 baseline_commit: '4f3240c1'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -35,6 +35,9 @@ deferred: []
 
 ## Review Triage Log
 
+- Fixed: `builder_jobs` missing from the control migration table list test; a failed rebuild now deletes a stale expired cache object; stale doc comments (lifecycle rule, claim).
+- Accepted: sweep-vs-requeue race window is negligible.
+
 ## Design Notes
 
 The audit database keeps the `changes` rows (snapshot's plus replayed) so the search of Story 8.37 can filter by actor, intent, entity and time. A job's `attempt` rises on every restart and claim, and every progress, finish and fail write names it, so a builder that was presumed dead cannot overwrite its successor.
@@ -48,5 +51,5 @@ The audit database keeps the `changes` rows (snapshot's plus replayed) so the se
 
 ## Auto Run Result
 
-Status: review
+Status: done
 Implemented: proto types and codes, control migration 25 and `builder_jobs` queries, `arena-replay` `replay_history`/`MonthBuilder`/`state_checksum`, cloud `audit_build` (request, builder, expiry sweep), owner routes, `--role builder`, builder Deployment. Tests: replay unit tests (round-trip checksum, snapshot resume, forks, month cut, gap, snapshot above fork) and `crates/arena-cloud/tests/audit_build.rs` (11 cases). Known unrelated failures: arena-replay `replaying_the_seeded_log_reproduces_branch_and_settings` (a `library_entries` fixture gap, fails on a clean checkout), arena-cloud `unreachable_at_start_retries_then_exits_1_without_logging_the_token` (and `a_hung_run_times_out_with_its_own_code` on a slow run), arena-tasks `trusted_time_is_cloud_time_plus_monotonic_elapsed` and `a_printer_that_stops_reading_times_out`. `check:deploy` could not run (no kubectl).

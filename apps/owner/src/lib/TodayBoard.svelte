@@ -2,6 +2,8 @@
   import { Button, TierLock, formatMoney, t } from "@arena/ui";
   import type { MessageKey } from "@arena/ui/messages";
   import { onMount } from "svelte";
+  import { afterNavigate } from "$app/navigation";
+  import { page } from "$app/state";
   import type { OwnerBranch } from "@arena/ui/generated";
   import SetupCard from "./SetupCard.svelte";
   import TodayCard from "./TodayCard.svelte";
@@ -11,6 +13,7 @@
     attentionOf,
     busy,
     fetchDue,
+    live,
     moneyLocale,
     newOpen,
     showCached,
@@ -93,6 +96,27 @@
     void showCached(fresh).then(() => fetchNow(fresh));
   });
 
+  // An alert's link (`/#today-<branch>`) lands on that branch's card. Cards above it grow as their
+  // figures arrive, so the board keeps the card in view until every card has settled or the owner
+  // scrolls.
+  let target = "";
+  function jump() {
+    const card = target && document.getElementById(target);
+    if (!card) return;
+    card.scrollIntoView();
+    card.focus({ preventScroll: true });
+    if (paid.every((b) => live[b.id])) target = "";
+  }
+  $effect(() => {
+    void paid.map((b) => [b.id, !!live[b.id]].join(":")).join();
+    jump();
+  });
+  afterNavigate(() => {
+    const id = decodeURIComponent(page.url.hash.slice(1));
+    target = id.startsWith("today-") ? id : "";
+    jump();
+  });
+
   onMount(() => {
     newOpen();
     const due = () => {
@@ -105,7 +129,11 @@
       if (document.visibilityState === "visible" && setupBranches().length) void refresh();
     }, BRANCH_POLL_MS);
     document.addEventListener("visibilitychange", due);
+    const stop = () => (target = "");
+    for (const ev of ["wheel", "touchstart", "keydown"])
+      addEventListener(ev, stop, { passive: true });
     return () => {
+      for (const ev of ["wheel", "touchstart", "keydown"]) removeEventListener(ev, stop);
       clearInterval(tick);
       clearInterval(poll);
       document.removeEventListener("visibilitychange", due);

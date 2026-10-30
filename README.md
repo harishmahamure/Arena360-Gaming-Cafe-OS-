@@ -1694,6 +1694,7 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
 | chrono-tz                           | =0.10.4                | `Cargo.toml`                                                                 |
 | chrono                              | =0.4.45                | `Cargo.toml`                                                                 |
 | sha2                                | =0.10.9                | `Cargo.toml`                                                                 |
+| zstd                                | =0.13.1                | `Cargo.toml`                                                                 |
 | tokio-tungstenite                   | =0.30.0                | `Cargo.toml`                                                                 |
 | rustls                              | =0.23.46               | `Cargo.toml`                                                                 |
 | tokio-rustls                        | =0.26.6                | `Cargo.toml`                                                                 |
@@ -1722,6 +1723,9 @@ table together. JS framework versions live in the pnpm `catalog:`; apps referenc
 | if-addrs                            | =0.15.0                | `Cargo.toml`                                                                 |
 | jsonwebtoken                        | =11.1.0                | `Cargo.toml`                                                                 |
 | base64                              | =0.22.1                | `Cargo.toml`                                                                 |
+| p256                                | =0.13.2                | `Cargo.toml`                                                                 |
+| hkdf                                | =0.12.4                | `Cargo.toml`                                                                 |
+| aes-gcm                             | =0.10.3                | `Cargo.toml`                                                                 |
 | libc                                | =0.2.191               | `Cargo.toml`                                                                 |
 | jni                                 | =0.21.1                | `Cargo.toml`                                                                 |
 | Android compileSdk                  | 36                     | `apps/hub/src-tauri/gen/android/app/build.gradle.kts`                        |

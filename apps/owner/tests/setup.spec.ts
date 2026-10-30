@@ -141,8 +141,7 @@ test("branch-scoped screens say a branch in setup is available after it goes liv
     if (path === "/manage") {
       await expect(page.getByRole("heading", { name: t("owner.cmd.list.title") })).toBeVisible();
     } else {
-      const open = page.getByRole("listitem").filter({ hasText: PAID[0].name });
-      await expect(open.getByText(t("owner.section.soon"))).toBeVisible();
+      await expect(page.getByText(t("owner.alerts.empty"))).toBeVisible();
     }
   }
 });

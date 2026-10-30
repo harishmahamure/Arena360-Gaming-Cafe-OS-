@@ -86,3 +86,40 @@ pub(super) fn notify_router(st: Arc<crate::auth::AuthState>) -> Router {
         .route("/dev/notify", get(notify_outbox))
         .with_state(st)
 }
+
+/// `POST /v1/dev/owner-alerts {id?, branch_id, kind, params}`: raises an owner alert for a branch
+/// (Story 8.33's source of alerts until the Hub's thresholds and the offline detector exist). An
+/// unknown branch is `NOT_FOUND`, an unknown kind or a missing parameter `VALIDATION_FAILED`.
+async fn raise_owner_alert(
+    State(st): State<Arc<crate::auth::AuthState>>,
+    ApiJson(body): ApiJson<arena_proto::DevOwnerAlert>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let kind = arena_proto::OwnerAlertKind::parse(&body.kind)
+        .ok_or_else(|| ApiError::validation("kind", "This kind of alert isn't supported."))?;
+    let branch = st
+        .db
+        .branch(&body.branch_id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(ApiError::not_found)?;
+    let raised = crate::owner_alerts::raise(
+        &st,
+        crate::owner_alerts::Raise {
+            id: body.id.as_deref(),
+            branch: &branch,
+            kind,
+            params: &body.params,
+        },
+    )
+    .await?;
+    Ok(Json(
+        serde_json::json!({ "id": raised.id, "created": raised.created }),
+    ))
+}
+
+/// The owner-alert fixture route, relative to `/v1`.
+pub(super) fn owner_alert_router(st: Arc<crate::auth::AuthState>) -> Router {
+    Router::new()
+        .route("/dev/owner-alerts", post(raise_owner_alert))
+        .with_state(st)
+}

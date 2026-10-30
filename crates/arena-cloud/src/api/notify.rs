@@ -8,6 +8,8 @@
 //! nothing was sent leaves the row `queued` so the Hub can post it again; an unknown outcome
 //! (a timeout after the request went out) leaves it `queued` and claimed, and it is not sent
 //! again. Logs and traces carry the outbox id and the branch id, never a number or a text.
+//!
+//! [`deliver`] is the send itself, shared with the owner's WhatsApp alerts (Story 8.33).
 
 use std::sync::Arc;
 
@@ -15,7 +17,7 @@ use arena_proto::{
     AppError, ErrorCode, MESSAGE_KINDS, NOTIFY_PARAM_MAX_CHARS, NotifyChannel, NotifyRequest,
     NotifyResponse, NotifyState, Tier, valid_e164,
 };
-use arena_store::control::{LedgerRow, MessageTemplate, NewLedgerRow, Settlement};
+use arena_store::control::{Branch, LedgerRow, MessageTemplate, NewLedgerRow, Settlement};
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::routing::post;
@@ -182,6 +184,18 @@ async fn notify(
             "This kind of message isn't supported.",
         ));
     }
+    deliver(&st, &branch, &body).await.map(Json)
+}
+
+/// Sends one ledger message for `branch`, once per `body.outbox_id`: the code behind
+/// `POST /v1/notify`, also used for the owner's WhatsApp alerts (Story 8.33). The caller has
+/// already checked the entitlement and that the kind is one it may send.
+pub(crate) async fn deliver(
+    st: &AuthState,
+    branch: &Branch,
+    body: &NotifyRequest,
+) -> Result<NotifyResponse, ApiError> {
+    let now = st.now();
     let Some(notifier) = st.notifier.get() else {
         return Err(ApiError::unavailable("no messaging adapter configured"));
     };
@@ -201,7 +215,7 @@ async fn notify(
             .into());
         }
         Some(row) if row.state != "queued" || row.in_flight => {
-            return Ok(Json(view(&row)));
+            return Ok(view(&row));
         }
         Some(row)
             if row.kind != body.kind
@@ -231,7 +245,7 @@ async fn notify(
                 .ok_or_else(|| ApiError::internal("no approved template for a known kind"))?;
             let id = ulid::Ulid::generate().to_string();
             let hash = st.recipient_hash(&body.recipient);
-            check(&body, &template)?;
+            check(body, &template)?;
             let inserted = st
                 .db
                 .ledger_insert(&NewLedgerRow {
@@ -256,12 +270,12 @@ async fn notify(
                 .map_err(ApiError::internal)?
                 .ok_or_else(|| ApiError::internal("ledger row missing after insert"))?;
             if row.state != "queued" || row.in_flight {
-                return Ok(Json(view(&row)));
+                return Ok(view(&row));
             }
             (template, row)
         }
     };
-    let params = check(&body, &template)?;
+    let params = check(body, &template)?;
     if !st
         .db
         .ledger_claim(&body.outbox_id)
@@ -275,7 +289,7 @@ async fn notify(
             .await
             .map_err(ApiError::internal)?
             .ok_or_else(|| ApiError::internal("ledger row vanished"))?;
-        return Ok(Json(view(&row)));
+        return Ok(view(&row));
     }
 
     let sms_text = render(&template.sms_text, &template.param_names, &params);
@@ -341,14 +355,14 @@ async fn notify(
             .await
             .map_err(ApiError::internal)?;
         tracing::info!(outbox_id = %row.outbox_id, branch_id = %branch.id, state = settlement.state, channel = channel.as_str(), attempts = row.attempts, "notify: settled");
-        return Ok(Json(NotifyResponse {
+        return Ok(NotifyResponse {
             outbox_id: row.outbox_id.clone(),
             state: state_of(settlement.state),
             channel: channel_of(settlement.channel),
             attempts: row.attempts,
             provider_message_id: settlement.provider_message_id.map(str::to_owned),
             error_code: settlement.error_code.map(str::to_owned),
-        }));
+        });
     }
 }
 

@@ -101,7 +101,7 @@ test("on Free the four data sections show only the tier-lock, with no Upgrade li
 test("with only paid branches the sections are not locked", async ({ page }) => {
   await stubCloud(page, [{ ...PAID[0] }]);
   await page.goto("/alerts");
-  await expect(page.getByText(t("owner.section.soon"))).toBeVisible();
+  await expect(page.getByText(t("owner.alerts.empty"))).toBeVisible();
   await expect(page.getByText(t("staff.tier.available_on", { tier: "Basic" }))).toHaveCount(0);
 });
 
@@ -118,6 +118,9 @@ test("a mixed tenant locks the Free branch and leaves the paid branch working", 
     if (k === "manage") {
       await expect(page.getByRole("heading", { name: t("owner.cmd.list.title") })).toBeVisible();
       await expect(page.getByRole("tablist", { name: t("owner.pricing.tabs") })).toBeVisible();
+    } else if (k === "alerts") {
+      // One list for the café (no entry of its own for the paid branch), the Free branch locked beside it.
+      await expect(page.getByText(t("owner.alerts.empty"))).toBeVisible();
     } else {
       await expect(
         paid.getByText(k === "today" ? t("owner.today.revenue") : t("owner.section.soon")),
@@ -142,6 +145,8 @@ test("a mixed tenant locks the Free branch and leaves the paid branch working", 
   await expect.poll(() => calls.some((c) => c.endsWith("/b1/data-age"))).toBe(true);
   await expect.poll(() => calls.some((c) => c.endsWith("/b1/summary"))).toBe(true);
   expect([...new Set(calls)].sort()).toEqual([
+    "GET /v1/alerts",
+    "GET /v1/alerts/settings",
     "GET /v1/branches",
     "GET /v1/branches/b1/live",
     "GET /v1/branches/b1/summary",
@@ -168,7 +173,7 @@ test("a Free branch that upgrades unlocks on the next open without signing out",
   await page.unroute("**/v1/**");
   await stubCloud(page, [{ ...FREE[0], tier: "basic" }]);
   await page.reload();
-  await expect(page.getByText(t("owner.section.soon"))).toBeVisible();
+  await expect(page.getByText(t("owner.alerts.empty"))).toBeVisible();
   await expect(page.getByText(t("staff.tier.available_on", { tier: "Basic" }))).toHaveCount(0);
   await page.goto("/");
   await expect(page.getByText(t("owner.today.revenue"))).toBeVisible();

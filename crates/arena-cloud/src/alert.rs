@@ -40,6 +40,13 @@ pub fn alert_text(env_name: &str, task: &str, code: &str) -> String {
 
 /// An HTTP client on the workspace rustls (ring) with the Mozilla roots.
 pub(crate) fn client(timeout: Duration) -> Result<reqwest::Client, String> {
+    client_builder(timeout)?
+        .build()
+        .map_err(|e| e.without_url().to_string())
+}
+
+/// The builder behind [`client`], for callers that change a policy (redirects) first.
+pub(crate) fn client_builder(timeout: Duration) -> Result<reqwest::ClientBuilder, String> {
     let roots = rustls::RootCertStore {
         roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
     };
@@ -50,11 +57,9 @@ pub(crate) fn client(timeout: Duration) -> Result<reqwest::Client, String> {
     .map_err(|e| e.to_string())?
     .with_root_certificates(roots)
     .with_no_client_auth();
-    reqwest::Client::builder()
+    Ok(reqwest::Client::builder()
         .tls_backend_preconfigured(tls)
-        .timeout(timeout)
-        .build()
-        .map_err(|e| e.without_url().to_string())
+        .timeout(timeout))
 }
 
 /// POSTs `{"text": text}` to `url` within `timeout`. A non-2xx answer is an error. The error

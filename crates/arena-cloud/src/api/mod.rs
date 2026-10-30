@@ -13,6 +13,7 @@
 //! [`gate::RequireSetupComplete`].
 
 pub mod account;
+pub mod alerts;
 pub mod branches;
 mod catalog;
 pub mod commands;
@@ -82,6 +83,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>, commands_only: bool) -> Router {
             .merge(wizard_golive::router(Arc::clone(st)))
             .merge(branches::router(Arc::clone(st)))
             .merge(owner_read::router(Arc::clone(st)))
+            .merge(alerts::router(Arc::clone(st)))
             .merge(catalog::router(Arc::clone(st)))
             .merge(pair::router(Arc::clone(st)))
             .merge(heartbeat::router(Arc::clone(st)))
@@ -99,6 +101,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>, commands_only: bool) -> Router {
             v1 = v1
                 .merge(dev::sms_router(Arc::clone(st)))
                 .merge(dev::notify_router(Arc::clone(st)))
+                .merge(dev::owner_alert_router(Arc::clone(st)))
                 .merge(dev::gate_router(Arc::clone(st)));
         }
     }

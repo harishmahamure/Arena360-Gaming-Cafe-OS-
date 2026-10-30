@@ -26,6 +26,7 @@ mod hubs;
 mod mfa;
 mod otp;
 mod owner;
+mod owner_alerts;
 mod owner_commands;
 mod pairing;
 mod rate_limit;
@@ -54,6 +55,10 @@ pub use otp::{
     SignupOutcome,
 };
 pub use owner::{NewOwner, Owner};
+pub use owner_alerts::{
+    NewOwnerAlert, OWNER_ALERT_RETENTION_MS, OwnerAlertRow, PushSubscriptionRow,
+    UpsertSubscription, UpsertedSubscription,
+};
 pub use owner_commands::{OwnerCommandFilter, OwnerCommandRow};
 pub use pairing::{
     IssueOutcome, NewPairingCode, PAIRING_HISTORY_MS, PairingCodeRow, RedeemInvalid, Redeemed,
@@ -178,6 +183,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 22,
         sql: include_str!("../control-migrations/0022_send_ledger.sql"),
+    },
+    ControlMigration {
+        version: 23,
+        sql: include_str!("../control-migrations/0023_owner_alerts.sql"),
     },
 ];
 

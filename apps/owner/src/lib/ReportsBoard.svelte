@@ -2,6 +2,7 @@
   import { Button, TabControl, TierLock, t } from "@arena/ui";
   import type { MessageKey } from "@arena/ui/messages";
   import { onMount, tick } from "svelte";
+  import { page } from "$app/state";
   import CashPanel from "./CashPanel.svelte";
   import CreditPanel from "./CreditPanel.svelte";
   import ExportsPanel from "./ExportsPanel.svelte";
@@ -46,9 +47,11 @@
   const locked = $derived(liveBranches().filter((b) => b.tier === "free"));
   const pending = $derived((shell.branches ?? []).filter((b) => !isLive(b)));
 
-  let tab = $state("revenue");
+  // Opened from an alert, the page names its tab and branch (`?tab=cash&branch=<id>`).
+  const wantedTab = page.url.searchParams.get("tab");
+  let tab = $state(TABS.some((x) => x.id === wantedTab) ? (wantedTab as string) : "revenue");
   let kind: RangeKind = $state("week");
-  let branchId = $state(ALL);
+  let branchId = $state(page.url.searchParams.get("branch") || ALL);
   let custom = $state({ from: "", to: "" });
   let report: BranchReport[] = $state([]);
   let windows: LevelsWindow[] = $state([]);
@@ -120,6 +123,11 @@
     windows = res;
     windowsLoaded = true;
   }
+
+  // A branch in the link that is not one of the paid, live ones falls back to all of them.
+  $effect(() => {
+    if (paid.length && branchId !== ALL && !paid.some((b) => b.id === branchId)) branchId = ALL;
+  });
 
   // Load again whenever the branches, the range or the pick change.
   $effect(() => {

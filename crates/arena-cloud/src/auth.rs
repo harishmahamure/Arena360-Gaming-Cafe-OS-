@@ -32,6 +32,9 @@ pub struct AuthState {
     pub sms: Messenger,
     /// Sends player and owner messages (Story 8.28); set once by `auth_state`. Unset: `/v1/notify` answers 503.
     pub notifier: std::sync::OnceLock<crate::messaging::Notifier>,
+    /// Pushes owner alerts to the owner's browsers (Story 8.33); set once by `auth_state`. Unset: the push
+    /// routes answer 503 and alerts reach only the list and WhatsApp.
+    pub push: std::sync::OnceLock<crate::push::WebPush>,
     pub clock: Clock,
     pepper: Vec<u8>,
     /// Exact browser origins allowed with credentials.
@@ -72,6 +75,7 @@ impl AuthState {
             db,
             sms,
             notifier: std::sync::OnceLock::new(),
+            push: std::sync::OnceLock::new(),
             clock,
             pepper: cfg.pepper.clone(),
             web_origins: cfg.web_origins.clone(),

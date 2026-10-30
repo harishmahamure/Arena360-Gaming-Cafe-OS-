@@ -54,6 +54,10 @@ environment (not with --dev):
                           _ENDPOINT) with the SMS account as the fallback, or are logged for an
                           operator to send. Unset WhatsApp variables leave POST /v1/notify at 503
                           (--dev: the recorded fake, read at GET /v1/dev/notify)
+  ARENA_VAPID_PRIVATE_KEY, ARENA_VAPID_SUBJECT  owner alert web push: the P-256 PKCS#8 private
+                          key (base64url) and the mailto:/https: contact the push services see.
+                          Unset: the push routes answer 503 and alerts reach the list and
+                          WhatsApp only (--dev: the recorded fake and a fixed public key)
   ARENA_MFA_KEY           base64 of 32 random bytes: the AES-256-GCM key of owners' TOTP
                           secrets (--dev: a fixed dev key)
   ARENA_LICENCE_SIGNING_KEY  the Ed25519 PKCS#8 PEM that signs branch licences (from

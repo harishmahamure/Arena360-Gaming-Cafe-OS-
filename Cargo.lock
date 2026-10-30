@@ -172,6 +172,7 @@ dependencies = [
 name = "arena-cloud"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "age",
  "arena-proto",
  "arena-replay",
@@ -184,10 +185,12 @@ dependencies = [
  "chrono",
  "futures-util",
  "getrandom 0.3.4",
+ "hkdf",
  "hmac 0.12.1",
  "hyper 0.14.32",
  "jsonwebtoken",
  "libsql",
+ "p256",
  "qrcode",
  "reqwest",
  "ring",

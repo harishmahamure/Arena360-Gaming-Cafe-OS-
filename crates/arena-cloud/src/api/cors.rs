@@ -69,7 +69,7 @@ async fn cors_inner(origins: &Origins, req: Request, next: Next) -> Response {
         let h = res.headers_mut();
         h.insert(
             header::ACCESS_CONTROL_ALLOW_METHODS,
-            HeaderValue::from_static("GET, POST, PUT, DELETE"),
+            HeaderValue::from_static("GET, POST, PUT, PATCH, DELETE"),
         );
         h.insert(
             header::ACCESS_CONTROL_ALLOW_HEADERS,

@@ -36,6 +36,7 @@ pub mod licence;
 mod matching;
 mod notify;
 mod operating;
+mod owner_alert;
 mod owner_commands;
 mod owner_export;
 mod owner_read;
@@ -258,6 +259,12 @@ pub use operating::{
     KIOSK_OPERATING_KEYS, KIOSK_VOLUME_MAX, LAST_MINUTE, MEDIA_CAP_GB_RANGE, MediaCacheStatus,
     OpeningDay, OpeningHoursError, SetupStatus, TestSessionState, has_open_day, is_absolute_path,
     is_backup_location, is_backup_tree_uri, opening_hours_json, parse_opening_hours,
+};
+pub use owner_alert::{
+    DevOwnerAlert, OWNER_ALERT_PARAM_MAX_CHARS, OWNER_ALERTS_PAGE, OWNER_ALERTS_PAGE_MAX,
+    OwnerAlertKind, OwnerAlertList, OwnerAlertParamError, OwnerAlertPush, OwnerAlertSettings,
+    OwnerAlertSettingsPatch, OwnerAlertView, PUSH_SUBSCRIPTIONS_MAX, PUSH_TTL_S, PushKeys,
+    PushRemove, PushSubscribe,
 };
 pub use owner_commands::{
     CreditRemind, DEVICE_REVOKE_REASONS, OWNER_COMMAND_KINDS, OWNER_COMMAND_POSTS_PER_MIN,

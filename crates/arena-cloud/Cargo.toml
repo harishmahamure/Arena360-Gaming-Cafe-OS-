@@ -38,6 +38,9 @@ ring.workspace = true
 qrcode.workspace = true
 jsonwebtoken.workspace = true
 base64.workspace = true
+p256.workspace = true
+hkdf.workspace = true
+aes-gcm.workspace = true
 
 [dev-dependencies]
 arena-proto = { workspace = true, features = ["dev-keys"] }

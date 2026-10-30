@@ -30,10 +30,12 @@ pub mod health;
 pub mod licence;
 pub mod messaging;
 pub mod ops;
+pub mod owner_alerts;
 pub mod owner_read;
 pub mod pairing_code;
 pub mod passwords;
 pub mod presign;
+pub mod push;
 pub mod rollups;
 pub mod store;
 pub mod templates;
@@ -53,6 +55,7 @@ use crate::config::{AuthConfig, Config, Database, Role, SmsProviderConfig};
 pub use crate::health::CHECK_INTERVAL;
 use crate::health::{CHECK_TIMEOUT, Reachability};
 use crate::messaging::{FakeNotifier, FakeSms, GupshupSms, Messenger, Notifier};
+use crate::push::{FakePush, WebPush};
 
 /// A source of Unix milliseconds (tests move it by hand).
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
@@ -206,9 +209,24 @@ pub fn auth_state(
             }
         },
     };
+    let push = match &cfg.sms {
+        SmsProviderConfig::Fake => Some(WebPush::Fake(FakePush::new(Arc::clone(&clock)))),
+        SmsProviderConfig::Gupshup(_) => {
+            match WebPush::from_env(&|k| std::env::var_os(k), Arc::clone(&clock)) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!(error = %e, "no web push: the push routes answer 503");
+                    None
+                }
+            }
+        }
+    };
     let st = Arc::new(AuthState::new(db, sms, clock, cfg));
     if let Some(n) = notifier {
         let _ = st.notifier.set(n);
+    }
+    if let Some(p) = push {
+        let _ = st.push.set(p);
     }
     Ok(st)
 }

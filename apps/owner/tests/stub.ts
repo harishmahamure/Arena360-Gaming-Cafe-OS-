@@ -4,6 +4,8 @@ import type {
   OwnerBranch,
   OwnerCommandPreview,
   OwnerCommandView,
+  OwnerAlertSettings,
+  OwnerAlertView,
   OwnerLive,
   OwnerRange,
   SummaryCatalogue,
@@ -164,6 +166,10 @@ export type StubOptions = {
   offline?: string[];
   /** The first N command posts are recorded but their response is lost (the connection drops). */
   lose?: number;
+  /** The alerts the cloud holds, newest first (the stub reads the array on every call). */
+  alerts?: OwnerAlertView[];
+  /** The notification settings the cloud starts with. */
+  alertSettings?: Partial<OwnerAlertSettings>;
   /** Answers a command post instead of the default (queue one row per branch that can take it). */
   post?: (body: Record<string, unknown>) => { status: number; body: unknown } | undefined;
 };
@@ -177,6 +183,20 @@ export function commandOf(over: Partial<OwnerCommandView> = {}, ageMs = 120_000)
     status: "pending",
     payload: { group_id: "g1", price_per_hour_minor: 6000 },
     queued_at: Date.now() - ageMs,
+    ...over,
+  };
+}
+
+/** An alert as the cloud lists it, `ageMs` old. */
+export function alertOf(over: Partial<OwnerAlertView> = {}, ageMs = 120_000): OwnerAlertView {
+  return {
+    id: "al1",
+    branch_id: "b1",
+    branch_name: "Pixel Arena MG Road",
+    kind: "low_stock",
+    text: "Cola is running low: 3 left.",
+    url: "/reports?tab=stock&branch=b1",
+    created_at: Date.now() - ageMs,
     ...over,
   };
 }
@@ -196,6 +216,14 @@ export async function stubCloud(
   const commands: OwnerCommandView[] = [...(opts.commands ?? [])];
   let nextId = Math.max(0, ...commands.map((c) => c.id));
   let lost = opts.lose ?? 0;
+  const alerts = opts.alerts ?? [];
+  const settings: OwnerAlertSettings = {
+    vapid_public_key:
+      "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+    whatsapp: true,
+    subscriptions: 0,
+    ...opts.alertSettings,
+  };
   const byKey = new Map<string, OwnerCommandView[]>();
   await page.route("**/v1/**", (route) => {
     const req = route.request();
@@ -299,13 +327,38 @@ export async function stubCloud(
       }
       return json({ commands: made, skipped: [] });
     }
+    if (path === "/v1/alerts" && req.method() === "GET") {
+      const q = new URL(req.url()).searchParams;
+      const from = Number(q.get("before") ?? 0);
+      const limit = Number(q.get("limit") ?? 30);
+      const page = alerts.slice(from, from + limit);
+      const more = from + limit < alerts.length;
+      return json({ alerts: page, ...(more ? { next_before: String(from + limit) } : {}) });
+    }
+    if (path === "/v1/alerts/settings" && req.method() === "GET") return json(settings);
+    if (path === "/v1/alerts/settings" && req.method() === "PATCH") {
+      const body = req.postDataJSON();
+      (bodies["PATCH /v1/alerts/settings"] ??= []).push(body);
+      settings.whatsapp = body.whatsapp;
+      return json(settings);
+    }
+    if (path === "/v1/alerts/push" && req.method() === "POST") {
+      (bodies["POST /v1/alerts/push"] ??= []).push(req.postDataJSON());
+      settings.subscriptions++;
+      return route.fulfill({ status: 204 });
+    }
+    if (path === "/v1/alerts/push/remove" && req.method() === "POST") {
+      (bodies["POST /v1/alerts/push/remove"] ??= []).push(req.postDataJSON());
+      settings.subscriptions = Math.max(0, settings.subscriptions - 1);
+      return route.fulfill({ status: 204 });
+    }
     if (path === "/v1/meta/timezones") return json(["Asia/Dubai", "Asia/Kolkata"]);
     if (path === "/v1/wizard/install-hub/code")
       return json({ code: "ABCD2345", expires_at: Date.now() + 900_000, server_now: Date.now() });
     if (path === "/v1/signout") return json(null, 200);
     return json({ code: "NOT_FOUND", message: "" }, 404);
   });
-  return Object.assign(calls, { bodies, exports, commands });
+  return Object.assign(calls, { bodies, exports, commands, alerts, settings });
 }
 
 export const cacheCount = (page: Page) =>

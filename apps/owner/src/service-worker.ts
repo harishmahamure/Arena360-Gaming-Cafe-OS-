@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 import { version } from "$app/env";
 import { assets, immutable } from "$app/manifest";
+import { t } from "@arena/ui/messages";
 
 const sw = self as unknown as ServiceWorkerGlobalScope;
 const key = "shell-" + version;
@@ -37,6 +38,47 @@ sw.addEventListener("fetch", (e) => {
       return hit && shell.includes(url.pathname)
         ? hit
         : fetch(request).catch(() => hit ?? Response.error());
+    }),
+  );
+});
+
+type PushPayload = { title?: string; body?: string; url?: string; tag?: string };
+
+// An owner alert (Story 8.33): shown as a notification, and any open window reads its list again.
+sw.addEventListener("push", (e) => {
+  let data: PushPayload = {};
+  try {
+    data = (e.data?.json() as PushPayload | undefined) ?? {};
+  } catch {
+    data = { body: e.data?.text() };
+  }
+  e.waitUntil(
+    Promise.all([
+      sw.registration.showNotification(data.title || t("app.name"), {
+        body: data.body ?? "",
+        tag: data.tag,
+        data: { url: data.url },
+      }),
+      sw.clients
+        .matchAll({ type: "window", includeUncontrolled: true })
+        .then((all) => all.forEach((c) => c.postMessage({ type: "owner-alert" }))),
+    ]),
+  );
+});
+
+// A tap focuses an open window and sends it to the alert's page, else opens one there.
+sw.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  const wanted = (e.notification.data as { url?: unknown } | null)?.url;
+  // Only a path in this app: never another site.
+  const path = typeof wanted === "string" && /^\/(?!\/)/.test(wanted) ? wanted : "/alerts";
+  const target = new URL(path, sw.location.origin).href;
+  e.waitUntil(
+    sw.clients.matchAll({ type: "window", includeUncontrolled: true }).then(async (all) => {
+      const open = all.find((c) => new URL(c.url).origin === sw.location.origin);
+      if (!open) return void (await sw.clients.openWindow(target));
+      await open.focus();
+      await open.navigate(target);
     }),
   );
 });

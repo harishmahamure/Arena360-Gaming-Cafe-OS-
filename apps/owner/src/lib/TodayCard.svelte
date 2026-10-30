@@ -50,7 +50,7 @@
 <Card>
   <section class="branch" aria-labelledby="today-{branch.id}" class:offline>
     <div class="head">
-      <h2 id="today-{branch.id}" class="type-hub-title">{branch.name}</h2>
+      <h2 id="today-{branch.id}" class="type-hub-title" tabindex="-1">{branch.name}</h2>
       {#if offline}<StatusBadge state="offline" label="owner.today.offline" />{/if}
     </div>
     {#if !state}

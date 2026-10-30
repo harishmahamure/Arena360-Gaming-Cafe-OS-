@@ -6,8 +6,9 @@ use arena_proto::{
     OWNER_ALL_BRANCHES, OWNER_COMMAND_POSTS_PER_MIN, OWNER_COMMANDS_PAGE, OWNER_COMMANDS_PAGE_MAX,
     OwnerCommandKind, OwnerCommandList, OwnerCommandPost, OwnerCommandPosted, OwnerCommandPreview,
     OwnerCommandPreviewRequest, OwnerCommandSkip, OwnerCommandTarget, OwnerCommandView,
-    PRODUCT_COMMAND_PAYLOAD_MAX, SETTINGS_COMMAND_KEYS, STEPUP_TTL_MS, Tier, command_payload_max,
-    is_setup_command, owner_command_kind, validate_owner_payload,
+    OwnerStaffUpsert, PRODUCT_COMMAND_PAYLOAD_MAX, SETTINGS_COMMAND_KEYS, SETUP_CODE_HUB_TTL_MS,
+    STEPUP_TTL_MS, StaffSetupCode, Tier, command_payload_max, is_setup_command, owner_command_kind,
+    validate_owner_payload,
 };
 use arena_store::control::{
     Branch, CommandRow, NewCommand, OwnerCommandFilter, OwnerCommandRow, RateRule,
@@ -15,13 +16,15 @@ use arena_store::control::{
 use axum::extract::{DefaultBodyLimit, FromRequestParts, Path, Query, State};
 use axum::handler::Handler;
 use axum::http::HeaderMap;
-use axum::http::header::AUTHORIZATION;
+use axum::http::header::{AUTHORIZATION, CACHE_CONTROL};
 use axum::http::request::Parts;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+use super::account::blocking;
 use super::branches::tier_of;
 use super::error::ApiError;
 use super::gate::RequireSetupComplete;
@@ -32,7 +35,9 @@ use super::signup::ceil_s;
 
 /// The body of an owner command post: a product image rides in the payload (Story 8.24).
 const OWNER_POST_BODY_LIMIT: usize = PRODUCT_COMMAND_PAYLOAD_MAX + 16 * 1024;
-use crate::auth::AuthState;
+use crate::auth::{AuthState, valid_phone, valid_text};
+use crate::pairing_code::new_pairing_code;
+use crate::passwords::hash_secret;
 use crate::presign::{Epoch, is_fenced};
 
 const POST_RATE_PREFIX: &str = "cmdpost:";
@@ -294,14 +299,28 @@ fn branch_key(group_key: &str, branch_id: &str) -> String {
     ulid::Ulid::from(u128::from_be_bytes(b) >> 3).to_string()
 }
 
+/// What the owner sees of a stored payload: a staff member's setup code hash stays in the cloud, and
+/// `setup_code: true` says a code was issued, so Retry asks for a new one (Story 8.26).
+fn shown_payload(kind: &str, stored: &str) -> serde_json::Value {
+    let mut payload = serde_json::from_str(stored).unwrap_or(serde_json::Value::Null);
+    if kind == "staff.upsert"
+        && let Some(fields) = payload.as_object_mut()
+        && fields.remove("setup_code_hash").is_some()
+    {
+        fields.remove("setup_expires_at");
+        fields.insert("setup_code".into(), true.into());
+    }
+    payload
+}
+
 fn view(row: OwnerCommandRow) -> OwnerCommandView {
     OwnerCommandView {
         id: row.id,
         branch_id: row.branch_id,
         group_id: row.group_id,
+        payload: shown_payload(&row.kind, &row.payload),
         kind: row.kind,
         status: row.status,
-        payload: serde_json::from_str(&row.payload).unwrap_or(serde_json::Value::Null),
         error: row.error.and_then(|e| serde_json::from_str(&e).ok()),
         queued_at: row.created_at,
         done_at: row.resolved_at,
@@ -324,13 +343,74 @@ fn view_of(row: CommandRow, group_id: Option<String>) -> OwnerCommandView {
     })
 }
 
+/// The staff id of a member added by a post: taken from the owner's key and the branch, so the same
+/// post names the same member whenever it is sent again.
+fn new_staff_id(key: &str, branch_id: &str) -> String {
+    branch_key(&format!("staff:{key}"), branch_id)
+}
+
+/// The `staff.upsert` a branch is sent (Story 8.26): the owner's fields, and for a new member (or
+/// when a new code is asked for) the id, a fresh setup code's hash and its expiry. The code itself
+/// comes back beside the payload; only its hash is stored and sent to the Hub.
+async fn staff_part(
+    fields: &OwnerStaffUpsert,
+    base_rev: Option<i64>,
+    key: &str,
+    branch_id: &str,
+    now: i64,
+) -> Result<(serde_json::Value, Option<StaffSetupCode>), ApiError> {
+    let issue = fields.staff_id.is_none() || fields.setup_code == Some(true);
+    let staff_id = fields
+        .staff_id
+        .clone()
+        .unwrap_or_else(|| new_staff_id(key, branch_id));
+    let mut payload = serde_json::json!({
+        "login": fields.login.trim(),
+        "display_name": fields.display_name.trim(),
+        "role_id": fields.role_id,
+        "active": fields.active,
+    });
+    let Some(out) = payload.as_object_mut() else {
+        return Err(ApiError::internal("staff payload"));
+    };
+    if fields.staff_id.is_some() || issue {
+        out.insert("staff_id".into(), staff_id.clone().into());
+    }
+    if let Some(rev) = base_rev {
+        out.insert("base_rev".into(), rev.into());
+    }
+    if !issue {
+        return Ok((payload, None));
+    }
+    let code = new_pairing_code().map_err(ApiError::internal)?;
+    let hash = {
+        let code = code.clone();
+        blocking(move || hash_secret(&code)).await?
+    };
+    if let Some(out) = payload.as_object_mut() {
+        out.insert("setup_code_hash".into(), hash.into());
+        out.insert(
+            "setup_expires_at".into(),
+            (now + SETUP_CODE_HUB_TTL_MS).into(),
+        );
+    }
+    Ok((
+        payload,
+        Some(StaffSetupCode {
+            branch_id: branch_id.to_owned(),
+            staff_id,
+            code,
+        }),
+    ))
+}
+
 /// `POST /v1/commands {branch_id | "all", idempotency_key, kind, payload, base_rev?}` from a
 /// signed-in owner (Story 8.18).
 async fn post_command(
     State(st): State<Arc<AuthState>>,
     RequireSetupComplete(signed): RequireSetupComplete,
     ApiJson(body): ApiJson<OwnerCommandPost>,
-) -> Result<Json<OwnerCommandPosted>, ApiError> {
+) -> Result<Response, ApiError> {
     let now = st.now();
     let tenant = st
         .db
@@ -379,6 +459,11 @@ async fn post_command(
     if payload.len() > command_payload_max(kind.kind) {
         return Err(ApiError::validation("payload", "The payload is too large."));
     }
+    let staff = if kind.kind == "staff.upsert" {
+        Some(checked_staff(&body)?)
+    } else {
+        None
+    };
     let elevated = step_up_check(&kind, signed.session.stepup_at, now)?;
     let branches = st
         .db
@@ -400,6 +485,7 @@ async fn post_command(
     };
     let mut commands = Vec::new();
     let mut skipped = Vec::new();
+    let mut setup_codes = Vec::new();
     for b in &targets {
         if let Some(e) = refusal(&st, b, &kind).await? {
             if !all {
@@ -420,6 +506,13 @@ async fn post_command(
         } else {
             (body.idempotency_key.clone(), None)
         };
+        let (payload, code) = match &staff {
+            Some(fields) => {
+                let (p, code) = staff_part(fields, body.base_rev, &row_key, &b.id, now).await?;
+                (serde_json::to_string(&p).map_err(ApiError::internal)?, code)
+            }
+            None => (payload.clone(), None),
+        };
         let row = st
             .db
             .submit_command(&NewCommand {
@@ -435,6 +528,13 @@ async fn post_command(
             })
             .await
             .map_err(ApiError::internal)?;
+        // A post sent again finds its first row, which holds the first code's hash: this code
+        // would not work, so it is not shown.
+        if let Some(code) = code
+            && row.payload == payload
+        {
+            setup_codes.push(code);
+        }
         commands.push(view_of(row, group.map(str::to_owned)));
     }
     if commands.is_empty()
@@ -442,7 +542,43 @@ async fn post_command(
     {
         return Err(AppError::new(first.code, first.message.clone()).into());
     }
-    Ok(Json(OwnerCommandPosted { commands, skipped }))
+    let posted = OwnerCommandPosted {
+        commands,
+        skipped,
+        setup_codes: (!setup_codes.is_empty()).then_some(setup_codes),
+    };
+    // A setup code is shown once: nothing may keep the answer.
+    Ok(([(CACHE_CONTROL, "no-store")], Json(posted)).into_response())
+}
+
+/// The owner's fields of a `staff.upsert`, checked the way the wizard checks an invitation. A
+/// member who is not new keeps the login the Hub holds, so only a new one must be a phone number.
+fn checked_staff(body: &OwnerCommandPost) -> Result<OwnerStaffUpsert, ApiError> {
+    let mut fields = body.payload.clone();
+    if let Some(o) = fields.as_object_mut() {
+        o.remove("base_rev");
+    }
+    let staff: OwnerStaffUpsert = serde_json::from_value(fields)
+        .map_err(|_| ApiError::validation("payload", "Send the staff member's details."))?;
+    if !valid_text(&staff.display_name) {
+        return Err(ApiError::validation(
+            "display_name",
+            "Enter their name (up to 80 characters).",
+        ));
+    }
+    if staff.staff_id.is_none() && !valid_phone(staff.login.trim()) {
+        return Err(ApiError::validation(
+            "login",
+            "Enter their mobile number with the country code, like +91 98765 43210.",
+        ));
+    }
+    if staff.staff_id.is_some() && staff.login.trim().is_empty() {
+        return Err(ApiError::validation("login", "Send the member's login."));
+    }
+    if staff.role_id.trim().is_empty() {
+        return Err(ApiError::validation("role_id", "Choose a role."));
+    }
+    Ok(staff)
 }
 
 /// `POST /v1/commands/preview {branch_id | "all", kind}` from a signed-in owner (Story 8.21): the

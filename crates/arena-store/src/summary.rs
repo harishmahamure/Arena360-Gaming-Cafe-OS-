@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use crate::coupons::list_coupon_targets;
 use crate::plans::list_plan_groups;
 use crate::products::list_components;
+use crate::staff::list_role_perms;
 use crate::{Store, db_error};
 
 /// The latest business day with a daily-rollup row (`yyyy-mm-dd`), if any (Story 8.6).
@@ -334,15 +335,23 @@ pub fn catalogue(conn: &Connection) -> Result<SummaryCatalogue, AppError> {
             .collect();
         with_list(bundle, "components", json!(parts));
     }
-    let roles = rows(
+    let mut roles = rows(
         conn,
         "SELECT role_id, name, rev, NULL, CASE WHEN builtin = 1 THEN 'builtin' END
          FROM roles ORDER BY role_id LIMIT ?1",
     )?;
+    for role in &mut roles {
+        let perms: Vec<Value> = list_role_perms(conn, &role.id)?
+            .into_iter()
+            .map(|(permission, effect)| json!({ "permission": permission, "effect": effect }))
+            .collect();
+        role.fields = Some(json!({ "permissions": perms }));
+    }
     let staff = {
         let mut stmt = conn
             .prepare(
-                "SELECT s.staff_id, s.display_name, COALESCE(r.name, s.role_id), s.active, s.rev
+                "SELECT s.staff_id, s.display_name, COALESCE(r.name, s.role_id), s.active, s.rev,
+                        s.login, s.role_id
                  FROM staff s LEFT JOIN roles r ON r.role_id = s.role_id
                  ORDER BY s.staff_id LIMIT ?1",
             )
@@ -354,6 +363,8 @@ pub fn catalogue(conn: &Connection) -> Result<SummaryCatalogue, AppError> {
                 role: r.get(2)?,
                 active: r.get(3)?,
                 rev: r.get(4)?,
+                login: Some(r.get(5)?),
+                role_id: Some(r.get(6)?),
             })
         })
         .map_err(db_error)?

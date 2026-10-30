@@ -4,7 +4,7 @@ use arena_proto::{
 };
 
 use arena_store::{
-    StoreTx, find_coupon, find_device_meta, find_plan, find_pricing_rule, find_product,
+    StoreTx, find_coupon, find_device_meta, find_plan, find_pricing_rule, find_product, find_role,
     find_setting, find_staff, newest_change_of,
 };
 
@@ -21,7 +21,7 @@ pub const BACKUP_NOW: &str = "backup.now";
 /// Every command kind this Hub runs, at [`COMMAND_SCHEMA_VERSION`]: the setup kinds (Story 2.15)
 /// and the owner kinds (Story 8.19). `arena_proto::OWNER_COMMAND_KINDS` lists the same owner kinds
 /// as handled; a test keeps the two in agreement.
-pub const HANDLED_COMMAND_KINDS: [&str; 14] = [
+pub const HANDLED_COMMAND_KINDS: [&str; 16] = [
     "group.upsert",
     "device.assign",
     "device.register",
@@ -35,6 +35,8 @@ pub const HANDLED_COMMAND_KINDS: [&str; 14] = [
     "coupon.upsert",
     "product.upsert",
     "stock.threshold",
+    "staff.deactivate",
+    "role.upsert",
     BACKUP_NOW,
 ];
 
@@ -193,6 +195,14 @@ fn edited_row(
             Some(id) => find_coupon(tx, id)?.map(|r| ("coupons", id.clone(), r.rev)),
             None => None,
         },
+        IntentPayload::StaffUpsert(p) => match &p.staff_id {
+            Some(id) => find_staff(tx, id)?.map(|r| ("staff", id.clone(), r.rev)),
+            None => None,
+        },
+        IntentPayload::RoleUpsert(p) => match &p.role_id {
+            Some(id) => find_role(tx, id)?.map(|r| ("roles", id.clone(), r.rev)),
+            None => None,
+        },
         _ => None,
     })
 }
@@ -217,10 +227,6 @@ pub(crate) fn owner_wins(
         IntentPayload::SettingsSet(s) => find_setting(tx, &s.key)?.map(|r| r.rev),
         IntentPayload::DeviceRegister(d) => match &d.device_id {
             Some(id) => find_device_meta(tx, id)?.map(|m| m.rev),
-            None => None,
-        },
-        IntentPayload::StaffUpsert(s) => match &s.staff_id {
-            Some(id) => find_staff(tx, id)?.map(|r| r.rev),
             None => None,
         },
         payload => match edited_row(tx, payload)? {
@@ -294,6 +300,8 @@ mod tests {
             )
             .collect();
         theirs.sort_unstable();
+        // The wizard and the owner both send `staff.upsert`.
+        theirs.dedup();
         assert_eq!(ours, theirs);
         for k in arena_proto::OWNER_COMMAND_KINDS
             .iter()

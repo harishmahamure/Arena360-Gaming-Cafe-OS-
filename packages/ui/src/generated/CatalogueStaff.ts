@@ -8,5 +8,11 @@ export type CatalogueStaff = {
   name: string;
   role: string;
   active: boolean;
+  /**
+   * The sign-in login (a mobile number for an invited member) and the id of the role, so the
+   * Owner app can edit the member (Story 8.26). Additive: an older summary lacks them.
+   */
+  login?: string;
+  role_id?: string;
   rev: number;
 };

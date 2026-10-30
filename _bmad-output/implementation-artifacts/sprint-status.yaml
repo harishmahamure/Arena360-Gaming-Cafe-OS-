@@ -247,7 +247,7 @@ development_status:
   8-23-manage-pricing-plans-and-rates-pricing-rules-and-coupons: done
   8-24-manage-products-and-bundles: done
   8-25-step-up-mfa-for-sensitive-commands: done
-  8-26-manage-staff-users-and-roles-by-command: backlog
+  8-26-manage-staff-users-and-roles-by-command: review
   8-27-manage-devices-and-groups-and-revoking-a-device: backlog
   8-28-the-cloud-sends-player-and-owner-messages-through-a-swappabl: backlog
   8-29-the-hub-drains-its-notification-outbox-after-the-undo-window: backlog

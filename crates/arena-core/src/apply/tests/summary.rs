@@ -357,15 +357,59 @@ async fn pricing_rows_carry_the_fields_of_their_upsert_payload() {
         })]
     );
 
-    // Every other list is unchanged: no `fields` key at all.
+    // Groups carry no `fields` key at all.
     assert!(s.catalogue.groups.iter().all(|r| r.fields.is_none()));
-    let json = serde_json::to_value(&s.catalogue.roles).unwrap();
-    assert!(
-        json.as_array()
-            .unwrap()
-            .iter()
-            .all(|r| r.get("fields").is_none())
+}
+
+/// Story 8.26: a staff member carries the login and role id the Owner app edits with, and a role
+/// its permissions.
+#[tokio::test]
+async fn staff_carry_their_login_and_role_and_roles_their_permissions() {
+    use serde_json::json;
+    let f = booted().await;
+    let role = f
+        .writer
+        .apply_command(arena_proto::CommandWire {
+            id: 1,
+            idempotency_key: ulid::Ulid::generate().to_string(),
+            kind: "role.upsert".into(),
+            schema_version: 1,
+            payload: json!({"name": "Floor lead",
+                "perms": [{"permission": "session.start", "effect": "allow"}]}),
+            issued_by: "owner-1".into(),
+            elevated_by: None,
+        })
+        .await
+        .unwrap();
+    assert!(role.applied, "{:?}", role.error);
+
+    let reader = SnapshotReader::open(&f.path).unwrap();
+    let s = reader.branch_summary(T0).unwrap().unwrap();
+    let lead = s
+        .catalogue
+        .roles
+        .iter()
+        .find(|r| r.name == "Floor lead")
+        .unwrap();
+    assert_eq!(
+        lead.fields,
+        Some(json!({"permissions": [{"permission": "session.start", "effect": "allow"}]}))
     );
+    let owner_role = s
+        .catalogue
+        .roles
+        .iter()
+        .find(|r| r.name == "Owner")
+        .unwrap();
+    assert_eq!(owner_role.detail.as_deref(), Some("builtin"));
+    assert!(
+        owner_role.fields.as_ref().unwrap()["permissions"]
+            .as_array()
+            .is_some_and(|p| p.len() >= 30)
+    );
+    for member in &s.catalogue.staff {
+        assert!(member.login.is_some() && member.role_id.is_some());
+    }
 }
 
 /// Story 8.24: products and bundles carry the fields of their upsert payload (no image, no id, no

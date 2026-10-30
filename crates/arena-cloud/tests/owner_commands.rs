@@ -425,7 +425,6 @@ async fn kinds_outside_the_catalogue_or_reserved_are_unsupported() {
         "hub.revoke",
         "backup.restore",
         "pricing.set",
-        "staff.upsert",
         "branch.go_live",
     ] {
         let r = h.send(&a, post(&a.branch, K1, kind, json!({}))).await;

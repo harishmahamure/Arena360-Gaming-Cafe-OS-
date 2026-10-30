@@ -11,6 +11,10 @@ export const OWNER_UPDATE_COPY = {
   "rule.upsert": "hub.owner_update.rule",
   "coupon.upsert": "hub.owner_update.coupon",
   "product.upsert": "hub.owner_update.product",
+  "staff.upsert": "hub.owner_update.staff",
+  // A deactivation is a staff update (Story 8.26).
+  "staff.deactivate": "hub.owner_update.staff",
+  "role.upsert": "hub.owner_update.role",
 } as const satisfies Record<string, MessageKey>;
 
 const isObject = (v: unknown): v is Record<string, unknown> =>

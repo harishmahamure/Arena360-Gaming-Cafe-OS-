@@ -9,7 +9,8 @@ use ts_rs::TS;
 use crate::commands::COMMAND_SCHEMA_VERSION;
 use crate::error::{AppError, ErrorCode};
 use crate::{
-    CouponUpsert, PlanUpsert, ProductUpsert, RateUpsert, RuleUpsert, StockThreshold, Tier,
+    CouponUpsert, Permission, PlanUpsert, ProductUpsert, RateUpsert, RoleUpsert, RuleUpsert,
+    StaffDeactivate, StockThreshold, Tier,
 };
 
 /// Owner command posts a tenant may make in a minute.
@@ -45,6 +46,14 @@ const fn handled(kind: &'static str) -> OwnerCommandKind {
     }
 }
 
+/// A kind the Hub runs that needs a step-up proof (Story 8.26).
+const fn sensitive(kind: &'static str) -> OwnerCommandKind {
+    OwnerCommandKind {
+        sensitive: true,
+        ..handled(kind)
+    }
+}
+
 const fn reserved(kind: &'static str) -> OwnerCommandKind {
     OwnerCommandKind {
         kind,
@@ -56,7 +65,7 @@ const fn reserved(kind: &'static str) -> OwnerCommandKind {
     }
 }
 
-pub const OWNER_COMMAND_KINDS: [OwnerCommandKind; 9] = [
+pub const OWNER_COMMAND_KINDS: [OwnerCommandKind; 12] = [
     handled("rate.upsert"),
     handled("plan.upsert"),
     handled("rule.upsert"),
@@ -64,12 +73,59 @@ pub const OWNER_COMMAND_KINDS: [OwnerCommandKind; 9] = [
     handled("product.upsert"),
     handled("stock.threshold"),
     handled("backup.now"),
+    sensitive("staff.upsert"),
+    sensitive("staff.deactivate"),
+    sensitive("role.upsert"),
     reserved("hub.revoke"),
     reserved("backup.restore"),
 ];
 
 pub fn owner_command_kind(kind: &str) -> Option<&'static OwnerCommandKind> {
     OWNER_COMMAND_KINDS.iter().find(|k| k.kind == kind)
+}
+
+/// The payload of an owner `staff.upsert` (Story 8.26): who, where in the team and whether active.
+/// It never carries a credential: the cloud adds `setup_code_hash` and `setup_expires_at` for a new
+/// member (or when `setup_code` asks for a new code) and the Hub keeps the member's own password
+/// and PIN. Without `staff_id` it adds a member at the branch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OwnerStaffUpsert {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub staff_id: Option<String>,
+    /// The member's mobile number with the country code: the login the setup code is for.
+    pub login: String,
+    pub display_name: String,
+    /// A role id of the branch, or the name of a built-in role.
+    pub role_id: String,
+    pub active: bool,
+    /// Issue a new setup code for a member who has not chosen a password yet. A new member always
+    /// gets one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub setup_code: Option<bool>,
+}
+
+/// One setup code the cloud issued for a new staff member of a branch. It is shown to the owner
+/// once, in the answer to the post, and kept nowhere else (only its hash goes to the Hub).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct StaffSetupCode {
+    pub branch_id: String,
+    pub staff_id: String,
+    pub code: String,
+}
+
+impl std::fmt::Debug for StaffSetupCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StaffSetupCode")
+            .field("branch_id", &self.branch_id)
+            .field("staff_id", &self.staff_id)
+            .field("code", &"[redacted]")
+            .finish()
+    }
 }
 
 fn invalid(field: &str, message: &str) -> AppError {
@@ -111,6 +167,25 @@ pub fn validate_owner_payload(kind: &str, payload: &serde_json::Value) -> Result
         "product.upsert" => parses::<ProductUpsert>(&fields),
         "stock.threshold" => parses::<StockThreshold>(&fields),
         "backup.now" => fields.as_object().is_some_and(|f| f.is_empty()),
+        "staff.upsert" => parses::<OwnerStaffUpsert>(&fields),
+        "staff.deactivate" => parses::<StaffDeactivate>(&fields),
+        "role.upsert" => match serde_json::from_value::<RoleUpsert>(fields) {
+            // Only permissions of the fixed catalogue go to a Hub.
+            Ok(role) => {
+                if let Some(i) = role
+                    .perms
+                    .iter()
+                    .position(|p| Permission::parse(&p.permission).is_none())
+                {
+                    return Err(invalid(
+                        &format!("perms[{i}]"),
+                        "That permission is not in the catalogue.",
+                    ));
+                }
+                true
+            }
+            Err(_) => false,
+        },
         _ => false,
     };
     if fits {
@@ -134,7 +209,15 @@ pub struct OwnerUpdate {
     pub copy_key: &'static str,
 }
 
-pub const OWNER_UPDATES: [OwnerUpdate; 5] = [
+impl OwnerUpdate {
+    /// Whether an owner command of `kind` raises this update: its own kind, and a deactivated
+    /// staff member counts as a staff update (Story 8.26).
+    pub fn covers(&self, kind: &str) -> bool {
+        kind == self.kind || (self.kind == "staff.upsert" && kind == "staff.deactivate")
+    }
+}
+
+pub const OWNER_UPDATES: [OwnerUpdate; 7] = [
     OwnerUpdate {
         kind: "rate.upsert",
         entity: "rate",
@@ -164,6 +247,18 @@ pub const OWNER_UPDATES: [OwnerUpdate; 5] = [
         entity: "product",
         tbl: "products",
         copy_key: "hub.owner_update.product",
+    },
+    OwnerUpdate {
+        kind: "staff.upsert",
+        entity: "staff",
+        tbl: "staff",
+        copy_key: "hub.owner_update.staff",
+    },
+    OwnerUpdate {
+        kind: "role.upsert",
+        entity: "role",
+        tbl: "roles",
+        copy_key: "hub.owner_update.role",
     },
 ];
 
@@ -287,6 +382,11 @@ pub struct OwnerCommandSkip {
 pub struct OwnerCommandPosted {
     pub commands: Vec<OwnerCommandView>,
     pub skipped: Vec<OwnerCommandSkip>,
+    /// The setup codes of the staff members this post added, one per branch (Story 8.26): shown
+    /// to the owner once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub setup_codes: Option<Vec<StaffSetupCode>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -329,6 +429,54 @@ mod tests {
             accepted_owner_kind("pricing.set").unwrap_err().code,
             ErrorCode::Unsupported
         );
+    }
+
+    #[test]
+    fn staff_and_role_kinds_are_handled_and_sensitive() {
+        for k in ["staff.upsert", "staff.deactivate", "role.upsert"] {
+            let kind = accepted_owner_kind(k).unwrap();
+            assert!(kind.sensitive && kind.handled, "{k}");
+        }
+    }
+
+    #[test]
+    fn a_staff_payload_never_carries_a_credential_and_a_role_only_catalogue_permissions() {
+        let member = json!({"login": "+919876500001", "display_name": "Neha", "role_id": "Counter", "active": true});
+        assert!(validate_owner_payload("staff.upsert", &member).is_ok());
+        let mut with_code = member.clone();
+        with_code["setup_code"] = true.into();
+        assert!(validate_owner_payload("staff.upsert", &with_code).is_ok());
+        for field in ["password_hash", "pin_hash", "setup_code_hash"] {
+            let mut bad = member.clone();
+            bad[field] = "x".into();
+            assert!(
+                validate_owner_payload("staff.upsert", &bad).is_err(),
+                "{field}"
+            );
+        }
+        assert!(validate_owner_payload("staff.deactivate", &json!({"staff_id": "S1"})).is_ok());
+        let role = |perm: &str| json!({"name": "Lead", "perms": [{"permission": perm, "effect": "allow"}]});
+        assert!(validate_owner_payload("role.upsert", &role("session.start")).is_ok());
+        let e = validate_owner_payload("role.upsert", &role("session.destroy")).unwrap_err();
+        assert_eq!(e.field.as_deref(), Some("perms[0]"));
+        assert!(validate_owner_payload("role.upsert", &json!({"perms": []})).is_err());
+    }
+
+    #[test]
+    fn a_setup_code_never_prints() {
+        let code = StaffSetupCode {
+            branch_id: "b".into(),
+            staff_id: "s".into(),
+            code: "K7Q49MZD".into(),
+        };
+        assert!(!format!("{code:?}").contains("K7Q49MZD"));
+    }
+
+    #[test]
+    fn a_deactivation_toasts_as_a_staff_update() {
+        let staff = OWNER_UPDATES.iter().find(|u| u.tbl == "staff").unwrap();
+        assert!(staff.covers("staff.upsert") && staff.covers("staff.deactivate"));
+        assert!(!staff.covers("role.upsert"));
     }
 
     #[test]

@@ -256,6 +256,174 @@ async fn every_owner_kind_applies_as_the_owner_and_wins_over_a_staff_edit() {
     }
 }
 
+/// The code of the error a refused command stored.
+fn refusal(c: &arena_store::AppliedCommand) -> Option<ErrorCode> {
+    let e: AppError = serde_json::from_str(c.error.as_deref()?).ok()?;
+    Some(e.code)
+}
+
+fn rows_of(f: &Fixture, table: Table) -> Vec<Row> {
+    reopen(f).rows(table).unwrap()
+}
+
+fn named(rows: Vec<Row>, key: &str, value: &str) -> Row {
+    rows.into_iter()
+        .find(|r| r[key] == RowValue::Text(value.into()))
+        .unwrap_or_else(|| panic!("no row with {key} = {value}"))
+}
+
+#[tokio::test]
+async fn the_owner_adds_edits_and_deactivates_staff_and_edits_a_custom_role() {
+    let f = bootstrapped().await;
+    let id = ulid::Ulid::generate().to_string();
+    let hash = crate::staff::hash_secret("K7Q49MZD").unwrap();
+    let mut new_member = json!({
+        "staff_id": id, "login": "+919876500001", "display_name": "Neha",
+        "role_id": "Counter", "active": true,
+        "setup_code_hash": hash, "setup_expires_at": T0 + 72 * 3_600_000,
+    });
+    let added = f
+        .writer
+        .apply_command(cmd(1, "staff.upsert", new_member.clone()))
+        .await
+        .unwrap();
+    assert!(added.applied, "{:?}", added.error);
+    let row = named(rows_of(&f, Table::Staff), "staff_id", &id);
+    assert_eq!(
+        (int(&row, "active"), text(&row, "login")),
+        (1, "+919876500001".into())
+    );
+    assert_eq!(
+        row["password_hash"],
+        RowValue::Null,
+        "the owner never sets a password"
+    );
+    assert_eq!(text(&row, "setup_code_hash"), hash);
+
+    // An edit that names no credential keeps the member's own; owner_wins fills the base_rev.
+    new_member["role_id"] = "Manager".into();
+    new_member["display_name"] = "Neha R.".into();
+    new_member
+        .as_object_mut()
+        .unwrap()
+        .remove("setup_code_hash");
+    new_member
+        .as_object_mut()
+        .unwrap()
+        .remove("setup_expires_at");
+    let edited = f
+        .writer
+        .apply_command(cmd(2, "staff.upsert", new_member))
+        .await
+        .unwrap();
+    assert!(edited.applied, "{:?}", edited.error);
+    let row = named(rows_of(&f, Table::Staff), "staff_id", &id);
+    let manager = named(rows_of(&f, Table::Roles), "name", ROLE_MANAGER);
+    assert_eq!(text(&row, "role_id"), text(&manager, "role_id"));
+    assert_eq!(text(&row, "display_name"), "Neha R.");
+
+    let gone = f
+        .writer
+        .apply_command(cmd(3, "staff.deactivate", json!({"staff_id": id})))
+        .await
+        .unwrap();
+    assert!(gone.applied, "{:?}", gone.error);
+    assert_eq!(
+        int(&named(rows_of(&f, Table::Staff), "staff_id", &id), "active"),
+        0
+    );
+
+    // A custom role is created, then edited with the rev the owner read.
+    let made = f
+        .writer
+        .apply_command(cmd(
+            4,
+            "role.upsert",
+            json!({"name": "Floor lead", "perms": [{"permission": "session.start", "effect": "allow"}]}),
+        ))
+        .await
+        .unwrap();
+    assert!(made.applied, "{:?}", made.error);
+    let role = named(rows_of(&f, Table::Roles), "name", "Floor lead");
+    let edited = f
+        .writer
+        .apply_command(cmd(
+            5,
+            "role.upsert",
+            json!({"role_id": text(&role, "role_id"), "base_rev": int(&role, "rev"), "name": "Floor lead",
+                "perms": [{"permission": "session.start", "effect": "allow"},
+                          {"permission": "session.end", "effect": "allow"}]}),
+        ))
+        .await
+        .unwrap();
+    assert!(edited.applied, "{:?}", edited.error);
+    let perms = reopen(&f)
+        .rows(Table::RolePerms)
+        .unwrap()
+        .into_iter()
+        .filter(|p| p["role_id"] == role["role_id"])
+        .count();
+    assert_eq!(perms, 2);
+    // Each change is the owner's, and owner changes toast on the Hub.
+    let changes = reopen(&f).changes().unwrap();
+    for tbl in ["staff", "roles"] {
+        let last = changes.iter().rfind(|c| c.tbl == tbl).unwrap();
+        assert_eq!(last.actor_kind, "owner", "{tbl}");
+        assert!(arena_proto::owner_update_for_table(tbl).is_some());
+    }
+}
+
+#[tokio::test]
+async fn the_owner_cannot_deactivate_or_demote_the_last_active_owner_and_cannot_edit_a_built_in_role()
+ {
+    let f = bootstrapped().await;
+    let boss = staff(&f, "boss", crate::rbac::ROLE_OWNER).await;
+    let boss_row = named(rows_of(&f, Table::Staff), "login", "boss");
+    assert_eq!(text(&boss_row, "staff_id"), boss.id);
+
+    let r = f
+        .writer
+        .apply_command(cmd(1, "staff.deactivate", json!({"staff_id": boss.id})))
+        .await
+        .unwrap();
+    assert!(!r.applied);
+    assert_eq!(
+        refusal(&r),
+        Some(ErrorCode::ValidationFailed),
+        "{:?}",
+        r.error
+    );
+    let demote = f
+        .writer
+        .apply_command(cmd(
+            2,
+            "staff.upsert",
+            json!({"staff_id": boss.id, "login": "boss", "display_name": "boss",
+                "role_id": "Counter", "active": true}),
+        ))
+        .await
+        .unwrap();
+    assert!(!demote.applied, "{:?}", demote.error);
+    assert_eq!(
+        int(&named(rows_of(&f, Table::Staff), "login", "boss"), "active"),
+        1
+    );
+
+    let owner_role = named(rows_of(&f, Table::Roles), "name", crate::rbac::ROLE_OWNER);
+    let builtin = f
+        .writer
+        .apply_command(cmd(
+            3,
+            "role.upsert",
+            json!({"role_id": text(&owner_role, "role_id"), "base_rev": int(&owner_role, "rev"),
+                "name": "Owner", "perms": []}),
+        ))
+        .await
+        .unwrap();
+    assert!(!builtin.applied);
+    assert_eq!(refusal(&builtin), Some(ErrorCode::PermissionDenied));
+}
+
 #[tokio::test]
 async fn a_rate_retires_the_old_one_and_never_records_an_override() {
     let f = bootstrapped().await;

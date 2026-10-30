@@ -298,6 +298,9 @@ const UPDATED_BY_OWNER = [
   ["rule.upsert", "rule", "hub.owner_update.rule"],
   ["coupon.upsert", "coupon", "hub.owner_update.coupon"],
   ["product.upsert", "product", "hub.owner_update.product"],
+  ["staff.upsert", "staff", "hub.owner_update.staff"],
+  ["staff.deactivate", "staff", "hub.owner_update.staff"],
+  ["role.upsert", "role", "hub.owner_update.role"],
 ] as const;
 
 test("an owner's remote update toasts the line of its kind", async ({ page }) => {
@@ -312,7 +315,8 @@ test("an owner's remote update toasts the line of its kind", async ({ page }) =>
   const unknown = JSON.stringify({ kind: "hub.revoke", entity: "hub", row_id: "R1" });
   for (const q of hub.queues) q.push(`event: updated_by_owner\ndata: ${unknown}\n\n`);
   await page.waitForTimeout(500);
-  await expect(page.getByTestId("hub-toast")).toHaveText(en["hub.owner_update.product"]);
+  // The unknown kind raised nothing: the last known toast stays.
+  await expect(page.getByTestId("hub-toast")).toHaveText(en[UPDATED_BY_OWNER.at(-1)![2]]);
 });
 
 test("an update that replaced a change lists it where the toast opens its detail", async ({

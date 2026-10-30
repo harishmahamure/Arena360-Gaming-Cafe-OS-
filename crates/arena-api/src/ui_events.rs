@@ -531,7 +531,7 @@ impl HubTask {
                             .flatten();
                             if let Some((kind, overwritten)) = update
                                 && let Some(u) = arena_proto::owner_update_for_table(&c.tbl)
-                                && u.kind == kind
+                                && u.covers(&kind)
                             {
                                 let event = arena_proto::UpdatedByOwnerEvent {
                                     kind,
@@ -1172,6 +1172,12 @@ mod tests {
         );
         let id = other.intent_id.clone();
         hub.writer.submit_intent(other).await.unwrap();
+        // The owner's staff change toasts (Story 8.26) and is `applied` with the intent id only.
+        let (event, data) = next_event(&mut frames).await.unwrap();
+        assert_eq!(
+            (event.as_str(), data["entity"].as_str()),
+            ("updated_by_owner", Some("staff"))
+        );
         let (event, data) = next_event(&mut frames).await.unwrap();
         assert_eq!(event, "applied");
         assert_eq!(data, serde_json::json!({ "intent_id": id }));
@@ -1934,6 +1940,9 @@ mod tests {
             ))
             .await
             .unwrap();
+        // The owner's staff change toasts first (Story 8.26); then the stream ends.
+        let (event, _) = next_event(&mut frames).await.unwrap();
+        assert_eq!(event, "updated_by_owner");
         assert_eq!(next_event(&mut frames).await, None);
     }
 

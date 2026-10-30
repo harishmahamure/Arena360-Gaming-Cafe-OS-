@@ -6,6 +6,7 @@ import type {
   OwnerCommandPreview,
   OwnerCommandTarget,
   OwnerCommandView,
+  StaffSetupCode,
   SummaryCatalogue,
 } from "@arena/ui/generated";
 import type { MessageKey } from "@arena/ui/messages";
@@ -104,7 +105,31 @@ export const cmd = $state({
   announcement: "",
   /** Retry/Resend in flight or failed, by `rowKey`. */
   again: {} as Record<string, "sending" | "failed">,
+  /** The setup codes a post issued (Story 8.26): shown once, kept only here until dismissed. */
+  codes: [] as SetupCode[],
 });
+
+/** A setup code for a new staff member, with who it is for and where. */
+export type SetupCode = StaffSetupCode & { name: string };
+
+/** Keeps the setup codes of an answer so the owner can read them once. */
+function takeCodes(posted: OwnerCommandPosted) {
+  const issued = posted.setup_codes ?? [];
+  if (!issued.length) return;
+  const nameOf = (c: StaffSetupCode) => {
+    const row = posted.commands.find(
+      (r) =>
+        r.branch_id === c.branch_id &&
+        (r.payload as { staff_id?: unknown })?.staff_id === c.staff_id,
+    );
+    const name = (row?.payload as { display_name?: unknown } | undefined)?.display_name;
+    return typeof name === "string" ? name : "";
+  };
+  cmd.codes = [...cmd.codes, ...issued.map((c) => ({ ...c, name: nameOf(c) }))];
+}
+
+/** The owner has read the codes: they are gone from the app. */
+export const dismissCodes = () => (cmd.codes = []);
 
 /** Waiting commands of each branch, for the offline branch card on Today. */
 export const waiting = $state<Record<string, OwnerCommandView[]>>({});
@@ -116,14 +141,17 @@ const KINDS: Record<string, { label: MessageKey; catalogue?: (keyof SummaryCatal
   "coupon.upsert": { label: "owner.cmd.kind.coupon", catalogue: ["coupons"] },
   "product.upsert": { label: "owner.cmd.kind.product", catalogue: ["products", "bundles"] },
   "stock.threshold": { label: "owner.cmd.kind.threshold" },
+  "staff.upsert": { label: "owner.cmd.kind.staff", catalogue: ["staff"] },
+  "staff.deactivate": { label: "owner.cmd.kind.staff_off", catalogue: ["staff"] },
+  "role.upsert": { label: "owner.cmd.kind.role", catalogue: ["roles"] },
   "backup.now": { label: "owner.cmd.kind.backup" },
 };
 
 /** What a command changes: its kind and, when the payload names the thing, the name. */
 export function whatOf(kind: string, payload: unknown): string {
   const label = t(KINDS[kind]?.label ?? "owner.cmd.kind.other");
-  const named = payload as { name?: unknown; code?: unknown } | null;
-  const name = named?.name ?? named?.code;
+  const named = payload as { name?: unknown; code?: unknown; display_name?: unknown } | null;
+  const name = named?.name ?? named?.code ?? named?.display_name;
   return typeof name === "string" && name ? t("owner.cmd.what", { kind: label, name }) : label;
 }
 
@@ -399,6 +427,7 @@ export async function confirm() {
     d.done = [...(d.done ?? []), part.key];
     cmd.rows = merge(cmd.rows, res.data.commands);
     cmd.loaded = true;
+    takeCodes(res.data);
   }
   cmd.sending = false;
   cmd.sent++;
@@ -410,12 +439,18 @@ export async function confirm() {
  * rev the old command carried when the summary doesn't list the row.
  */
 export function currentBaseRev(row: Row): number | undefined {
-  const p = row.payload as { id?: unknown; base_rev?: unknown } | null;
+  const p = row.payload as {
+    id?: unknown;
+    staff_id?: unknown;
+    role_id?: unknown;
+    base_rev?: unknown;
+  } | null;
+  const id = p?.id ?? p?.staff_id ?? p?.role_id;
   const lists = KINDS[row.kind]?.catalogue;
   const catalogue = live[row.branch_id]?.data?.summary?.catalogue;
-  if (lists && catalogue && typeof p?.id === "string") {
+  if (lists && catalogue && typeof id === "string") {
     for (const list of lists) {
-      const found = (catalogue[list] as { id: string; rev: number }[]).find((r) => r.id === p.id);
+      const found = (catalogue[list] as { id: string; rev: number }[]).find((r) => r.id === id);
       if (found) return found.rev;
     }
   }
@@ -585,6 +620,7 @@ async function drain() {
       await remove(q.key);
       cmd.rows = merge(cmd.rows, res.data.commands);
       cmd.loaded = true;
+      takeCodes(res.data);
     } else if (TRANSIENT.has(res.code)) {
       return; // later changes wait behind this one: creation order
     } else if (res.code === "MFA_REQUIRED") {
@@ -679,4 +715,5 @@ export async function again(row: Row) {
   }
   delete cmd.again[k];
   cmd.rows = merge(cmd.rows, res.data.commands);
+  takeCodes(res.data);
 }

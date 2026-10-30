@@ -12,7 +12,8 @@ export type CatalogueRow = {
   detail?: string;
   /**
    * The row as its upsert payload without `id` and `active`, for the kinds the Owner app can
-   * edit (rates, plans, pricing rules, coupons, products and bundles; Stories 8.23, 8.24).
+   * edit (rates, plans, pricing rules, coupons, products and bundles; Stories 8.23, 8.24) and, for a role,
+   * its `permissions` (`[{permission, effect}]`; Story 8.26).
    * Additive: an older summary lacks it and its row can be listed but not edited. A product or
    * bundle carries no image or kitchen notes and adds `low_stock_qty` (set by `stock.threshold`).
    */

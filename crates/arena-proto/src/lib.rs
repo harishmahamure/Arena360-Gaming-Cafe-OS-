@@ -253,8 +253,9 @@ pub use owner_commands::{
     OWNER_COMMAND_KINDS, OWNER_COMMAND_POSTS_PER_MIN, OWNER_COMMANDS_PAGE, OWNER_COMMANDS_PAGE_MAX,
     OWNER_UPDATES, OverwrittenChange, OwnerCommandKind, OwnerCommandList, OwnerCommandPost,
     OwnerCommandPosted, OwnerCommandPreview, OwnerCommandPreviewRequest, OwnerCommandSkip,
-    OwnerCommandTarget, OwnerCommandView, OwnerUpdate, UpdatedByOwnerEvent, accepted_owner_kind,
-    owner_command_kind, owner_update_for_table, validate_owner_payload,
+    OwnerCommandTarget, OwnerCommandView, OwnerStaffUpsert, OwnerUpdate, StaffSetupCode,
+    UpdatedByOwnerEvent, accepted_owner_kind, owner_command_kind, owner_update_for_table,
+    validate_owner_payload,
 };
 pub use owner_export::{ExportReport, major, owner_csv, utc_minute};
 pub use owner_read::{

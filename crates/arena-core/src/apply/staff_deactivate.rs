@@ -2,7 +2,7 @@
 //! licence's `users` limit.
 //!
 //! - **authorize**: only a staff actor holding the built-in Owner role (a Manager with
-//!   `user.manage` can list staff but not remove them).
+//!   `user.manage` can list staff but not remove them), or the café owner's command from the cloud.
 //! - **validate**: the member exists and is active; nobody deactivates themselves; the last
 //!   active Owner stays.
 //! - **mutate**: the row is kept (history shows the name) with `active = 0`. Hub sign-in ends
@@ -36,8 +36,10 @@ pub(super) fn load(
     d: &StaffDeactivate,
 ) -> Result<DeactivateTarget, AppError> {
     let row = find_staff(tx, &d.staff_id)?;
-    let actor_is_owner = intent.actor.kind == ActorKind::Staff
-        && staff_builtin_role(tx, &intent.actor.id)?.as_deref() == Some(ROLE_OWNER);
+    // The café owner acting from the cloud (Story 8.26) may deactivate, like a Hub Owner.
+    let actor_is_owner = intent.actor.kind == ActorKind::Owner
+        || (intent.actor.kind == ActorKind::Staff
+            && staff_builtin_role(tx, &intent.actor.id)?.as_deref() == Some(ROLE_OWNER));
     let active_owners = match &row {
         Some(r) if r.active => match find_role(tx, &r.role_id)? {
             Some(role) if role.builtin && role.name == ROLE_OWNER => {

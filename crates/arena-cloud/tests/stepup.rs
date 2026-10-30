@@ -1,6 +1,7 @@
 //! Step-up MFA for sensitive owner commands (Story 8.25): the gate on `POST /v1/commands`, the
 //! step-up endpoints, their limits and single-use rules, and the `elevated_by` the Hub fetches.
-//! The sensitive kind is a test fixture (`AuthState::extra_kinds`); no real kind is sensitive yet.
+//! The gate is tested with a fixture kind (`AuthState::extra_kinds`) and with the real sensitive
+//! kinds of Story 8.26 (staff and roles).
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -771,4 +772,226 @@ async fn the_fixture_kind_is_unknown_in_production_and_the_step_up_needs_a_sessi
         )
         .await;
     assert_eq!((anon.status, anon.code()), (401, "AUTH_FAILED"));
+}
+
+// ---- Staff users and roles (Story 8.26) ------------------------------------------------------
+
+const K3: &str = "01JBQ6W3Y8Z9X0A1B2C3D4E5F8";
+const STAFF_ID: &str = "01JSTAFFAAAAAAAAAAAAAAAAAA";
+
+impl Harness {
+    async fn post(&self, c: &Cafe, key: &str, kind: &str, payload: Value) -> Reply {
+        self.call(
+            "POST",
+            "/v1/commands",
+            Some(json!({
+                "branch_id": c.branch,
+                "idempotency_key": key,
+                "kind": kind,
+                "payload": payload,
+            })),
+            &c.access,
+        )
+        .await
+    }
+
+    /// The Hub's mailbox as the paired Hub fetches it.
+    async fn mailbox(&self, c: &Cafe) -> Vec<Value> {
+        let mut req = Request::builder()
+            .method("GET")
+            .uri("/v1/commands?after=0&epoch=1:01HUBINSTANCE")
+            .header("authorization", format!("Bearer {}", c.token))
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(SocketAddr::new(
+            "198.51.100.4".parse().unwrap(),
+            40000,
+        )));
+        let page = reply(self.app.clone().oneshot(req).await.unwrap()).await;
+        assert_eq!(page.status, 200, "{}", page.body);
+        page.body["commands"].as_array().unwrap().clone()
+    }
+}
+
+fn new_member() -> Value {
+    json!({
+        "login": "+919876500001",
+        "display_name": "Neha Rao",
+        "role_id": "Counter",
+        "active": true,
+    })
+}
+
+#[tokio::test]
+async fn a_new_staff_member_needs_a_stepup_and_gets_one_setup_code_whose_hash_alone_goes_to_the_hub()
+ {
+    let h = Harness::new().await;
+    let c = h.cafe().await;
+
+    let none = h.post(&c, K1, "staff.upsert", new_member()).await;
+    assert_eq!((none.status, none.code()), (403, "MFA_REQUIRED"));
+    assert_eq!(h.rows(), 0);
+
+    assert_eq!(h.stepup(&c, "totp", &h.totp(&c)).await.status, 204);
+    let res = h
+        .raw(
+            "POST",
+            "/v1/commands",
+            Some(json!({
+                "branch_id": c.branch,
+                "idempotency_key": K1,
+                "kind": "staff.upsert",
+                "payload": new_member(),
+            })),
+            &format!("arena_access={}", c.access),
+        )
+        .await;
+    assert_eq!(res.status().as_u16(), 200);
+    assert_eq!(
+        res.headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok()),
+        Some("no-store"),
+        "a setup code is never cached"
+    );
+    let sent = reply(res).await;
+    let codes = sent.body["setup_codes"].as_array().unwrap();
+    assert_eq!(codes.len(), 1, "{}", sent.body);
+    let code = codes[0]["code"].as_str().unwrap();
+    assert_eq!(code.len(), 8);
+    assert_eq!(codes[0]["branch_id"], c.branch.as_str());
+
+    // The Hub gets the member id, the hash and the expiry, never the code.
+    let mail = h.mailbox(&c).await;
+    assert_eq!(mail.len(), 1);
+    let payload = &mail[0]["payload"];
+    assert_eq!(payload["staff_id"], codes[0]["staff_id"]);
+    assert_eq!(payload["login"], "+919876500001");
+    assert_eq!(payload["role_id"], "Counter");
+    assert!(
+        payload["setup_code_hash"]
+            .as_str()
+            .unwrap()
+            .starts_with("$argon2id$")
+    );
+    assert_eq!(payload["setup_expires_at"], h.now() + 72 * 60 * 60 * 1000);
+    assert!(!mail[0].to_string().contains(code));
+    assert!(mail[0]["elevated_by"].is_string());
+
+    // The owner list hides the hash and says a code was issued.
+    let list = h.call("GET", "/v1/commands", None, &c.access).await;
+    let shown = &list.body["commands"][0]["payload"];
+    assert!(shown.get("setup_code_hash").is_none(), "{shown}");
+    assert_eq!(shown["setup_code"], true);
+    assert!(!list.body.to_string().contains(code));
+
+    // Sent again with the same key: the first row, and no second code that would not work.
+    let again = h.post(&c, K1, "staff.upsert", new_member()).await;
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert!(again.body.get("setup_codes").is_none(), "{}", again.body);
+    assert_eq!(h.rows(), 1);
+}
+
+#[tokio::test]
+async fn staff_details_are_checked_before_any_stepup_and_never_carry_a_credential() {
+    let h = Harness::new().await;
+    let c = h.cafe().await;
+    let mut bad_phone = new_member();
+    bad_phone["login"] = "98765".into();
+    let mut no_name = new_member();
+    no_name["display_name"] = "  ".into();
+    let mut password = new_member();
+    password["password_hash"] = "$argon2id$x".into();
+    let mut pin = new_member();
+    pin["pin_hash"] = "$argon2id$x".into();
+    for (field, payload) in [
+        ("login", bad_phone),
+        ("display_name", no_name),
+        ("payload", password),
+        ("payload", pin),
+    ] {
+        let r = h.post(&c, K1, "staff.upsert", payload).await;
+        assert_eq!(
+            (r.status, r.code(), r.body["field"].as_str()),
+            (422, "VALIDATION_FAILED", Some(field)),
+            "{}",
+            r.body
+        );
+    }
+    assert_eq!(h.rows(), 0);
+}
+
+#[tokio::test]
+async fn editing_a_member_sends_no_code_unless_a_new_one_is_asked_for() {
+    let h = Harness::new().await;
+    let c = h.cafe().await;
+    assert_eq!(h.stepup(&c, "totp", &h.totp(&c)).await.status, 204);
+    let edit = json!({
+        "staff_id": STAFF_ID,
+        "login": "+919876500001",
+        "display_name": "Neha R.",
+        "role_id": "Manager",
+        "active": true,
+    });
+    let r = h.post(&c, K1, "staff.upsert", edit.clone()).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(r.body.get("setup_codes").is_none());
+    let mail = h.mailbox(&c).await;
+    assert!(mail[0]["payload"].get("setup_code_hash").is_none());
+    assert_eq!(mail[0]["payload"]["staff_id"], STAFF_ID);
+
+    let mut renew = edit;
+    renew["setup_code"] = true.into();
+    let r = h.post(&c, K2, "staff.upsert", renew).await;
+    assert_eq!(r.body["setup_codes"].as_array().unwrap().len(), 1);
+    assert_eq!(r.body["setup_codes"][0]["staff_id"], STAFF_ID);
+}
+
+#[tokio::test]
+async fn deactivating_and_editing_roles_are_sensitive_and_roles_take_catalogue_permissions_only() {
+    let h = Harness::new().await;
+    let c = h.cafe().await;
+    let deactivate = json!({"staff_id": STAFF_ID});
+    let role = json!({
+        "name": "Floor lead",
+        "perms": [
+            {"permission": "session.start", "effect": "allow"},
+            {"permission": "session.end", "effect": "allow"},
+        ],
+    });
+    for (key, kind, payload) in [
+        (K1, "staff.deactivate", deactivate.clone()),
+        (K2, "role.upsert", role.clone()),
+    ] {
+        let r = h.post(&c, key, kind, payload).await;
+        assert_eq!((r.status, r.code()), (403, "MFA_REQUIRED"), "{kind}");
+    }
+    assert_eq!(h.rows(), 0);
+
+    assert_eq!(h.stepup(&c, "totp", &h.totp(&c)).await.status, 204);
+    let mut bad = role.clone();
+    bad["perms"][1]["permission"] = "session.destroy".into();
+    let r = h.post(&c, K3, "role.upsert", bad).await;
+    assert_eq!(
+        (r.status, r.code(), r.body["field"].as_str()),
+        (422, "VALIDATION_FAILED", Some("perms[1]")),
+        "{}",
+        r.body
+    );
+    assert_eq!(
+        h.rows(),
+        0,
+        "an unknown permission is refused before sending"
+    );
+
+    for (key, kind, payload) in [
+        (K1, "staff.deactivate", deactivate),
+        (K2, "role.upsert", role),
+    ] {
+        let r = h.post(&c, key, kind, payload).await;
+        assert_eq!(r.status, 200, "{kind}: {}", r.body);
+    }
+    let mail = h.mailbox(&c).await;
+    assert_eq!(mail.len(), 2);
+    assert!(mail.iter().all(|m| m["elevated_by"].is_string()));
 }

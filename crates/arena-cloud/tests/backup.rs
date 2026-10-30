@@ -61,6 +61,7 @@ fn expected_counts() -> BTreeMap<String, u64> {
         ("hubs", 0),
         ("licences", 1500),
         ("members", 2),
+        ("message_templates", 5),
         ("onboarding_progress", 0),
         ("ops_audit", 0),
         ("otp_challenges", 0),
@@ -72,6 +73,7 @@ fn expected_counts() -> BTreeMap<String, u64> {
         ("owners", 0),
         ("pairing_codes", 0),
         ("rate_limits", 0),
+        ("send_ledger", 0),
         (
             "schema_migrations",
             u64::from(arena_store::control::LATEST_CONTROL_VERSION),
@@ -753,6 +755,7 @@ async fn restore_control_reads_a_plaintext_dump_from_stdin() {
             "hubs",
             "licences",
             "members",
+            "message_templates",
             "onboarding_progress",
             "ops_audit",
             "otp_challenges",
@@ -765,6 +768,7 @@ async fn restore_control_reads_a_plaintext_dump_from_stdin() {
             "pairing_codes",
             "rate_limits",
             "schema_migrations",
+            "send_ledger",
             "signin_challenges",
             "staff_invites",
             "tenants"

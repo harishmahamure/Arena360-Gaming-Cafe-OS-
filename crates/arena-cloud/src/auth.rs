@@ -24,11 +24,14 @@ const OTP_LABEL: &[u8] = b"otp\0";
 const TAG_LABEL: &[u8] = b"tag\0";
 const PAIR_LABEL: &[u8] = b"pair\0";
 const LINK_LABEL: &[u8] = b"tpl\0";
+const NOTIFY_LABEL: &[u8] = b"notify\0";
 
 /// What the sign-up and session routes share.
 pub struct AuthState {
     pub db: Arc<ControlDb>,
     pub sms: Messenger,
+    /// Sends player and owner messages (Story 8.28); set once by `auth_state`. Unset: `/v1/notify` answers 503.
+    pub notifier: std::sync::OnceLock<crate::messaging::Notifier>,
     pub clock: Clock,
     pepper: Vec<u8>,
     /// Exact browser origins allowed with credentials.
@@ -68,6 +71,7 @@ impl AuthState {
         Self {
             db,
             sms,
+            notifier: std::sync::OnceLock::new(),
             clock,
             pepper: cfg.pepper.clone(),
             web_origins: cfg.web_origins.clone(),
@@ -174,6 +178,15 @@ impl AuthState {
         let digits: Vec<char> = phone_e164.chars().filter(char::is_ascii_digit).collect();
         let last2: String = digits[digits.len().saturating_sub(2)..].iter().collect();
         format!("{last2}:{}", &digest[..8])
+    }
+
+    /// The ledger's stand-in for a recipient: lowercase hex of SHA-256("notify\0" ‖ pepper ‖ phone).
+    pub fn recipient_hash(&self, phone_e164: &str) -> String {
+        let mut h = Sha256::new();
+        h.update(NOTIFY_LABEL);
+        h.update(&self.pepper);
+        h.update(phone_e164.as_bytes());
+        hex(&h.finalize())
     }
 
     pub fn email_tag(&self, email: &str) -> String {

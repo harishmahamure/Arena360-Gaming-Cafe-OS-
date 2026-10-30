@@ -24,6 +24,7 @@ mod heartbeat;
 mod json;
 mod meta;
 pub mod mfa;
+pub mod notify;
 pub mod owned;
 mod owner_read;
 mod pair;
@@ -85,6 +86,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>, commands_only: bool) -> Router {
             .merge(pair::router(Arc::clone(st)))
             .merge(heartbeat::router(Arc::clone(st)))
             .merge(presign::router(Arc::clone(st)))
+            .merge(notify::router(Arc::clone(st)))
             .merge(setup_template::router(Arc::clone(st)))
             .merge(setup_start::router(Arc::clone(st)))
             .merge(commands::router(Arc::clone(st)))
@@ -96,6 +98,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>, commands_only: bool) -> Router {
         if let Some(st) = auth {
             v1 = v1
                 .merge(dev::sms_router(Arc::clone(st)))
+                .merge(dev::notify_router(Arc::clone(st)))
                 .merge(dev::gate_router(Arc::clone(st)));
         }
     }

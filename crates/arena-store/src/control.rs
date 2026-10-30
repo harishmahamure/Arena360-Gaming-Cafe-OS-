@@ -29,6 +29,7 @@ mod owner;
 mod owner_commands;
 mod pairing;
 mod rate_limit;
+mod send_ledger;
 mod session;
 mod setup_codes;
 mod setup_status;
@@ -58,6 +59,7 @@ pub use pairing::{
     IssueOutcome, NewPairingCode, PAIRING_HISTORY_MS, PairingCodeRow, RedeemInvalid, Redeemed,
 };
 pub use rate_limit::{RateReservation, RateRule, RateWindow};
+pub use send_ledger::{LedgerRow, MessageTemplate, NewLedgerRow, NewTemplate, Settlement};
 pub use session::{
     NewOwnerSession, OwnerSession, REFRESH_RACE_MS, RefreshOutcome, SessionWithOwner,
 };
@@ -172,6 +174,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 21,
         sql: include_str!("../control-migrations/0021_stepup.sql"),
+    },
+    ControlMigration {
+        version: 22,
+        sql: include_str!("../control-migrations/0022_send_ledger.sql"),
     },
 ];
 

@@ -52,7 +52,7 @@ use crate::auth::AuthState;
 use crate::config::{AuthConfig, Config, Database, Role, SmsProviderConfig};
 pub use crate::health::CHECK_INTERVAL;
 use crate::health::{CHECK_TIMEOUT, Reachability};
-use crate::messaging::{FakeSms, GupshupSms, Messenger};
+use crate::messaging::{FakeNotifier, FakeSms, GupshupSms, Messenger, Notifier};
 
 /// A source of Unix milliseconds (tests move it by hand).
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
@@ -196,7 +196,21 @@ pub fn auth_state(
             Messenger::Gupshup(GupshupSms::new(g.clone()).map_err(|e| e.to_string())?)
         }
     };
-    Ok(Arc::new(AuthState::new(db, sms, clock, cfg)))
+    let notifier = match &cfg.sms {
+        SmsProviderConfig::Fake => Some(Notifier::Fake(FakeNotifier::new(Arc::clone(&clock)))),
+        SmsProviderConfig::Gupshup(g) => match Notifier::from_env(g, &|k| std::env::var_os(k)) {
+            Ok(n) => Some(n),
+            Err(e) => {
+                tracing::warn!(error = %e, "no messaging adapter: /v1/notify answers 503");
+                None
+            }
+        },
+    };
+    let st = Arc::new(AuthState::new(db, sms, clock, cfg));
+    if let Some(n) = notifier {
+        let _ = st.notifier.set(n);
+    }
+    Ok(st)
 }
 
 /// How [`serve`] runs.

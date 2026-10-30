@@ -49,6 +49,11 @@ environment (not with --dev):
   ARENA_SMS_PROVIDER      gupshup (--dev: always the fake, read at GET /v1/dev/sms)
   ARENA_SMS_GLOBAL_PER_MIN  SMS sends per rolling minute across all phones (default 60;
                           --dev 10000)
+  ARENA_NOTIFY_MODE      gupshup (default) or manual: player messages go out through Gupshup
+                          WhatsApp (ARENA_GUPSHUP_WA_API_KEY, _SOURCE, _APP, optionally
+                          _ENDPOINT) with the SMS account as the fallback, or are logged for an
+                          operator to send. Unset WhatsApp variables leave POST /v1/notify at 503
+                          (--dev: the recorded fake, read at GET /v1/dev/notify)
   ARENA_MFA_KEY           base64 of 32 random bytes: the AES-256-GCM key of owners' TOTP
                           secrets (--dev: a fixed dev key)
   ARENA_LICENCE_SIGNING_KEY  the Ed25519 PKCS#8 PEM that signs branch licences (from

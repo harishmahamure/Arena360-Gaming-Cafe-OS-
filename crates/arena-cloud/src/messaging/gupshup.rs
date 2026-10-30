@@ -47,6 +47,16 @@ impl GupshupSms {
 
     /// The form fields of one send (the recipient without its `+`).
     pub fn form(&self, to_e164: &str, text: &str) -> Vec<(&'static str, String)> {
+        self.form_with(to_e164, text, &self.config.dlt_template_id)
+    }
+
+    /// [`Self::form`] under another DLT template id.
+    pub fn form_with(
+        &self,
+        to_e164: &str,
+        text: &str,
+        dlt_template_id: &str,
+    ) -> Vec<(&'static str, String)> {
         let c = &self.config;
         vec![
             ("method", "SendMessage".to_owned()),
@@ -59,7 +69,7 @@ impl GupshupSms {
             ("v", "1.1".to_owned()),
             ("format", "text".to_owned()),
             ("mask", c.sender.clone()),
-            ("dltTemplateId", c.dlt_template_id.clone()),
+            ("dltTemplateId", dlt_template_id.to_owned()),
         ]
     }
 }
@@ -75,10 +85,23 @@ pub fn is_success_reply(body: &str) -> bool {
 
 impl Sms for GupshupSms {
     async fn send(&self, to_e164: &str, text: &str) -> Result<(), SmsError> {
+        self.send_with_template(to_e164, text, &self.config.dlt_template_id)
+            .await
+    }
+}
+
+impl GupshupSms {
+    /// Sends `text` under the DLT template `dlt_template_id`.
+    pub async fn send_with_template(
+        &self,
+        to_e164: &str,
+        text: &str,
+        dlt_template_id: &str,
+    ) -> Result<(), SmsError> {
         let mut res = self
             .client
             .post(&self.config.endpoint)
-            .form(&self.form(to_e164, text))
+            .form(&self.form_with(to_e164, text, dlt_template_id))
             .send()
             .await
             .map_err(|e| {

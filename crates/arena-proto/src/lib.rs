@@ -34,6 +34,7 @@ mod kitchen;
 mod library;
 pub mod licence;
 mod matching;
+mod notify;
 mod operating;
 mod owner_commands;
 mod owner_export;
@@ -237,6 +238,10 @@ pub use matching::{
     GameMatch, GameMatched, LibraryDismiss, LibraryDismissClear, MAX_DISMISS_KEYS, MAX_DISMISSED,
     MAX_MATCHES, MAX_PROPOSAL_KEY_CHARS, ProposalDevice, ProposalView, ProposalsView,
     is_proposal_key, proposal_key,
+};
+pub use notify::{
+    MESSAGE_KINDS, NOTIFY_PARAM_MAX_CHARS, NotifyChannel, NotifyRequest, NotifyResponse,
+    NotifyState, valid_e164,
 };
 pub use operating::{
     ADS_POLICY_VERSION, ADS_RATINGS, AdConsentState, AdRating, AdsConsent, AdsConsentSet,

@@ -130,3 +130,12 @@ The café owner sees every branch and changes it from a phone or laptop, without
 - **Summary.** Group rows carry `fields {name, group_kind, colour, sort_order}`; a revoked device stays in `catalogue.devices` (`revoked: true`).
 - **Revoked Hub token.** The `command-sweep` job rejects waiting commands of a branch whose Hub rows are all revoked with `TOKEN_REVOKED` ("Device/Hub revoked" in the app); `SweepReport.revoked` counts them.
 - **Owner app.** `?area=devices`: groups by name over the branches in scope (swatch dot via `GroupChip`), devices per branch with Move (groups of the device kind, or Unassigned) and Revoke (reason, then step-up). A device belongs to one branch, so a move or revoke is one command to that branch.
+
+## Story 8.28: The cloud sends player and owner messages through a swappable messaging adapter, exactly once
+
+- **Route.** `POST /v1/notify {outbox_id, kind, purpose, consent_policy_version, recipient, params}` with a paid Hub's device token answers `{outbox_id, state queued|sent|failed, channel, attempts, provider_message_id?, error_code?}`. Free is `FEATURE_NOT_ENTITLED`; no adapter is 503.
+- **Ledger.** `send_ledger` (migration 22, `outbox_id` unique) is inserted and then claimed before a send, so a repeat, a lost reply or a race never sends twice and a repeat gets the stored result. The recipient is kept only as `SHA-256("notify\0" ‖ pepper ‖ phone)`. Connect failures and HTTP 429 leave the row `queued` and unclaimed (the Hub posts again); a timeout or 5xx leaves it `queued` and claimed (in doubt, never resent).
+- **Fallback.** A non-retryable WhatsApp rejection is followed by an SMS in the same call (attempts 2, `attempt_log` holds both); a rejected SMS ends `failed` with the code.
+- **Templates.** `message_templates` has version 1 of `credit_reminder`, `low_balance`, `session_ending`, `console_5min`, `receipt` (placeholder provider ids until approved). A change is a new version via `add_template_version`; a ledger row keeps its version, also on retry.
+- **Adapter.** `Notifier` is Fake (recorded, per-channel `Behaviour`, `GET /v1/dev/notify` under `--dev`), Manual (`ARENA_NOTIFY_MODE=manual`, logs the message for an operator) or Gupshup (WhatsApp template API with `ARENA_GUPSHUP_WA_API_KEY|SOURCE|APP`, SMS through the sign-up account with a per-template DLT id).
+- **Hub side.** The drain, consent re-check, `notify.sent|failed` and the irreversible-effect guard are Story 8.29.

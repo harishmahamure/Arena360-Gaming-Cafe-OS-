@@ -4,12 +4,17 @@
 
 mod fake;
 mod gupshup;
+mod notify;
 
 use std::fmt;
 use std::future::Future;
 
 pub use fake::{FakeSms, SentSms};
 pub use gupshup::{GupshupConfig, GupshupSms, MAX_REPLY_BYTES, is_success_reply};
+pub use notify::{
+    Behaviour, Channel, FakeNotifier, GupshupNotifier, Notifier, Outgoing, SendFailure,
+    SentMessage, WhatsappConfig,
+};
 
 /// Why an SMS was not sent. The message never carries the recipient, the text or a secret.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -66,3 +66,23 @@ pub(super) fn gate_router(st: Arc<crate::auth::AuthState>) -> Router {
         .route("/dev/setup-gate", get(setup_gate))
         .with_state(st)
 }
+
+/// `GET /v1/dev/notify`: every player message the recorded fake captured, oldest first.
+async fn notify_outbox(
+    State(st): State<Arc<crate::auth::AuthState>>,
+) -> Json<Vec<crate::messaging::SentMessage>> {
+    Json(
+        st.notifier
+            .get()
+            .and_then(crate::messaging::Notifier::fake)
+            .map(|f| f.sent())
+            .unwrap_or_default(),
+    )
+}
+
+/// The recorded player-message route, relative to `/v1`.
+pub(super) fn notify_router(st: Arc<crate::auth::AuthState>) -> Router {
+    Router::new()
+        .route("/dev/notify", get(notify_outbox))
+        .with_state(st)
+}

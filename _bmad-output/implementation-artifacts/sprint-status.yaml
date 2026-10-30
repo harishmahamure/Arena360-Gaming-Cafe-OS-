@@ -280,7 +280,7 @@ development_status:
   9-11-upgrading-from-free-uploads-a-full-snapshot-before-the-first: done
   9-12-fetch-a-paid-branch-s-cloud-backup-onto-a-replacement-hub: done
   9-13-rebuild-the-branch-from-the-fetched-backup-as-a-new-epoch: done
-  9-14-the-hub-emits-a-yearly-gst-archive-kept-for-8-years: review
+  9-14-the-hub-emits-a-yearly-gst-archive-kept-for-8-years: done
   9-15-backups-are-kept-for-the-plan-s-retention-and-gst-records-fo: backlog
   9-16-cloud-backup-status-in-the-hub-header-and-system-screen: backlog
   9-17-owner-sees-backup-status-and-sends-backup-now: backlog

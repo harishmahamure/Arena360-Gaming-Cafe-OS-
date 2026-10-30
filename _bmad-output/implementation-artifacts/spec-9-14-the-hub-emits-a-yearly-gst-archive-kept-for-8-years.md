@@ -2,7 +2,7 @@
 title: 'Story 9.14: The Hub emits a yearly GST archive kept for 8 years'
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: '38cc1c7d544c06312de9a9f4d0eb7b3cb28ebc4c'
 review_loop_iteration: 0
 context:
@@ -93,7 +93,7 @@ The log table is a dedicated one (not `rollup_log`) because it needs the hash, c
 
 ## Auto Run Result
 
-Status: review
+Status: done
 
 Implemented per spec. Judgement calls and risks:
 - The staleness check stores no separate fingerprint: the log row's counts and `built_at` are compared with the year's current invoice count, credit note count and newest `updated_at` (stale when a count differs or a row was written at or after `built_at`). A row written in the same millisecond as the build costs at most one extra rebuild.
@@ -107,3 +107,12 @@ Implemented per spec. Judgement calls and risks:
 - `cargo fmt --check`, `cargo clippy` (proto, store, core, cloud, tasks, api, hub, replay; `--all-targets -D warnings`): clean.
 - `cargo test`: proto, store, core (lib and proptest_apply), cloud (lib and presign), api, hub pass. Failing, none in touched code: `arena-replay` `replaying_the_seeded_log_reproduces_branch_and_settings` (same "library_entries has no row" as at HEAD~1), `arena-tasks` `heartbeat::trusted_time_is_cloud_time_plus_monotonic_elapsed` and `printer::lan::a_printer_that_stops_reading_times_out`, `arena-cloud` `backup::a_hung_run_times_out_with_its_own_code` and `binary::unreachable_at_start_...` (Windows timing/process tests).
 - `gen:types`, `check:strings`, `check:layers`, `check:protocol`, `format:check`: ok. `pnpm --filter @arena/hub check`: only the 2 pre-existing `playwright.kitchen.config.ts` errors. Playwright `system-backup`, `audit`, `service`, `operating`: pass.
+
+## Code Review Result
+
+Reviewed by four layers (blind, edge case, verification gap, acceptance). No AC violations. Fixed:
+- A failed `gst_archive.publish` record after a good PUT now backs off (`failed()`) instead of re-uploading at full rate.
+- `held_live` lookup failure now lists the orphan number rather than dropping it.
+- Added a 403 test for `GET /ui/backup/gst-archive` without `report.view`.
+
+Deferred (not blocking, outside the spec): a fork after an archive does not by itself make the year due (orphans are picked up at the next rebuild); staleness uses `updated_at >= built_at` so future-dated rows could cause repeat rebuilds; the reader lock is held through the build; archive header lacks seller GSTIN; a rebuild after a restore can shrink the archive's invoice detail.

@@ -393,7 +393,8 @@ fn held_live(live: &Connection, number: &str) -> bool {
         [number],
         |r| r.get(0),
     )
-    .unwrap_or(true)
+    // A lookup that fails lists the number: an extra orphan is harmless, a lost one is not.
+    .unwrap_or(false)
 }
 
 #[cfg(test)]

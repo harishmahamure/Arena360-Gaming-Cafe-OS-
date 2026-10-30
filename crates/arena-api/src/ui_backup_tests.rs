@@ -524,3 +524,12 @@ async fn the_gst_archive_list_needs_a_session() {
     let (status, _) = call(&hub, "GET", GST_URL, None, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn the_gst_archive_list_needs_the_report_permission() {
+    let hub = hub().await;
+    let token = token_for(&hub, "counter", "c-pass").await;
+    let (status, body) = call(&hub, "GET", GST_URL, Some(&token), None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["code"], "PERMISSION_DENIED");
+}

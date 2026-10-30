@@ -1591,13 +1591,14 @@ impl UploadTask {
                 Err(Next::idle(TIER_RECHECK))
             }
             Err(e) => {
-                // The cloud has the file; the next cycle sends it again under the same key.
+                // The cloud has the file; the next cycle sends it again under the same key,
+                // after a backoff so a record that keeps failing does not re-upload at full rate.
                 tracing::warn!(
                     fy,
                     code = e.code.as_str(),
                     "gst archive: could not record the upload"
                 );
-                Ok(false)
+                Err(self.failed(interval))
             }
         }
     }

@@ -17,6 +17,17 @@ pub const SETTINGS_COMMAND_KEYS: [&str; 2] = ["branch.name", "branch.tz"];
 
 pub const COMMAND_SCHEMA_VERSION: u32 = 1;
 pub const COMMAND_PAYLOAD_MAX: usize = 16 * 1024;
+/// A `product.upsert` may carry a product image (up to 200 KB as a base64 data URL, Story 8.24).
+pub const PRODUCT_COMMAND_PAYLOAD_MAX: usize = 288 * 1024;
+
+/// The largest payload the cloud queues for an owner command of `kind`.
+pub fn command_payload_max(kind: &str) -> usize {
+    if kind == "product.upsert" {
+        PRODUCT_COMMAND_PAYLOAD_MAX
+    } else {
+        COMMAND_PAYLOAD_MAX
+    }
+}
 pub const COMMANDS_PAGE: usize = 50;
 /// A `fetched` command with no result after this long goes back to `pending` (Story 8.20).
 pub const COMMAND_FETCH_TIMEOUT_MS: i64 = 10 * 60 * 1000;

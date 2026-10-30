@@ -10,13 +10,18 @@ use arena_store::{
 
 use crate::apply::is_ulid;
 
+/// The `image` an owner `product.upsert` carries when the owner sent none (the summary holds no
+/// images, so the Owner app cannot send the stored one back): `owner_wins` swaps it for the
+/// product's stored image. It is not a JPEG data URL, so it can never be stored by mistake.
+const IMAGE_KEEP: &str = "keep";
+
 /// The command kind that runs outside `apply()`: an upload and summary cycle (Story 8.19).
 pub const BACKUP_NOW: &str = "backup.now";
 
 /// Every command kind this Hub runs, at [`COMMAND_SCHEMA_VERSION`]: the setup kinds (Story 2.15)
 /// and the owner kinds (Story 8.19). `arena_proto::OWNER_COMMAND_KINDS` lists the same owner kinds
 /// as handled; a test keeps the two in agreement.
-pub const HANDLED_COMMAND_KINDS: [&str; 13] = [
+pub const HANDLED_COMMAND_KINDS: [&str; 14] = [
     "group.upsert",
     "device.assign",
     "device.register",
@@ -29,6 +34,7 @@ pub const HANDLED_COMMAND_KINDS: [&str; 13] = [
     "rule.upsert",
     "coupon.upsert",
     "product.upsert",
+    "stock.threshold",
     BACKUP_NOW,
 ];
 
@@ -105,6 +111,9 @@ pub fn command_intent(cmd: &CommandWire, now: i64) -> Result<Intent, AppError> {
         other => other,
     };
     fields.insert("kind".into(), kind.into());
+    if cmd.kind == "product.upsert" && !fields.contains_key("image") {
+        fields.insert("image".into(), IMAGE_KEEP.into());
+    }
     if cmd.kind == "branch.go_live" {
         fields.insert("key".into(), KEY_SETUP_LIVE.into());
         fields.insert("value".into(), "true".into());
@@ -189,6 +198,14 @@ pub(crate) fn owner_wins(
     intent: &mut Intent,
 ) -> Result<Option<Overwrote>, AppError> {
     let mut overwrote = None;
+    if let IntentPayload::ProductUpsert(p) = &mut intent.payload
+        && p.image == IMAGE_KEEP
+    {
+        p.image = match &p.id {
+            Some(id) => find_product(tx, id)?.map(|r| r.image).unwrap_or_default(),
+            None => String::new(),
+        };
+    }
     let rev = match &intent.payload {
         IntentPayload::SettingsSet(s) => find_setting(tx, &s.key)?.map(|r| r.rev),
         IntentPayload::DeviceRegister(d) => match &d.device_id {

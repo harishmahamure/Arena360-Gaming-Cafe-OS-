@@ -9,22 +9,34 @@
     kind,
     name,
     edit,
+    more,
     children,
   }: {
     kind: string;
     name: string;
     /** The button's text (for example "Edit Night pass"); none hides it. */
     edit?: { label: string; onclick: () => void };
+    /** A second button of the same kind (for example the low-stock level of a product). */
+    more?: { label: string; onclick: () => void };
     children: Snippet;
   } = $props();
 </script>
 
 <li class="row" data-component="pricing-row" data-kind={kind} data-name={name}>
   <div class="what">{@render children()}</div>
-  {#if edit}
-    <button type="button" class="ui-interactive btn type-hub-label" onclick={edit.onclick}
-      >{edit.label}</button
-    >
+  {#if edit || more}
+    <div class="buttons">
+      {#if edit}
+        <button type="button" class="ui-interactive btn type-hub-label" onclick={edit.onclick}
+          >{edit.label}</button
+        >
+      {/if}
+      {#if more}
+        <button type="button" class="ui-interactive btn type-hub-label" onclick={more.onclick}
+          >{more.label}</button
+        >
+      {/if}
+    </div>
   {/if}
 </li>
 
@@ -53,6 +65,11 @@
   }
   .what :global(.muted) {
     color: var(--text-muted);
+  }
+  .buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
   }
   .btn {
     min-height: var(--space-touch-min);

@@ -133,7 +133,8 @@ pub use catalog::{
 pub use commands::{
     COMMAND_EXPIRY_MS, COMMAND_FETCH_TIMEOUT_MS, COMMAND_PAYLOAD_MAX, COMMAND_SCHEMA_VERSION,
     COMMANDS_PAGE, CommandResult, CommandResultAck, CommandStatus, CommandWire, CommandsPage,
-    SETTINGS_COMMAND_KEYS, SETUP_COMMAND_KINDS, is_setup_command,
+    PRODUCT_COMMAND_PAYLOAD_MAX, SETTINGS_COMMAND_KEYS, SETUP_COMMAND_KINDS, command_payload_max,
+    is_setup_command,
 };
 pub use connectivity::{Connectivity, ConnectivityState};
 pub use coupon::{

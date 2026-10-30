@@ -71,8 +71,8 @@ export function listed(data: BranchData[], pick: (c: SummaryCatalogue) => Catalo
 export const sourceOf = (item: Listed) => item.entries.find((e) => e.row.fields);
 
 export const fieldsOf = (row: CatalogueRow) => (row.fields ?? {}) as Record<string, unknown>;
-const num = (v: unknown) => (typeof v === "number" ? v : undefined);
-const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+export const num = (v: unknown) => (typeof v === "number" ? v : undefined);
+export const str = (v: unknown) => (typeof v === "string" ? v : undefined);
 
 /** One group's rate at each branch that has the group. */
 export type RateLine = {
@@ -705,7 +705,10 @@ export function windowText(row: CatalogueRow): string {
 
 export type Choice = { key: string; name: string; kind?: string };
 
-function choices(data: BranchData[], pick: (c: SummaryCatalogue) => CatalogueRow[]): Choice[] {
+export function choices(
+  data: BranchData[],
+  pick: (c: SummaryCatalogue) => CatalogueRow[],
+): Choice[] {
   const map = new Map<string, Choice>();
   for (const d of data) {
     for (const r of d.cat ? pick(d.cat) : []) {
@@ -732,9 +735,9 @@ export type Ctx = {
   origin: string | null;
 };
 
-type Made = { payload: Record<string, unknown> } | { reason: string };
+export type Made = { payload: Record<string, unknown> } | { reason: string };
 
-type Spec = {
+export type Spec = {
   kind: string;
   /** The name as typed, for the preview. */
   label: string;
@@ -748,14 +751,14 @@ type Spec = {
   make: (d: BranchData, cat: SummaryCatalogue) => Made;
 };
 
-const idByName = (rows: CatalogueRow[], name: string) =>
+export const idByName = (rows: CatalogueRow[], name: string) =>
   rows.find((r) => norm(r.name) === norm(name))?.id;
 
-const missing = (name: string): Made => ({
+export const missing = (name: string): Made => ({
   reason: t("owner.pricing.excluded.missing", { name }),
 });
 
-function resolve(ctx: Ctx, p: Spec): CommandDraft {
+export function resolve(ctx: Ctx, p: Spec): CommandDraft {
   const variants: Variant[] = [];
   const excluded: Excluded[] = [];
   const many = ctx.scope === ALL;
@@ -807,8 +810,8 @@ function resolve(ctx: Ctx, p: Spec): CommandDraft {
   };
 }
 
-const money = (text: string, d: BranchData) => parsePrice(text, d.exponent);
-const badAmount = (): Made => ({ reason: t("owner.pricing.excluded.amount") });
+export const money = (text: string, d: BranchData) => parsePrice(text, d.exponent);
+export const badAmount = (): Made => ({ reason: t("owner.pricing.excluded.amount") });
 
 export function proposeRate(ctx: Ctx, f: RateForm): CommandDraft {
   return resolve(ctx, {

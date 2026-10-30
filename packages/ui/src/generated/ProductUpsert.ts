@@ -9,6 +9,10 @@ export type ProductUpsert = {
   tax_rate_bp?: number;
   hsn: string;
   track_stock: boolean;
+  /**
+   * Story 8.24: an owner command without an image keeps the stored one (`IMAGE_KEEP` in
+   * `arena_core::commands`), so the field has a default.
+   */
   image: string;
   barcode: string;
   kitchen: boolean;

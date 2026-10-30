@@ -358,7 +358,7 @@ async fn pricing_rows_carry_the_fields_of_their_upsert_payload() {
     );
 
     // Every other list is unchanged: no `fields` key at all.
-    assert!(s.catalogue.products.iter().all(|r| r.fields.is_none()));
+    assert!(s.catalogue.groups.iter().all(|r| r.fields.is_none()));
     let json = serde_json::to_value(&s.catalogue.roles).unwrap();
     assert!(
         json.as_array()
@@ -366,4 +366,68 @@ async fn pricing_rows_carry_the_fields_of_their_upsert_payload() {
             .iter()
             .all(|r| r.get("fields").is_none())
     );
+}
+
+/// Story 8.24: products and bundles carry the fields of their upsert payload (no image, no id, no
+/// `active`) plus the low-stock threshold, and a bundle its components.
+#[tokio::test]
+async fn product_and_bundle_rows_carry_the_fields_of_their_upsert_payload() {
+    use arena_proto::BundleComponent;
+    use serde_json::json;
+
+    let f = booted().await;
+    let cola = make(
+        &f,
+        arena_proto::ProductUpsert {
+            category: "Drinks".into(),
+            price_minor: 5_000,
+            tax_rate_bp: Some(1_200),
+            hsn: "2202".into(),
+            barcode: "890123".into(),
+            kitchen: true,
+            image: super::shop::jpeg(),
+            ..up("Cola")
+        },
+    )
+    .await;
+    set_threshold(&f, owner(), &cola, Some(4)).await.unwrap();
+    let combo = make(
+        &f,
+        arena_proto::ProductUpsert {
+            price_minor: 9_000,
+            bundle: true,
+            track_stock: false,
+            components: vec![BundleComponent {
+                product_id: cola.clone(),
+                qty: 2,
+            }],
+            ..up("Combo")
+        },
+    )
+    .await;
+
+    let s = SnapshotReader::open(&f.path)
+        .unwrap()
+        .branch_summary(T0)
+        .unwrap()
+        .unwrap();
+    let cola_row = s.catalogue.products.iter().find(|r| r.id == cola).unwrap();
+    assert_eq!(cola_row.detail.as_deref(), Some("Drinks"));
+    assert_eq!(
+        cola_row.fields,
+        Some(json!({
+            "category": "Drinks", "price_minor": 5_000, "tax_rate_bp": 1_200, "hsn": "2202",
+            "track_stock": true, "barcode": "890123", "kitchen": true, "favourite": false,
+            "bundle": false, "low_stock_qty": 4
+        }))
+    );
+    let combo_row = s.catalogue.bundles.iter().find(|r| r.id == combo).unwrap();
+    let fields = combo_row.fields.clone().unwrap();
+    assert_eq!(fields["bundle"], json!(true));
+    assert_eq!(fields["track_stock"], json!(false));
+    assert_eq!(
+        fields["components"],
+        json!([{"product_id": cola, "qty": 2}])
+    );
+    assert!(fields.get("image").is_none() && fields.get("low_stock_qty").is_none());
 }

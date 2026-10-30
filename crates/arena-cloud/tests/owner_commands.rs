@@ -1148,3 +1148,29 @@ async fn the_owner_list_carries_the_payload_so_a_retry_can_send_it_again() {
     assert_eq!(p["price_per_hour_minor"], 6000);
     assert_eq!(p["base_rev"], 4);
 }
+
+#[tokio::test]
+async fn only_a_product_may_carry_a_picture_past_the_usual_payload_size() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    let image = format!("data:image/jpeg;base64,{}", "A".repeat(200 * 1024 * 4 / 3));
+    let product = json!({"name": "Cola", "category": "", "price_minor": 100, "hsn": "",
+        "barcode": "", "kitchen": false, "favourite": false, "image": image});
+    let r = h
+        .send(&a, post(&a.branch, K1, "product.upsert", product.clone()))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+
+    let mut rate = rate();
+    rate["pad"] = json!("x".repeat(20 * 1024));
+    let r = h.send(&a, post(&a.branch, K2, "rate.upsert", rate)).await;
+    assert_eq!((r.status, r.code()), (422, "VALIDATION_FAILED"));
+
+    let mut huge = product;
+    huge["image"] = json!("A".repeat(300 * 1024));
+    let r = h
+        .send(&a, post(&a.branch, K3, "product.upsert", huge))
+        .await;
+    assert_eq!((r.status, r.code()), (422, "VALIDATION_FAILED"));
+    assert_eq!(h.rows(), 1);
+}

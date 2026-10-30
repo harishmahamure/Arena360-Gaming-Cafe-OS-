@@ -1,5 +1,5 @@
 use super::plans::group;
-use super::stock::{intent, owner, staff, up};
+use super::stock::{intent, make, owner, staff, up};
 use super::*;
 use crate::rbac::ROLE_MANAGER;
 use arena_proto::CommandWire;
@@ -484,4 +484,55 @@ async fn an_applied_rate_rule_and_plan_reach_the_floor_and_the_attract_view_with
     let plans = reopen(&f).plans().unwrap();
     assert_eq!(plans.len(), 1);
     assert_eq!(plans[0].1, vec![g]);
+}
+
+/// Story 8.24: the Owner app sends no image (the summary holds none), so an edit keeps the stored
+/// one; a given image replaces it, and `stock.threshold` is an owner command.
+#[tokio::test]
+async fn an_owner_product_edit_without_an_image_keeps_it_and_sets_the_threshold_by_command() {
+    let f = bootstrapped().await;
+    let image = &super::shop::jpeg();
+    let id = make(
+        &f,
+        arena_proto::ProductUpsert {
+            image: image.clone(),
+            ..up("Cola")
+        },
+    )
+    .await;
+    let stored = |f: &Fixture| text(&reopen(f).rows(Table::Products).unwrap().remove(0), "image");
+    let mut edit = json!({"id": id, "name": "Cola 500", "category": "", "price_minor": 100,
+        "hsn": "", "barcode": "", "kitchen": false, "favourite": false});
+    let applied = f
+        .writer
+        .apply_command(cmd(1, "product.upsert", edit.clone()))
+        .await
+        .unwrap();
+    assert!(applied.applied, "{:?}", applied.error);
+    assert_eq!(stored(&f), *image);
+
+    edit["name"] = "Cola 600".into();
+    edit["image"] = "".into();
+    let cleared = f
+        .writer
+        .apply_command(cmd(2, "product.upsert", edit))
+        .await
+        .unwrap();
+    assert!(cleared.applied, "{:?}", cleared.error);
+    assert_eq!(stored(&f), "", "an empty image clears it");
+
+    let set = f
+        .writer
+        .apply_command(cmd(
+            3,
+            "stock.threshold",
+            json!({"product_id": id, "low_stock_qty": 6}),
+        ))
+        .await
+        .unwrap();
+    assert!(set.applied, "{:?}", set.error);
+    assert_eq!(
+        reopen(&f).tracked_thresholds().unwrap()[0].low_stock_qty,
+        Some(6)
+    );
 }

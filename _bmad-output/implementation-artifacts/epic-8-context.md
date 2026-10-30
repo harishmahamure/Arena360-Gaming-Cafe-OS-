@@ -108,3 +108,10 @@ The café owner sees every branch and changes it from a phone or laptop, without
 - **Choices.** A branch missing the item (scope All) asks "Create here" / "Exclude" and Send waits (`choose`); a branch missing a named group/plan/product, an amount that does not fit its currency, or (when adding) an item with that name is left out with the reason inline.
 - **Rule status.** `active now` / `scheduled` / `ended` / `off` in the branch zone; a weekly window past midnight belongs to the day it starts on.
 - **Closing.** `cmd.sent` counts sent or queued changes; open forms close when it moves. `whatOf` names a coupon by its code.
+
+## Story 8.24: Manage → Products and bundles
+
+- **Areas.** Manage has two areas, `?area=pricing|products` (default pricing); leaving Pricing drops its `?tab=`. `CatalogueScope` (branch pick, data ages, reads) is shared by `PricingBoard` and `ProductsBoard`.
+- **Fields.** Product and bundle catalogue rows carry `fields` like 8.23 (no `image`, no `kitchen_notes`; plus `low_stock_qty`, and `components` on a bundle). Forms hold names; `resolve()` maps them per branch, so a missing component leaves that branch out with the reason.
+- **Picture.** `shrinkImage` makes a JPEG ≤ 512 px and ≤ 200 KB. An owner `product.upsert` with no `image` keeps the stored one (`IMAGE_KEEP`, swapped in `owner_wins`); `""` removes it. The cloud allows 288 KB payloads for `product.upsert` only (`command_payload_max`) and `POST /v1/commands` bodies of that size.
+- **Low-stock level.** `stock.threshold` is an owner kind (`{product_id, low_stock_qty | null}`, no `base_rev`, 14 handled kinds); a tracked non-bundle row has its own "Low-stock level" action.

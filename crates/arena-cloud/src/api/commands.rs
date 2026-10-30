@@ -6,12 +6,14 @@ use arena_proto::{
     OWNER_ALL_BRANCHES, OWNER_COMMAND_POSTS_PER_MIN, OWNER_COMMANDS_PAGE, OWNER_COMMANDS_PAGE_MAX,
     OwnerCommandKind, OwnerCommandList, OwnerCommandPost, OwnerCommandPosted, OwnerCommandPreview,
     OwnerCommandPreviewRequest, OwnerCommandSkip, OwnerCommandTarget, OwnerCommandView,
-    SETTINGS_COMMAND_KEYS, Tier, accepted_owner_kind, is_setup_command, validate_owner_payload,
+    PRODUCT_COMMAND_PAYLOAD_MAX, SETTINGS_COMMAND_KEYS, Tier, accepted_owner_kind,
+    command_payload_max, is_setup_command, validate_owner_payload,
 };
 use arena_store::control::{
     Branch, CommandRow, NewCommand, OwnerCommandFilter, OwnerCommandRow, RateRule,
 };
-use axum::extract::{FromRequestParts, Path, Query, State};
+use axum::extract::{DefaultBodyLimit, FromRequestParts, Path, Query, State};
+use axum::handler::Handler;
 use axum::http::HeaderMap;
 use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
@@ -27,6 +29,9 @@ use super::heartbeat::authenticate;
 use super::json::ApiJson;
 use super::pair::check_field;
 use super::signup::ceil_s;
+
+/// The body of an owner command post: a product image rides in the payload (Story 8.24).
+const OWNER_POST_BODY_LIMIT: usize = PRODUCT_COMMAND_PAYLOAD_MAX + 16 * 1024;
 use crate::auth::AuthState;
 use crate::presign::{Epoch, is_fenced};
 
@@ -336,7 +341,7 @@ async fn post_command(
         fields.insert("base_rev".into(), rev.into());
     }
     let payload = serde_json::to_string(&payload).map_err(ApiError::internal)?;
-    if payload.len() > COMMAND_PAYLOAD_MAX {
+    if payload.len() > command_payload_max(kind.kind) {
         return Err(ApiError::validation("payload", "The payload is too large."));
     }
     let branches = st
@@ -538,7 +543,11 @@ async fn get_commands(
 
 pub(super) fn router(st: Arc<AuthState>) -> Router {
     Router::new()
-        .route("/commands", get(get_commands).post(post_command))
+        .route(
+            "/commands",
+            get(get_commands)
+                .post(post_command.layer(DefaultBodyLimit::max(OWNER_POST_BODY_LIMIT))),
+        )
         .route("/commands/preview", post(preview_command))
         .route("/commands/{id}/result", post(result))
         .with_state(st)

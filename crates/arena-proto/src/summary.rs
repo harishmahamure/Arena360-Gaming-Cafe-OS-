@@ -75,8 +75,9 @@ pub struct CatalogueRow {
     #[ts(optional)]
     pub detail: Option<String>,
     /// The row as its upsert payload without `id` and `active`, for the kinds the Owner app can
-    /// edit (rates, plans, pricing rules, coupons; Story 8.23). Additive: an older summary lacks
-    /// it and its row can be listed but not edited.
+    /// edit (rates, plans, pricing rules, coupons, products and bundles; Stories 8.23, 8.24).
+    /// Additive: an older summary lacks it and its row can be listed but not edited. A product or
+    /// bundle carries no image or kitchen notes and adds `low_stock_qty` (set by `stock.threshold`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "Record<string, unknown>")]
     pub fields: Option<serde_json::Value>,

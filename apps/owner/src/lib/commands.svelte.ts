@@ -106,12 +106,13 @@ export const cmd = $state({
 /** Waiting commands of each branch, for the offline branch card on Today. */
 export const waiting = $state<Record<string, OwnerCommandView[]>>({});
 
-const KINDS: Record<string, { label: MessageKey; catalogue?: keyof SummaryCatalogue }> = {
+const KINDS: Record<string, { label: MessageKey; catalogue?: (keyof SummaryCatalogue)[] }> = {
   "rate.upsert": { label: "owner.cmd.kind.rate" },
-  "plan.upsert": { label: "owner.cmd.kind.plan", catalogue: "plans" },
-  "rule.upsert": { label: "owner.cmd.kind.rule", catalogue: "pricing_rules" },
-  "coupon.upsert": { label: "owner.cmd.kind.coupon", catalogue: "coupons" },
-  "product.upsert": { label: "owner.cmd.kind.product", catalogue: "products" },
+  "plan.upsert": { label: "owner.cmd.kind.plan", catalogue: ["plans"] },
+  "rule.upsert": { label: "owner.cmd.kind.rule", catalogue: ["pricing_rules"] },
+  "coupon.upsert": { label: "owner.cmd.kind.coupon", catalogue: ["coupons"] },
+  "product.upsert": { label: "owner.cmd.kind.product", catalogue: ["products", "bundles"] },
+  "stock.threshold": { label: "owner.cmd.kind.threshold" },
   "backup.now": { label: "owner.cmd.kind.backup" },
 };
 
@@ -400,11 +401,13 @@ export async function confirm() {
  */
 export function currentBaseRev(row: Row): number | undefined {
   const p = row.payload as { id?: unknown; base_rev?: unknown } | null;
-  const list = KINDS[row.kind]?.catalogue;
+  const lists = KINDS[row.kind]?.catalogue;
   const catalogue = live[row.branch_id]?.data?.summary?.catalogue;
-  if (list && catalogue && typeof p?.id === "string") {
-    const found = (catalogue[list] as { id: string; rev: number }[]).find((r) => r.id === p.id);
-    if (found) return found.rev;
+  if (lists && catalogue && typeof p?.id === "string") {
+    for (const list of lists) {
+      const found = (catalogue[list] as { id: string; rev: number }[]).find((r) => r.id === p.id);
+      if (found) return found.rev;
+    }
   }
   return typeof p?.base_rev === "number" ? p.base_rev : undefined;
 }

@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 use crate::coupons::list_coupon_targets;
 use crate::plans::list_plan_groups;
+use crate::products::list_components;
 use crate::{Store, db_error};
 
 /// The latest business day with a daily-rollup row (`yyyy-mm-dd`), if any (Story 8.6).
@@ -191,6 +192,47 @@ fn with_list(row: &mut CatalogueRow, key: &str, list: Value) {
     }
 }
 
+/// Products (or bundles) with their editable fields: the upsert payload without `id`, `active`,
+/// the image (too large for a summary: an owner command without one keeps the stored image) and
+/// the kitchen notes, plus `low_stock_qty`, which `stock.threshold` sets.
+fn product_rows(conn: &Connection, bundle: bool) -> Result<Vec<CatalogueRow>, AppError> {
+    let sql = format!(
+        "SELECT product_id, name, rev, active, category, category, price_minor, tax_rate_bp, hsn,
+                track_stock, barcode, kitchen, favourite, bundle, low_stock_qty
+         FROM products WHERE deleted_at IS NULL AND bundle = {}
+         ORDER BY product_id LIMIT ?1",
+        i32::from(bundle)
+    );
+    editable_rows(conn, &sql, |r| {
+        fields_of(
+            r,
+            &[
+                "category",
+                "price_minor",
+                "tax_rate_bp",
+                "hsn",
+                "track_stock",
+                "barcode",
+                "kitchen",
+                "favourite",
+                "bundle",
+                "low_stock_qty",
+            ],
+        )
+    })
+}
+
+/// The 0/1 columns of a product's `fields` as the booleans the upsert payload holds.
+fn to_flags(row: &mut CatalogueRow) {
+    if let Some(Value::Object(fields)) = row.fields.as_mut() {
+        for key in ["track_stock", "kitchen", "favourite", "bundle"] {
+            if let Some(n) = fields.get(key).and_then(Value::as_i64) {
+                fields.insert(key.to_owned(), (n != 0).into());
+            }
+        }
+    }
+}
+
 /// The owner-editable configuration: names, `rev`, flags. No credentials, no transactions, no
 /// player data.
 pub fn catalogue(conn: &Connection) -> Result<SummaryCatalogue, AppError> {
@@ -279,16 +321,19 @@ pub fn catalogue(conn: &Connection) -> Result<SummaryCatalogue, AppError> {
             .collect();
         with_list(coupon, "targets", json!(targets));
     }
-    let products = rows(
-        conn,
-        "SELECT product_id, name, rev, active, category FROM products
-         WHERE deleted_at IS NULL AND bundle = 0 ORDER BY product_id LIMIT ?1",
-    )?;
-    let bundles = rows(
-        conn,
-        "SELECT product_id, name, rev, active, category FROM products
-         WHERE deleted_at IS NULL AND bundle = 1 ORDER BY product_id LIMIT ?1",
-    )?;
+    let mut products = product_rows(conn, false)?;
+    for product in &mut products {
+        to_flags(product);
+    }
+    let mut bundles = product_rows(conn, true)?;
+    for bundle in &mut bundles {
+        to_flags(bundle);
+        let parts: Vec<Value> = list_components(conn, &bundle.id)?
+            .into_iter()
+            .map(|(product_id, qty)| json!({ "product_id": product_id, "qty": qty }))
+            .collect();
+        with_list(bundle, "components", json!(parts));
+    }
     let roles = rows(
         conn,
         "SELECT role_id, name, rev, NULL, CASE WHEN builtin = 1 THEN 'builtin' END

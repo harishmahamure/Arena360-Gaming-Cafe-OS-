@@ -12,7 +12,7 @@ use arena_proto::{
 };
 
 /// A JPEG data URL with a header the Hub accepts (not a decodable picture).
-fn jpeg() -> String {
+pub(super) fn jpeg() -> String {
     use base64::Engine;
     let mut b = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x04, 0x00, 0x00];
     b.extend([0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x40, 0x00, 0x40]);

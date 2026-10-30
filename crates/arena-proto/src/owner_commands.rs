@@ -8,7 +8,9 @@ use ts_rs::TS;
 
 use crate::commands::COMMAND_SCHEMA_VERSION;
 use crate::error::{AppError, ErrorCode};
-use crate::{CouponUpsert, PlanUpsert, ProductUpsert, RateUpsert, RuleUpsert, Tier};
+use crate::{
+    CouponUpsert, PlanUpsert, ProductUpsert, RateUpsert, RuleUpsert, StockThreshold, Tier,
+};
 
 /// Owner command posts a tenant may make in a minute.
 pub const OWNER_COMMAND_POSTS_PER_MIN: u64 = 60;
@@ -53,12 +55,13 @@ const fn reserved(kind: &'static str) -> OwnerCommandKind {
     }
 }
 
-pub const OWNER_COMMAND_KINDS: [OwnerCommandKind; 8] = [
+pub const OWNER_COMMAND_KINDS: [OwnerCommandKind; 9] = [
     handled("rate.upsert"),
     handled("plan.upsert"),
     handled("rule.upsert"),
     handled("coupon.upsert"),
     handled("product.upsert"),
+    handled("stock.threshold"),
     handled("backup.now"),
     reserved("hub.revoke"),
     reserved("backup.restore"),
@@ -105,6 +108,7 @@ pub fn validate_owner_payload(kind: &str, payload: &serde_json::Value) -> Result
         "rule.upsert" => parses::<RuleUpsert>(&fields),
         "coupon.upsert" => parses::<CouponUpsert>(&fields),
         "product.upsert" => parses::<ProductUpsert>(&fields),
+        "stock.threshold" => parses::<StockThreshold>(&fields),
         "backup.now" => fields.as_object().is_some_and(|f| f.is_empty()),
         _ => false,
     };

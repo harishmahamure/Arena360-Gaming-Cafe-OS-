@@ -56,6 +56,9 @@ pub struct ProductUpsert {
     pub hsn: String,
     #[serde(default = "yes")]
     pub track_stock: bool,
+    /// Story 8.24: an owner command without an image keeps the stored one (`IMAGE_KEEP` in
+    /// `arena_core::commands`), so the field has a default.
+    #[serde(default)]
     pub image: String,
     pub barcode: String,
     pub kitchen: bool,

@@ -145,7 +145,9 @@ test("Pricing offers three tabs, keeps the selected one in the URL and shows eac
     t("owner.pricing.tab.coupons"),
   ]);
   await expect(page).toHaveURL(/[?&]tab=plans/);
-  await expect(page.locator("[data-component='tab-control']")).toBeVisible();
+  await expect(
+    page.locator("[data-component='pricing-board'] [data-component='tab-control']"),
+  ).toBeVisible();
 
   await expect(page.getByText(`${B1} · Updated 2 min ago`)).toBeVisible();
   await expect(page.getByText(`${B3} · Updated 10 min ago`)).toBeVisible();

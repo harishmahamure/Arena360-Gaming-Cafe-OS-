@@ -301,3 +301,26 @@ async fn an_export_the_intent_refuses_is_deleted() {
     assert!(names(dir.path()).is_empty(), "the file was deleted");
     assert_eq!(changes(&hub).len(), before);
 }
+
+#[tokio::test]
+async fn a_refused_export_keeps_an_earlier_file_it_replaced() {
+    let hub = hub().await;
+    let dir = tempfile::tempdir().unwrap();
+    locate(&hub, &dir.path().to_string_lossy()).await;
+    let token = token_for(&hub, "manager", "m-pass").await;
+    let (status, body) = export(&hub, &token, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let kept = names(dir.path());
+    assert_eq!(kept.len(), 1);
+    hub.writer
+        .submit(|tx| {
+            tx.execute_batch("DELETE FROM settings WHERE key = 'backup.last_export'")
+                .map_err(arena_store::db_error)
+        })
+        .await
+        .unwrap();
+    // Same clock minute: the second export replaces the first file, then the intent is refused.
+    let (status, _) = export(&hub, &token, None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(names(dir.path()), kept, "the earlier export is not deleted");
+}

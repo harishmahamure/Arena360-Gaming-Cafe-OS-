@@ -270,7 +270,7 @@ development_status:
   9-1-erase-a-player-s-personal-data-by-crypto-shredding: done
   9-2-player-keys-are-backed-up-and-the-branch-key-is-escrowed: done
   9-3-the-cloud-issues-epoch-counters-by-compare-and-set-on-the-br: done
-  9-4-one-tap-full-database-export-to-a-folder-or-usb-drive: review
+  9-4-one-tap-full-database-export-to-a-folder-or-usb-drive: done
   9-5-the-hub-saves-a-daily-export-to-the-backup-location: backlog
   9-6-the-export-format-is-documented-and-every-report-exports-alo: backlog
   9-7-restore-a-branch-from-an-export-file-as-a-new-epoch: backlog

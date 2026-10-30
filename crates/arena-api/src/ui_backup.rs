@@ -7,8 +7,8 @@
 //! work. It then checks the location, writes the file (the writer is never blocked: the copy is
 //! made on a connection of its own), and only then submits the intent, which redeems the ticket.
 //! If the intent is refused the file is deleted, so `backup.last_export` never names a file the
-//! Hub did not stand behind. A `HUB_SLOW` answer is the one exception: the intent may still
-//! commit, so the file stays.
+//! Hub did not stand behind. Two exceptions keep the file: a `HUB_SLOW` answer (the intent may
+//! still commit) and a file that replaced an earlier export of the same minute.
 
 use std::sync::Arc;
 
@@ -68,16 +68,16 @@ pub(crate) async fn export(
         )));
     }
 
-    // A ticket that could not be redeemed would refuse the intent after the file exists, and a
-    // refused export deletes its file, which may replace one made in the same minute.
+    // One export at a time: two taps in the same minute would share a file name.
+    let _single = auth.export_lock().lock().await;
+
+    // A ticket that could not be redeemed would refuse the intent after the file exists. Checked
+    // under the lock so a queued export cannot spend it between the check and the redemption.
     if let Some(ticket) = &request.elevation_ticket
         && let Err(e) = auth.check_ticket(ticket, &token, &me.staff_id, IntentKind::BackupExport)
     {
         return fail(e);
     }
-
-    // One export at a time: two taps in the same minute would share a file name.
-    let _single = auth.export_lock().lock().await;
     let reader = Arc::clone(auth.reader());
     let folder = {
         let reader = Arc::clone(&reader);
@@ -90,6 +90,12 @@ pub(crate) async fn export(
     if let Err(e) = auth.probe_export_folder(&folder).await {
         return fail(e);
     }
+
+    // File names have minute resolution, so a second export can replace an earlier one; a refusal
+    // must not then delete that earlier file.
+    let before: std::collections::HashSet<std::ffi::OsString> = std::fs::read_dir(&folder)
+        .map(|dir| dir.flatten().map(|entry| entry.file_name()).collect())
+        .unwrap_or_default();
 
     let now = auth.clock().now_ms();
     let made = {
@@ -135,7 +141,11 @@ pub(crate) async fn export(
     let slow = serde_json::from_slice::<serde_json::Value>(&bytes)
         .ok()
         .is_some_and(|v| v["code"] == serde_json::json!(ErrorCode::HubSlow));
-    if !slow && let Err(e) = std::fs::remove_file(&path) {
+    let replaced = before.contains(std::ffi::OsStr::new(&facts.file_name));
+    if !slow
+        && !replaced
+        && let Err(e) = std::fs::remove_file(&path)
+    {
         tracing::warn!(error = %e, "could not delete an export the hub refused to record");
     }
     Response::from_parts(parts, axum::body::Body::from(bytes))

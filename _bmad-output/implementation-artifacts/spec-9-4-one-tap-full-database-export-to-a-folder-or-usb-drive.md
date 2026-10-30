@@ -2,7 +2,7 @@
 title: 'Story 9.4: One-tap full database export to a folder or USB drive'
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 baseline_commit: 'f280cafae16b4ea8ddf7903515ca6e0340eec22b'
 baseline_revision: 'f280cafae16b4ea8ddf7903515ca6e0340eec22b'
 review_loop_iteration: 0
@@ -96,8 +96,16 @@ deferred:
 
 ## Auto Run Result
 
-Status: in-review
+Status: done
 
 Implemented per spec. Verified: clippy clean on proto/store/core/api/hub; `cargo test` for proto, store, core and api pass (one `ui_events` test failed once under load and passes alone); check scripts clean; `pnpm --filter @arena/hub check` shows only the two baseline `process` type errors in `playwright.kitchen.config.ts`. The ignored 1 GB benchmark took 8.8 s on the dev PC (release, incompressible data); it has not been run on the reference HDD PC.
 
 Judgement calls: the file name has minute resolution, so two exports in one minute share a name (the route runs one export at a time and checks the PIN ticket before writing). Scratch copies sit beside the database and there is no free-space check. Exporting to an Android tree URI answers `UNSUPPORTED` (deferred in the frontmatter).
+
+## Code Review (2026-10-30)
+
+Four layers (blind, edge-case, verification-gap, acceptance). Fixed:
+- A refused export deleted its file by name even when it had replaced an earlier export of the same minute, leaving `backup.last_export` naming a missing file. The route now notes the folder's file names first and keeps a file that replaced one. New test `a_refused_export_keeps_an_earlier_file_it_replaced`.
+- The ticket pre-check ran before the export lock, so a queued export could spend the ticket in between. It now runs under the lock.
+
+Deferred (not blocking): no free-space check or write-error cause mapping; dropped-request orphan file; no read-back/verify path (Stories 9.5/9.7); Android tree URI (already deferred); "Choose location" is a no-op for a Counter without `settings.edit`; extra Playwright/route tests for `PIN_REQUIRED`, `NOT_PRIMARY`, `HUB_SLOW`, concurrent exports; the 1 GB benchmark prints without asserting.

@@ -250,7 +250,7 @@ development_status:
   8-26-manage-staff-users-and-roles-by-command: done
   8-27-manage-devices-and-groups-and-revoking-a-device: done
   8-28-the-cloud-sends-player-and-owner-messages-through-a-swappabl: done
-  8-29-the-hub-drains-its-notification-outbox-after-the-undo-window: review
+  8-29-the-hub-drains-its-notification-outbox-after-the-undo-window: done
   8-30-low-balance-session-ending-and-console-5-minute-messages: backlog
   8-31-credit-reminders-go-out-on-cycle-days-and-free-shows-an-over: backlog
   8-32-reports-credit-with-a-one-tap-reminder: backlog

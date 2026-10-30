@@ -2,7 +2,7 @@
 title: "Story 8.29: The Hub drains its notification outbox after the undo window"
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 baseline_commit: '1bc1d45'
 review_loop_iteration: 0
 followup_review_recommended: false

@@ -2,7 +2,7 @@
 title: 'Story 9.2: Player keys are backed up and the branch key is escrowed'
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 baseline_commit: 'd7511a48c953c8f39f9ea6171402595df660a422'
 baseline_revision: 'd7511a48c953c8f39f9ea6171402595df660a422'
 review_loop_iteration: 0
@@ -87,6 +87,8 @@ deferred: []
 
 ## Review Triage Log
 
+Code review (2026-10-30): no blocking findings. Clippy (-D warnings), the new unit and integration tests, and check:layers, pins, protocol, secrets, strings and generated all pass. Non-blocking notes: a build with no escrow recipient makes the key backup cycle wait the 15 min retry, which only affects release builds before the escrow key is added (already listed as a known gap).
+
 ## Design Notes
 
 - The escrow check is its own cycle step rather than a heartbeat field: the Hub already knows from `backup_state` whether the cloud accepted its key, and a re-pair clears it. The AC's "next heartbeat" is met by a cycle at least every minute while unescrowed (`TIER_RECHECK`), faster than the heartbeat.
@@ -103,7 +105,7 @@ deferred: []
 
 ## Auto Run Result
 
-Status: in-review
+Status: done
 
 Implemented per spec. Failures seen that are not from this story and fail the same on the baseline commit: `arena-tasks` `heartbeat::tests::trusted_time_is_cloud_time_plus_monotonic_elapsed` and `printer::lan::tests::a_printer_that_stops_reading_times_out`; `arena-cloud` `backup` `a_hung_run_times_out_with_its_own_code` and `binary` `unreachable_at_start_retries_then_exits_1_without_logging_the_token`; `arena-hub` `android_fleet` test does not compile with `--features dev-fixtures` (`SessionSettle` fields); `check:deploy` needs `kubectl`.
 

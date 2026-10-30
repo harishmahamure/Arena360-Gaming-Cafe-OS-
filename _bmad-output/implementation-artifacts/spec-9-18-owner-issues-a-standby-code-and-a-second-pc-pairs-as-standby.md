@@ -2,7 +2,7 @@
 title: 'Story 9.18: Owner issues a standby code and a second PC pairs as standby'
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: '34f1d1c3666e354217a800c5460e51497fa59e5e'
 review_loop_iteration: 0
 followup_review_recommended: true
@@ -83,6 +83,7 @@ deferred:
 ## Review Triage Log
 
 - Implementation pass only; the independent code review is the next step (story status `review`).
+- Code review (2026-10-31): fixed standby-code refusal order (STEP_NOT_READY before TIER_LOCKED), standby pairing now needs a live Windows main Hub, a main Hub code is refused on the PC already paired as standby, key-request hub lookups count role = main; added tests (expiry exact code, plan downgrade TIER_LOCKED, same-PC main-after-standby, standby restore_pending). Accepted/deferred: wrong-role code message (spec-mandated), per-role issue rate limit, licence carries no role (standby token is refused everywhere until 9.19), standby last-seen UI unreachable until 9.19, narrow tier race between classify and pair_hub.
 - Scope cut, recorded in `deferred`: the LAN link / fingerprint / Hub-installer half needs the standby Hub identity and runtime role of Story 9.19, which does not exist yet; the cloud and Owner app halves are complete and tested.
 - Known, not from this story (Windows): `arena-cloud` `binary::unreachable_at_start_retries_then_exits_1...` fails on the baseline; `backup::a_hung_run_times_out_with_its_own_code` is timing-flaky.
 

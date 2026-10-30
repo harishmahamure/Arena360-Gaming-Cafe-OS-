@@ -2844,6 +2844,7 @@ async fn pairing_a_standby_never_touches_the_main_hubs_fence_and_re_pairing_main
     let code = code_of(&h.standby_code(&a, &branch).await);
     let standby = h.pair_as(&code, "windows", "SECOND", Some("standby")).await;
     assert_eq!(standby.status, 200, "{}", standby.body);
+    assert_eq!(standby.body["restore_pending"], false);
     assert_eq!(h.fence_row(&branch), fence, "the fence is the main Hub's");
 
     // A new main Hub replaces the main Hub only.
@@ -2983,11 +2984,48 @@ async fn an_expired_standby_code_pairs_no_standby() {
     let h = Harness::new().await;
     let (a, branch, _main) = h.premium_with_main().await;
     let code = code_of(&h.standby_code(&a, &branch).await);
-    // The code expires (and the comp ends) before the second PC pairs.
-    h.advance(31 * 24 * 60 * 60 * 1000);
+    // The code expires while the plan is still Premium.
+    h.advance(16 * 60 * 1000);
     let r = h.pair_as(&code, "windows", "SECOND", Some("standby")).await;
-    assert!(r.status >= 400, "{} {}", r.status, r.body);
+    assert_eq!(
+        (r.status, r.code()),
+        (401, "PAIR_CODE_EXPIRED"),
+        "{}",
+        r.body
+    );
     assert!(h.db.standby_hub(&branch).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_standby_code_is_refused_once_the_plan_loses_the_standby_flag() {
+    let h = Harness::new().await;
+    let (a, branch, _main) = h.premium_with_main().await;
+    let code = code_of(&h.standby_code(&a, &branch).await);
+    h.comp(&branch, Tier::Basic).await;
+    let r = h.pair_as(&code, "windows", "SECOND", Some("standby")).await;
+    assert_eq!((r.status, r.code()), (403, "TIER_LOCKED"), "{}", r.body);
+    assert!(h.db.standby_hub(&branch).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn the_standby_pc_cannot_also_pair_as_the_main_hub() {
+    let h = Harness::new().await;
+    let (a, branch, _main) = h.premium_with_main().await;
+    let code = code_of(&h.standby_code(&a, &branch).await);
+    let standby = h.pair_as(&code, "windows", "SECOND", Some("standby")).await;
+    assert_eq!(standby.status, 200, "{}", standby.body);
+    h.advance(1_000);
+    let (hub_code, _) = h.issue(&a).await;
+    let r = h.pair_as(&hub_code, "windows", "SECOND", None).await;
+    assert_eq!(
+        (r.status, r.code()),
+        (401, "PAIR_CODE_INVALID"),
+        "{}",
+        r.body
+    );
+    // The code is not spent: another PC can still use it.
+    let other = h.pair_as(&hub_code, "windows", "MAIN2", None).await;
+    assert_eq!(other.status, 200, "{}", other.body);
 }
 
 #[tokio::test]

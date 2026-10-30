@@ -317,17 +317,42 @@ async fn pair(
     let licence = st.licence.sign(&claims).map_err(ApiError::internal)?;
 
     let standby = body.role == HubRole::Standby;
-    if standby
-        && st
-            .db
-            .active_hub(&c.branch.id)
-            .await
-            .map_err(ApiError::internal)?
-            .is_some_and(|h| h.hub_instance_id == body.hub_instance_id)
+    // One PC is one role: a standby joins beside a live Windows main Hub that is another machine,
+    // and a main Hub cannot be the machine that is already the standby. Refused before the code
+    // is spent.
+    let main = st
+        .db
+        .active_hub(&c.branch.id)
+        .await
+        .map_err(ApiError::internal)?;
+    if standby {
+        let Some(main) = main else {
+            return Err(AppError::new(ErrorCode::StepNotReady, "Pair the main Hub first.").into());
+        };
+        if main.platform != HubPlatform::Windows {
+            return Err(AppError::new(
+                ErrorCode::PlatformUnsupported,
+                "A standby needs the Windows Hub.",
+            )
+            .into());
+        }
+        if main.hub_instance_id == body.hub_instance_id {
+            return Err(AppError::new(
+                ErrorCode::PairCodeInvalid,
+                "This PC is already the main Hub. Use a second PC as the standby.",
+            )
+            .into());
+        }
+    } else if st
+        .db
+        .standby_hub(&c.branch.id)
+        .await
+        .map_err(ApiError::internal)?
+        .is_some_and(|h| h.hub_instance_id == body.hub_instance_id)
     {
         return Err(AppError::new(
             ErrorCode::PairCodeInvalid,
-            "This PC is already the main Hub. Use a second PC as the standby.",
+            "This PC is already the standby. Use another PC as the main Hub.",
         )
         .into());
     }

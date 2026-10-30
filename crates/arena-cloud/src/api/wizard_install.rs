@@ -111,13 +111,6 @@ async fn post_standby_code(
         .await
         .map_err(ApiError::internal)?
         .map_or(Tier::Free, |e| e.tier_at(st.now()));
-    if !tier.defaults().flags.contains(&"standby") {
-        return Err(AppError::new(
-            ErrorCode::TierLocked,
-            "A standby PC is available on Premium.",
-        )
-        .into());
-    }
     let hub = st
         .db
         .active_hub(&branch.id)
@@ -129,6 +122,13 @@ async fn post_standby_code(
                 "Pair the main Hub first.",
             ))
         })?;
+    if !tier.defaults().flags.contains(&"standby") {
+        return Err(AppError::new(
+            ErrorCode::TierLocked,
+            "A standby PC is available on Premium.",
+        )
+        .into());
+    }
     if hub.platform != HubPlatform::Windows {
         return Err(AppError::new(
             ErrorCode::PlatformUnsupported,

@@ -2,7 +2,7 @@
 title: "Story 8.22: Commands queue on the owner's device while it is offline"
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 baseline_commit: '129b183'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -90,4 +90,4 @@ deferred: []
 
 ## Auto Run Result
 
-Status: in-review. Implemented the on-device command queue, the last-known offline preview, queued rows with Retry / Resend, expiry at 7 days and the keep-or-delete choice at sign out. Verified as listed above. No Rust changes.
+Status: done (code review passed, no blocking findings). Implemented the on-device command queue, the last-known offline preview, queued rows with Retry / Resend, expiry at 7 days and the keep-or-delete choice at sign out. Verified as listed above. No Rust changes.

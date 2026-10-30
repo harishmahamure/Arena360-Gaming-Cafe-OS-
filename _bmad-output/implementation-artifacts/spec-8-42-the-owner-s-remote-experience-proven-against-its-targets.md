@@ -2,7 +2,7 @@
 title: "Story 8.42: The owner's remote experience proven against its targets"
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 review_loop_iteration: 0
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-8-context.md'
@@ -76,6 +76,10 @@ deferred:
 
 ## Auto Run Result
 
-Status: review
+Status: done
 
 Implemented as above. Residual risks: the Hub-through-the-network soak, the cloud-down hour and the nightly staging run do not exist (see deferred); the first-render margin on a 170 ms link is nil; the cost figure is a model of PUT counts at a fixed price; the `release-bench.yml` jobs were not run on GitHub.
+
+## Code Review Result
+
+Reviewed 2026-10-30: no blocking findings. fmt, clippy (-D warnings), `remote_experience` (4), `audit_build` (19), arena-proto (322), `remote-report.test.mjs` (9) pass; the only arena-cloud failures (`backup`, `binary`) are the pre-existing ones listed above.

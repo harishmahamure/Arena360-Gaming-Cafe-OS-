@@ -1,3 +1,5 @@
+use chrono::{Datelike, Duration, NaiveDate, NaiveTime, TimeZone};
+use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -153,6 +155,68 @@ pub fn opening_hours_json(week: &[OpeningDay; DAYS_PER_WEEK]) -> String {
     format!("[{}]", days.join(","))
 }
 
+/// The start (Unix ms) of the opening window of `week` in `tz` that contains `now_ms`, or `None`
+/// when the branch is closed then (Story 8.35). A window that wraps past midnight belongs to the
+/// day it starts on, so the previous day's window counts after midnight. Where windows overlap,
+/// the earliest start is answered.
+pub fn opening_window_start(
+    week: &[OpeningDay; DAYS_PER_WEEK],
+    tz: Tz,
+    now_ms: i64,
+) -> Option<i64> {
+    let today = tz.timestamp_millis_opt(now_ms).single()?.date_naive();
+    let at = |date: NaiveDate, minute: u16| -> Option<i64> {
+        let time = NaiveTime::from_hms_opt(u32::from(minute) / 60, u32::from(minute) % 60, 0)?;
+        Some(
+            tz.from_local_datetime(&date.and_time(time))
+                .earliest()?
+                .timestamp_millis(),
+        )
+    };
+    (-1..=0)
+        .filter_map(|d| {
+            let date = today + Duration::days(d);
+            let OpeningDay::Open {
+                open_min,
+                close_min,
+            } = week[date.weekday().num_days_from_monday() as usize]
+            else {
+                return None;
+            };
+            let start = at(date, open_min)?;
+            let end = at(
+                date + Duration::days(i64::from(close_min < open_min)),
+                close_min,
+            )?;
+            (start <= now_ms && now_ms < end).then_some(start)
+        })
+        .min()
+}
+
+/// What a paid Hub tells the cloud about when its branch is open (Story 8.35): the stored
+/// `branch.opening_hours` JSON and the branch's time zone (IANA name).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct BranchOpening {
+    pub opening_hours: String,
+    pub timezone: String,
+}
+
+/// The longest `opening_hours` JSON the cloud keeps, in bytes.
+pub const BRANCH_OPENING_MAX_BYTES: usize = 1024;
+
+impl BranchOpening {
+    /// The week and zone when both parse and the JSON is within [`BRANCH_OPENING_MAX_BYTES`].
+    pub fn parse(&self) -> Option<([OpeningDay; DAYS_PER_WEEK], Tz)> {
+        if self.opening_hours.len() > BRANCH_OPENING_MAX_BYTES {
+            return None;
+        }
+        let week = parse_opening_hours(&self.opening_hours).ok()?;
+        let tz = self.timezone.parse::<Tz>().ok()?;
+        Some((week, tz))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct AdsConsent {
@@ -289,6 +353,117 @@ mod tests {
     }
 
     const CLOSED: &str = r#"{"closed":true}"#;
+
+    /// Monday 09:00 to 23:00, Friday 18:00 to 02:00 (Saturday), the rest closed.
+    fn shop() -> [OpeningDay; 7] {
+        parse_opening_hours(&week(&[
+            r#"{"open_min":540,"close_min":1380}"#,
+            CLOSED,
+            CLOSED,
+            CLOSED,
+            r#"{"open_min":1080,"close_min":120}"#,
+            CLOSED,
+            CLOSED,
+        ]))
+        .unwrap()
+    }
+
+    fn at(tz: Tz, (y, mo, d): (i32, u32, u32), (h, mi): (u32, u32)) -> i64 {
+        tz.with_ymd_and_hms(y, mo, d, h, mi, 0)
+            .unwrap()
+            .timestamp_millis()
+    }
+
+    #[test]
+    fn the_window_start_is_when_the_open_day_began() {
+        let tz = chrono_tz::Asia::Kolkata;
+        let w = shop();
+        // Monday 2026-10-26.
+        let mon = (2026, 10, 26);
+        let start = Some(at(tz, mon, (9, 0)));
+        assert_eq!(opening_window_start(&w, tz, at(tz, mon, (9, 0))), start);
+        assert_eq!(opening_window_start(&w, tz, at(tz, mon, (14, 5))), start);
+        assert_eq!(opening_window_start(&w, tz, at(tz, mon, (22, 59))), start);
+        assert_eq!(opening_window_start(&w, tz, at(tz, mon, (8, 59))), None);
+        assert_eq!(opening_window_start(&w, tz, at(tz, mon, (23, 0))), None);
+        assert_eq!(
+            opening_window_start(&w, tz, at(tz, (2026, 10, 27), (10, 0))),
+            None
+        );
+    }
+
+    #[test]
+    fn a_window_past_midnight_belongs_to_the_day_it_started_on() {
+        let tz = chrono_tz::Asia::Kolkata;
+        let w = shop();
+        // Friday 2026-10-30 18:00 to Saturday 02:00.
+        let start = Some(at(tz, (2026, 10, 30), (18, 0)));
+        assert_eq!(
+            opening_window_start(&w, tz, at(tz, (2026, 10, 30), (17, 59))),
+            None
+        );
+        assert_eq!(
+            opening_window_start(&w, tz, at(tz, (2026, 10, 30), (23, 30))),
+            start
+        );
+        assert_eq!(
+            opening_window_start(&w, tz, at(tz, (2026, 10, 31), (0, 30))),
+            start
+        );
+        assert_eq!(
+            opening_window_start(&w, tz, at(tz, (2026, 10, 31), (1, 59))),
+            start
+        );
+        assert_eq!(
+            opening_window_start(&w, tz, at(tz, (2026, 10, 31), (2, 0))),
+            None
+        );
+        // Sunday has no window of its own and Saturday's does not exist.
+        assert_eq!(
+            opening_window_start(&w, tz, at(tz, (2026, 11, 1), (1, 0))),
+            None
+        );
+    }
+
+    #[test]
+    fn the_zone_decides_the_day() {
+        let w = shop();
+        let utc_time = at(chrono_tz::UTC, (2026, 10, 26), (4, 0));
+        // 04:00 UTC is 09:30 in Kolkata (open) and 23:00 the day before in New York.
+        assert!(opening_window_start(&w, chrono_tz::Asia::Kolkata, utc_time).is_some());
+        assert_eq!(
+            opening_window_start(&w, chrono_tz::America::New_York, utc_time),
+            None
+        );
+        assert_eq!(
+            opening_window_start(&[OpeningDay::Closed; 7], chrono_tz::UTC, utc_time),
+            None
+        );
+    }
+
+    #[test]
+    fn a_branch_opening_parses_only_a_good_week_and_zone_within_the_limit() {
+        let ok = BranchOpening {
+            opening_hours: DEFAULT_OPENING_HOURS.to_owned(),
+            timezone: "Asia/Kolkata".to_owned(),
+        };
+        assert!(ok.parse().is_some());
+        let bad_zone = BranchOpening {
+            timezone: "Mars/Base".to_owned(),
+            ..ok.clone()
+        };
+        assert!(bad_zone.parse().is_none());
+        let bad_hours = BranchOpening {
+            opening_hours: "[]".to_owned(),
+            ..ok.clone()
+        };
+        assert!(bad_hours.parse().is_none());
+        let long = BranchOpening {
+            opening_hours: format!("{}{}", DEFAULT_OPENING_HOURS, " ".repeat(1024)),
+            ..ok
+        };
+        assert!(long.parse().is_none());
+    }
 
     #[test]
     fn the_default_week_is_closed_every_day() {

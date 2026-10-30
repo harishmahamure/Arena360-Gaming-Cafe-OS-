@@ -18,6 +18,7 @@
 
 mod admin_audit;
 mod ads;
+mod branch_watch;
 mod catalog;
 mod commands;
 mod dump;
@@ -41,6 +42,7 @@ mod tenant;
 
 pub use admin_audit::{AdminAuditRow, NewAdminAudit};
 pub use ads::{AdFillRow, AdMetric};
+pub use branch_watch::{WatchRow, WatchState};
 pub use catalog::{
     CatalogImport, CatalogImportOutcome, CatalogMediaRow, CatalogRow, CatalogSignatureRow,
     GameWrite,
@@ -187,6 +189,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 23,
         sql: include_str!("../control-migrations/0023_owner_alerts.sql"),
+    },
+    ControlMigration {
+        version: 24,
+        sql: include_str!("../control-migrations/0024_branch_watch.sql"),
     },
 ];
 

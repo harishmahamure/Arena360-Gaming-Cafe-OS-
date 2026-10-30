@@ -327,6 +327,11 @@ pub struct HeartbeatRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub command_schema: Option<u32>,
+    /// The branch's opening hours and time zone, sent by a paid Hub only, so the cloud can tell
+    /// when a silent branch should be open (Story 8.35).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub opening: Option<crate::BranchOpening>,
 }
 
 /// A run of change-log `seq`s of the heartbeat's epoch, both ends included.

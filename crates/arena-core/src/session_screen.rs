@@ -56,6 +56,25 @@ pub(crate) fn closing_in(
     closes_in(&parse_opening_hours(hours).ok()?, tz, now_ms)
 }
 
+/// The opening hours and time zone a paid Hub tells the cloud (Story 8.35): the stored hours,
+/// else the default, and the zone that applies at `now_ms`. `None` without a branch.
+pub(crate) fn branch_opening_of(
+    branch: Option<arena_store::BranchLocale>,
+    settings: &[arena_store::SettingRow],
+    now_ms: i64,
+) -> Option<arena_proto::BranchOpening> {
+    let b = branch?;
+    let tz = resolve(&locale_rows(&b, settings), now_ms).1.tz;
+    let hours = settings
+        .iter()
+        .find(|r| r.key == KEY_OPENING_HOURS)
+        .map_or(DEFAULT_OPENING_HOURS, |r| r.value.as_str());
+    Some(arena_proto::BranchOpening {
+        opening_hours: hours.to_owned(),
+        timezone: tz.name().to_owned(),
+    })
+}
+
 /// The running sessions the timer engine tracks: a timed session by its `ends_at`, a postpaid
 /// one by the branch's next closing time.
 pub fn timed_sessions(store: &Store, now_ms: i64) -> Result<Vec<TimedSession>, AppError> {

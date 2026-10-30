@@ -56,6 +56,7 @@ export type { BranchBootstrap } from "./BranchBootstrap";
 export type { BranchBootstrapCommand } from "./BranchBootstrapCommand";
 export type { BranchCodeSet } from "./BranchCodeSet";
 export type { BranchHub } from "./BranchHub";
+export type { BranchOpening } from "./BranchOpening";
 export type { BranchSeedDefaults } from "./BranchSeedDefaults";
 export type { BranchSetup } from "./BranchSetup";
 export type { BranchSetupProgress } from "./BranchSetupProgress";

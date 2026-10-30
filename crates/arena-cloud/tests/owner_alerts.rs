@@ -977,3 +977,552 @@ async fn a_free_branch_hub_raises_nothing() {
     assert_eq!(h.alert_rows(), 0);
     assert!(h.fake_wa().sent().is_empty());
 }
+
+// ---- Story 8.35: the offline watch -------------------------------------------------------------
+
+mod offline_watch {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use arena_cloud::backup::AlertTarget;
+    use arena_cloud::offline_watch::{WatchOutcome, watch_once};
+
+    use super::*;
+
+    const MINUTE: i64 = 60_000;
+    const HOUR: i64 = 60 * MINUTE;
+    /// Asia/Kolkata is UTC+05:30 all year.
+    const IST: i64 = 19_800_000;
+    const EPOCH: &str = "1:01HUBEPOCH";
+
+    /// Every day 09:00 to 23:00.
+    fn daily_hours() -> String {
+        let day = r#"{"open_min":540,"close_min":1380}"#;
+        format!("[{}]", [day; 7].join(","))
+    }
+
+    /// Midnight in Kolkata on the day after `T0`: every time in these tests is after `T0`.
+    fn day0() -> i64 {
+        (T0 + IST).div_euclid(DAY) * DAY - IST + DAY
+    }
+
+    fn opening() -> Value {
+        json!({"opening_hours": daily_hours(), "timezone": "Asia/Kolkata"})
+    }
+
+    fn target(webhook: Option<&str>) -> AlertTarget {
+        AlertTarget {
+            webhook: webhook.map(str::to_owned),
+            env_name: "staging".into(),
+            heartbeat: None,
+        }
+    }
+
+    impl Harness {
+        /// A heartbeat from `token` at cloud time `at`; `extra` is merged into the body.
+        async fn beat(&self, token: &str, at: i64, extra: Value) -> Reply {
+            self.now.store(at, Ordering::SeqCst);
+            let mut body = json!({
+                "epoch": EPOCH,
+                "version": "0.2.0",
+                "schema_version": 12,
+                "last_seq_uploaded": 0,
+            });
+            for (k, v) in extra.as_object().unwrap() {
+                body[k] = v.clone();
+            }
+            let req = Request::builder()
+                .method("POST")
+                .uri("/v1/heartbeat")
+                .header("content-type", "application/json")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::from(body.to_string()))
+                .unwrap();
+            reply(self.app.clone().oneshot(req).await.unwrap()).await
+        }
+
+        /// Runs the watch once at cloud time `at`.
+        async fn watch(&self, at: i64) -> WatchOutcome {
+            self.watch_with(at, &target(None)).await
+        }
+
+        async fn watch_with(&self, at: i64, target: &AlertTarget) -> WatchOutcome {
+            self.now.store(at, Ordering::SeqCst);
+            watch_once(&self.st, target).await.unwrap()
+        }
+
+        fn exec(&self, sql: &str) {
+            rusqlite::Connection::open(self.dir.path().join("gz_control.db"))
+                .unwrap()
+                .execute_batch(sql)
+                .unwrap();
+        }
+
+        fn column(&self, sql: &str) -> Vec<String> {
+            let conn = rusqlite::Connection::open(self.dir.path().join("gz_control.db")).unwrap();
+            let mut stmt = conn.prepare(sql).unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        }
+
+        /// The kinds of the alerts raised, oldest first.
+        fn kinds(&self) -> Vec<String> {
+            self.column("SELECT kind FROM owner_alerts ORDER BY created_at, id")
+        }
+
+        /// A paid café with a paired Hub.
+        async fn watched(&self) -> (Cafe, String) {
+            let cafe = self.paid().await;
+            let token = self.pair_hub(&cafe).await;
+            (cafe, token)
+        }
+
+        /// Adds `n` more paid branches with a live Hub, hours cached and `last_seen_at` at
+        /// `seen`, to the café's tenant. Returns their ids.
+        async fn estate(&self, cafe: &Cafe, n: usize, seen: i64) -> Vec<String> {
+            let mut ids = Vec::new();
+            for i in 0..n {
+                let id = format!("EXTRA{i:03}");
+                self.exec(&format!(
+                    "INSERT INTO branches (id, tenant_id, name, city, country, currency, timezone, \
+                         gst_registered, gstin, branch_code, code_locked_at, created_at, updated_at) \
+                     SELECT '{id}', tenant_id, 'Extra {i}', city, country, currency, timezone, 0, NULL, \
+                         'X{i:03}', NULL, created_at, updated_at FROM branches WHERE id = '{b}';
+                     INSERT INTO entitlements (branch_id, tenant_id, tier, source, addons_json, \
+                         issued_at, until, updated_at) \
+                     SELECT '{id}', tenant_id, 'basic', 'comp', '[]', {T0}, {until}, {T0} \
+                         FROM branches WHERE id = '{id}';
+                     INSERT INTO hubs (id, branch_id, platform, hub_instance_id, version, token_hash, \
+                         paired_at, last_seen_at) \
+                     VALUES ('HUB{id}', '{id}', 'android', 'inst{i}', '0.2.0', 'x', {T0}, {seen});",
+                    b = cafe.branch,
+                    until = T0 + 400 * DAY,
+                ));
+                self.db
+                    .record_branch_opening(&id, &daily_hours(), "Asia/Kolkata", T0)
+                    .await
+                    .unwrap();
+                ids.push(id);
+            }
+            ids
+        }
+
+        fn silence(&self, branch: &str, seen: i64) {
+            self.exec(&format!(
+                "UPDATE hubs SET last_seen_at = {seen} WHERE branch_id = '{branch}'"
+            ));
+        }
+    }
+
+    /// A local HTTP listener standing in for the alert webhook: answers 200 and hands over each
+    /// request's body.
+    struct Webhook {
+        url: String,
+        requests: mpsc::Receiver<String>,
+    }
+
+    impl Webhook {
+        fn start() -> Self {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = l.local_addr().unwrap().port();
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                for stream in l.incoming() {
+                    let Ok(mut s) = stream else { continue };
+                    let mut r = BufReader::new(s.try_clone().unwrap());
+                    let mut len = 0usize;
+                    loop {
+                        let mut line = String::new();
+                        if r.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                            break;
+                        }
+                        if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                            len = v.trim().parse().unwrap_or(0);
+                        }
+                    }
+                    let mut body = vec![0; len];
+                    let _ = r.read_exact(&mut body);
+                    let _ = write!(
+                        s,
+                        "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = tx.send(String::from_utf8_lossy(&body).into_owned());
+                }
+            });
+            Self {
+                url: format!("http://127.0.0.1:{port}/hook"),
+                requests: rx,
+            }
+        }
+
+        fn next(&self) -> Option<String> {
+            self.requests.recv_timeout(Duration::from_secs(5)).ok()
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_paid_heartbeat_caches_the_hours_and_a_free_one_stores_none() {
+        let h = Harness::new().await;
+        let (cafe, token) = h.watched().await;
+        let day = day0();
+        let r = h
+            .beat(&token, day + 10 * HOUR, json!({"opening": opening()}))
+            .await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        let cached = h.db.branch_opening(&cafe.branch).await.unwrap().unwrap();
+        assert_eq!(cached, (daily_hours(), "Asia/Kolkata".to_owned()));
+        let written: i64 = h.sql("SELECT updated_at FROM branch_opening");
+        assert_eq!(written, day + 10 * HOUR);
+
+        // The same block again writes nothing.
+        h.beat(&token, day + 11 * HOUR, json!({"opening": opening()}))
+            .await;
+        assert_eq!(
+            h.sql::<i64>("SELECT updated_at FROM branch_opening"),
+            written
+        );
+
+        let free = h.cafe(PHONE_B, "Free Arena", None).await;
+        let free_token = h.pair_hub(&free).await;
+        let r = h
+            .beat(&free_token, day + 12 * HOUR, json!({"opening": opening()}))
+            .await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(h.db.branch_opening(&free.branch).await.unwrap(), None);
+        assert_eq!(h.sql::<i64>("SELECT COUNT(*) FROM branch_opening"), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_bad_hours_block_is_ignored_and_never_fails_the_heartbeat() {
+        let h = Harness::new().await;
+        let (cafe, token) = h.watched().await;
+        let day = day0();
+        let long = format!("{}{}", daily_hours(), " ".repeat(1024));
+        let bad = [
+            json!({"opening_hours": "[]", "timezone": "Asia/Kolkata"}),
+            json!({"opening_hours": daily_hours(), "timezone": "Mars/Base"}),
+            json!({"opening_hours": long, "timezone": "Asia/Kolkata"}),
+        ];
+        for (n, block) in bad.iter().enumerate() {
+            let r = h
+                .beat(
+                    &token,
+                    day + (10 + n as i64) * HOUR,
+                    json!({"opening": block}),
+                )
+                .await;
+            assert_eq!(r.status, 200, "{}", r.body);
+        }
+        assert_eq!(h.db.branch_opening(&cafe.branch).await.unwrap(), None);
+
+        h.beat(&token, day + 14 * HOUR, json!({"opening": opening()}))
+            .await;
+        let other = json!({"opening_hours": "nope", "timezone": "Asia/Kolkata"});
+        let r = h
+            .beat(&token, day + 15 * HOUR, json!({"opening": other}))
+            .await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(
+            h.db.branch_opening(&cafe.branch).await.unwrap().unwrap().0,
+            daily_hours()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_offline_branch_in_hours_is_alerted_once() {
+        let h = Harness::new().await;
+        let (cafe, token) = h.watched().await;
+        h.subscribe(&cafe, &endpoint(1)).await;
+        let day = day0();
+        let seen = day + 11 * HOUR;
+        h.beat(&token, seen, json!({"opening": opening()})).await;
+
+        // 25 minutes of silence is not enough.
+        assert_eq!(h.watch(seen + 25 * MINUTE).await.offline, 0);
+        assert_eq!(h.alert_rows(), 0);
+
+        let out = h.watch(seen + 35 * MINUTE).await;
+        assert_eq!((out.offline, out.watched, out.held), (1, 1, None));
+        assert_eq!(h.kinds(), ["branch_offline"]);
+        let id: String = h.sql("SELECT id FROM owner_alerts");
+        assert_eq!(id, format!("off-{}-{seen}", cafe.branch));
+        let wa = h.fake_wa().sent();
+        assert_eq!(wa.len(), 1);
+        assert_eq!(
+            wa[0].params[1],
+            "The branch has been offline for 35 minutes."
+        );
+        let pushes = h.fake_push().sent();
+        assert_eq!(pushes.len(), 1);
+        let payload: Value = serde_json::from_str(&pushes[0].payload).unwrap();
+        assert_eq!(payload["url"], format!("/#today-{}", cafe.branch));
+        assert_eq!(h.sql::<i64>("SELECT offline_key FROM branch_watch"), seen);
+
+        // A rerun, now or later in the same silence, adds nothing.
+        assert_eq!(
+            h.watch(seen + 40 * MINUTE).await,
+            WatchOutcome {
+                watched: 1,
+                ..Default::default()
+            }
+        );
+        h.watch(seen + 3 * HOUR).await;
+        assert_eq!(h.alert_rows(), 1);
+        assert_eq!(h.fake_wa().sent().len(), 1);
+        assert_eq!(h.fake_push().sent().len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_branch_silent_all_night_is_alerted_half_an_hour_after_it_opens() {
+        let h = Harness::new().await;
+        let (_cafe, token) = h.watched().await;
+        let day = day0();
+        h.beat(&token, day + 22 * HOUR, json!({"opening": opening()}))
+            .await;
+
+        // Closed from 23:00 to 09:00: nothing, however long it is silent.
+        assert_eq!(h.watch(day + 23 * HOUR + 10 * MINUTE).await.offline, 0);
+        assert_eq!(h.watch(day + DAY + 8 * HOUR + 59 * MINUTE).await.offline, 0);
+        // Open, but not yet 30 minutes since it opened.
+        assert_eq!(h.watch(day + DAY + 9 * HOUR + 20 * MINUTE).await.offline, 0);
+        assert_eq!(h.alert_rows(), 0);
+
+        assert_eq!(h.watch(day + DAY + 9 * HOUR + 30 * MINUTE).await.offline, 1);
+        let wa = h.fake_wa().sent();
+        assert_eq!(
+            wa[0].params[1],
+            "The branch has been offline for 30 minutes."
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_branch_that_reports_but_does_not_upload_is_alerted_per_stall() {
+        let h = Harness::new().await;
+        let (cafe, token) = h.watched().await;
+        let day = day0();
+        let stale = day + 11 * HOUR;
+        let up = |last_upload_at: i64, summary: i64| {
+            json!({
+                "opening": opening(),
+                "last_upload_at": last_upload_at,
+                "last_summary_at": summary,
+            })
+        };
+        h.beat(
+            &token,
+            day + 11 * HOUR + 35 * MINUTE,
+            up(stale, stale - 10 * MINUTE),
+        )
+        .await;
+
+        let out = h.watch(day + 11 * HOUR + 35 * MINUTE).await;
+        assert_eq!((out.offline, out.not_uploading), (0, 1));
+        assert_eq!(h.kinds(), ["branch_not_uploading"]);
+        let id: String = h.sql("SELECT id FROM owner_alerts");
+        assert_eq!(id, format!("up-{}-{stale}", cafe.branch));
+        assert_eq!(
+            h.fake_wa().sent()[0].params[1],
+            "The branch is online but has not backed up for 35 minutes."
+        );
+        assert_eq!(h.sql::<i64>("SELECT upload_key FROM branch_watch"), stale);
+        assert_eq!(
+            h.watch(day + 11 * HOUR + 36 * MINUTE).await.not_uploading,
+            0
+        );
+        assert_eq!(h.alert_rows(), 1);
+
+        // An upload ends the episode and clears its key.
+        let fresh = day + 11 * HOUR + 50 * MINUTE;
+        h.beat(&token, fresh + MINUTE, up(fresh, fresh)).await;
+        assert_eq!(h.watch(fresh + MINUTE).await.not_uploading, 0);
+        assert_eq!(
+            h.sql::<Option<i64>>("SELECT upload_key FROM branch_watch"),
+            None
+        );
+
+        // The next stall is a new alert.
+        let later = fresh + 40 * MINUTE;
+        h.beat(&token, later, up(fresh, fresh)).await;
+        assert_eq!(h.watch(later).await.not_uploading, 1);
+        assert_eq!(h.kinds(), ["branch_not_uploading", "branch_not_uploading"]);
+        assert_eq!(h.sql::<i64>("SELECT upload_key FROM branch_watch"), fresh);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_return_adds_one_push_only_entry_and_a_new_outage_alerts_again() {
+        let h = Harness::new().await;
+        let (cafe, token) = h.watched().await;
+        h.subscribe(&cafe, &endpoint(1)).await;
+        let day = day0();
+        let seen = day + 11 * HOUR;
+        h.beat(&token, seen, json!({"opening": opening()})).await;
+        assert_eq!(h.watch(seen + 35 * MINUTE).await.offline, 1);
+        assert_eq!(
+            (h.fake_wa().sent().len(), h.fake_push().sent().len()),
+            (1, 1)
+        );
+
+        let back = seen + 50 * MINUTE;
+        h.beat(&token, back, json!({})).await;
+        let out = h.watch(back).await;
+        assert_eq!((out.online, out.offline), (1, 0));
+        assert_eq!(h.kinds(), ["branch_offline", "branch_online"]);
+        let id: String = h.sql("SELECT id FROM owner_alerts WHERE kind = 'branch_online'");
+        assert_eq!(id, format!("on-{}-{seen}", cafe.branch));
+        // Push went out; WhatsApp did not.
+        assert_eq!(h.fake_push().sent().len(), 2);
+        let body: Value = serde_json::from_str(&h.fake_push().sent()[1].payload).unwrap();
+        assert_eq!(body["body"], "The branch is back online after 50 minutes.");
+        assert_eq!(h.fake_wa().sent().len(), 1);
+        assert_eq!(h.ledger_rows(), 1);
+        assert_eq!(
+            h.sql::<Option<i64>>("SELECT offline_key FROM branch_watch"),
+            None
+        );
+        assert_eq!(h.watch(back + MINUTE).await.online, 0);
+        assert_eq!(h.alert_rows(), 2);
+
+        // A new outage is a new episode.
+        assert_eq!(h.watch(back + 35 * MINUTE).await.offline, 1);
+        assert_eq!(h.alert_rows(), 3);
+        assert_eq!(h.fake_wa().sent().len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn free_branches_and_branches_without_hours_are_never_alerted() {
+        let h = Harness::new().await;
+        let day = day0();
+        let free = h.cafe(PHONE_B, "Free Arena", None).await;
+        let free_token = h.pair_hub(&free).await;
+        h.beat(&free_token, day + 11 * HOUR, json!({"opening": opening()}))
+            .await;
+
+        let (_paid, token) = h.watched().await;
+        // The paid Hub never sends its hours.
+        h.beat(&token, day + 11 * HOUR + 10 * MINUTE, json!({}))
+            .await;
+
+        let out = h.watch(day + 13 * HOUR).await;
+        assert_eq!(
+            out,
+            WatchOutcome {
+                watched: 1,
+                ..Default::default()
+            }
+        );
+        assert_eq!(h.alert_rows(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_mass_outage_is_held_and_pages_the_on_call() {
+        let h = Harness::new().await;
+        let (cafe, _token) = h.watched().await;
+        let day = day0();
+        let now = day + 12 * HOUR;
+        h.db.record_branch_opening(&cafe.branch, &daily_hours(), "Asia/Kolkata", T0)
+            .await
+            .unwrap();
+        let extra = h.estate(&cafe, 9, now - MINUTE).await;
+        // Five of ten are silent.
+        h.silence(&cafe.branch, day + 11 * HOUR);
+        for id in &extra[..4] {
+            h.silence(id, day + 11 * HOUR);
+        }
+        let hook = Webhook::start();
+        let out = h.watch_with(now, &target(Some(&hook.url))).await;
+        assert_eq!((out.watched, out.held), (10, Some(5)));
+        assert_eq!((out.offline, out.failed), (0, 0));
+        assert_eq!(h.alert_rows(), 0);
+        assert_eq!(h.sql::<i64>("SELECT COUNT(*) FROM branch_watch"), 0);
+        let page: Value = serde_json::from_str(&hook.next().expect("a page")).unwrap();
+        assert_eq!(
+            page["text"],
+            "arena-cloud staging: task offline-watch held 5 branch alerts because many branches look offline at once. See the job's logs."
+        );
+        // The next run looks again, and pages again while it holds.
+        let out = h
+            .watch_with(now + 5 * MINUTE, &target(Some(&hook.url)))
+            .await;
+        assert_eq!(out.held, Some(5));
+        assert!(hook.next().is_some());
+
+        // Two come back: three would alert, below the floor, so they are raised.
+        h.silence(&extra[0], now + 5 * MINUTE);
+        h.silence(&extra[1], now + 5 * MINUTE);
+        let out = h
+            .watch_with(now + 6 * MINUTE, &target(Some(&hook.url)))
+            .await;
+        assert_eq!((out.held, out.offline), (None, 3));
+        assert_eq!(h.alert_rows(), 3);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_share_of_exactly_twenty_percent_is_not_held() {
+        let h = Harness::new().await;
+        let (cafe, _token) = h.watched().await;
+        let day = day0();
+        let now = day + 12 * HOUR;
+        h.db.record_branch_opening(&cafe.branch, &daily_hours(), "Asia/Kolkata", T0)
+            .await
+            .unwrap();
+        let extra = h.estate(&cafe, 24, now - MINUTE).await;
+        h.silence(&cafe.branch, day + 11 * HOUR);
+        // Five of 25 is exactly 20 percent: not more, so not held.
+        for id in &extra[..4] {
+            h.silence(id, day + 11 * HOUR);
+        }
+        let out = h.watch(now).await;
+        assert_eq!((out.held, out.offline), (None, 5));
+        assert_eq!(h.alert_rows(), 5);
+        // A sixth is raised on its own: the five before it are already alerted.
+        h.silence(&extra[4], day + 11 * HOUR);
+        let out = h.watch(now + MINUTE).await;
+        assert_eq!((out.held, out.offline), (None, 1));
+        assert_eq!(h.alert_rows(), 6);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn one_branch_failing_to_raise_does_not_stop_the_others_or_record_its_key() {
+        let h = Harness::new().await;
+        let (cafe, _token) = h.watched().await;
+        let day = day0();
+        let now = day + 12 * HOUR;
+        h.db.record_branch_opening(&cafe.branch, &daily_hours(), "Asia/Kolkata", T0)
+            .await
+            .unwrap();
+        let extra = h.estate(&cafe, 2, now - MINUTE).await;
+        let seen = day + 11 * HOUR;
+        h.silence(&cafe.branch, seen);
+        h.silence(&extra[0], seen);
+        // The id the first branch would use is already taken by another branch's alert.
+        h.exec(&format!(
+            "INSERT INTO owner_alerts (id, tenant_id, branch_id, kind, params, created_at) \
+             SELECT 'off-{b}-{seen}', tenant_id, '{x}', 'branch_offline', '{{\"minutes\":\"1\"}}', {T0} \
+             FROM branches WHERE id = '{x}'",
+            b = cafe.branch,
+            x = extra[1],
+        ));
+        let out = h.watch(now).await;
+        assert_eq!((out.offline, out.failed), (1, 1));
+        assert_eq!(h.sql::<i64>("SELECT COUNT(*) FROM branch_watch"), 1);
+        let keyed: String = h.sql("SELECT branch_id FROM branch_watch");
+        assert_eq!(keyed, extra[0]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_new_kinds_are_not_raised_by_a_hub() {
+        let h = Harness::new().await;
+        let (_cafe, token) = h.watched().await;
+        for (n, kind) in ["branch_not_uploading", "branch_online"].iter().enumerate() {
+            let r = h
+                .hub_alert(&token, &format!("NEW{n}"), kind, json!({"minutes": "20"}))
+                .await;
+            assert_eq!((r.status, r.code()), (422, "VALIDATION_FAILED"), "{kind}");
+        }
+        assert_eq!(h.alert_rows(), 0);
+    }
+}

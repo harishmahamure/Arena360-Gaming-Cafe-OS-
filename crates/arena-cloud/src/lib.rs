@@ -29,6 +29,7 @@ pub mod gstin;
 pub mod health;
 pub mod licence;
 pub mod messaging;
+pub mod offline_watch;
 pub mod ops;
 pub mod owner_alerts;
 pub mod owner_read;

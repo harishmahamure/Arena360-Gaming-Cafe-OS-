@@ -611,6 +611,20 @@ impl WriterHandle {
         .await
     }
 
+    /// The branch's opening hours and time zone, as a paid Hub's heartbeat carries them
+    /// (Story 8.35). Writes nothing.
+    pub async fn branch_opening(&self) -> Result<Option<arena_proto::BranchOpening>, AppError> {
+        let now = self.clock.now_ms();
+        self.run(move |store| {
+            let (settings, branch) =
+                store.read_consistent(|s| Ok((s.settings()?, s.branch_locale()?)))?;
+            Ok(crate::session_screen::branch_opening_of(
+                branch, &settings, now,
+            ))
+        })
+        .await
+    }
+
     pub async fn snapshot(&self) -> Result<arena_proto::HubSnapshot, AppError> {
         let now = self.clock.now_ms();
         self.run(move |store| crate::snapshot::read_snapshot(store, now))

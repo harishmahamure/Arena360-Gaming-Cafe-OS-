@@ -10,4 +10,6 @@ export type OwnerAlertKind =
   | "credit_overdue"
   | "large_refund"
   | "large_discount"
-  | "branch_offline";
+  | "branch_offline"
+  | "branch_not_uploading"
+  | "branch_online";

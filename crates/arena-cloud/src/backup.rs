@@ -45,6 +45,8 @@ pub mod code {
     pub const TIMEOUT: &str = "BACKUP_TIMEOUT";
     pub const SWEEP_FAILED: &str = "COMMAND_SWEEP_FAILED";
     pub const SWEEP_TIMEOUT: &str = "COMMAND_SWEEP_TIMEOUT";
+    pub const WATCH_FAILED: &str = "OFFLINE_WATCH_FAILED";
+    pub const WATCH_TIMEOUT: &str = "OFFLINE_WATCH_TIMEOUT";
     pub const RESTORE_CONFIG_INVALID: &str = "RESTORE_CONFIG_INVALID";
     pub const SOURCE_FAILED: &str = "RESTORE_SOURCE_FAILED";
     pub const DECRYPT_FAILED: &str = "RESTORE_DECRYPT_FAILED";
@@ -422,6 +424,7 @@ pub async fn run_job(job: &JobConfig, env: impl Fn(&str) -> Option<OsString>) ->
             supervise(&target, RUN_TIMEOUT, run).await.is_ok()
         }
         Task::CommandSweep => crate::command_sweep::run_job(job, &env, &target).await,
+        Task::OfflineWatch => crate::offline_watch::run_job(job, &env, &target).await,
     }
 }
 

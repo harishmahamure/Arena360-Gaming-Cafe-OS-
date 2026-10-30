@@ -330,6 +330,21 @@ fn the_command_sweeper_is_a_jobs_task() {
 }
 
 #[test]
+fn the_offline_watch_is_a_jobs_task() {
+    assert_eq!(
+        parse(
+            args(&["--role", "jobs", "--task", "offline-watch"]),
+            env_of(&[])
+        ),
+        Ok(Command::Job(JobConfig {
+            task: Task::OfflineWatch,
+            dev_data_dir: None,
+        }))
+    );
+    assert_eq!(Task::OfflineWatch.as_str(), "offline-watch");
+}
+
+#[test]
 fn jobs_run_one_task_and_read_no_env_at_parse_time() {
     assert_eq!(
         parse(

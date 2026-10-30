@@ -231,6 +231,17 @@ impl HeartbeatTask {
         } else {
             AdPending::default()
         };
+        // A paid branch tells the cloud when it should be open, so a silent one can be told from a
+        // closed one (Story 8.35). A Free branch sends nothing of the kind.
+        let paid = self.status.borrow().tier.is_some_and(|t| t != Tier::Free);
+        let opening = if paid {
+            writer.branch_opening().await.unwrap_or_else(|e| {
+                tracing::warn!(code = e.code.as_str(), "heartbeat: no opening hours");
+                None
+            })
+        } else {
+            None
+        };
         let req = HeartbeatRequest {
             epoch: lease.epoch().to_string(),
             version: self.version.clone(),
@@ -245,6 +256,7 @@ impl HeartbeatTask {
             ad_impressions: ads.impressions,
             ad_requests: ads.requests,
             command_schema: Some(arena_proto::COMMAND_SCHEMA_VERSION),
+            opening,
         };
         let sent = Instant::now();
         match self.cloud.heartbeat(&token, &req).await {
@@ -1464,6 +1476,22 @@ mod tests {
         for absent in ["last_summary_at", "last_rollup_date", "resend_unavailable"] {
             assert!(body.get(absent).is_none(), "{absent} in {body}");
         }
+    }
+
+    #[tokio::test]
+    async fn only_a_paid_heartbeat_carries_the_opening_hours_and_zone() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let port = serve_with(vec![answer(true, Tier::Basic)], false, Arc::clone(&seen)).await;
+        let mut f = fx(port).await;
+        // The first beat runs before any licence is stored, so no paid tier is known yet.
+        f.task.beat().await;
+        assert!(sent(&seen, 0).get("opening").is_none());
+        f.task.beat().await;
+        let opening = sent(&seen, 1)["opening"].clone();
+        assert_eq!(opening["timezone"], "Asia/Kolkata");
+        let week: Vec<serde_json::Value> =
+            serde_json::from_str(opening["opening_hours"].as_str().unwrap()).unwrap();
+        assert_eq!(week.len(), 7);
     }
 
     #[tokio::test]

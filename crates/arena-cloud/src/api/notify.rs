@@ -216,6 +216,7 @@ async fn raise_owner_alert(
             branch,
             kind,
             params: &body.params,
+            whatsapp: true,
         },
     )
     .await?;

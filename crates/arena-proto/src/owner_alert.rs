@@ -46,6 +46,10 @@ pub enum OwnerAlertKind {
     LargeDiscount,
     /// The branch's Hub stopped reporting.
     BranchOffline,
+    /// The branch's Hub reports but has stopped backing up (Story 8.35).
+    BranchNotUploading,
+    /// The branch's Hub reports again after an offline alert (Story 8.35).
+    BranchOnline,
 }
 
 /// Why a set of parameters does not fit its kind: the offending name.
@@ -57,7 +61,7 @@ pub struct OwnerAlertParamError {
 
 impl OwnerAlertKind {
     /// Every kind.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 9] = [
         Self::Test,
         Self::CashVariance,
         Self::LowStock,
@@ -65,6 +69,8 @@ impl OwnerAlertKind {
         Self::LargeRefund,
         Self::LargeDiscount,
         Self::BranchOffline,
+        Self::BranchNotUploading,
+        Self::BranchOnline,
     ];
 
     /// The kinds a Hub raises through `POST /v1/notify` (Story 8.34).
@@ -91,6 +97,8 @@ impl OwnerAlertKind {
             Self::LargeRefund => "large_refund",
             Self::LargeDiscount => "large_discount",
             Self::BranchOffline => "branch_offline",
+            Self::BranchNotUploading => "branch_not_uploading",
+            Self::BranchOnline => "branch_online",
         }
     }
 
@@ -106,7 +114,7 @@ impl OwnerAlertKind {
             Self::LowStock => &["product", "qty"],
             Self::CreditOverdue => &["amount", "days"],
             Self::LargeRefund | Self::LargeDiscount => &["amount"],
-            Self::BranchOffline => &["minutes"],
+            Self::BranchOffline | Self::BranchNotUploading | Self::BranchOnline => &["minutes"],
         }
     }
 
@@ -185,6 +193,16 @@ impl OwnerAlertKind {
                 let unit = if minutes == "1" { "minute" } else { "minutes" };
                 format!("The branch has been offline for {minutes} {unit}.")
             }
+            Self::BranchNotUploading => {
+                let minutes = p("minutes");
+                let unit = if minutes == "1" { "minute" } else { "minutes" };
+                format!("The branch is online but has not backed up for {minutes} {unit}.")
+            }
+            Self::BranchOnline => {
+                let minutes = p("minutes");
+                let unit = if minutes == "1" { "minute" } else { "minutes" };
+                format!("The branch is back online after {minutes} {unit}.")
+            }
         }
     }
 
@@ -192,7 +210,9 @@ impl OwnerAlertKind {
     pub fn url(self, branch_id: &str) -> String {
         match self {
             Self::Test => "/alerts".to_owned(),
-            Self::BranchOffline => format!("/#today-{branch_id}"),
+            Self::BranchOffline | Self::BranchNotUploading | Self::BranchOnline => {
+                format!("/#today-{branch_id}")
+            }
             Self::CashVariance => format!("/reports?tab=cash&branch={branch_id}"),
             Self::LowStock => format!("/reports?tab=stock&branch={branch_id}"),
             Self::CreditOverdue => format!("/reports?tab=credit&branch={branch_id}"),
@@ -430,6 +450,14 @@ mod tests {
             line(OwnerAlertKind::BranchOffline),
             "The branch has been offline for 20 minutes."
         );
+        assert_eq!(
+            line(OwnerAlertKind::BranchNotUploading),
+            "The branch is online but has not backed up for 20 minutes."
+        );
+        assert_eq!(
+            line(OwnerAlertKind::BranchOnline),
+            "The branch is back online after 20 minutes."
+        );
     }
 
     #[test]
@@ -451,6 +479,8 @@ mod tests {
         let url = |k: OwnerAlertKind| k.url("B1");
         assert_eq!(url(OwnerAlertKind::Test), "/alerts");
         assert_eq!(url(OwnerAlertKind::BranchOffline), "/#today-B1");
+        assert_eq!(url(OwnerAlertKind::BranchNotUploading), "/#today-B1");
+        assert_eq!(url(OwnerAlertKind::BranchOnline), "/#today-B1");
         assert_eq!(
             url(OwnerAlertKind::CashVariance),
             "/reports?tab=cash&branch=B1"
@@ -523,6 +553,8 @@ mod tests {
         assert!(OwnerAlertKind::LowStock.hub_sourced());
         assert!(!OwnerAlertKind::Test.hub_sourced());
         assert!(!OwnerAlertKind::BranchOffline.hub_sourced());
+        assert!(!OwnerAlertKind::BranchNotUploading.hub_sourced());
+        assert!(!OwnerAlertKind::BranchOnline.hub_sourced());
     }
 
     #[test]

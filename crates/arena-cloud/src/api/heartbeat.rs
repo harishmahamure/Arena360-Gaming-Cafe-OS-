@@ -163,6 +163,22 @@ async fn heartbeat(
     let claims =
         crate::licence::claims_for(&branch.tenant_id, &branch.id, entitlement.as_ref(), now);
     let licence = st.licence.sign(&claims).map_err(ApiError::internal)?;
+    // The opening hours of a paid branch, for the offline watch (Story 8.35). A block that does
+    // not parse is ignored and never fails the heartbeat.
+    if claims.tier != Tier::Free
+        && let Some(opening) = body.opening.as_ref().filter(|o| o.parse().is_some())
+        && let Err(e) = st
+            .db
+            .record_branch_opening(
+                &hub.branch_id,
+                &opening.opening_hours,
+                &opening.timezone,
+                now,
+            )
+            .await
+    {
+        tracing::warn!(error = %e, hub_id = %hub.id, "heartbeat: opening hours not recorded");
+    }
     let resend = if claims.tier == Tier::Free {
         None
     } else {

@@ -362,6 +362,7 @@ name = "arena-proto"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "chrono-tz",
  "jsonwebtoken",
  "serde",

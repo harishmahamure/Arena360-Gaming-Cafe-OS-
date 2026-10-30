@@ -16,3 +16,4 @@ resources:
   - middleware-cloudflare-only.yaml
   - cronjob-control-backup.yaml
   - cronjob-command-sweep.yaml
+  - cronjob-offline-watch.yaml

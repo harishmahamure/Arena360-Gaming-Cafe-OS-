@@ -36,6 +36,9 @@ pub struct Raise<'a> {
     pub branch: &'a Branch,
     pub kind: OwnerAlertKind,
     pub params: &'a BTreeMap<String, String>,
+    /// Also send the alert on WhatsApp (when the owner has not turned that off). Push and the
+    /// list always get it.
+    pub whatsapp: bool,
 }
 
 /// What a raise did.
@@ -144,7 +147,12 @@ pub async fn raise(st: &AuthState, r: Raise<'_>) -> Result<Raised, ApiError> {
     if let Err(e) = push_all(st, &owner.id, &view, now).await {
         tracing::error!(alert_id = %id, error = %e, "owner alert: push failed");
     }
-    match st.db.owner_alert_whatsapp(&owner.id).await {
+    match st
+        .db
+        .owner_alert_whatsapp(&owner.id)
+        .await
+        .map(|on| on && r.whatsapp)
+    {
         Ok(true) => {
             let request = NotifyRequest {
                 outbox_id: format!("{id}.wa"),

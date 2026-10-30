@@ -633,3 +633,24 @@ test("a counter's change to a kitchen display needs a manager's PIN", async ({ p
   await expect(page.getByTestId("hc-approval")).toBeVisible();
   expect(hub.intents).toEqual([]);
 });
+
+test("a device restored from the cloud backup says to pair it again", async ({ page }) => {
+  const hub = newHub();
+  hub.devices = [
+    ...hub.devices,
+    {
+      device_id: "01JRESTOREDKIOSK00000000000",
+      label: "Restored Kiosk",
+      class: "paired",
+      zone: null,
+      online: false,
+      pair_again: true,
+    },
+  ];
+  await openSection(page, hub);
+  const again = page.getByTestId("hc-row-01JRESTOREDKIOSK00000000000-pair-again");
+  await expect(again).toHaveText(en["hub.settings.devices_display.pair_again"]);
+  // The paired one next to it says nothing of the kind.
+  await expect(page.getByTestId(`hc-row-${KIOSK}-pair-again`)).toHaveCount(0);
+  await expectNoSeriousAxe(page);
+});

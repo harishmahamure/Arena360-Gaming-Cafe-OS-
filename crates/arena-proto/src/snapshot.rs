@@ -401,6 +401,11 @@ pub struct SnapshotDevice {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(optional, type = "boolean")]
     pub remote: bool,
+    /// Restored from the cloud backup and not paired with this Hub yet: staff pair it again with
+    /// the 6-digit code (Story 9.13).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(optional, type = "boolean")]
+    pub pair_again: bool,
 }
 
 impl SnapshotDevice {
@@ -452,6 +457,7 @@ mod tests {
                 maintenance_note: None,
                 controller_check: None,
                 remote: false,
+                pair_again: false,
             }],
             locale: None,
             ui: SnapshotUi::default(),
@@ -561,6 +567,7 @@ mod locale_tests {
             maintenance_note: None,
             controller_check: None,
             remote: false,
+            pair_again: false,
         };
         let mut d = dev(false, DeviceStatus::Offline);
         d.apply_presence(true, Some(9));

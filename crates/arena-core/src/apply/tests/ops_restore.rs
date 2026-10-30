@@ -32,6 +32,7 @@ fn facts(f: &Fixture) -> OpsRestore {
         orphaned_file: "4-abc-20270115T133000.db".into(),
         restored_at: T0,
         by: None,
+        cloud: None,
     }
 }
 

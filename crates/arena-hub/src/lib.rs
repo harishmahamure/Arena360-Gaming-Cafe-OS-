@@ -12,6 +12,7 @@ mod config;
 mod dev;
 mod logs;
 pub mod restore;
+mod restore_rebuild;
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -638,6 +639,18 @@ async fn run(
             &cfg.data_dir,
             status_rx.clone(),
         ));
+    // "Rebuild this branch" replays the downloaded backup into a new database and restarts the
+    // Hub onto it (Story 9.13).
+    let restore_rebuild: Arc<dyn arena_core::RestoreRebuildControl> =
+        Arc::new(restore_rebuild::Rebuilder::new(
+            Arc::clone(&restore_fetch),
+            Arc::clone(&kek_store),
+            cfg.db_path(),
+            cfg.data_dir.clone(),
+            Arc::clone(&clock),
+            status_rx.clone(),
+            restore::request_restart,
+        ));
     let command_job = tokio::spawn(
         CommandTask::new(
             cloud.clone(),
@@ -840,7 +853,10 @@ async fn run(
         ))
         .merge(arena_api::ui_auth_router(ui_auth))
         .merge(arena_api::ui_pair_router(pairer, pair_gate))
-        .merge(arena_api::ui_restore_fetch_router(restore_fetch));
+        .merge(arena_api::ui_restore_fetch_router(
+            restore_fetch,
+            restore_rebuild,
+        ));
     #[cfg(feature = "dev-fixtures")]
     let router = router.merge(arena_api::health::dev_router(
         writer.clone(),

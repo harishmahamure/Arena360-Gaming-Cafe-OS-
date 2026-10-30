@@ -21,7 +21,10 @@ use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use arena_proto::{AppError, ErrorCode, ExportHeader, ORPHAN_KEEP_DAYS, OpsRestore};
+use arena_proto::{
+    AppError, CloudRestoreFacts, ErrorCode, ExportHeader, ORPHAN_KEEP_DAYS, OpsRestore,
+    PAIR_AGAIN_TOKEN, RESTORE_SYSTEM_ACTOR,
+};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -151,13 +154,7 @@ pub fn inspect_export(db_path: &Path, file: &Path) -> Result<Inspection, AppErro
     }
 
     let live = open_read_only(db_path)?;
-    let branch: Option<(String, String)> = live
-        .query_row("SELECT branch_id, name FROM branch LIMIT 1", [], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })
-        .optional()
-        .map_err(db_error)?;
-    let Some((branch_id, branch_name)) = branch else {
+    let Some((branch_id, branch_name)) = live_branch(&live)? else {
         return Err(AppError::new(
             ErrorCode::RestoreWrongBranch,
             "this PC holds no branch to restore into",
@@ -193,6 +190,28 @@ pub fn inspect_export(db_path: &Path, file: &Path) -> Result<Inspection, AppErro
     })
 }
 
+/// The branch the live database holds or, on a replacement Hub waiting in "Restore this branch"
+/// (Story 9.9) that has no branch rows yet, the branch it was paired to replace.
+fn live_branch(live: &Connection) -> Result<Option<(String, String)>, AppError> {
+    let held: Option<(String, String)> = live
+        .query_row("SELECT branch_id, name FROM branch LIMIT 1", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .optional()
+        .map_err(db_error)?;
+    if held.is_some() {
+        return Ok(held);
+    }
+    live.query_row(
+        "SELECT branch_id, COALESCE(restore_branch_name, '') FROM hub_identity
+         WHERE id = 1 AND restore_pending = 1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .optional()
+    .map_err(db_error)
+}
+
 /// Change rows after `(epoch, seq)` in log order (epoch counter, epoch, seq).
 fn rows_above(conn: &Connection, epoch: &str, seq: i64) -> i64 {
     conn.query_row(
@@ -210,6 +229,9 @@ struct Marker {
     confirmed_by: String,
     /// The file's name as the Owner gave it.
     file_name: String,
+    /// Set when the file was rebuilt from the cloud backup (Story 9.13).
+    #[serde(default)]
+    cloud: Option<CloudRestoreFacts>,
 }
 
 /// What a finished restore leaves for the Hub to record as `ops.restore`.
@@ -262,17 +284,60 @@ pub fn stage_export(
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default(),
+            cloud: None,
         };
-        let json = serde_json::to_vec(&marker).map_err(|e| internal("write the marker", &e))?;
-        let tmp = dir.join(format!("{PENDING_MARKER}.part"));
-        fs::write(&tmp, json).map_err(|e| internal("write the marker", &e))?;
-        fs::rename(&tmp, dir.join(PENDING_MARKER)).map_err(|e| internal("write the marker", &e))
+        write_marker(&dir, &marker)
     })();
     if let Err(e) = staged {
         clear_dir(&dir);
         return Err(e);
     }
     Ok(inspection)
+}
+
+fn write_marker(dir: &Path, marker: &Marker) -> Result<(), AppError> {
+    let json = serde_json::to_vec(marker).map_err(|e| internal("write the marker", &e))?;
+    let tmp = dir.join(format!("{PENDING_MARKER}.part"));
+    fs::write(&tmp, json).map_err(|e| internal("write the marker", &e))?;
+    fs::rename(&tmp, dir.join(PENDING_MARKER)).map_err(|e| internal("write the marker", &e))
+}
+
+/// The side table a rebuild from the cloud backup leaves in the database it hands over: the
+/// paired devices and kitchen displays of the old Hub (`tbl` is the table, `id` the row). The
+/// export strips their token hashes, which would make them look like devices added by hand;
+/// [`apply_pending`] marks these [`PAIR_AGAIN_TOKEN`] instead and drops the table.
+pub const PAIR_AGAIN_TABLE: &str = "restore_pair_again";
+
+/// Stages the database `rebuilt` from the cloud backup (Story 9.13) for the next start, exactly as
+/// a checked `.a360` file is staged: it is exported (stripped of the licence cache and token
+/// hashes) into `restore-pending/`, checked against the branch this Hub waits to restore, and the
+/// marker is written last. `rebuilt` must be closed. A refusal stages nothing. Blocking (disk).
+pub fn stage_rebuilt(
+    db_path: &Path,
+    rebuilt: &Path,
+    cloud: CloudRestoreFacts,
+    now_ms: i64,
+) -> Result<Inspection, AppError> {
+    let dir = data_dir(db_path).join(PENDING_DIR);
+    clear_dir(&dir);
+    fs::create_dir_all(&dir).map_err(|e| internal("create the restore folder", &e))?;
+    let staged = (|| -> Result<Inspection, AppError> {
+        crate::export::write_export(rebuilt, &dir, PENDING_FILE, now_ms)?;
+        let inspection = inspect_export(db_path, &dir.join(PENDING_FILE))?;
+        write_marker(
+            &dir,
+            &Marker {
+                confirmed_by: RESTORE_SYSTEM_ACTOR.to_owned(),
+                file_name: "cloud-backup".to_owned(),
+                cloud: Some(cloud),
+            },
+        )?;
+        Ok(inspection)
+    })();
+    if staged.is_err() {
+        clear_dir(&dir);
+    }
+    staged
 }
 
 /// Whether a restore is staged (its marker exists).
@@ -467,6 +532,7 @@ fn build_restored(
     now_ms: i64,
     inspection: &Inspection,
     old: &Replaced,
+    cloud: bool,
 ) -> Result<Built, AppError> {
     let mut store = Store::open(work, now_ms)?;
     if !store.holds_writer_lock() {
@@ -550,6 +616,12 @@ fn build_restored(
         crate::write_lease_fork(tx, fork.as_ref())?;
         crate::raise_max_seen_counter(tx, counter.max(old.max_seen))?;
 
+        // A rebuild from the cloud backup names the devices that were paired with the old Hub:
+        // their tokens were stripped, and they pair again (Story 9.13).
+        if cloud {
+            pair_again(tx)?;
+        }
+
         // What belongs to this Hub and not to the branch is not in an export: its pairing, its
         // licence and the device tokens, so paired kiosks keep working.
         if let Some((tenant, branch, hub, tier, paired_at)) = &old.identity
@@ -587,6 +659,40 @@ fn build_restored(
             erasures_reapplied: reapplied,
         })
     })
+}
+
+/// Marks the devices and kitchen displays listed in [`PAIR_AGAIN_TABLE`] [`PAIR_AGAIN_TOKEN`] and
+/// drops the table. A file without the table (an ordinary export) changes nothing.
+fn pair_again(tx: &crate::StoreTx<'_>) -> Result<(), AppError> {
+    let listed: bool = tx
+        .query_row(
+            "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+            [PAIR_AGAIN_TABLE],
+            |r| r.get(0),
+        )
+        .map_err(db_error)?;
+    if !listed {
+        return Ok(());
+    }
+    tx.execute(
+        &format!(
+            "UPDATE devices SET token_hash = ?1 WHERE token_hash = ''
+               AND device_id IN (SELECT id FROM {PAIR_AGAIN_TABLE} WHERE tbl = 'devices')"
+        ),
+        [PAIR_AGAIN_TOKEN],
+    )
+    .map_err(db_error)?;
+    tx.execute(
+        &format!(
+            "UPDATE kitchen_displays SET token_hash = ?1 WHERE token_hash = ''
+               AND id IN (SELECT id FROM {PAIR_AGAIN_TABLE} WHERE tbl = 'kitchen_displays')"
+        ),
+        [PAIR_AGAIN_TOKEN],
+    )
+    .map_err(db_error)?;
+    tx.execute_batch(&format!("DROP TABLE {PAIR_AGAIN_TABLE};"))
+        .map_err(db_error)?;
+    Ok(())
 }
 
 /// Decompresses the body of `staged` (the file whose header is `inspection.header`) to `work`.
@@ -688,7 +794,7 @@ fn restore_from(
 
     remove_scratch(work);
     unpack(&staged, work)?;
-    let built = build_restored(work, now_ms, &inspection, &old)?;
+    let built = build_restored(work, now_ms, &inspection, &old, marker.cloud.is_some())?;
     checkpoint(work)?;
     for suffix in ["-wal", "-shm", ".lock"] {
         let _ = fs::remove_file(with_suffix(work, suffix));
@@ -711,6 +817,7 @@ fn restore_from(
             orphaned_file: orphan_file,
             restored_at: now_ms,
             by: None,
+            cloud: marker.cloud,
         },
     };
     if let Ok(json) = serde_json::to_vec(&outcome) {
@@ -1343,5 +1450,165 @@ mod tests {
         let bytes = fs::read(&b.file).unwrap();
         let (h, _) = ExportHeader::decode(&bytes).unwrap();
         assert_eq!(h.format_version, EXPORT_FORMAT_VERSION);
+    }
+
+    /// A replacement Hub: paired to the branch, waiting in "Restore this branch", no branch rows.
+    fn replacement(dir: &Path, waiting: bool) -> PathBuf {
+        let path = dir.join("branch.db");
+        let mut store = Store::open(&path, T).unwrap();
+        store
+            .write_tx(|tx| {
+                set_meta(tx, crate::META_HUB_INSTANCE_ID, "NEWHUB")?;
+                crate::insert_hub_identity(
+                    tx,
+                    &crate::HubIdentity {
+                        tenant_id: "T1".into(),
+                        branch_id: BRANCH.into(),
+                        hub_id: "H2".into(),
+                        tier: arena_proto::Tier::Basic,
+                        paired_at: T,
+                    },
+                )?;
+                if waiting {
+                    crate::mark_restore_pending(tx, "Level Up")?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        path
+    }
+
+    /// What the rebuild leaves: the branch, two devices (one paired, one by hand) and the list of
+    /// devices that pair again.
+    fn rebuilt(dir: &Path) -> PathBuf {
+        let db = live(dir, 2, "OLDHUB");
+        add_changes(&db, "2:OLDHUB", 1, 6);
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(&format!(
+            "INSERT INTO devices (device_id, branch_id, class, label, token_hash, rev, created_at, updated_at)
+               VALUES ('D1', '{BRANCH}', 'paired', 'PC 1', '$argon2id$x', 1, 0, 0),
+                      ('D2', '{BRANCH}', 'paired', 'Console', '', 1, 0, 0);
+             CREATE TABLE {PAIR_AGAIN_TABLE} (tbl TEXT NOT NULL, id TEXT NOT NULL, PRIMARY KEY (tbl, id));
+             INSERT INTO {PAIR_AGAIN_TABLE} VALUES ('devices', 'D1');"
+        ))
+        .unwrap();
+        db
+    }
+
+    fn facts() -> CloudRestoreFacts {
+        CloudRestoreFacts {
+            snapshot_date: Some("2027-01-14".into()),
+            first: Some(arena_proto::RestorePosition {
+                epoch: "2:OLDHUB".into(),
+                seq: 1,
+            }),
+            last: Some(arena_proto::RestorePosition {
+                epoch: "2:OLDHUB".into(),
+                seq: 6,
+            }),
+            batches: 2,
+            applied: 6,
+            orphaned: 1,
+            keys_restored: 3,
+        }
+    }
+
+    #[test]
+    fn a_rebuilt_database_replaces_a_waiting_hub_and_its_paired_devices_pair_again() {
+        let hub = tempfile::tempdir().unwrap();
+        let live_path = replacement(hub.path(), true);
+        let src = tempfile::tempdir().unwrap();
+        let db = rebuilt(src.path());
+
+        let i = stage_rebuilt(&live_path, &db, facts(), T).unwrap();
+        assert_eq!(i.branch_name, "Level Up");
+        assert_eq!(
+            (i.header.epoch.as_str(), i.header.last_seq),
+            ("2:OLDHUB", 6)
+        );
+        assert_eq!(i.rows_set_aside, 0);
+        assert!(has_pending(&live_path));
+
+        let out = apply_pending(&live_path, T + 1000).unwrap().unwrap();
+        assert_eq!(out.restore.cloud, Some(facts()));
+        assert_eq!(out.confirmed_by, RESTORE_SYSTEM_ACTOR);
+        assert_eq!(
+            out.restore.new_epoch, "3:NEWHUB",
+            "above the backup's epoch 2"
+        );
+        assert_eq!(out.restore.old_epoch, "", "the waiting Hub had no lease");
+        assert!(!has_pending(&live_path));
+
+        // This Hub's own identity is kept and no longer waits; the branch is there.
+        assert_eq!(
+            count(
+                &live_path,
+                "SELECT restore_pending FROM hub_identity WHERE hub_id = 'H2'"
+            ),
+            0
+        );
+        assert_eq!(count(&live_path, "SELECT COUNT(*) FROM branch"), 1);
+        assert_eq!(count(&live_path, "SELECT COUNT(*) FROM player_keys"), 3);
+        let store = Store::open(&live_path, T + 2000).unwrap();
+        assert!(store.restore_pending().unwrap().is_none());
+        let lease = store.lease().unwrap().unwrap();
+        assert_eq!((lease.counter, lease.provisional), (3, true));
+        let fork = crate::read_lease_fork(&Connection::open(&live_path).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (fork.parent_epoch.as_str(), fork.parent_seq),
+            ("2:OLDHUB", 6)
+        );
+        drop(store);
+
+        // The paired device cannot authenticate and is told apart from the one added by hand.
+        let conn = Connection::open(&live_path).unwrap();
+        let hash = |id: &str| -> String {
+            conn.query_row(
+                "SELECT token_hash FROM devices WHERE device_id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(hash("D1"), PAIR_AGAIN_TOKEN);
+        assert_eq!(hash("D2"), "");
+        let left: i64 = conn
+            .query_row(
+                &format!("SELECT COUNT(*) FROM sqlite_master WHERE name = '{PAIR_AGAIN_TABLE}'"),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0, "the list is consumed");
+
+        // The empty shell this Hub started with is kept, not deleted.
+        assert_eq!(names(&data_dir(&live_path).join(ORPHANED_DIR)).len(), 1);
+    }
+
+    #[test]
+    fn a_hub_that_is_not_waiting_or_a_file_of_another_branch_is_refused() {
+        let src = tempfile::tempdir().unwrap();
+        let db = rebuilt(src.path());
+
+        // Paired but not waiting: it holds no branch, so there is nothing to restore into.
+        let hub = tempfile::tempdir().unwrap();
+        let live_path = replacement(hub.path(), false);
+        let e = stage_rebuilt(&live_path, &db, facts(), T).unwrap_err();
+        assert_eq!(e.code, ErrorCode::RestoreWrongBranch);
+        assert!(!has_pending(&live_path));
+        assert!(!data_dir(&live_path).join(PENDING_DIR).exists());
+
+        // Waiting for another branch.
+        let other = tempfile::tempdir().unwrap();
+        let live_path = replacement(other.path(), true);
+        Connection::open(&live_path)
+            .unwrap()
+            .execute("UPDATE hub_identity SET branch_id = '01JOTHER'", [])
+            .unwrap();
+        let e = stage_rebuilt(&live_path, &db, facts(), T).unwrap_err();
+        assert_eq!(e.code, ErrorCode::RestoreWrongBranch);
+        assert!(!has_pending(&live_path));
     }
 }

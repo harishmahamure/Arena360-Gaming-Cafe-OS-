@@ -72,14 +72,7 @@ impl MonthBuilder {
         }
         let mut store = Store::open(&path, now_ms)?;
         let resume = store.write_tx(|tx| {
-            tx.execute_batch(
-                "CREATE TABLE IF NOT EXISTS orphaned_changes AS
-                 SELECT epoch, seq, tbl, row_id, op, row, intent_id, intent_kind, actor_kind,
-                        actor_id, elevated_by_kind, elevated_by_id, elevated_by_mode,
-                        elevated_by_verifier_version, at, business_day, fy, reason
-                 FROM changes WHERE 0",
-            )
-            .map_err(db_error)?;
+            ensure_orphan_table(tx)?;
             tx.query_row(
                 "SELECT epoch, seq FROM changes
                  ORDER BY epoch_counter DESC, epoch DESC, seq DESC LIMIT 1",
@@ -200,7 +193,19 @@ impl MonthBuilder {
     }
 }
 
-fn insert_orphan(conn: &DbConn, c: &ChangeRecord) -> Result<(), AppError> {
+/// Creates `orphaned_changes`, the rows a fork point kept out of state, with the columns of `changes`.
+pub(crate) fn ensure_orphan_table(conn: &DbConn) -> Result<(), AppError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS orphaned_changes AS
+         SELECT epoch, seq, tbl, row_id, op, row, intent_id, intent_kind, actor_kind,
+                actor_id, elevated_by_kind, elevated_by_id, elevated_by_mode,
+                elevated_by_verifier_version, at, business_day, fy, reason
+         FROM changes WHERE 0",
+    )
+    .map_err(db_error)
+}
+
+pub(crate) fn insert_orphan(conn: &DbConn, c: &ChangeRecord) -> Result<(), AppError> {
     conn.execute(
         "INSERT INTO orphaned_changes (epoch, seq, tbl, row_id, op, row, intent_id, intent_kind,
                                        actor_kind, actor_id, elevated_by_kind, elevated_by_id,

@@ -72,6 +72,14 @@ pub struct StagedManifest {
     pub partial: bool,
 }
 
+impl StagedManifest {
+    /// The manifest of a finished download in `staging`, if it is there and readable.
+    pub fn read(staging: &Path) -> Option<Self> {
+        let bytes = std::fs::read(staging.join(MANIFEST_FILE)).ok()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StagedBatch {
     pub epoch: String,

@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::ExportHeader;
+use crate::{ExportHeader, RestorePosition};
 
 /// The settings key `ops.restore` writes: the last restore that finished.
 pub const KEY_BACKUP_LAST_RESTORE: &str = "backup.last_restore";
@@ -18,6 +18,10 @@ pub const DEFAULT_BACKUP_LAST_RESTORE: &str = "";
 /// The `actor.id` of the system actor that records a restore when the Owner who confirmed it is
 /// not in the restored database (they were added after the file was made).
 pub const RESTORE_SYSTEM_ACTOR: &str = "restore";
+/// The `devices.token_hash` of a paired device after the branch was rebuilt from the cloud backup
+/// (Story 9.13): it is not an Argon2 hash, so nothing verifies against it, and it is not empty,
+/// so the device is not mistaken for one added by hand. Staff pair the device again.
+pub const PAIR_AGAIN_TOKEN: &str = "!pair-again";
 /// How long a replaced database stays in `orphaned/` before the Hub deletes it, in days.
 pub const ORPHAN_KEEP_DAYS: u64 = 90;
 
@@ -126,6 +130,53 @@ pub struct OpsRestore {
     /// The Owner who confirmed (their display name), set by the Hub when it applies the record.
     #[serde(default)]
     pub by: Option<String>,
+    /// What the rebuild used, when the branch was rebuilt from the cloud backup (Story 9.13).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cloud: Option<CloudRestoreFacts>,
+}
+
+/// What a rebuild from the cloud backup (Story 9.13) replayed, for the audit record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct CloudRestoreFacts {
+    /// The business day of the snapshot the rebuild started from, if there was one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub snapshot_date: Option<String>,
+    /// The first and last change of the batches replayed after the snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub first: Option<RestorePosition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last: Option<RestorePosition>,
+    /// Batches replayed.
+    pub batches: u32,
+    /// Changes applied from them.
+    #[ts(type = "number")]
+    pub applied: i64,
+    /// Changes of a forked epoch's parent above its fork point, kept out of state.
+    #[ts(type = "number")]
+    pub orphaned: i64,
+    /// Player keys restored from the key backup.
+    #[ts(type = "number")]
+    pub keys_restored: i64,
+}
+
+impl CloudRestoreFacts {
+    fn is_consistent(&self) -> bool {
+        self.snapshot_date.as_deref().is_none_or(text_ok)
+            && self
+                .first
+                .iter()
+                .chain(self.last.iter())
+                .all(|p| text_ok(&p.epoch) && p.seq >= 0)
+            && self.applied >= 0
+            && self.orphaned >= 0
+            && self.keys_restored >= 0
+    }
 }
 
 /// `yyyy-mm-dd hh:mm` of `ms` in the branch's zone (UTC for an unknown zone).
@@ -176,6 +227,10 @@ impl OpsRestore {
             && self.erasures_reapplied >= 0
             && self.restored_at > 0
             && self.by.as_ref().is_none_or(|b| !b.is_empty() && text_ok(b))
+            && self
+                .cloud
+                .as_ref()
+                .is_none_or(CloudRestoreFacts::is_consistent)
     }
 
     /// The value of `backup.last_restore`, or `None` when it is empty or malformed.
@@ -215,6 +270,7 @@ mod tests {
             orphaned_file: "4-abc-20270115T133000.db".into(),
             restored_at: 1_800_000_100_000,
             by: None,
+            cloud: None,
         }
     }
 

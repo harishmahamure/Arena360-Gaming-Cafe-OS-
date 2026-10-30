@@ -118,6 +118,7 @@ pub fn build_snapshot(
                     maintenance_note: m.and_then(|m| m.maintenance_note.clone()),
                     controller_check: None,
                     remote: false,
+                    pair_again: d.token_hash == arena_proto::PAIR_AGAIN_TOKEN,
                     device_id: d.device_id,
                     // Presence is the LAN registry's, not the database's: the snapshot
                     // handler fills it in.
@@ -2583,6 +2584,7 @@ mod tests {
                     maintenance_note: None,
                     controller_check: None,
                     remote: false,
+                    pair_again: false,
                 }],
                 locale: Some(SnapshotLocale {
                     currency: "INR".into(),

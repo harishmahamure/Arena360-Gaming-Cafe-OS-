@@ -6265,6 +6265,7 @@ b"
                 orphaned_file: "2-proptest-20270115T133000.db".into(),
                 restored_at: hub.clock_now(),
                 by: None,
+                cloud: None,
             };
             let before = hub.change_count();
             let was = hub.setting("backup.last_restore");

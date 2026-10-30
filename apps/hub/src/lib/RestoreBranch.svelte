@@ -1,14 +1,18 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import type { RestoreFetchView } from "@arena/ui/generated";
+  import type { RestoreFetchView, RestoreRebuildView } from "@arena/ui/generated";
   import { Button, t } from "@arena/ui";
   import { formatBytes } from "./media-cache";
   import {
     cancelRestoreCloud,
+    cancelRestoreRebuild,
     restoreCloudPartial,
     restoreCloudView,
+    restoreRebuildView,
     startRestoreCloud,
+    startRestoreRebuild,
     type RestoreCloudResult,
+    type RestoreRebuildResult,
   } from "./restore-cloud";
 
   /**
@@ -27,6 +31,28 @@
   /** A refusal or an unreachable Hub service from the last action. */
   let problem = $state<string | null>(null);
   let busy = $state(false);
+  /** The rebuild from the downloaded backup (Story 9.13), once it has started. */
+  let rebuild = $state<RestoreRebuildView | null>(null);
+  let rebuildConfirming = $state(false);
+
+  function takeRebuild(result: RestoreRebuildResult) {
+    if (result.kind === "ok") {
+      rebuild = result.view;
+      problem = null;
+    } else {
+      problem = result.kind === "refused" ? result.code : "HUB_UNREACHABLE";
+    }
+  }
+
+  async function actRebuild(run: () => Promise<RestoreRebuildResult>) {
+    busy = true;
+    try {
+      takeRebuild(await run());
+    } finally {
+      busy = false;
+    }
+    rebuildConfirming = false;
+  }
 
   function take(result: RestoreCloudResult) {
     if (result.kind === "ok") {
@@ -53,6 +79,15 @@
 
   onMount(() => {
     void refresh();
+    // A rebuild that was running when this screen opened (the Hub restarts onto it when done).
+    void restoreRebuildView().then(takeRebuild);
+  });
+
+  // While the rebuild runs, its progress is read once a second.
+  $effect(() => {
+    if (rebuild?.phase !== "replaying" && rebuild?.phase !== "checking") return;
+    const timer = setInterval(() => void restoreRebuildView().then(takeRebuild), POLL_MS);
+    return () => clearInterval(timer);
   });
 
   // While files come down, the progress is read once a second.
@@ -117,7 +152,54 @@
     </div>
   {/if}
 
-  {#if view?.phase === "downloading"}
+  {#if rebuild && rebuild.phase !== "failed"}
+    <div class="panel" data-testid="rebuild-progress">
+      {#if rebuild.phase === "restarting"}
+        <p class="type-hub-body" role="status" aria-live="polite" data-testid="rebuild-restarting">
+          {t("hub.restore_pending.rebuild_restarting")}
+        </p>
+      {:else}
+        <p class="type-hub-body" role="status" aria-live="polite" data-testid="rebuild-phase">
+          {t(
+            rebuild.phase === "replaying"
+              ? "hub.restore_pending.rebuild_replaying"
+              : "hub.restore_pending.rebuild_checking",
+            { done: rebuild.done, total: rebuild.total },
+          )}
+        </p>
+        <progress
+          max="100"
+          value={rebuild.percent}
+          aria-label={t("hub.restore_pending.rebuild_progress_label")}
+        ></progress>
+        <p class="type-hub-body">
+          {t("hub.restore_pending.rebuild_percent", { percent: rebuild.percent })}
+        </p>
+        <Button
+          label="hub.restore_pending.rebuild_cancel"
+          variant="secondary"
+          onclick={() => void actRebuild(cancelRestoreRebuild)}
+        />
+      {/if}
+    </div>
+  {:else if rebuild?.phase === "failed"}
+    <div class="panel" role="alert" data-testid="rebuild-failed">
+      <p class="type-hub-body">
+        {t("hub.restore_pending.rebuild_failed", { code: rebuild.error ?? "UNKNOWN" })}
+      </p>
+      <div class="options">
+        <Button
+          label="hub.restore_pending.rebuild_retry"
+          onclick={() => void actRebuild(startRestoreRebuild)}
+        />
+        <Button
+          label="hub.restore_pending.cloud_cancel"
+          variant="secondary"
+          onclick={() => void actRebuild(cancelRestoreRebuild)}
+        />
+      </div>
+    </div>
+  {:else if view?.phase === "downloading"}
     <div class="panel" data-testid="cloud-progress">
       <p class="type-hub-body" role="status" aria-live="polite">
         {t("hub.restore_pending.cloud_progress", { done: view.done, total: view.total })}
@@ -183,12 +265,41 @@
       {#if ready.partial}
         <p class="type-hub-body">{t("hub.restore_pending.cloud_ready_partial")}</p>
       {/if}
-      <p class="type-hub-body">{t("hub.restore_pending.cloud_ready_next")}</p>
-      <Button
-        label="hub.restore_pending.cloud_remove"
-        variant="secondary"
-        onclick={() => void act(cancelRestoreCloud)}
-      />
+      {#if rebuildConfirming}
+        <div
+          class="panel"
+          role="group"
+          aria-labelledby="rebuild-confirm"
+          data-testid="rebuild-confirm"
+        >
+          <p class="type-hub-body" id="rebuild-confirm">
+            {t("hub.restore_pending.rebuild_confirm")}
+          </p>
+          <div class="options">
+            <Button
+              label="hub.restore_pending.rebuild_go"
+              onclick={() => void actRebuild(startRestoreRebuild)}
+            />
+            <Button
+              label="hub.restore_pending.cloud_not_now"
+              variant="secondary"
+              onclick={() => (rebuildConfirming = false)}
+            />
+          </div>
+        </div>
+      {:else}
+        <div class="options">
+          <Button
+            label="hub.restore_pending.rebuild_option"
+            onclick={() => (rebuildConfirming = true)}
+          />
+          <Button
+            label="hub.restore_pending.cloud_remove"
+            variant="secondary"
+            onclick={() => void act(cancelRestoreCloud)}
+          />
+        </div>
+      {/if}
     </div>
   {:else if view?.phase === "failed"}
     <div class="panel" role="alert" data-testid="cloud-failed">

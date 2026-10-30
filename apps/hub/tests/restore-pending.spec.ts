@@ -126,6 +126,8 @@ const GAP = {
   percent: 4,
   gap: { epoch: "3:H", from_seq: 6, to_seq: 10, last_good_seq: 5, lost: 37 },
 };
+const REPLAYING = { phase: "replaying", done: 2, total: 9, percent: 22 };
+const CHECKING = { phase: "checking", done: 3, total: 4, percent: 75 };
 const READY = {
   phase: "ready",
   done: 4,
@@ -136,7 +138,12 @@ const READY = {
 };
 
 /** The Hub's loopback API with the cloud-restore routes stubbed: `view` is what GET answers. */
-async function openCloud(page: Page, tier: string, start: { view: CloudView }) {
+async function openCloud(
+  page: Page,
+  tier: string,
+  start: { view: CloudView },
+  rebuild: { view: CloudView; after?: CloudView } = { view: null },
+) {
   const posts: string[] = [];
   await page.route(`${HUB}/**`, async (route) => {
     const req = route.request();
@@ -163,6 +170,22 @@ async function openCloud(page: Page, tier: string, start: { view: CloudView }) {
       case "/ui/restore/cloud/cancel":
         posts.push("cancel");
         start.view = null;
+        return json(route, 200, null);
+      case "/ui/restore/cloud/rebuild":
+        if (req.method() === "POST") {
+          posts.push("rebuild");
+          rebuild.view = REPLAYING;
+          return json(route, 200, rebuild.view);
+        }
+        {
+          const now = rebuild.view;
+          // The next poll sees the rebuild one step on.
+          if (now && rebuild.after) rebuild.view = rebuild.after;
+          return json(route, 200, now);
+        }
+      case "/ui/restore/cloud/rebuild/cancel":
+        posts.push("rebuild-cancel");
+        rebuild.view = null;
         return json(route, 200, null);
       case "/ui/restore/cloud/partial":
         posts.push("partial");
@@ -228,4 +251,48 @@ test("a gap names the range, the cost and offers to stop before it", async ({ pa
   await expect(ready).toContainText("snapshot of 2026-10-29");
   await expect(ready).toContainText(en["hub.restore_pending.cloud_ready_partial"]);
   expect(posts).toEqual(["partial"]);
+});
+
+test("a complete download offers to rebuild the branch, shows Replaying then Checking and can cancel", async ({
+  page,
+}) => {
+  const rebuild = { view: null as CloudView, after: CHECKING as CloudView };
+  const posts = await openCloud(page, "basic", { view: READY }, rebuild);
+  const screen = page.getByTestId("hub-restore-pending");
+  await screen.getByRole("button", { name: en["hub.restore_pending.rebuild_option"] }).click();
+  const confirm = screen.getByTestId("rebuild-confirm");
+  await expect(confirm).toContainText(en["hub.restore_pending.rebuild_confirm"]);
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
+
+  await confirm.getByRole("button", { name: en["hub.restore_pending.rebuild_go"] }).click();
+  const progress = screen.getByTestId("rebuild-progress");
+  await expect(progress.getByTestId("rebuild-phase")).toContainText("Replaying 2 of 9");
+  await expect(progress).toContainText("22%");
+  expect(posts).toContain("rebuild");
+  // The next poll shows the checks.
+  await expect(progress.getByTestId("rebuild-phase")).toContainText("Checking 3 of 4");
+  await expect(progress.getByRole("progressbar")).toHaveAttribute("value", "75");
+
+  await progress.getByRole("button", { name: en["hub.restore_pending.rebuild_cancel"] }).click();
+  await expect(screen.getByTestId("rebuild-progress")).toHaveCount(0);
+  expect(posts).toContain("rebuild-cancel");
+  // Back in "Restore this branch" with the downloaded backup still offered.
+  await expect(screen.getByTestId("cloud-ready")).toBeVisible();
+  await expect(page.locator("nav")).toHaveCount(0);
+});
+
+test("a rebuild that fails says why and keeps the downloaded backup", async ({ page }) => {
+  const rebuild = {
+    view: { phase: "failed", done: 1, total: 9, percent: 11, error: "RESTORE_CORRUPT" },
+  };
+  await openCloud(page, "basic", { view: READY }, rebuild);
+  const screen = page.getByTestId("hub-restore-pending");
+  const failed = screen.getByTestId("rebuild-failed");
+  await expect(failed).toContainText("RESTORE_CORRUPT");
+  await expect(
+    failed.getByRole("button", { name: en["hub.restore_pending.rebuild_retry"] }),
+  ).toBeVisible();
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(results.violations).toEqual([]);
 });

@@ -19,8 +19,10 @@ use arena_store::{
 use sha2::{Digest, Sha256};
 
 mod audit;
+mod rebuild;
 
 pub use audit::{BuiltMonth, MonthBuilder};
+pub use rebuild::{RebuildSource, RebuildStage, RebuildStop, Rebuilt, rebuild};
 
 fn bad(message: String) -> AppError {
     AppError::new(ErrorCode::Internal, message)
@@ -220,7 +222,7 @@ mod tests {
     };
     use arena_store::{LeaseRow, RowValue, Store, write_lease};
 
-    const T0: i64 = 1_800_000_000_000;
+    pub(crate) const T0: i64 = 1_800_000_000_000;
 
     /// A database seeded through the Writer with `branch.bootstrap`, as `dev seed` does.
     async fn seeded() -> (tempfile::TempDir, Store) {
@@ -228,7 +230,7 @@ mod tests {
     }
 
     /// Like [`seeded`], plus one `device.register` so every change-log table has a row.
-    async fn seeded_with_device() -> (tempfile::TempDir, Store) {
+    pub(crate) async fn seeded_with_device() -> (tempfile::TempDir, Store) {
         seed(true).await
     }
 

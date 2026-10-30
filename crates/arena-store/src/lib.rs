@@ -216,8 +216,9 @@ pub use reports::{
     SalesOrderRow, SegmentSpan, SessionReportRow, StaffCountRow, StaffShiftRow,
 };
 pub use restore::{
-    Inspection, ORPHANED_DIR, PENDING_DIR, RESULT_FILE, RestoreOutcome, apply_pending,
-    clear_outcome, has_pending, inspect_export, read_outcome, stage_export, sweep_orphaned,
+    Inspection, ORPHANED_DIR, PAIR_AGAIN_TABLE, PENDING_DIR, RESULT_FILE, RestoreOutcome,
+    apply_pending, clear_outcome, has_pending, inspect_export, read_outcome, stage_export,
+    stage_rebuilt, sweep_orphaned,
 };
 pub use rollup::{
     ChangedRow, ROLLUP_LEDGER_TABLES, RollupDebtorRow, RollupFacts, RollupLotRow, RollupPaymentRow,

@@ -154,6 +154,36 @@ pub struct RestoreFetchView {
     pub ready: Option<RestoreReadyView>,
 }
 
+/// Where the rebuild of the branch from the staged backup stands (Story 9.13).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum RestoreRebuildPhase {
+    /// The snapshot is unpacked and the batches are applied in order.
+    Replaying,
+    /// The rebuilt database is checked and the keys and erasures are settled.
+    Checking,
+    /// The rebuilt database is staged; the Hub restarts onto it.
+    Restarting,
+    /// The rebuild stopped (see `error`); the staged backup is kept.
+    Failed,
+}
+
+/// The progress panel of "Rebuild this branch" (`GET /ui/restore/cloud/rebuild`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct RestoreRebuildView {
+    pub phase: RestoreRebuildPhase,
+    pub done: u32,
+    pub total: u32,
+    /// `done` of `total`, 0 to 100.
+    pub percent: u8,
+    /// The error code that ended the attempt (`phase` `failed`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub error: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

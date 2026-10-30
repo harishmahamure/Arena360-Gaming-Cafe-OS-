@@ -26,7 +26,14 @@
   const HUB_KEY = "display.hc.hub";
   const keyOf = (deviceId: string) => `display.hc.${deviceId}`; // i18n-ignore (a setting key)
 
-  type Row = { key: string; label: string; testId: string; kitchen?: boolean };
+  type Row = {
+    key: string;
+    label: string;
+    testId: string;
+    kitchen?: boolean;
+    /** Restored from the cloud backup: pair it again with a code (Story 9.13). */
+    again?: boolean;
+  };
   type Server = { value: boolean; rev: number };
   type RowStatus = { tone: "ok" | "refusal"; message: MessageKey };
 
@@ -94,6 +101,7 @@
         key: keyOf(d.device_id),
         label: d.label,
         testId: `hc-row-${d.device_id}`, // i18n-ignore (a test id)
+        again: d.pair_again === true,
       })),
     ...(snapshot?.kitchen_displays ?? []).map((d) => ({
       key: keyOf(d.id),
@@ -387,6 +395,11 @@
               >
             </label>
           </div>
+          {#if row.again}
+            <p class="note type-hub-label" data-testid="{row.testId}-pair-again">
+              {t("hub.settings.devices_display.pair_again")}
+            </p>
+          {/if}
           {#if needsApproval && approving?.key !== row.key}
             <p class="note type-hub-label">{t("hub.settings.branch.needs_approval")}</p>
           {/if}

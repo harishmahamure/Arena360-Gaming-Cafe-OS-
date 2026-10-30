@@ -439,13 +439,14 @@ pub use report::{
 };
 pub use report_export::{EXPORT_REPORTS, ExportFormat, ReportExportRequest, ReportExported};
 pub use restore::{
-    DEFAULT_BACKUP_LAST_RESTORE, EpochChangedEvent, KEY_BACKUP_LAST_RESTORE, ORPHAN_KEEP_DAYS,
-    OpsRestore, RESTORE_SYSTEM_ACTOR, RestoreCheck, RestoreCheckRequest, RestoreRequest,
-    RestoreStaged, restore_time_text, restore_warning,
+    CloudRestoreFacts, DEFAULT_BACKUP_LAST_RESTORE, EpochChangedEvent, KEY_BACKUP_LAST_RESTORE,
+    ORPHAN_KEEP_DAYS, OpsRestore, PAIR_AGAIN_TOKEN, RESTORE_SYSTEM_ACTOR, RestoreCheck,
+    RestoreCheckRequest, RestoreRequest, RestoreStaged, restore_time_text, restore_warning,
 };
 pub use restore_plan::{
     RestoreFetchPhase, RestoreFetchView, RestoreGapView, RestorePlan, RestorePlanBatch,
     RestorePlanRequest, RestorePlanSnapshot, RestorePosition, RestoreReadyView,
+    RestoreRebuildPhase, RestoreRebuildView,
 };
 pub use rollup::{
     ROLLUP_MIN_SCHEMA, ROLLUP_PLAYERS_CAP, ROLLUP_SCHEMA, RollupAged, RollupAmount, RollupByMethod,

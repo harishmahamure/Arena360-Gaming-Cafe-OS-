@@ -36,4 +36,9 @@ export type SnapshotDevice = {
    * Connected through the Cloudflare Tunnel, not the LAN (Story 8.41); filled by the snapshot handler.
    */
   remote?: boolean;
+  /**
+   * Restored from the cloud backup and not paired with this Hub yet: staff pair it again with
+   * the 6-digit code (Story 9.13).
+   */
+  pair_again?: boolean;
 };

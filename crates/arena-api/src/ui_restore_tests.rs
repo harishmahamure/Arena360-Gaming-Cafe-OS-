@@ -409,6 +409,7 @@ async fn the_direct_intent_route_does_not_take_ops_restore() {
         orphaned_file: "o.db".into(),
         restored_at: T0,
         by: None,
+        cloud: None,
     };
     let r = call(
         &f.hub,

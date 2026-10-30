@@ -79,6 +79,10 @@ pub async fn apply_at_start(
                         erasures_reapplied = done.restore.erasures_reapplied,
                         "restored the branch from an export file as a new epoch"
                     );
+                    if done.restore.cloud.is_some() {
+                        // The downloaded backup has done its work; the rebuilt branch is the copy.
+                        clear_cloud_staging(&db_path);
+                    }
                     Some(done)
                 }
                 Ok(None) => None,
@@ -110,6 +114,19 @@ pub async fn apply_at_start(
             tracing::error!(error = %e, "the restore start-up task failed");
             None
         }
+    }
+}
+
+/// Removes the folder of the downloaded cloud backup (Story 9.12) once it was rebuilt (Story 9.13).
+fn clear_cloud_staging(db_path: &Path) {
+    let Some(dir) = db_path.parent() else {
+        return;
+    };
+    let staging = dir.join(arena_tasks::RESTORE_STAGING_DIR);
+    if let Err(e) = std::fs::remove_dir_all(&staging)
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(error = %e, "the downloaded backup could not be removed after the rebuild");
     }
 }
 

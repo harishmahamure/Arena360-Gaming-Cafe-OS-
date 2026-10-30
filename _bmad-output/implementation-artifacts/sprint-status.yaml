@@ -257,7 +257,7 @@ development_status:
   8-33-owner-alerts-by-web-push-and-whatsapp-and-the-alerts-tab: done
   8-34-the-hub-raises-owner-alerts-for-cash-variance-low-stock-over: done
   8-35-the-cloud-alerts-the-owner-when-a-branch-goes-offline-during: done
-  8-36-the-audit-builder-rebuilds-a-branch-month-on-demand: backlog
+  8-36-the-audit-builder-rebuilds-a-branch-month-on-demand: review
   8-37-the-builder-serves-audit-queries-from-a-local-cache: backlog
   8-38-audit-search-in-reports-with-preparing-audit: backlog
   8-39-a-cloudflare-tunnel-for-entitled-branches-run-by-the-windows: backlog

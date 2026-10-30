@@ -40,13 +40,15 @@ jsonwebtoken.workspace = true
 base64.workspace = true
 p256.workspace = true
 hkdf.workspace = true
+tempfile.workspace = true
 aes-gcm.workspace = true
 
 [dev-dependencies]
 arena-proto = { workspace = true, features = ["dev-keys"] }
 rusqlite.workspace = true
 tower.workspace = true
-tempfile.workspace = true
 libsql.workspace = true
 hyper.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
+zstd.workspace = true
+rmp-serde.workspace = true

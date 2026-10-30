@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub const USAGE: &str =
-    "usage: arena-cloud --role control|command|all [--listen <addr:port>] [--help] [--version]
-       arena-cloud --role control|command|all --dev [--data-dir <dir>] [--listen <loopback addr:port>]
+    "usage: arena-cloud --role control|command|builder|all [--listen <addr:port>] [--help] [--version]
+       arena-cloud --role control|command|builder|all --dev [--data-dir <dir>] [--listen <loopback addr:port>]
        arena-cloud --role jobs --task control-backup|command-sweep|offline-watch [--dev [--data-dir <dir>]]
        arena-cloud ops restore-control (--from-key <key> | --from-file <path|->)
                                        (--identity <file> | --plaintext) [--dev [--data-dir <dir>]]
@@ -18,6 +18,9 @@ pub const USAGE: &str =
                                   [--dev [--data-dir <dir>]]
 
   --role all   every serving role this build has (control, command)
+  --role builder  rebuild the months owners ask to audit: claim queued builder_jobs, replay the
+               snapshot and batches into audit-cache/ (needs the data bucket; ARENA_BUILDER_DIR
+               sets the scratch directory, default the system temp directory)
   --role jobs  run one --task and exit (0 on success, 1 on failure)
   --task       control-backup: dump gz_control, age-encrypt it, put it in the backup bucket
                under gz_control/nightly/ and keep the newest 30
@@ -114,6 +117,8 @@ pub const DEFAULT_RETRY_WINDOW: Duration = Duration::from_secs(60);
 pub enum Role {
     Control,
     Command,
+    /// The audit builder (Story 8.36): replays queued months into `audit-cache/`.
+    Builder,
     /// Run one [`Task`] and exit.
     Jobs,
     All,
@@ -124,6 +129,7 @@ impl Role {
         match self {
             Self::Control => "control",
             Self::Command => "command",
+            Self::Builder => "builder",
             Self::Jobs => "jobs",
             Self::All => "all",
         }
@@ -544,9 +550,12 @@ pub fn parse(
         return Ok(cmd);
     }
     let role = match role.as_deref() {
-        None => return Err("--role is required (control, command, jobs or all)".to_owned()),
+        None => {
+            return Err("--role is required (control, command, builder, jobs or all)".to_owned());
+        }
         Some("control") => Role::Control,
         Some("command") => Role::Command,
+        Some("builder") => Role::Builder,
         Some("jobs") => Role::Jobs,
         Some("all") => Role::All,
         Some(other) => return Err(format!("role not available yet: {other}")),

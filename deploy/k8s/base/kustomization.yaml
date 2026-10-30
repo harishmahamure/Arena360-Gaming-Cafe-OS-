@@ -1,4 +1,4 @@
-# arena-cloud base: the control and command roles, their Services, the Traefik Ingress, the Cloudflare-only
+# arena-cloud base: the control, command and builder roles, their Services, the Traefik Ingress, the Cloudflare-only
 # origin lock and the nightly gz_control backup CronJob. Overlays set the namespace, host,
 # replicas, resources, image tag and backup bucket.
 apiVersion: kustomize.config.k8s.io/v1beta1
@@ -11,6 +11,7 @@ resources:
   - deployment.yaml
   - service.yaml
   - deployment-command.yaml
+  - deployment-builder.yaml
   - service-command.yaml
   - ingress.yaml
   - middleware-cloudflare-only.yaml

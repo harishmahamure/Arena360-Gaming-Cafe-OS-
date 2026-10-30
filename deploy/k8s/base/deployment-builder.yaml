@@ -1,0 +1,130 @@
+# Audit builder (Story 8.36, AD-37): `arena-cloud --role builder` claims queued `builder_jobs`, replays
+# a branch month from the data bucket into a temporary SQLite file and writes
+# `audit-cache/<yyyy-mm>.db.zst` back (the bucket expires that prefix after 24 hours). It serves only
+# /healthz, so there is no Service or Ingress. It needs the data bucket Secret `arena-cloud-data`
+# (ARENA_DATA_S3_*, see deploy/README.md); until that exists the references are optional, the pod
+# stops with "the builder needs the data bucket" and Kubernetes keeps restarting it. Temporary
+# databases live on an emptyDir (the root filesystem is read-only) and are deleted after each job.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: arena-cloud-builder
+  labels:
+    app.kubernetes.io/name: arena-cloud-builder
+    app.kubernetes.io/component: builder
+spec:
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: arena-cloud-builder
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: arena-cloud-builder
+        app.kubernetes.io/component: builder
+    spec:
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: ghcr-pull
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: 30
+      volumes:
+        - name: scratch
+          emptyDir:
+            sizeLimit: 20Gi
+      containers:
+        - name: builder
+          image: ghcr.io/arena360/arena-cloud:unset
+          imagePullPolicy: IfNotPresent
+          args: ["--role", "builder"]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: ARENA_BUILDER_DIR
+              value: /scratch
+            - name: ARENA_CONTROL_DB_URL
+              valueFrom:
+                secretKeyRef:
+                  name: arena-cloud-secrets
+                  key: ARENA_CONTROL_DB_URL
+            - name: ARENA_CONTROL_DB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: arena-cloud-secrets
+                  key: ARENA_CONTROL_DB_TOKEN
+            - name: ARENA_DATA_S3_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: arena-cloud-data
+                  key: ARENA_DATA_S3_ENDPOINT
+                  optional: true
+            - name: ARENA_DATA_S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: arena-cloud-data
+                  key: ARENA_DATA_S3_BUCKET
+                  optional: true
+            - name: ARENA_DATA_S3_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: arena-cloud-data
+                  key: ARENA_DATA_S3_ACCESS_KEY_ID
+                  optional: true
+            - name: ARENA_DATA_S3_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: arena-cloud-data
+                  key: ARENA_DATA_S3_SECRET_ACCESS_KEY
+                  optional: true
+          volumeMounts:
+            - name: scratch
+              mountPath: /scratch
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 18
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

@@ -15,6 +15,7 @@
 
 pub mod alert;
 pub mod api;
+pub mod audit_build;
 pub mod auth;
 pub mod backup;
 pub mod branch_code;
@@ -287,6 +288,25 @@ pub async fn serve(
         checked_at: None,
     });
     let db = Arc::new(db);
+    let worker = if role == Role::Builder {
+        let data = presign::Presigner::from_env(dev, &|k| std::env::var_os(k))
+            .map_err(|e| std::io::Error::other(format!("data bucket: {e}")))?
+            .ok_or_else(|| {
+                std::io::Error::other("the builder needs the data bucket (ARENA_DATA_S3_*)")
+            })?;
+        let scratch = std::env::var_os("ARENA_BUILDER_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let builder = Arc::new(audit_build::AuditBuilder::new(
+            Arc::clone(&db),
+            data,
+            system_clock(),
+            scratch,
+        ));
+        Some(tokio::spawn(audit_build::run_worker(builder)))
+    } else {
+        None
+    };
     let auth = match auth {
         Some(cfg) => Some(
             auth_state(Arc::clone(&db), &cfg, system_clock())
@@ -344,5 +364,8 @@ pub async fn serve(
     .with_graceful_shutdown(shutdown)
     .await;
     check.abort();
+    if let Some(worker) = worker {
+        worker.abort();
+    }
     served
 }

@@ -10,6 +10,7 @@ mod admin;
 mod alert;
 mod attract;
 mod audit;
+mod audit_build;
 mod billing;
 mod booster;
 mod catalog;
@@ -106,6 +107,10 @@ pub use audit::{
     AUDIT_DEFAULT_LIMIT, AUDIT_MAX_LIMIT, AuditActor, AuditActorKind, AuditAdminExit, AuditDetail,
     AuditElevatedBy, AuditElevationKind, AuditElevationMode, AuditFacets, AuditImage, AuditItem,
     AuditPage, AuditStaffOption, AuditValue, ELEVATION_HEADER,
+};
+pub use audit_build::{
+    AUDIT_BUILD_STALE_MS, AUDIT_BUILDS_PER_HOUR, AUDIT_CACHE_TTL_MS, AuditBuildRequest,
+    AuditBuildState, AuditBuildStatus, audit_month_start, is_audit_month,
 };
 pub use billing::{
     BILLING_GRACE_RANGE, BILLING_LOW_BALANCE_MAX_MINOR, BILLING_MINIMUM_RANGE,

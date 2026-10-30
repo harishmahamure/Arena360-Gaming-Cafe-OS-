@@ -187,6 +187,11 @@ pub enum ErrorCode {
     /// A sensitive owner command was posted without a step-up proof younger than 5 minutes
     /// (Story 8.25).
     MfaRequired,
+    /// The month asked for is queued or being rebuilt by the audit builder (Story 8.36).
+    AuditBuilding,
+    /// The audit builder could not rebuild the month: a batch is missing or does not match its
+    /// checksum (Story 8.36).
+    AuditBuildFailed,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -300,6 +305,8 @@ impl ErrorCode {
             Self::BranchUpdateRequired => "BRANCH_UPDATE_REQUIRED",
             Self::CommandExpired => "COMMAND_EXPIRED",
             Self::MfaRequired => "MFA_REQUIRED",
+            Self::AuditBuilding => "AUDIT_BUILDING",
+            Self::AuditBuildFailed => "AUDIT_BUILD_FAILED",
         }
     }
 }
@@ -474,6 +481,8 @@ mod tests {
             (ErrorCode::BranchUpdateRequired, "BRANCH_UPDATE_REQUIRED"),
             (ErrorCode::CommandExpired, "COMMAND_EXPIRED"),
             (ErrorCode::MfaRequired, "MFA_REQUIRED"),
+            (ErrorCode::AuditBuilding, "AUDIT_BUILDING"),
+            (ErrorCode::AuditBuildFailed, "AUDIT_BUILD_FAILED"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

@@ -90,8 +90,17 @@ fn the_command_role_parses() {
 }
 
 #[test]
+fn the_builder_role_parses_and_serves_like_the_others() {
+    let Ok(Command::Run(c)) = parse(args(&["--role", "builder"]), env_of(TURSO)) else {
+        panic!("expected run");
+    };
+    assert_eq!(c.role, Role::Builder);
+    assert_eq!(c.role.as_str(), "builder");
+}
+
+#[test]
 fn other_roles_are_not_available_yet() {
-    for role in ["builder", "worker"] {
+    for role in ["worker", "ingester"] {
         let e = parse(args(&["--role", role]), env_of(TURSO)).unwrap_err();
         assert!(e.contains("role not available yet"), "{e}");
         assert!(e.contains(role), "{e}");

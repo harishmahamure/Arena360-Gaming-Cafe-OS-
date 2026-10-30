@@ -106,6 +106,8 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::BranchUpdateRequired
         | ErrorCode::CommandExpired => StatusCode::CONFLICT,
         ErrorCode::PairPinPaused => StatusCode::TOO_MANY_REQUESTS,
+        ErrorCode::AuditBuilding => StatusCode::ACCEPTED,
+        ErrorCode::AuditBuildFailed => StatusCode::BAD_GATEWAY,
         ErrorCode::SchemaTooNew | ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
@@ -337,6 +339,8 @@ mod tests {
             (ErrorCode::RollupSchemaOld, 409),
             (ErrorCode::BranchUpdateRequired, 409),
             (ErrorCode::CommandExpired, 409),
+            (ErrorCode::AuditBuilding, 202),
+            (ErrorCode::AuditBuildFailed, 502),
         ] {
             assert_eq!(status_of(code).as_u16(), status, "{code:?}");
         }

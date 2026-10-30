@@ -374,6 +374,12 @@ stringData:
 #   ARENA_DATA_S3_BUCKET: <the environment's data bucket>
 #   ARENA_DATA_S3_ACCESS_KEY_ID: <R2 token with write access to that bucket>
 #   ARENA_DATA_S3_SECRET_ACCESS_KEY: <its secret>
+# Story 8.36: the audit builder (`deployment-builder.yaml`) reads the same Secret (optional
+# references, so the pod starts, stops with "the builder needs the data bucket" and is restarted
+# until it exists) and writes `audit-cache/<yyyy-mm>.db.zst` under each branch's prefix. The
+# builder itself deletes a month 24 hours after it was built; R2 lifecycle rules match only a
+# key prefix from its start, and the branch prefix comes first, so no single bucket rule can
+# expire these objects.
 ---
 apiVersion: v1
 kind: Secret

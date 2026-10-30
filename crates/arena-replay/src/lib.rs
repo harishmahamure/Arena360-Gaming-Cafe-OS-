@@ -5,11 +5,22 @@
 //! change's MessagePack row into its table; a delete removes the row with that key. Only the
 //! change-log tables ([`Table::ALL`]: `branch`, `settings`, `devices`) may be written. Replaying a
 //! database's whole log must reproduce its rows exactly.
+//!
+//! [`replay_history`] is the same replay for the audit builder (Story 8.36): it honours fork points,
+//! can continue after a snapshot, and [`MonthBuilder`] drives it batch by batch into a file that
+//! becomes `audit-cache/<yyyy-mm>.db.zst`. [`state_checksum`] fingerprints the rows so a rebuilt
+//! database can be compared with the Hub's.
 
 use arena_proto::{AppError, ErrorCode};
 use arena_store::{
-    ChangeOp, ChangeRecord, Row, RowKey, StoreTx, Table, delete_row, has_branch_data, upsert_row,
+    ChangeOp, ChangeRecord, Row, RowKey, Store, StoreTx, Table, delete_row, has_branch_data,
+    upsert_row,
 };
+use sha2::{Digest, Sha256};
+
+mod audit;
+
+pub use audit::{BuiltMonth, MonthBuilder};
 
 fn bad(message: String) -> AppError {
     AppError::new(ErrorCode::Internal, message)
@@ -23,6 +34,39 @@ fn epoch_key(epoch: &str) -> Result<(i64, &str), AppError> {
         .ok_or_else(|| bad(format!("malformed epoch {epoch:?}")))
 }
 
+/// Where an epoch was forked from: rows of `parent_epoch` above `parent_seq` were written by a Hub
+/// that was replaced, and are never replayed into state (AD-4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpochFork {
+    pub epoch: String,
+    pub parent_epoch: String,
+    pub parent_seq: i64,
+}
+
+/// The last change a destination already holds (a snapshot's position): replay continues after it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resume {
+    pub epoch: String,
+    pub seq: i64,
+}
+
+impl Resume {
+    /// Whether `c` is at or before this position in log order.
+    pub fn covers(&self, c: &ChangeRecord) -> Result<bool, AppError> {
+        let at = (epoch_key(&self.epoch)?, self.seq);
+        Ok((epoch_key(&c.epoch)?, c.seq) <= at)
+    }
+}
+
+/// What [`replay_history`] did.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Replayed {
+    /// The changes applied to state, in log order.
+    pub applied: Vec<ChangeRecord>,
+    /// Rows above a fork point, kept out of state, in log order.
+    pub orphaned: Vec<ChangeRecord>,
+}
+
 /// Replays `changes` into `dest`. Fails `INTERNAL`, writing nothing the caller commits, on a
 /// destination that already has branch, settings or change rows; a table outside the
 /// allow-list; a malformed epoch or row; a row whose key does not match its `row_id`; a delete
@@ -34,21 +78,83 @@ pub fn replay(
     if has_branch_data(dest)? {
         return Err(bad("replay destination is not empty".to_owned()));
     }
-    let mut changes: Vec<ChangeRecord> = changes.into_iter().collect();
-    for c in &changes {
+    Ok(apply(changes, &[], None, dest)?.applied.len())
+}
+
+/// Replays `changes` onto `dest` honouring `forks` (Story 8.36, the audit builder). With `resume`
+/// the destination already holds the log up to that position (a snapshot, or the previous
+/// batch): changes at or before it are skipped. With none, the destination must be empty. Rows
+/// of a forked epoch's parent above its fork point come back in [`Replayed::orphaned`] and are
+/// not applied; a forked epoch starts at `parent_seq + 1`. Fails as [`replay`] does, and when
+/// `resume` is itself above a fork point of its epoch.
+pub fn replay_history(
+    changes: impl IntoIterator<Item = ChangeRecord>,
+    forks: &[EpochFork],
+    resume: Option<&Resume>,
+    dest: &mut StoreTx<'_>,
+) -> Result<Replayed, AppError> {
+    if resume.is_none() && has_branch_data(dest)? {
+        return Err(bad("replay destination is not empty".to_owned()));
+    }
+    apply(changes, forks, resume, dest)
+}
+
+fn apply(
+    changes: impl IntoIterator<Item = ChangeRecord>,
+    forks: &[EpochFork],
+    resume: Option<&Resume>,
+    dest: &mut StoreTx<'_>,
+) -> Result<Replayed, AppError> {
+    if let Some(r) = resume {
+        epoch_key(&r.epoch)?;
+        if let Some(f) = forks
+            .iter()
+            .find(|f| f.parent_epoch == r.epoch && f.parent_seq < r.seq)
+        {
+            return Err(bad(format!(
+                "the starting point {}:{} is above the fork point {} of epoch {}",
+                r.epoch, r.seq, f.parent_seq, f.epoch
+            )));
+        }
+    }
+    let mut all: Vec<ChangeRecord> = changes.into_iter().collect();
+    for c in &all {
         epoch_key(&c.epoch)?;
     }
-    changes.sort_by(|a, b| {
+    all.sort_by(|a, b| {
         let ka = epoch_key(&a.epoch).expect("checked");
         let kb = epoch_key(&b.epoch).expect("checked");
         ka.cmp(&kb).then(a.seq.cmp(&b.seq))
     });
 
+    let mut out = Replayed::default();
+    for c in all {
+        if let Some(r) = resume
+            && r.covers(&c)?
+        {
+            continue;
+        }
+        let orphan = forks
+            .iter()
+            .any(|f| f.parent_epoch == c.epoch && c.seq > f.parent_seq);
+        if orphan {
+            out.orphaned.push(c);
+        } else {
+            out.applied.push(c);
+        }
+    }
+
     let mut prev: Option<(&str, i64)> = None;
-    for c in &changes {
+    for c in &out.applied {
         let expected = match prev {
             Some((epoch, seq)) if epoch == c.epoch => seq + 1,
-            _ => 1,
+            _ => match resume {
+                Some(r) if r.epoch == c.epoch => r.seq + 1,
+                _ => forks
+                    .iter()
+                    .find(|f| f.epoch == c.epoch)
+                    .map_or(1, |f| f.parent_seq + 1),
+            },
         };
         if c.seq != expected {
             return Err(bad(format!(
@@ -83,7 +189,24 @@ pub fn replay(
             }
         }
     }
-    Ok(changes.len())
+    Ok(out)
+}
+
+/// A SHA-256 over every row of every change-log table, in primary-key order: two databases with
+/// the same checksum hold the same branch rows. The audit builder's round-trip test compares the
+/// Hub's against the rebuilt database's.
+pub fn state_checksum(store: &Store) -> Result<String, AppError> {
+    let mut hash = Sha256::new();
+    for table in Table::ALL {
+        hash.update(table.name().as_bytes());
+        for row in store.rows(table)? {
+            let bytes = rmp_serde::to_vec_named(&row)
+                .map_err(|e| bad(format!("checksum {}: {e}", table.name())))?;
+            hash.update((bytes.len() as u64).to_le_bytes());
+            hash.update(&bytes);
+        }
+    }
+    Ok(hash.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
 #[cfg(test)]
@@ -1754,5 +1877,229 @@ mod tests {
         assert!(epoch_key("1:B").unwrap() > epoch_key("1:A").unwrap());
         assert!(epoch_key("x:A").is_err());
         assert!(epoch_key("1").is_err());
+    }
+
+    // ---- the audit builder (Story 8.36) ----
+
+    fn batches_of(changes: &[ChangeRecord], size: usize) -> Vec<arena_store::DecodedBatch> {
+        let mut epochs: Vec<&str> = changes.iter().map(|c| c.epoch.as_str()).collect();
+        epochs.dedup();
+        let mut out = Vec::new();
+        for epoch in epochs {
+            let rows: Vec<ChangeRecord> = changes
+                .iter()
+                .filter(|c| c.epoch == epoch)
+                .cloned()
+                .collect();
+            for chunk in rows.chunks(size) {
+                out.push(arena_store::DecodedBatch {
+                    header: arena_store::BatchHeader {
+                        epoch: epoch.to_owned(),
+                        fork: None,
+                        first: chunk[0].seq,
+                        last: chunk[chunk.len() - 1].seq,
+                        sha256: String::new(),
+                        schema: 0,
+                    },
+                    rows: chunk.to_vec(),
+                });
+            }
+        }
+        out
+    }
+
+    fn month_of(changes: &[ChangeRecord]) -> String {
+        changes
+            .iter()
+            .filter_map(|c| c.business_day.as_deref())
+            .map(|d| d[..7].to_owned())
+            .max()
+            .expect("a change with a business day")
+    }
+
+    fn build(
+        dir: &std::path::Path,
+        month: &str,
+        snapshot: Option<&[u8]>,
+        forks: Vec<EpochFork>,
+        batches: &[arena_store::DecodedBatch],
+    ) -> Result<BuiltMonth, AppError> {
+        let mut b = MonthBuilder::open(dir, month, snapshot, forks, T0)?;
+        for batch in batches {
+            if !b.apply(batch)? {
+                break;
+            }
+        }
+        b.finish()
+    }
+
+    #[tokio::test]
+    async fn a_month_rebuilt_from_batches_has_the_hubs_checksum() {
+        let (_a, source) = seeded_with_device().await;
+        let changes = source.changes().unwrap();
+        let month = month_of(&changes);
+        let work = tempfile::tempdir().unwrap();
+        let built = build(work.path(), &month, None, vec![], &batches_of(&changes, 3)).unwrap();
+        assert_eq!(built.checksum, state_checksum(&source).unwrap());
+        assert_eq!(built.applied, changes.len());
+        assert_eq!(built.orphaned, 0);
+        let last = changes.last().unwrap();
+        assert_eq!(
+            (built.epoch.as_str(), built.seq),
+            (last.epoch.as_str(), last.seq)
+        );
+    }
+
+    #[tokio::test]
+    async fn the_rebuilt_database_keeps_the_change_log_for_audit_search() {
+        let (_a, source) = seeded_with_device().await;
+        let changes = source.changes().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let built = build(
+            work.path(),
+            &month_of(&changes),
+            None,
+            vec![],
+            &batches_of(&changes, 4),
+        )
+        .unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let path = out.path().join("audit.db");
+        std::fs::write(&path, zstd::decode_all(&built.bytes[..]).unwrap()).unwrap();
+        let rebuilt = Store::open(&path, T0).unwrap();
+        assert_eq!(rebuilt.changes().unwrap().len(), changes.len());
+    }
+
+    #[tokio::test]
+    async fn a_build_resumes_after_a_snapshot_and_skips_what_it_holds() {
+        let (_a, source) = seeded_with_device().await;
+        let changes = source.changes().unwrap();
+        let month = month_of(&changes);
+        let all = batches_of(&changes, 3);
+        assert!(all.len() > 2, "the fixture spans several batches");
+
+        // A snapshot of the log up to its second batch.
+        let early = tempfile::tempdir().unwrap();
+        let snap = build(early.path(), &month, None, vec![], &all[..2]).unwrap();
+        let held = snap.applied;
+
+        // Every batch is offered; the two the snapshot holds are skipped.
+        let work = tempfile::tempdir().unwrap();
+        let built = build(work.path(), &month, Some(&snap.bytes), vec![], &all).unwrap();
+        assert_eq!(built.applied, changes.len() - held);
+        assert_eq!(built.checksum, state_checksum(&source).unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_hub_snapshot_alone_rebuilds_the_same_rows() {
+        let (a, source) = seeded_with_device().await;
+        let snap = arena_store::build_snapshot_file(source.path(), a.path(), "2027-01-15").unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let built = build(
+            work.path(),
+            "2027-01",
+            Some(&snap.read().unwrap()),
+            vec![],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(built.checksum, state_checksum(&source).unwrap());
+        assert_eq!(built.applied, 0);
+        assert_eq!(built.seq, snap.last_seq);
+    }
+
+    #[tokio::test]
+    async fn replay_stops_at_the_first_change_of_a_later_month() {
+        let (_a, source) = seeded_with_device().await;
+        let mut changes = source.changes().unwrap();
+        let month = month_of(&changes);
+        let last = changes.len() - 1;
+        changes[last].business_day = Some("2099-12-31".to_owned());
+        let work = tempfile::tempdir().unwrap();
+        let built = build(work.path(), &month, None, vec![], &batches_of(&changes, 3)).unwrap();
+        assert_eq!(built.applied, changes.len() - 1);
+        assert_ne!(built.checksum, state_checksum(&source).unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_missing_batch_fails_the_build() {
+        let (_a, source) = seeded_with_device().await;
+        let changes = source.changes().unwrap();
+        let mut all = batches_of(&changes, 3);
+        all.remove(1);
+        let work = tempfile::tempdir().unwrap();
+        let err = build(work.path(), &month_of(&changes), None, vec![], &all).unwrap_err();
+        assert!(err.message.contains("seq gap"), "{}", err.message);
+    }
+
+    #[tokio::test]
+    async fn rows_above_a_fork_point_are_kept_apart_not_replayed() {
+        let (_a, source) = seeded_with_device().await;
+        let mut changes: Vec<ChangeRecord> = source.changes().unwrap();
+        for c in &mut changes {
+            c.epoch = "1:A".to_owned();
+        }
+        let month = month_of(&changes);
+        let n = changes.len() as i64;
+        // The last change was written by a Hub that was replaced: epoch 2 continues from n - 1.
+        let setting = changes
+            .iter()
+            .rfind(|c| c.tbl == "settings")
+            .unwrap()
+            .clone();
+        let mut row: Row = rmp_serde::from_slice(&setting.row).unwrap();
+        row.insert("value".into(), RowValue::Text("forked".into()));
+        let second = ChangeRecord {
+            epoch: "2:B".to_owned(),
+            seq: n,
+            op: ChangeOp::Update,
+            row: rmp_serde::to_vec_named(&row).unwrap(),
+            ..setting
+        };
+        let mut log = changes.clone();
+        log.push(second);
+        let forks = vec![EpochFork {
+            epoch: "2:B".into(),
+            parent_epoch: "1:A".into(),
+            parent_seq: n - 1,
+        }];
+        let work = tempfile::tempdir().unwrap();
+        let built = build(work.path(), &month, None, forks, &batches_of(&log, 3)).unwrap();
+        assert_eq!(built.orphaned, 1);
+        assert_eq!(built.applied, log.len() - 1);
+        assert_eq!((built.epoch.as_str(), built.seq), ("2:B", n));
+
+        let out = tempfile::tempdir().unwrap();
+        let path = out.path().join("audit.db");
+        std::fs::write(&path, zstd::decode_all(&built.bytes[..]).unwrap()).unwrap();
+        let rebuilt = Store::open(&path, T0).unwrap();
+        assert!(rebuilt.rows(Table::Settings).unwrap().contains(&row));
+        let orphans: i64 = arena_store::DbConn::open(&path)
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM orphaned_changes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(orphans, 1);
+    }
+
+    #[tokio::test]
+    async fn a_snapshot_above_a_fork_point_cannot_be_resumed() {
+        let (_a, source) = seeded_with_device().await;
+        let changes = source.changes().unwrap();
+        let month = month_of(&changes);
+        let work = tempfile::tempdir().unwrap();
+        let snap = build(work.path(), &month, None, vec![], &batches_of(&changes, 3)).unwrap();
+        let forks = vec![EpochFork {
+            epoch: "9:Z".into(),
+            parent_epoch: changes[0].epoch.clone(),
+            parent_seq: 1,
+        }];
+        let work2 = tempfile::tempdir().unwrap();
+        let mut b = MonthBuilder::open(work2.path(), &month, Some(&snap.bytes), forks, T0).unwrap();
+        let err = b.apply(&batches_of(&changes, 3)[0]).unwrap_err();
+        assert!(
+            err.message.contains("above the fork point"),
+            "{}",
+            err.message
+        );
     }
 }

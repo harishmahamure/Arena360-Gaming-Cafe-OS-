@@ -68,7 +68,7 @@ fn help_and_version_exit_zero() {
 #[test]
 fn bad_role_exits_64() {
     let o = run(cloud()
-        .args(["--role", "builder"])
+        .args(["--role", "worker"])
         .env("ARENA_CONTROL_DB_URL", "libsql://x.turso.io")
         .env("ARENA_CONTROL_DB_TOKEN", "t"));
     assert_eq!(o.status.code(), Some(64));

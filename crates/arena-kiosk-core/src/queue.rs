@@ -107,6 +107,7 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::CommandExpired
         | ErrorCode::ControllersUnchecked
         | ErrorCode::DeviceUnassigned => true,
+        ErrorCode::AuditBuilding | ErrorCode::AuditBuildFailed => false,
         ErrorCode::BadFrame
         | ErrorCode::HsnRequired
         | ErrorCode::BarcodeTaken

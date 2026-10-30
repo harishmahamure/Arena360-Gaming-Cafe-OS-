@@ -194,6 +194,7 @@ dependencies = [
  "qrcode",
  "reqwest",
  "ring",
+ "rmp-serde",
  "rusqlite",
  "rustls 0.23.46",
  "serde",
@@ -207,6 +208,7 @@ dependencies = [
  "tracing-subscriber",
  "ulid",
  "webpki-roots 1.0.9",
+ "zstd",
 ]
 
 [[package]]
@@ -378,9 +380,12 @@ dependencies = [
  "arena-proto",
  "arena-store",
  "rmp-serde",
+ "rusqlite",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "ulid",
+ "zstd",
 ]
 
 [[package]]

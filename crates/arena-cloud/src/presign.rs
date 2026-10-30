@@ -181,6 +181,25 @@ impl Presigner {
         .map_err(|e| e.to_string())
     }
 
+    /// Writes `body` to `key` in the data bucket with the same credentials as the links (Story
+    /// 8.36: the audit builder's output).
+    pub async fn put(&self, key: &str, body: Vec<u8>) -> Result<(), String> {
+        match &self.listing {
+            Some(mem) => mem.put(key, body).await,
+            None => self.lister.put(key, body).await,
+        }
+        .map_err(|e| e.to_string())
+    }
+
+    /// Removes `key` from the data bucket (no error when it is already gone).
+    pub async fn delete(&self, key: &str) -> Result<(), String> {
+        match &self.listing {
+            Some(mem) => mem.delete(key).await,
+            None => self.lister.delete(key).await,
+        }
+        .map_err(|e| e.to_string())
+    }
+
     /// The ETag of `key` in the data bucket, or none when it is not there (Story 8.9).
     pub async fn head(&self, key: &str) -> Result<Option<String>, String> {
         match &self.listing {

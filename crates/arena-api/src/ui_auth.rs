@@ -954,6 +954,8 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::RollupSchemaOld
         | ErrorCode::BranchUpdateRequired
         | ErrorCode::CommandExpired => StatusCode::CONFLICT,
+        ErrorCode::AuditBuilding => StatusCode::ACCEPTED,
+        ErrorCode::AuditBuildFailed => StatusCode::BAD_GATEWAY,
         ErrorCode::HubIncompatible => StatusCode::CONFLICT,
         ErrorCode::PairPinPaused => StatusCode::TOO_MANY_REQUESTS,
         ErrorCode::TokenRevoked | ErrorCode::TokenInvalid => StatusCode::UNAUTHORIZED,

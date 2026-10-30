@@ -14,6 +14,7 @@
 
 pub mod account;
 pub mod alerts;
+mod audit;
 pub mod branches;
 mod catalog;
 pub mod commands;
@@ -83,6 +84,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>, commands_only: bool) -> Router {
             .merge(wizard_golive::router(Arc::clone(st)))
             .merge(branches::router(Arc::clone(st)))
             .merge(owner_read::router(Arc::clone(st)))
+            .merge(audit::router(Arc::clone(st)))
             .merge(alerts::router(Arc::clone(st)))
             .merge(catalog::router(Arc::clone(st)))
             .merge(pair::router(Arc::clone(st)))

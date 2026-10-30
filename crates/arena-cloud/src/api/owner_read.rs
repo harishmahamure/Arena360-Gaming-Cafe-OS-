@@ -58,7 +58,7 @@ fn not_entitled() -> ApiError {
 }
 
 /// The branches a call is about, after the tenant's rate limit and the entitlement check.
-async fn branches_for(
+pub(super) async fn branches_for(
     st: &AuthState,
     owner_id: &str,
     id: &str,

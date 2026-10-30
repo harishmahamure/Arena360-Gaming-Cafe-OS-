@@ -139,12 +139,17 @@ async fn main() -> ExitCode {
         }
     };
 
-    let auth = match config::auth_from_env(cfg.dev(), &|k| std::env::var_os(k)) {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("arena-cloud: {e}");
-            eprintln!("{}", config::USAGE);
-            return ExitCode::from(EXIT_USAGE);
+    // The builder serves no owner or Hub routes, so it needs no sign-up, SMS or licence settings.
+    let auth = if cfg.role == config::Role::Builder {
+        None
+    } else {
+        match config::auth_from_env(cfg.dev(), &|k| std::env::var_os(k)) {
+            Ok(a) => Some(a),
+            Err(e) => {
+                eprintln!("arena-cloud: {e}");
+                eprintln!("{}", config::USAGE);
+                return ExitCode::from(EXIT_USAGE);
+            }
         }
     };
 
@@ -169,14 +174,16 @@ async fn main() -> ExitCode {
         role = cfg.role.as_str(),
         version = env!("CARGO_PKG_VERSION"),
         listen = %cfg.listen,
-        sms_provider = match auth.sms {
-            config::SmsProviderConfig::Fake => "fake",
-            config::SmsProviderConfig::Gupshup(_) => "gupshup",
+        sms_provider = match auth.as_ref().map(|a| &a.sms) {
+            None => "none",
+            Some(config::SmsProviderConfig::Fake) => "fake",
+            Some(config::SmsProviderConfig::Gupshup(_)) => "gupshup",
         },
-        web_origins = ?auth.web_origins,
+        web_origins = ?auth.as_ref().map(|a| &a.web_origins),
         "starting"
     );
-    if !cfg.dev()
+    if let Some(auth) = auth.as_ref()
+        && !cfg.dev()
         && !auth
             .licence
             .trusted_by(arena_proto::licence::LICENCE_VERIFY_KEYS)
@@ -240,7 +247,7 @@ async fn main() -> ExitCode {
         dev: cfg.dev(),
         migration_version,
         check_interval: CHECK_INTERVAL,
-        auth: Some(auth),
+        auth,
     };
     match serve(listener, db, opts, shutdown()).await {
         Ok(()) => {

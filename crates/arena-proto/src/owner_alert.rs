@@ -16,6 +16,12 @@ pub const OWNER_ALERT_PARAM_MAX_CHARS: usize = 40;
 pub const OWNER_ALERTS_PAGE: usize = 30;
 /// The most alerts one page holds.
 pub const OWNER_ALERTS_PAGE_MAX: usize = 100;
+/// The setting that holds a branch's [`OwnerAlertThresholds`] (Story 8.34).
+pub const KEY_OWNER_ALERT_THRESHOLDS: &str = "owner_alert.thresholds";
+/// The default value of [`KEY_OWNER_ALERT_THRESHOLDS`]: [`OwnerAlertThresholds::default`] as JSON.
+pub const DEFAULT_OWNER_ALERT_THRESHOLDS: &str = r#"{"cash_variance_minor":null,"large_refund_minor":50000,"large_discount_minor":20000,"large_discount_percent":20}"#;
+/// The largest money threshold, in minor units.
+pub const OWNER_ALERT_MAX_MINOR: i64 = 100_000_000;
 /// Push subscriptions one owner may keep.
 pub const PUSH_SUBSCRIPTIONS_MAX: u32 = 10;
 /// How long a push service keeps a message it cannot deliver yet, in seconds.
@@ -61,6 +67,20 @@ impl OwnerAlertKind {
         Self::BranchOffline,
     ];
 
+    /// The kinds a Hub raises through `POST /v1/notify` (Story 8.34).
+    pub const HUB_SOURCED: [Self; 5] = [
+        Self::CashVariance,
+        Self::LowStock,
+        Self::CreditOverdue,
+        Self::LargeRefund,
+        Self::LargeDiscount,
+    ];
+
+    /// Whether a Hub may raise this kind.
+    pub fn hub_sourced(self) -> bool {
+        Self::HUB_SOURCED.contains(&self)
+    }
+
     /// The wire name.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -94,6 +114,7 @@ impl OwnerAlertKind {
     pub fn optional_params(self) -> &'static [&'static str] {
         match self {
             Self::CreditOverdue => &["player_id"],
+            Self::CashVariance => &["reason"],
             _ => &[],
         }
     }
@@ -140,11 +161,17 @@ impl OwnerAlertKind {
         let p = |name: &str| params.get(name).map_or("-", String::as_str);
         match self {
             Self::Test => "Test alert. Alerts from your branches will reach you here.".to_owned(),
-            Self::CashVariance => format!(
-                "Cash is off by {} at the close of the {} shift.",
-                p("amount"),
-                p("shift")
-            ),
+            Self::CashVariance => {
+                let reason = params
+                    .get("reason")
+                    .map(|r| format!(" ({r})"))
+                    .unwrap_or_default();
+                format!(
+                    "Cash is off by {} at the close of the {} shift{reason}.",
+                    p("amount"),
+                    p("shift")
+                )
+            }
             Self::LowStock => format!("{} is running low: {} left.", p("product"), p("qty")),
             Self::CreditOverdue => {
                 let days = p("days");
@@ -171,6 +198,58 @@ impl OwnerAlertKind {
             Self::CreditOverdue => format!("/reports?tab=credit&branch={branch_id}"),
             Self::LargeRefund | Self::LargeDiscount => format!("/reports?branch={branch_id}"),
         }
+    }
+}
+
+/// The per-branch limits above which the Hub raises an alert (setting
+/// [`KEY_OWNER_ALERT_THRESHOLDS`], a JSON object; Story 8.34).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OwnerAlertThresholds {
+    /// A shift closed with the cash off by more than this; `None` is the branch's own variance
+    /// threshold.
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub cash_variance_minor: Option<i64>,
+    /// A refund of more than this.
+    #[ts(type = "number")]
+    pub large_refund_minor: i64,
+    /// A manual discount of more than this.
+    #[ts(type = "number")]
+    pub large_discount_minor: i64,
+    /// A manual discount of more than this percent of the bill before it.
+    #[ts(type = "number")]
+    pub large_discount_percent: i64,
+}
+
+impl Default for OwnerAlertThresholds {
+    fn default() -> Self {
+        Self {
+            cash_variance_minor: None,
+            large_refund_minor: 50_000,
+            large_discount_minor: 20_000,
+            large_discount_percent: 20,
+        }
+    }
+}
+
+impl OwnerAlertThresholds {
+    /// Reads the setting's JSON: every field but `cash_variance_minor` present, nothing unknown,
+    /// money in `0..=`[`OWNER_ALERT_MAX_MINOR`] and the percent in `1..=100`.
+    pub fn parse(json: &str) -> Option<Self> {
+        let t: Self = serde_json::from_str(json).ok()?;
+        let money = |v: i64| (0..=OWNER_ALERT_MAX_MINOR).contains(&v);
+        (t.cash_variance_minor.is_none_or(money)
+            && money(t.large_refund_minor)
+            && money(t.large_discount_minor)
+            && (1..=100).contains(&t.large_discount_percent))
+        .then_some(t)
+    }
+
+    /// The setting's JSON.
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
     }
 }
 
@@ -425,6 +504,59 @@ mod tests {
             err(&params(&[("product", "Co\nla"), ("qty", "3")])),
             "product"
         );
+    }
+
+    #[test]
+    fn a_cash_variance_line_carries_its_reason() {
+        let mut p = sample(OwnerAlertKind::CashVariance);
+        p.insert("reason".into(), "counting error".into());
+        assert_eq!(OwnerAlertKind::CashVariance.check_params(&p), Ok(()));
+        assert_eq!(
+            OwnerAlertKind::CashVariance.text(&p),
+            "Cash is off by Rs 250 at the close of the evening shift (counting error)."
+        );
+    }
+
+    #[test]
+    fn the_hub_raises_five_kinds() {
+        assert_eq!(OwnerAlertKind::HUB_SOURCED.len(), 5);
+        assert!(OwnerAlertKind::LowStock.hub_sourced());
+        assert!(!OwnerAlertKind::Test.hub_sourced());
+        assert!(!OwnerAlertKind::BranchOffline.hub_sourced());
+    }
+
+    #[test]
+    fn thresholds_parse_strictly() {
+        let d = OwnerAlertThresholds::default();
+        assert_eq!(OwnerAlertThresholds::parse(&d.to_json()), Some(d));
+        assert_eq!(d.to_json(), DEFAULT_OWNER_ALERT_THRESHOLDS);
+        let ok = |j: &str| OwnerAlertThresholds::parse(j).is_some();
+        assert!(ok(
+            r#"{"large_refund_minor":0,"large_discount_minor":1,"large_discount_percent":100}"#
+        ));
+        assert!(ok(
+            r#"{"cash_variance_minor":0,"large_refund_minor":1,"large_discount_minor":1,"large_discount_percent":1}"#
+        ));
+        assert!(!ok(r#"{"large_refund_minor":1}"#));
+        assert!(!ok(
+            r#"{"large_refund_minor":-1,"large_discount_minor":1,"large_discount_percent":1}"#
+        ));
+        assert!(!ok(
+            r#"{"large_refund_minor":1,"large_discount_minor":1,"large_discount_percent":0}"#
+        ));
+        assert!(!ok(
+            r#"{"large_refund_minor":1,"large_discount_minor":1,"large_discount_percent":101}"#
+        ));
+        assert!(!ok(
+            r#"{"cash_variance_minor":-5,"large_refund_minor":1,"large_discount_minor":1,"large_discount_percent":1}"#
+        ));
+        assert!(!ok(
+            r#"{"large_refund_minor":100000001,"large_discount_minor":1,"large_discount_percent":1}"#
+        ));
+        assert!(!ok(
+            r#"{"large_refund_minor":1,"large_discount_minor":1,"large_discount_percent":1,"x":1}"#
+        ));
+        assert!(!ok("nope"));
     }
 
     #[test]

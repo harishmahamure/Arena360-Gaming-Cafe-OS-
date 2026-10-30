@@ -305,6 +305,7 @@ export type { OwnerAlertList } from "./OwnerAlertList";
 export type { OwnerAlertPush } from "./OwnerAlertPush";
 export type { OwnerAlertSettings } from "./OwnerAlertSettings";
 export type { OwnerAlertSettingsPatch } from "./OwnerAlertSettingsPatch";
+export type { OwnerAlertThresholds } from "./OwnerAlertThresholds";
 export type { OwnerAlertView } from "./OwnerAlertView";
 export type { OwnerBranch } from "./OwnerBranch";
 export type { OwnerCommandList } from "./OwnerCommandList";

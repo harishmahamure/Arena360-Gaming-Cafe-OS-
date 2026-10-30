@@ -109,6 +109,7 @@ pub(super) fn queue_on_settle(
             not_before: now_ms + UNDO_WINDOW_MS,
             params: None,
             reminder_day: None,
+            source_ref: None,
         },
     )?;
     written.push(Written {

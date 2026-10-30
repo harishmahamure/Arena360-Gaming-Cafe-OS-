@@ -244,10 +244,10 @@ pub use notify::{
     CREDIT_REMINDER_INTERVAL_S, CREDIT_REMINDER_MINUTE, MESSAGE_KINDS, NOTIFY_DRAIN_INTERVAL_S,
     NOTIFY_EXPIRY_MS, NOTIFY_KIND_CONSOLE_5MIN, NOTIFY_KIND_CREDIT_REMINDER,
     NOTIFY_KIND_LOW_BALANCE, NOTIFY_KIND_SESSION_ENDING, NOTIFY_PARAM_MAX_CHARS,
-    NOTIFY_STATE_EXPIRED, NOTIFY_STATE_FAILED, NOTIFY_STATE_SENT, NOTIFY_TRIGGER_INTERVAL_S,
-    NotifyChannel, NotifyExpired, NotifyFailed, NotifyRearm, NotifyRequest, NotifyRequested,
-    NotifyResponse, NotifySent, NotifySkipped, NotifyState, SESSION_NEAR_END_MS,
-    SESSION_NOTIFY_KINDS, valid_e164,
+    NOTIFY_PURPOSE_OWNER_ALERT, NOTIFY_STATE_EXPIRED, NOTIFY_STATE_FAILED, NOTIFY_STATE_SENT,
+    NOTIFY_TRIGGER_INTERVAL_S, NotifyChannel, NotifyExpired, NotifyFailed, NotifyRearm,
+    NotifyRequest, NotifyRequested, NotifyResponse, NotifySent, NotifySkipped, NotifyState,
+    SESSION_NEAR_END_MS, SESSION_NOTIFY_KINDS, valid_e164,
 };
 pub use operating::{
     ADS_POLICY_VERSION, ADS_RATINGS, AdConsentState, AdRating, AdsConsent, AdsConsentSet,
@@ -261,10 +261,11 @@ pub use operating::{
     is_backup_location, is_backup_tree_uri, opening_hours_json, parse_opening_hours,
 };
 pub use owner_alert::{
-    DevOwnerAlert, OWNER_ALERT_PARAM_MAX_CHARS, OWNER_ALERTS_PAGE, OWNER_ALERTS_PAGE_MAX,
+    DEFAULT_OWNER_ALERT_THRESHOLDS, DevOwnerAlert, KEY_OWNER_ALERT_THRESHOLDS,
+    OWNER_ALERT_MAX_MINOR, OWNER_ALERT_PARAM_MAX_CHARS, OWNER_ALERTS_PAGE, OWNER_ALERTS_PAGE_MAX,
     OwnerAlertKind, OwnerAlertList, OwnerAlertParamError, OwnerAlertPush, OwnerAlertSettings,
-    OwnerAlertSettingsPatch, OwnerAlertView, PUSH_SUBSCRIPTIONS_MAX, PUSH_TTL_S, PushKeys,
-    PushRemove, PushSubscribe,
+    OwnerAlertSettingsPatch, OwnerAlertThresholds, OwnerAlertView, PUSH_SUBSCRIPTIONS_MAX,
+    PUSH_TTL_S, PushKeys, PushRemove, PushSubscribe,
 };
 pub use owner_commands::{
     CreditRemind, DEVICE_REVOKE_REASONS, OWNER_COMMAND_KINDS, OWNER_COMMAND_POSTS_PER_MIN,

@@ -10,9 +10,13 @@
     refreshAlerts,
     setWhatsapp,
   } from "./alerts.svelte";
+  import CommandList from "./CommandList.svelte";
+  import CommandPreview from "./CommandPreview.svelte";
+  import { cancel } from "./commands.svelte";
   import { disablePush, enablePush, pushState, type PushState } from "./push";
   import SetupGate from "./SetupGate.svelte";
   import { isLive, shell } from "./shell.svelte";
+  import ThresholdsForm from "./ThresholdsForm.svelte";
 
   const NOTES = {
     on: "owner.alerts.push.on",
@@ -88,6 +92,7 @@
       removeEventListener("focus", read);
       document.removeEventListener("visibilitychange", read);
       navigator.serviceWorker?.removeEventListener("message", pushed);
+      cancel();
     };
   });
 </script>
@@ -139,6 +144,10 @@
       <p>{t("owner.loading")}</p>
     {/if}
   </section>
+
+  <ThresholdsForm />
+  <CommandPreview />
+  <CommandList />
 
   <section class="list" aria-labelledby="alerts-list-title">
     <h2 id="alerts-list-title" class="type-hub-title">{t("owner.alerts.title")}</h2>

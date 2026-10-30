@@ -556,7 +556,7 @@ pub(super) fn mutate(
             _ => Err(mismatch()),
         },
         IntentPayload::CreditAutoPause(_) => match target {
-            Target::CreditAutoPause(t) => super::credit_pause::mutate(tx, t),
+            Target::CreditAutoPause(t) => super::credit_pause::mutate(tx, t, now_ms),
             _ => Err(mismatch()),
         },
         IntentPayload::SummaryPublish(p) => match target {

@@ -4,11 +4,13 @@
 //! Undo cancels it with a compensating `sale_reverted` row. Without an open shift a cash row is
 //! refused `SHIFT_NOT_OPEN`; UPI, card, wallet and credit never need one.
 
+use std::collections::BTreeMap;
+
 use arena_proto::{
     ActorKind, AppError, CASH_DEPOSIT, CASH_EXPENSE, CASH_FLOAT_IN, CASH_SALE, CASH_SALE_REVERTED,
     CashDeposit, DEPOSIT_REFERENCE_MAX_CHARS, EXPENSE_NOTE_MAX_CHARS, ErrorCode, ExpenseCreate,
     ExpensePaidFrom, Intent, KEY_PRINTER_SELECTED, MAX_CASH_MOVE_MINOR, MAX_FLOAT_MINOR,
-    PaymentMethod, PaymentRow, Permission, PrinterSelected, ShiftClose, ShiftOpen,
+    OwnerAlertKind, PaymentMethod, PaymentRow, Permission, PrinterSelected, ShiftClose, ShiftOpen,
     VARIANCE_NOTE_MAX_CHARS, VarianceReason, receipt_photo_problem,
 };
 use arena_store::{
@@ -21,6 +23,7 @@ use arena_store::{
 use crate::rbac;
 
 use super::mutate::Written;
+use super::owner_alert;
 
 #[derive(Default)]
 pub(crate) struct ShiftTarget {
@@ -468,7 +471,50 @@ pub(super) fn mutate_close(
         op: ChangeOp::Update,
         before: None,
     });
+    alert_on_variance(tx, intent, &shift.id, t, &check, now_ms, &mut written)?;
     Ok(written)
+}
+
+/// Queues the owner's "cash variance" alert when the closed shift's difference, either way, is
+/// over the owner's limit (the branch's own variance threshold unless the owner set another).
+fn alert_on_variance(
+    tx: &StoreTx<'_>,
+    intent: &Intent,
+    shift_id: &str,
+    t: &ShiftTarget,
+    check: &CloseCheck,
+    now_ms: i64,
+    written: &mut Vec<Written>,
+) -> Result<(), AppError> {
+    let limit = owner_alert::thresholds(tx)?
+        .cash_variance_minor
+        .unwrap_or(t.threshold_minor);
+    let amount = check.difference_minor.abs();
+    if amount <= limit {
+        return Ok(());
+    }
+    let mut params = BTreeMap::from([
+        ("amount_minor", amount.to_string()),
+        (
+            "shift",
+            owner_alert::text_param(&staff_display_name(tx, &intent.actor.id)?),
+        ),
+    ]);
+    if let Some(reason) = check.reason {
+        params.insert("reason", reason.as_str().replace('_', " "));
+    }
+    owner_alert::queue(
+        tx,
+        &owner_alert::Alert {
+            kind: OwnerAlertKind::CashVariance,
+            source_ref: shift_id,
+            order_id: None,
+            player_id: "",
+            params,
+        },
+        now_ms,
+        written,
+    )
 }
 
 /// Builds the Z-report of the shift being closed from its stored rows and returns it as JSON

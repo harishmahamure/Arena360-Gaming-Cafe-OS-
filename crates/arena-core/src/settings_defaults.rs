@@ -49,6 +49,9 @@ use arena_proto::{
     RECEIPT_PHONE_MAX_LINES, valid_receipt_lines,
 };
 use arena_proto::{
+    DEFAULT_OWNER_ALERT_THRESHOLDS, KEY_OWNER_ALERT_THRESHOLDS, OwnerAlertThresholds,
+};
+use arena_proto::{
     DEFAULT_PRINTER_PAPER_MM, DEFAULT_PRINTER_SELECTED, DEFAULT_PRINTER_STATUS,
     KEY_PRINTER_PAPER_MM, KEY_PRINTER_SELECTED, KEY_PRINTER_STATUS, PRINTER_PAPER_WIDTHS_MM,
 };
@@ -162,6 +165,8 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
         DEFAULT_SHIFT_VARIANCE_THRESHOLD,
     ),
     (KEY_MEDIA_CAP_GB, DEFAULT_MEDIA_CAP_GB),
+    // Story 8.34: the limits above which the Hub raises an owner alert.
+    (KEY_OWNER_ALERT_THRESHOLDS, DEFAULT_OWNER_ALERT_THRESHOLDS),
     // Story 6.25: the game booster, read by every paired PC.
     (KEY_BOOSTER_CLOSE, DEFAULT_BOOSTER_CLOSE),
     (KEY_BOOSTER_PRIORITY, DEFAULT_BOOSTER_PRIORITY),
@@ -180,7 +185,7 @@ pub const SYSTEM_MANAGED_KEYS: [&str; 7] = [
     KEY_TEST_SESSION,
 ];
 
-pub const KEYED_FIELD_KEYS: [&str; 36] = [
+pub const KEYED_FIELD_KEYS: [&str; 37] = [
     KEY_DISPLAY_MODES,
     KEY_BOOSTER_CLOSE,
     KEY_BOOSTER_PRIORITY,
@@ -217,6 +222,7 @@ pub const KEYED_FIELD_KEYS: [&str; 36] = [
     KEY_BILLING_CREDIT_AUTO_PAUSE,
     KEY_STOCK_EXPIRY_WARN_DAYS,
     KEY_INVENTORY_TAKE_STOCK_AT,
+    KEY_OWNER_ALERT_THRESHOLDS,
 ];
 
 /// The value `branch.seed_defaults` inserts for a default setting an existing branch lacks:
@@ -273,6 +279,8 @@ pub enum SettingRule {
     DisplayModes,
     /// `billing.warn_marks`: one to three distinct minutes (`arena_proto::parse_warn_marks`).
     WarnMarks,
+    /// `owner_alert.thresholds`: a JSON `OwnerAlertThresholds` (`OwnerAlertThresholds::parse`).
+    OwnerAlertThresholds,
     /// Up to `max_lines` receipt text lines (`arena_proto::valid_receipt_lines`).
     ReceiptLines {
         max_lines: usize,
@@ -425,6 +433,10 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
             max: MEDIA_CAP_GB_RANGE.1,
         },
     ),
+    (
+        KEY_OWNER_ALERT_THRESHOLDS,
+        SettingRule::OwnerAlertThresholds,
+    ),
     (KEY_BOOSTER_CLOSE, SettingRule::BoosterPrograms),
     (KEY_BOOSTER_PRIORITY, SettingRule::OneOf(BOOSTER_PRIORITIES)),
     (KEY_BOOSTER_POWER_PLAN, SettingRule::Bool),
@@ -489,6 +501,7 @@ impl SettingRule {
             Self::TestSession => arena_proto::TestSessionStatus::parse(value).is_some(),
             Self::Tax => TaxSettings::parse(value).is_some_and(|t| t.check().is_ok()),
             Self::ReceiptLines { max_lines } => valid_receipt_lines(value, max_lines),
+            Self::OwnerAlertThresholds => OwnerAlertThresholds::parse(value).is_some(),
             Self::WarnMarks => arena_proto::parse_warn_marks(value).is_ok(),
             Self::BoosterPrograms => arena_proto::parse_booster_programs(value).is_ok(),
             Self::DisplayModes => arena_proto::parse_display_modes(value).is_ok(),

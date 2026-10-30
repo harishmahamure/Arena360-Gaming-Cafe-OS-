@@ -16,6 +16,7 @@ pub struct NewNotify<'a> {
     pub order_id: Option<&'a str>,
     /// The session a `low_balance`, `session_ending` or `console_5min` message is about.
     pub session_id: Option<&'a str>,
+    /// The player the message is for; empty for an owner alert that names none.
     pub player_id: &'a str,
     pub consent_policy_version: &'a str,
     pub not_before: i64,
@@ -23,6 +24,8 @@ pub struct NewNotify<'a> {
     pub params: Option<&'a str>,
     /// The business day a `credit_reminder` is raised for (at most one per player per day).
     pub reminder_day: Option<&'a str>,
+    /// The event an owner alert is raised for (at most one row per kind and event).
+    pub source_ref: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,6 +35,7 @@ pub struct NotifyRow {
     pub kind: String,
     pub order_id: Option<String>,
     pub session_id: Option<String>,
+    /// Empty for an owner alert that names no player.
     pub player_id: String,
     pub consent_policy_version: String,
     pub not_before: i64,
@@ -39,10 +43,11 @@ pub struct NotifyRow {
     pub params: Option<String>,
     pub rearmed_at: Option<i64>,
     pub reminder_day: Option<String>,
+    pub source_ref: Option<String>,
 }
 
 const ROW_COLUMNS: &str = "id, purpose, kind, order_id, session_id, player_id, \
-     consent_policy_version, not_before, state, params, rearmed_at, reminder_day";
+     consent_policy_version, not_before, state, params, rearmed_at, reminder_day, source_ref";
 
 fn row_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<NotifyRow> {
     Ok(NotifyRow {
@@ -51,13 +56,14 @@ fn row_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<NotifyRow> {
         kind: r.get(2)?,
         order_id: r.get(3)?,
         session_id: r.get(4)?,
-        player_id: r.get(5)?,
+        player_id: r.get::<_, Option<String>>(5)?.unwrap_or_default(),
         consent_policy_version: r.get(6)?,
         not_before: r.get(7)?,
         state: r.get(8)?,
         params: r.get(9)?,
         rearmed_at: r.get(10)?,
         reminder_day: r.get(11)?,
+        source_ref: r.get(12)?,
     })
 }
 
@@ -65,24 +71,41 @@ pub fn insert_notify(conn: &Connection, n: &NewNotify<'_>) -> Result<(), AppErro
     conn.execute(
         "INSERT INTO notify_outbox (id, purpose, kind, order_id, session_id, player_id,
                                     consent_policy_version, not_before, state, params,
-                                    reminder_day, rev, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, 0, 0)",
+                                    reminder_day, source_ref, rev, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, 0, 0)",
         params![
             n.id,
             n.purpose,
             n.kind,
             n.order_id,
             n.session_id,
-            n.player_id,
+            Some(n.player_id).filter(|p| !p.is_empty()),
             n.consent_policy_version,
             n.not_before,
             NOTIFY_STATE_QUEUED,
             n.params,
             n.reminder_day,
+            n.source_ref,
         ],
     )
     .map_err(db_error)?;
     Ok(())
+}
+
+/// Whether an owner alert of `kind` was ever queued for the event `source_ref`, whatever became of
+/// it: an event raises its alert once.
+pub fn owner_alert_exists(
+    conn: &Connection,
+    kind: &str,
+    source_ref: &str,
+) -> Result<bool, AppError> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM notify_outbox
+                        WHERE purpose = 'owner_alert' AND kind = ?1 AND source_ref = ?2)",
+        params![kind, source_ref],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
 }
 
 /// The ids of the rows of `order_id` still waiting to be sent.
@@ -297,6 +320,7 @@ mod tests {
             not_before: 8_000,
             params: None,
             reminder_day: None,
+            source_ref: None,
         }
     }
 
@@ -312,6 +336,7 @@ mod tests {
             not_before: 8_000,
             params: Some("{}"),
             reminder_day: None,
+            source_ref: None,
         }
     }
 
@@ -445,7 +470,53 @@ mod tests {
             not_before: 8_000,
             params: Some(r#"{"amount_minor":"6000"}"#),
             reminder_day: day,
+            source_ref: None,
         }
+    }
+
+    fn alert<'a>(id: &'a str, kind: &'a str, source: Option<&'a str>) -> NewNotify<'a> {
+        NewNotify {
+            id,
+            purpose: "owner_alert",
+            kind,
+            order_id: None,
+            session_id: None,
+            player_id: "",
+            consent_policy_version: "owner",
+            not_before: 8_000,
+            params: Some(r#"{"amount_minor":"6000"}"#),
+            reminder_day: None,
+            source_ref: source,
+        }
+    }
+
+    #[test]
+    fn an_owner_alert_needs_its_event_and_is_raised_once_per_event() {
+        let conn = conn();
+        assert!(!owner_alert_exists(&conn, "cash_variance", "S1").unwrap());
+        insert_notify(&conn, &alert("N1", "cash_variance", Some("S1"))).unwrap();
+        assert!(owner_alert_exists(&conn, "cash_variance", "S1").unwrap());
+        assert!(!owner_alert_exists(&conn, "large_refund", "S1").unwrap());
+        assert!(!owner_alert_exists(&conn, "cash_variance", "S2").unwrap());
+        assert!(
+            insert_notify(&conn, &alert("N2", "cash_variance", Some("S1"))).is_err(),
+            "the same event twice is refused"
+        );
+        insert_notify(&conn, &alert("N3", "large_refund", Some("S1"))).unwrap();
+        assert!(
+            insert_notify(&conn, &alert("N4", "cash_variance", None)).is_err(),
+            "an alert without its event is not a row"
+        );
+        // A settled row still counts, and a row without a player reads with an empty one.
+        finish_notify(&conn, "N1", "sent", Some("app"), None, None).unwrap();
+        assert!(owner_alert_exists(&conn, "cash_variance", "S1").unwrap());
+        let row = find_notify(&conn, "N1").unwrap().unwrap();
+        assert_eq!(row.player_id, "");
+        assert_eq!(row.source_ref.as_deref(), Some("S1"));
+        // A player message still needs its player.
+        let mut guest = new("N5", "O5");
+        guest.player_id = "";
+        assert!(insert_notify(&conn, &guest).is_err());
     }
 
     #[test]

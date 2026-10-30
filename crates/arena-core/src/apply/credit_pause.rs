@@ -1,10 +1,15 @@
-use arena_proto::{AppError, CreditAutoPause, ErrorCode, Intent, KEY_BILLING_CREDIT_AUTO_PAUSE};
+use std::collections::BTreeMap;
+
+use arena_proto::{
+    AppError, CreditAutoPause, ErrorCode, Intent, KEY_BILLING_CREDIT_AUTO_PAUSE, OwnerAlertKind,
+};
 use arena_store::{
     ChangeOp, RowKey, StoreTx, credit_aging, find_credit, find_setting, list_credit_debtors,
     set_credit_paused,
 };
 
 use super::mutate::Written;
+use super::owner_alert;
 use super::session::invalid;
 
 pub(super) fn rule_on(tx: &StoreTx<'_>) -> Result<bool, AppError> {
@@ -18,6 +23,8 @@ pub(super) fn overdue(tx: &StoreTx<'_>, player_id: &str, today: &str) -> Result<
 #[derive(Default)]
 pub(crate) struct PauseTarget {
     changes: Vec<(String, bool)>,
+    /// The business day the changes were worked out for.
+    today: String,
 }
 
 pub(crate) fn load(
@@ -40,7 +47,7 @@ pub(crate) fn load(
             changes.push((row.player_id, want));
         }
     }
-    Ok(PauseTarget { changes })
+    Ok(PauseTarget { changes, today })
 }
 
 pub(crate) fn is_due(t: &PauseTarget) -> bool {
@@ -60,7 +67,13 @@ pub(super) fn validate(intent: &Intent, t: &PauseTarget) -> Result<(), AppError>
     Ok(())
 }
 
-pub(super) fn mutate(tx: &StoreTx<'_>, t: &PauseTarget) -> Result<Vec<Written>, AppError> {
+/// Applies the changes. A pause turned on is the moment a player's credit reached its overdue
+/// days, so it also queues the owner's `credit_overdue` alert (once per player and business day).
+pub(super) fn mutate(
+    tx: &StoreTx<'_>,
+    t: &PauseTarget,
+    now_ms: i64,
+) -> Result<Vec<Written>, AppError> {
     let mut written = Vec::with_capacity(t.changes.len());
     for (player_id, paused) in &t.changes {
         set_credit_paused(tx, player_id, *paused)?;
@@ -71,6 +84,26 @@ pub(super) fn mutate(tx: &StoreTx<'_>, t: &PauseTarget) -> Result<Vec<Written>, 
             op: ChangeOp::Update,
             before: None,
         });
+        if *paused {
+            let owed = find_credit(tx, player_id)?.map_or(0, |c| c.outstanding_minor);
+            let age = credit_aging(tx, player_id, &t.today)?.oldest_age_days;
+            owner_alert::queue(
+                tx,
+                &owner_alert::Alert {
+                    kind: OwnerAlertKind::CreditOverdue,
+                    source_ref: &format!("{player_id}:{}", t.today),
+                    order_id: None,
+                    player_id,
+                    params: BTreeMap::from([
+                        ("amount_minor", owed.to_string()),
+                        ("days", age.to_string()),
+                        ("player_id", player_id.clone()),
+                    ]),
+                },
+                now_ms,
+                &mut written,
+            )?;
+        }
     }
     Ok(written)
 }

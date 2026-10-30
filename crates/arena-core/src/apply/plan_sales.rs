@@ -180,7 +180,7 @@ pub(super) fn mutate_sell(
             .elevated_by
             .as_ref()
             .map_or(intent.actor.id.as_str(), |e| e.id.as_str());
-        super::discount::record(tx, d, &order_id, by, false)?;
+        super::discount::record(tx, d, &order_id, by, false, now_ms, &mut written)?;
     }
     let stamp = Stamp {
         staff_id: &intent.actor.id,

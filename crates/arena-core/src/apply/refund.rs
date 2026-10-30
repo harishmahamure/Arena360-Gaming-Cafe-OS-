@@ -22,8 +22,9 @@
 use std::collections::BTreeMap;
 
 use arena_proto::{
-    AppError, CASH_REFUND, ErrorCode, Intent, KEY_TAX, MAX_REFUND_LINES, PaymentMethod, PaymentRow,
-    REFUND_NOTE_MAX_CHARS, ReasonCode, ReceiptChoice, RefundCreate, TaxMode, TaxSettings,
+    AppError, CASH_REFUND, ErrorCode, Intent, KEY_TAX, MAX_REFUND_LINES, OwnerAlertKind,
+    PaymentMethod, PaymentRow, REFUND_NOTE_MAX_CHARS, ReasonCode, ReceiptChoice, RefundCreate,
+    TaxMode, TaxSettings,
 };
 use arena_store::{
     BranchSummary, ChangeOp, CreditRow, KIND_PRINT, NewCashEvent, NewRefund, NewRefundPayment,
@@ -684,6 +685,20 @@ pub(super) fn mutate(
         written.push(update(RowKey::Orders {
             id: order.id.clone(),
         }));
+    }
+    if p.total_minor > super::owner_alert::thresholds(tx)?.large_refund_minor {
+        super::owner_alert::queue(
+            tx,
+            &super::owner_alert::Alert {
+                kind: OwnerAlertKind::LargeRefund,
+                source_ref: &refund_id,
+                order_id: None,
+                player_id: "",
+                params: BTreeMap::from([("amount_minor", p.total_minor.to_string())]),
+            },
+            now_ms,
+            &mut written,
+        )?;
     }
     Ok(written)
 }

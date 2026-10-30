@@ -158,8 +158,8 @@ pub use migrations::LATEST_SCHEMA_VERSION;
 pub use notify::{
     NewNotify, NotifyRow, credit_reminded_on, credit_reminder_exists, find_notify, finish_notify,
     insert_notify, last_credit_reminder_sent, latest_low_balance, latest_receipt_state,
-    list_due_notify, order_player_id, queued_notify_ids, rearm_notify, session_notice_exists,
-    skip_notify,
+    list_due_notify, order_player_id, owner_alert_exists, queued_notify_ids, rearm_notify,
+    session_notice_exists, skip_notify,
 };
 pub use outbox::{
     KIND_DRAWER, KIND_KOT, KIND_PRINT, OutboxRow, ReceiptHead, ReceiptLineRow, ReceiptPaymentRow,
@@ -1004,6 +1004,14 @@ impl Store {
             return Ok(Vec::new());
         }
         list_open_alerts(&self.conn)
+    }
+
+    /// Whether the Hub alert `id` is still open (raised and not acknowledged).
+    pub fn alert_is_open(&self, id: &str) -> Result<bool, AppError> {
+        if !self.table_exists("alerts")? {
+            return Ok(false);
+        }
+        Ok(find_alert(&self.conn, id)?.is_some_and(|a| a.acked_at.is_none()))
     }
 
     /// Every open alert with the name of the product it is about (if any), oldest first.

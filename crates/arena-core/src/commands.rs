@@ -161,7 +161,7 @@ pub fn command_intent(cmd: &CommandWire, now: i64) -> Result<Intent, AppError> {
         return Err(refused(
             ErrorCode::ValidationFailed,
             "key",
-            "only the branch name and timezone are set by command",
+            "only the branch name, timezone and alert limits are set by command",
         ));
     }
     Ok(Intent {

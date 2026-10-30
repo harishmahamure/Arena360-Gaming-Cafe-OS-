@@ -9,8 +9,9 @@ use ts_rs::TS;
 use crate::commands::COMMAND_SCHEMA_VERSION;
 use crate::error::{AppError, ErrorCode};
 use crate::{
-    CouponUpsert, DeviceAssign, GroupUpsert, Permission, PlanUpsert, ProductUpsert, RateUpsert,
-    ReasonCode, RoleUpsert, RuleUpsert, StaffDeactivate, StockThreshold, Tier,
+    CouponUpsert, DeviceAssign, GroupUpsert, KEY_OWNER_ALERT_THRESHOLDS, OwnerAlertThresholds,
+    Permission, PlanUpsert, ProductUpsert, RateUpsert, ReasonCode, RoleUpsert, RuleUpsert,
+    SettingsSet, StaffDeactivate, StockThreshold, Tier,
 };
 
 /// Owner command posts a tenant may make in a minute.
@@ -65,7 +66,7 @@ const fn reserved(kind: &'static str) -> OwnerCommandKind {
     }
 }
 
-pub const OWNER_COMMAND_KINDS: [OwnerCommandKind; 16] = [
+pub const OWNER_COMMAND_KINDS: [OwnerCommandKind; 17] = [
     handled("rate.upsert"),
     handled("plan.upsert"),
     handled("rule.upsert"),
@@ -80,6 +81,8 @@ pub const OWNER_COMMAND_KINDS: [OwnerCommandKind; 16] = [
     handled("device.assign"),
     sensitive("device.revoke"),
     handled("credit.remind"),
+    // The alert limits (Story 8.34): `settings.set` of `owner_alert.thresholds` only.
+    handled("settings.set"),
     reserved("hub.revoke"),
     reserved("backup.restore"),
 ];
@@ -199,6 +202,7 @@ pub fn validate_owner_payload(kind: &str, payload: &serde_json::Value) -> Result
         "product.upsert" => parses::<ProductUpsert>(&fields),
         "stock.threshold" => parses::<StockThreshold>(&fields),
         "backup.now" => fields.as_object().is_some_and(|f| f.is_empty()),
+        "settings.set" => return validate_alert_limits(fields),
         "staff.upsert" => parses::<OwnerStaffUpsert>(&fields),
         "staff.deactivate" => parses::<StaffDeactivate>(&fields),
         "group.upsert" => parses::<GroupUpsert>(&fields),
@@ -234,6 +238,30 @@ pub fn validate_owner_payload(kind: &str, payload: &serde_json::Value) -> Result
             "The payload does not match this kind of change.",
         ))
     }
+}
+
+/// An owner `settings.set` sets the alert limits and nothing else: the key must be
+/// [`KEY_OWNER_ALERT_THRESHOLDS`] and the value a valid [`OwnerAlertThresholds`] JSON.
+fn validate_alert_limits(fields: serde_json::Value) -> Result<(), AppError> {
+    let Ok(set) = serde_json::from_value::<SettingsSet>(fields) else {
+        return Err(invalid(
+            "payload",
+            "The payload does not match this kind of change.",
+        ));
+    };
+    if set.key != KEY_OWNER_ALERT_THRESHOLDS {
+        return Err(invalid(
+            "key",
+            "Only the alert limits can be set from here.",
+        ));
+    }
+    if OwnerAlertThresholds::parse(&set.value).is_none() {
+        return Err(invalid(
+            "value",
+            "Enter amounts from 0 and a percent from 1 to 100.",
+        ));
+    }
+    Ok(())
 }
 
 /// The kinds whose owner command raises `updated_by_owner` on the Hub's UI event stream (Story
@@ -546,7 +574,7 @@ mod tests {
         let kind = accepted_owner_kind("credit.remind").unwrap();
         assert!(!kind.sensitive && kind.handled);
         assert_eq!(kind.min_tier, Tier::Basic);
-        assert_eq!(OWNER_COMMAND_KINDS.len(), 16);
+        assert_eq!(OWNER_COMMAND_KINDS.len(), 17);
         assert!(validate_owner_payload("credit.remind", &json!({"player_id": "P1"})).is_ok());
         for bad in [
             json!({}),
@@ -561,6 +589,33 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn an_owner_settings_set_takes_only_the_alert_limits() {
+        let kind = accepted_owner_kind("settings.set").unwrap();
+        assert!(!kind.sensitive && kind.handled);
+        assert_eq!(kind.min_tier, Tier::Basic);
+        let limits = crate::OwnerAlertThresholds::default().to_json();
+        let ok = json!({"key": "owner_alert.thresholds", "value": limits, "base_rev": 2});
+        assert!(validate_owner_payload("settings.set", &ok).is_ok());
+        let field = |p: serde_json::Value| {
+            validate_owner_payload("settings.set", &p)
+                .unwrap_err()
+                .field
+        };
+        assert_eq!(
+            field(json!({"key": "branch.name", "value": "X"})).as_deref(),
+            Some("key")
+        );
+        assert_eq!(
+            field(json!({"key": "owner_alert.thresholds", "value": "{}"})).as_deref(),
+            Some("value")
+        );
+        assert_eq!(
+            field(json!({"key": "owner_alert.thresholds"})).as_deref(),
+            Some("payload")
+        );
     }
 
     #[test]

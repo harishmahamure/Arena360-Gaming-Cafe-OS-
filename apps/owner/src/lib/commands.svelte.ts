@@ -149,6 +149,8 @@ const KINDS: Record<string, { label: MessageKey; catalogue?: (keyof SummaryCatal
   "device.revoke": { label: "owner.cmd.kind.revoke" },
   "backup.now": { label: "owner.cmd.kind.backup" },
   "credit.remind": { label: "owner.cmd.kind.credit_remind" },
+  // The only settings.set an owner sends: the alert limits (Story 8.34).
+  "settings.set": { label: "owner.cmd.kind.limits" },
 };
 
 /** What a command changes: its kind and, when the payload names the thing, the name. */

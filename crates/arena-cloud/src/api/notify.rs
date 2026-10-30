@@ -14,8 +14,8 @@
 use std::sync::Arc;
 
 use arena_proto::{
-    AppError, ErrorCode, MESSAGE_KINDS, NOTIFY_PARAM_MAX_CHARS, NotifyChannel, NotifyRequest,
-    NotifyResponse, NotifyState, Tier, valid_e164,
+    AppError, ErrorCode, MESSAGE_KINDS, NOTIFY_PARAM_MAX_CHARS, NOTIFY_PURPOSE_OWNER_ALERT,
+    NotifyChannel, NotifyRequest, NotifyResponse, NotifyState, OwnerAlertKind, Tier, valid_e164,
 };
 use arena_store::control::{Branch, LedgerRow, MessageTemplate, NewLedgerRow, Settlement};
 use axum::extract::State;
@@ -29,6 +29,7 @@ use super::heartbeat::authenticate;
 use super::json::ApiJson;
 use crate::auth::AuthState;
 use crate::messaging::{Channel, Outgoing, SendFailure};
+use crate::owner_alerts;
 
 const OUTBOX_ID_MAX: usize = 64;
 const PURPOSE_MAX: usize = 40;
@@ -178,6 +179,9 @@ async fn notify(
         )
         .into());
     }
+    if body.purpose == NOTIFY_PURPOSE_OWNER_ALERT {
+        return raise_owner_alert(&st, &branch, &body).await.map(Json);
+    }
     if !MESSAGE_KINDS.contains(&body.kind.as_str()) {
         return Err(ApiError::validation(
             "kind",
@@ -185,6 +189,44 @@ async fn notify(
         ));
     }
     deliver(&st, &branch, &body).await.map(Json)
+}
+
+/// An owner alert a Hub queued (Story 8.34): raised for `branch` under the outbox id, so a repeat
+/// of the post adds nothing. Only the kinds a Hub sources are accepted; the alert reaches the
+/// owner's app (and, through the 8.33 raise, their browsers and WhatsApp), so there is no
+/// recipient to check.
+async fn raise_owner_alert(
+    st: &AuthState,
+    branch: &Branch,
+    body: &NotifyRequest,
+) -> Result<NotifyResponse, ApiError> {
+    if !token_ok(&body.outbox_id, OUTBOX_ID_MAX) {
+        return Err(ApiError::validation(
+            "outbox_id",
+            "Send the outbox row's id.",
+        ));
+    }
+    let kind = OwnerAlertKind::parse(&body.kind)
+        .filter(|k| k.hub_sourced())
+        .ok_or_else(|| ApiError::validation("kind", "This kind of alert isn't supported."))?;
+    owner_alerts::raise(
+        st,
+        owner_alerts::Raise {
+            id: Some(&body.outbox_id),
+            branch,
+            kind,
+            params: &body.params,
+        },
+    )
+    .await?;
+    Ok(NotifyResponse {
+        outbox_id: body.outbox_id.clone(),
+        state: NotifyState::Sent,
+        channel: NotifyChannel::App,
+        attempts: 1,
+        provider_message_id: None,
+        error_code: None,
+    })
 }
 
 /// Sends one ledger message for `branch`, once per `body.outbox_id`: the code behind

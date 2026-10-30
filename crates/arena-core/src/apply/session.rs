@@ -953,7 +953,7 @@ pub(super) fn mutate_settle(
                 .elevated_by
                 .as_ref()
                 .map_or(intent.actor.id.as_str(), |e| e.id.as_str());
-            super::discount::record(tx, d, &s.order_id, by, true)?;
+            super::discount::record(tx, d, &s.order_id, by, true, now_ms, &mut written)?;
         }
     }
     let player_id = t.order.as_ref().and_then(|o| o.player_id.as_deref());

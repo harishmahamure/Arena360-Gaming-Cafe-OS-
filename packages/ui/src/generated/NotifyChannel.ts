@@ -3,4 +3,4 @@
 /**
  * How a message went (or goes) out.
  */
-export type NotifyChannel = "whatsapp" | "sms";
+export type NotifyChannel = "whatsapp" | "sms" | "app";

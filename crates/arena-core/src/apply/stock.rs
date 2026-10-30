@@ -963,7 +963,7 @@ pub(super) fn mutate_threshold(
             out.push(alert_update(&alert.id));
         }
         (Some(th), None) if qty <= th => {
-            out.push(raise_low(tx, &w.product_id, qty, th, now)?);
+            out.extend(raise_low(tx, &w.product_id, qty, th, now)?);
         }
         (_, Some(alert)) => out.push(ack_row(tx, alert, &intent.actor.id, now)?),
         _ => {}
@@ -975,13 +975,14 @@ fn alert_update(id: &str) -> Written {
     write(RowKey::Alerts { id: id.to_owned() }, ChangeOp::Update, None)
 }
 
+/// Raises the "Low stock" alert of `product_id` and queues the owner's `low_stock` alert for it.
 fn raise_low(
     tx: &StoreTx<'_>,
     product_id: &str,
     qty: i64,
     threshold: i64,
     now: i64,
-) -> Result<Written, AppError> {
+) -> Result<Vec<Written>, AppError> {
     let id = ulid::Ulid::generate().to_string();
     insert_alert(
         tx,
@@ -996,7 +997,28 @@ fn raise_low(
             ticket_id: None,
         },
     )?;
-    Ok(write(RowKey::Alerts { id }, ChangeOp::Insert, None))
+    let mut written = vec![write(
+        RowKey::Alerts { id: id.clone() },
+        ChangeOp::Insert,
+        None,
+    )];
+    let product = find_product(tx, product_id)?.map_or_else(String::new, |p| p.name);
+    super::owner_alert::queue(
+        tx,
+        &super::owner_alert::Alert {
+            kind: arena_proto::OwnerAlertKind::LowStock,
+            source_ref: &id,
+            order_id: None,
+            player_id: "",
+            params: std::collections::BTreeMap::from([
+                ("product", super::owner_alert::text_param(&product)),
+                ("qty", qty.to_string()),
+            ]),
+        },
+        now,
+        &mut written,
+    )?;
+    Ok(written)
 }
 
 /// The low-stock hook every stock change runs after it moved the quantity of `product_id` from
@@ -1032,9 +1054,7 @@ pub(crate) fn low_after_change(
             Ok(vec![alert_update(&alert.id)])
         }
         Some(_) => Ok(Vec::new()),
-        None if old_qty > threshold => {
-            Ok(vec![raise_low(tx, product_id, new_qty, threshold, now)?])
-        }
+        None if old_qty > threshold => raise_low(tx, product_id, new_qty, threshold, now),
         None => Ok(Vec::new()),
     }
 }

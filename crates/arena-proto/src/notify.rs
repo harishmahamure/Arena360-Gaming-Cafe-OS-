@@ -14,6 +14,9 @@ pub const MESSAGE_KINDS: [&str; 5] = [
     "receipt",
 ];
 
+/// The purpose of a `notify_outbox` row that raises an owner alert at the cloud (Story 8.34).
+pub const NOTIFY_PURPOSE_OWNER_ALERT: &str = "owner_alert";
+
 /// The longest value of one template parameter, in characters.
 pub const NOTIFY_PARAM_MAX_CHARS: usize = 200;
 
@@ -51,6 +54,8 @@ pub enum NotifyState {
 pub enum NotifyChannel {
     Whatsapp,
     Sms,
+    /// An owner alert that reached the owner's app (Story 8.34), not a phone.
+    App,
 }
 
 /// The ledger's answer, the same for every post of one `outbox_id`.

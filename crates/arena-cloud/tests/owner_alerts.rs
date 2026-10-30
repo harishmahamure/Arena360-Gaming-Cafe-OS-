@@ -1,6 +1,7 @@
 //! Owner alerts (Story 8.33): raising once per alert id, web push and WhatsApp, the subscription
 //! and settings routes and the tenant scope, over the router with the recorded fakes.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
@@ -14,6 +15,7 @@ use arena_cloud::{Clock, app_with_auth, auth_state};
 use arena_proto::Tier;
 use arena_store::control::{CompGrant, ControlDb, LATEST_CONTROL_VERSION, NewBackupCode};
 use axum::body::{Body, to_bytes};
+use axum::extract::connect_info::ConnectInfo;
 use axum::http::{Request, header};
 use serde_json::{Value, json};
 use tokio::sync::watch;
@@ -291,6 +293,61 @@ impl Harness {
 
     async fn paid(&self) -> Cafe {
         self.cafe(PHONE_A, "Pixel Arena", Some(Tier::Basic)).await
+    }
+
+    /// Pairs a Hub to the café's branch and returns its device token.
+    async fn pair_hub(&self, cafe: &Cafe) -> String {
+        let r = self
+            .call(
+                "POST",
+                "/v1/wizard/install-hub/code",
+                Some(json!({})),
+                &cafe.access,
+            )
+            .await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        let code = r.body["code"].as_str().unwrap().to_owned();
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/v1/pair")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "code": code,
+                    "platform": "android",
+                    "hub_instance_id": "01HUBINSTANCE",
+                    "version": "0.1.0",
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(SocketAddr::new(
+            "198.51.100.4".parse().unwrap(),
+            40000,
+        )));
+        let r = reply(self.app.clone().oneshot(req).await.unwrap()).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        r.body["token"].as_str().unwrap().to_owned()
+    }
+
+    /// What a Hub's drain posts for an owner alert.
+    async fn hub_alert(&self, token: &str, outbox_id: &str, kind: &str, params: Value) -> Reply {
+        let body = json!({
+            "outbox_id": outbox_id,
+            "kind": kind,
+            "purpose": "owner_alert",
+            "consent_policy_version": "owner",
+            "recipient": "",
+            "params": params,
+        });
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/notify")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        reply(self.app.clone().oneshot(req).await.unwrap()).await
     }
 
     async fn subscribe(&self, cafe: &Cafe, endpoint: &str) -> Reply {
@@ -798,4 +855,125 @@ async fn the_alert_routes_need_a_finished_account() {
         )
         .await;
     assert_eq!((r.status, r.code()), (403, "SETUP_INCOMPLETE"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hub_post_raises_one_alert_under_the_outbox_id_and_a_repeat_adds_none() {
+    let h = Harness::new().await;
+    let cafe = h.paid().await;
+    let token = h.pair_hub(&cafe).await;
+    assert_eq!(h.subscribe(&cafe, &endpoint(1)).await.status, 204);
+    let id = "01J9OUTBOXCASHVARIANCE000";
+
+    let r = h
+        .hub_alert(
+            &token,
+            id,
+            "cash_variance",
+            json!({"amount": "₹200.00", "shift": "Asha", "reason": "counting error"}),
+        )
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["outbox_id"], id);
+    assert_eq!(r.body["state"], "sent");
+    assert_eq!(r.body["channel"], "app");
+
+    let list = h.alerts(&cafe).await;
+    assert_eq!(list["alerts"].as_array().unwrap().len(), 1);
+    let a = &list["alerts"][0];
+    assert_eq!(a["id"], id);
+    assert_eq!(a["kind"], "cash_variance");
+    assert_eq!(
+        a["text"],
+        "Cash is off by ₹200.00 at the close of the Asha shift (counting error)."
+    );
+    assert_eq!(h.fake_push().sent().len(), 1);
+    assert_eq!(h.fake_wa().sent().len(), 1);
+
+    // The drain posts it again (a lost reply): the same answer, nothing more is raised or sent.
+    let again = h
+        .hub_alert(
+            &token,
+            id,
+            "cash_variance",
+            json!({"amount": "₹200.00", "shift": "Asha", "reason": "counting error"}),
+        )
+        .await;
+    assert_eq!((again.status, &again.body), (200, &r.body));
+    assert_eq!(h.alert_rows(), 1);
+    assert_eq!(h.fake_push().sent().len(), 1);
+    assert_eq!(h.fake_wa().sent().len(), 1);
+    // The alert carries no phone, name or email of anyone.
+    let raw: String =
+        h.sql("SELECT id || tenant_id || branch_id || kind || params FROM owner_alerts");
+    assert!(!raw.contains(PHONE_A) && !raw.contains("owner10@example.in"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hub_may_raise_only_its_five_kinds_with_the_right_parameters() {
+    let h = Harness::new().await;
+    let cafe = h.paid().await;
+    let token = h.pair_hub(&cafe).await;
+    let kinds = [
+        ("cash_variance", json!({"amount": "Rs 5", "shift": "Asha"})),
+        ("low_stock", json!({"product": "Cola", "qty": "3"})),
+        (
+            "credit_overdue",
+            json!({"amount": "Rs 5", "days": "15", "player_id": "01J9PLAYER"}),
+        ),
+        ("large_refund", json!({"amount": "Rs 5"})),
+        ("large_discount", json!({"amount": "Rs 5"})),
+    ];
+    for (n, (kind, params)) in kinds.iter().enumerate() {
+        let r = h
+            .hub_alert(&token, &format!("OUTBOX{n}"), kind, params.clone())
+            .await;
+        assert_eq!(r.status, 200, "{kind}: {}", r.body);
+    }
+    assert_eq!(h.alert_rows(), 5);
+
+    let bad = [
+        // The cloud's own kinds, and ones nobody knows.
+        ("test", json!({})),
+        ("branch_offline", json!({"minutes": "20"})),
+        ("owner_alert", json!({})),
+        ("nope", json!({})),
+        // A missing, an unknown, an empty and a personal parameter.
+        ("low_stock", json!({"product": "Cola"})),
+        (
+            "low_stock",
+            json!({"product": "Cola", "qty": "3", "phone": PHONE_A}),
+        ),
+        ("large_refund", json!({"amount": " "})),
+        ("large_refund", json!({"amount": "x".repeat(41)})),
+    ];
+    for (n, (kind, params)) in bad.into_iter().enumerate() {
+        let r = h
+            .hub_alert(&token, &format!("BAD{n}"), kind, params.clone())
+            .await;
+        assert_eq!(
+            (r.status, r.code()),
+            (422, "VALIDATION_FAILED"),
+            "{kind} {params}"
+        );
+    }
+    assert_eq!(h.alert_rows(), 5);
+    let r = h
+        .hub_alert(&token, "a/b", "large_refund", json!({"amount": "Rs 5"}))
+        .await;
+    assert_eq!((r.status, r.code()), (422, "VALIDATION_FAILED"));
+    assert_eq!(h.alert_rows(), 5);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_free_branch_hub_raises_nothing() {
+    let h = Harness::new().await;
+    let free = h.cafe(PHONE_B, "Free Arena", None).await;
+    let token = h.pair_hub(&free).await;
+    let r = h
+        .hub_alert(&token, "OUT1", "large_refund", json!({"amount": "Rs 5"}))
+        .await;
+    assert_eq!((r.status, r.code()), (403, "FEATURE_NOT_ENTITLED"));
+    assert_eq!(h.alert_rows(), 0);
+    assert!(h.fake_wa().sent().is_empty());
 }

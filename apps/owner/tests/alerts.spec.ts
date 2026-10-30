@@ -24,7 +24,9 @@ const CASH = alertOf(
 const STOCK = alertOf({}, 900_000);
 
 const rows = (page: Page) => page.locator('[data-component="alert-row"]');
-const live = (page: Page) => page.locator('.visually-hidden[aria-live="polite"]');
+// The page has a second polite region (the list of changes sent), so this one is the list's own.
+const live = (page: Page) =>
+  page.getByRole("region", { name: t("owner.alerts.title") }).getByRole("status");
 const pushSwitch = (page: Page) => page.getByRole("switch", { name: t("owner.alerts.push.label") });
 const whatsappSwitch = (page: Page) =>
   page.getByRole("switch", { name: t("owner.alerts.whatsapp.label") });
@@ -398,3 +400,101 @@ for (const theme of ["light", "dark"] as const) {
     ).toEqual([]);
   });
 }
+
+const limits = (page: Page) => page.locator("[data-component=alert-limits]");
+const field = (page: Page, key: string) =>
+  limits(page).getByLabel(t(`owner.alerts.limits.${key}` as "owner.alerts.limits.cash"));
+const saveLimits = (page: Page) =>
+  limits(page).getByRole("button", { name: t("owner.alerts.limits.save") });
+const previewOf = (page: Page) => page.locator('[data-component="command-preview"]');
+const posts = (calls: Awaited<ReturnType<typeof stubCloud>>) =>
+  (calls.bodies["POST /v1/commands"] ?? []) as Array<Record<string, unknown>>;
+
+test("the limits start at the Hub's defaults in the branch money unit, with the cash limit empty", async ({
+  page,
+}) => {
+  await stubCloud(page, ONE);
+  await page.goto("/alerts");
+  await expect(page.getByRole("heading", { name: t("owner.alerts.limits.title") })).toBeVisible();
+  await expect(field(page, "cash")).toHaveValue("");
+  await expect(page.getByText(t("owner.alerts.limits.cash_hint"))).toBeVisible();
+  await expect(field(page, "refund")).toHaveValue("500.00");
+  await expect(field(page, "discount")).toHaveValue("200.00");
+  await expect(field(page, "percent")).toHaveValue("20");
+});
+
+test("saving the limits previews one settings.set for all branches and sends it on Send", async ({
+  page,
+}) => {
+  const calls = await stubCloud(page, PAID);
+  await page.goto("/alerts");
+  await field(page, "cash").fill("25");
+  await field(page, "refund").fill("750.50");
+  await field(page, "discount").fill("100");
+  await field(page, "percent").fill("15");
+  await saveLimits(page).click();
+
+  const p = previewOf(page);
+  await expect(p).toBeVisible();
+  await expect(p).toContainText(`${t("owner.cmd.kind.limits")} · ${t("owner.cmd.scope.all")}`);
+  expect(posts(calls)).toHaveLength(0);
+  await p.getByRole("button", { name: t("owner.cmd.send") }).click();
+
+  await expect(p).toHaveCount(0);
+  const sent = posts(calls);
+  expect(sent).toHaveLength(1);
+  expect(sent[0]).toMatchObject({ branch_id: "all", kind: "settings.set" });
+  expect(sent[0]).not.toHaveProperty("base_rev");
+  const payload = sent[0].payload as { key: string; value: string };
+  expect(payload.key).toBe("owner_alert.thresholds");
+  expect(JSON.parse(payload.value)).toEqual({
+    cash_variance_minor: 2500,
+    large_refund_minor: 75050,
+    large_discount_minor: 10000,
+    large_discount_percent: 15,
+  });
+  await expect(page.locator('[data-component="command-row"]')).toHaveCount(1);
+});
+
+test("an empty cash limit is sent as the branch default", async ({ page }) => {
+  const calls = await stubCloud(page, ONE);
+  await page.goto("/alerts");
+  await saveLimits(page).click();
+  await previewOf(page)
+    .getByRole("button", { name: t("owner.cmd.send") })
+    .click();
+  await expect.poll(() => posts(calls).length).toBe(1);
+  const payload = posts(calls)[0].payload as { value: string };
+  expect(JSON.parse(payload.value)).toEqual({
+    cash_variance_minor: null,
+    large_refund_minor: 50000,
+    large_discount_minor: 20000,
+    large_discount_percent: 20,
+  });
+});
+
+test("a bad amount or percent shows its message and opens no preview", async ({ page }) => {
+  const calls = await stubCloud(page, ONE);
+  await page.goto("/alerts");
+  await field(page, "cash").fill("abc");
+  await field(page, "refund").fill("-5");
+  await field(page, "percent").fill("101");
+  await saveLimits(page).click();
+  await expect(limits(page).getByText(t("owner.alerts.limits.invalid_amount"))).toHaveCount(2);
+  await expect(limits(page).getByText(t("owner.alerts.limits.invalid_percent"))).toBeVisible();
+  await expect(previewOf(page)).toHaveCount(0);
+  await field(page, "cash").fill("1.234");
+  await field(page, "refund").fill("5");
+  await field(page, "percent").fill("0");
+  await saveLimits(page).click();
+  await expect(limits(page).getByText(t("owner.alerts.limits.invalid_amount"))).toHaveCount(1);
+  await expect(limits(page).getByText(t("owner.alerts.limits.invalid_percent"))).toBeVisible();
+  expect(posts(calls)).toHaveLength(0);
+});
+
+test("a Free café has no limits to set", async ({ page }) => {
+  await stubCloud(page, FREE);
+  await page.goto("/alerts");
+  await expect(page.getByText(t("staff.tier.available_on", { tier: "Basic" }))).toBeVisible();
+  await expect(page.locator("[data-component=alert-limits]")).toHaveCount(0);
+});

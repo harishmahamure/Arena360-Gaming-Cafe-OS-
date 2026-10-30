@@ -65,6 +65,7 @@ mod order_line;
 mod order_place;
 mod order_ready;
 mod order_void;
+mod owner_alert;
 mod pc_command;
 mod pc_settings;
 mod plan_sales;

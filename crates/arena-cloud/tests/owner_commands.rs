@@ -1239,3 +1239,42 @@ async fn waiting_commands_of_a_branch_with_no_live_hub_token_are_rejected_token_
     assert!(cmds.iter().all(|c| c["error"]["code"] == "TOKEN_REVOKED"));
     assert_eq!(h.sweep().await.revoked, 0);
 }
+
+#[tokio::test]
+async fn the_alert_limits_are_a_settings_key_an_owner_may_set_within_range() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    let set = |value: Value| {
+        post(
+            &a.branch,
+            K1,
+            "settings.set",
+            json!({"key": "owner_alert.thresholds", "value": value}),
+        )
+    };
+    let good = r#"{"cash_variance_minor":null,"large_refund_minor":50000,"large_discount_minor":20000,"large_discount_percent":20}"#;
+    for bad in [
+        json!(null),
+        json!(5),
+        json!("nope"),
+        json!(r#"{"large_refund_minor":-1,"large_discount_minor":1,"large_discount_percent":20}"#),
+        json!(r#"{"large_refund_minor":1,"large_discount_minor":1,"large_discount_percent":101}"#),
+    ] {
+        let r = h.send(&a, set(bad.clone())).await;
+        assert_eq!((r.status, r.code()), (422, "VALIDATION_FAILED"), "{bad}");
+    }
+    assert_eq!(h.rows(), 0);
+    let r = h.send(&a, set(json!(good))).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(h.rows(), 1);
+
+    // Other keys are still not the owner's to set from here.
+    let other = post(
+        &a.branch,
+        K2,
+        "settings.set",
+        json!({"key": "idle_lock_minutes", "value": "9"}),
+    );
+    let r = h.send(&a, other).await;
+    assert_eq!((r.status, r.code()), (422, "VALIDATION_FAILED"));
+}

@@ -13,7 +13,7 @@ pub const SETUP_COMMAND_KINDS: [&str; 7] = [
     "branch.go_live",
 ];
 
-pub const SETTINGS_COMMAND_KEYS: [&str; 2] = ["branch.name", "branch.tz"];
+pub const SETTINGS_COMMAND_KEYS: [&str; 3] = ["branch.name", "branch.tz", "owner_alert.thresholds"];
 
 pub const COMMAND_SCHEMA_VERSION: u32 = 1;
 pub const COMMAND_PAYLOAD_MAX: usize = 16 * 1024;

@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use arena_proto::{
     AppError, DISCOUNT_MAX_PERCENT_BP, DISCOUNT_NOTE_MAX_CHARS, DiscountPreview,
     DiscountPreviewRequest, DiscountReason, ErrorCode, MAX_PRICE_MINOR, ManualDiscount,
+    OwnerAlertKind,
 };
 use arena_store::{
     CouponLineRow, DbConn, clear_order_discount, find_order, find_plan, list_coupon_lines,
@@ -16,6 +17,8 @@ use arena_store::{
 };
 
 use super::coupon::{self, CouponBill, CouponCtx, Quote};
+use super::mutate::Written;
+use super::owner_alert;
 
 fn invalid(field: &str, message: &str) -> AppError {
     AppError::with_field(ErrorCode::ValidationFailed, field, message)
@@ -30,6 +33,8 @@ pub(crate) struct Taken {
     pub(crate) note: Option<String>,
     /// Per tax rate (ascending): the part of the discount taken off the lines at that rate.
     pub(crate) shares: Vec<(u16, i64)>,
+    /// The bill the discount came off, after the coupon and before the discount.
+    pub(crate) before_minor: i64,
 }
 
 /// What a bill's coupon and manual discount take off it together.
@@ -177,6 +182,7 @@ pub(crate) fn quote(
         reason: d.reason,
         note,
         shares: coupon::spread(wanted, base, &left),
+        before_minor: i64::try_from(after_coupon).unwrap_or(i64::MAX),
     })
 }
 
@@ -200,13 +206,17 @@ pub(crate) fn price(
 }
 
 /// Writes the discount on the order at settle. A session bill (`reduce_totals`) is lowered by it;
-/// a counter or plan sale is written net already. `by` is the approving staff member.
+/// a counter or plan sale is written net already. `by` is the approving staff member. A discount
+/// over the owner's amount or percent limit also queues the owner's `large_discount` alert,
+/// tied to the order so the Undo of the settle skips it.
 pub(super) fn record(
     tx: &arena_store::StoreTx<'_>,
     taken: &Taken,
     order_id: &str,
     by: &str,
     reduce_totals: bool,
+    now_ms: i64,
+    written: &mut Vec<Written>,
 ) -> Result<(), AppError> {
     set_order_discount(
         tx,
@@ -216,7 +226,25 @@ pub(super) fn record(
         taken.note.as_deref(),
         by,
         reduce_totals,
-    )
+    )?;
+    let limits = owner_alert::thresholds(tx)?;
+    let share_of_bill = i128::from(taken.minor) * 100
+        > i128::from(limits.large_discount_percent) * i128::from(taken.before_minor);
+    if taken.minor > limits.large_discount_minor || share_of_bill {
+        owner_alert::queue(
+            tx,
+            &owner_alert::Alert {
+                kind: OwnerAlertKind::LargeDiscount,
+                source_ref: order_id,
+                order_id: Some(order_id),
+                player_id: "",
+                params: BTreeMap::from([("amount_minor", taken.minor.to_string())]),
+            },
+            now_ms,
+            written,
+        )?;
+    }
+    Ok(())
 }
 
 /// Undo of a session settle that took a discount: the amount goes back onto the bill's total and

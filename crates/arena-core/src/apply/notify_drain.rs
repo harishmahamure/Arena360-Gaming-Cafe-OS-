@@ -124,6 +124,7 @@ pub(super) fn mutate(
             Some(match p.channel {
                 NotifyChannel::Whatsapp => "whatsapp",
                 NotifyChannel::Sms => "sms",
+                NotifyChannel::App => "app",
             }),
             None,
             None,

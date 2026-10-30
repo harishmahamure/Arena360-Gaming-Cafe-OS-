@@ -244,6 +244,7 @@ pub(super) fn mutate(
                     not_before: now_ms + UNDO_WINDOW_MS,
                     params: Some(&params),
                     reminder_day: a.credit.as_ref().map(|(_, day)| day.as_str()),
+                    source_ref: None,
                 },
             )?;
             Ok(vec![Written {

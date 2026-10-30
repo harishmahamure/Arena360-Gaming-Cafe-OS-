@@ -255,7 +255,7 @@ development_status:
   8-31-credit-reminders-go-out-on-cycle-days-and-free-shows-an-over: done
   8-32-reports-credit-with-a-one-tap-reminder: done
   8-33-owner-alerts-by-web-push-and-whatsapp-and-the-alerts-tab: done
-  8-34-the-hub-raises-owner-alerts-for-cash-variance-low-stock-over: backlog
+  8-34-the-hub-raises-owner-alerts-for-cash-variance-low-stock-over: review
   8-35-the-cloud-alerts-the-owner-when-a-branch-goes-offline-during: backlog
   8-36-the-audit-builder-rebuilds-a-branch-month-on-demand: backlog
   8-37-the-builder-serves-audit-queries-from-a-local-cache: backlog

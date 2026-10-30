@@ -6,14 +6,18 @@
 //! runs through [`RULES`], one small check each, so a later story adds its rule (the erasure rule
 //! of Epic 9) without touching the drain. Story 8.30 added the "session no longer near its end"
 //! rule for the session and console messages, and Story 8.31 the "credit still owed" rule for the
-//! credit reminder. Nothing here writes: the task applies the result as `notify.*` intents.
+//! credit reminder. Story 8.34 added the owner-alert rows: they name no player, so the player and
+//! consent rules pass them, a `low_stock` alert is skipped once its Hub alert is no longer open, and
+//! the request carries the alert's parameters with the amount in the branch money format. Nothing
+//! here writes: the task applies the result as `notify.*` intents.
 
 use std::collections::BTreeMap;
 
 use arena_proto::{
     AppError, NOTIFY_EXPIRY_MS, NOTIFY_KIND_CONSOLE_5MIN, NOTIFY_KIND_CREDIT_REMINDER,
-    NOTIFY_KIND_LOW_BALANCE, NOTIFY_KIND_RECEIPT, NOTIFY_KIND_SESSION_ENDING, NotifyRequest,
-    SESSION_NEAR_END_MS, SnapshotLocale, valid_e164,
+    NOTIFY_KIND_LOW_BALANCE, NOTIFY_KIND_RECEIPT, NOTIFY_KIND_SESSION_ENDING,
+    NOTIFY_PURPOSE_OWNER_ALERT, NotifyRequest, OwnerAlertKind, SESSION_NEAR_END_MS, SnapshotLocale,
+    valid_e164,
 };
 use arena_store::{InvoiceOrder, LiveSession, NotifyRow, PlayerRow, Store};
 
@@ -47,6 +51,8 @@ pub struct RowContext<'a> {
     pub session: Option<&'a LiveSession>,
     /// What the player owes on credit now (0 when nothing, or no credit).
     pub owed_minor: i64,
+    /// For a `low_stock` alert: whether its Hub alert is still open.
+    pub alert_open: bool,
     pub now_ms: i64,
 }
 
@@ -60,10 +66,16 @@ pub const RULES: &[Rule] = &[
     receipt_ready,
     session_near_end,
     credit_still_owed,
+    stock_still_low,
 ];
 
+/// Whether the row raises an owner alert (it names no player and needs no consent).
+fn is_alert(row: &NotifyRow) -> bool {
+    row.purpose == NOTIFY_PURPOSE_OWNER_ALERT
+}
+
 fn player_exists(c: &RowContext<'_>) -> Verdict {
-    if c.player.is_some() {
+    if is_alert(c.row) || c.player.is_some() {
         Verdict::Pass
     } else {
         Verdict::Skip("player_gone")
@@ -71,6 +83,9 @@ fn player_exists(c: &RowContext<'_>) -> Verdict {
 }
 
 fn consent_current(c: &RowContext<'_>) -> Verdict {
+    if is_alert(c.row) {
+        return Verdict::Pass;
+    }
     match c.consent {
         Some((true, _)) => Verdict::Pass,
         _ => Verdict::Skip("consent_withdrawn"),
@@ -119,6 +134,16 @@ fn session_near_end(c: &RowContext<'_>) -> Verdict {
 fn credit_still_owed(c: &RowContext<'_>) -> Verdict {
     if c.row.kind == NOTIFY_KIND_CREDIT_REMINDER && c.owed_minor <= 0 {
         Verdict::Skip("credit_cleared")
+    } else {
+        Verdict::Pass
+    }
+}
+
+/// A `low_stock` alert goes out only while the Hub's own "Low stock" alert is still open: stock that
+/// was refilled within the Undo window, or since, is skipped.
+fn stock_still_low(c: &RowContext<'_>) -> Verdict {
+    if is_alert(c.row) && c.row.kind == OwnerAlertKind::LowStock.as_str() && !c.alert_open {
+        Verdict::Skip("stock_recovered")
     } else {
         Verdict::Pass
     }
@@ -187,6 +212,21 @@ fn request(
     }
 }
 
+/// The request of an owner alert: its stored parameters (the amount is added by the reader) and no
+/// recipient.
+fn alert_request(row: &NotifyRow) -> NotifyRequest {
+    let mut params = stored_params(row);
+    params.remove("amount_minor");
+    NotifyRequest {
+        outbox_id: row.id.clone(),
+        kind: row.kind.clone(),
+        purpose: NOTIFY_PURPOSE_OWNER_ALERT.to_owned(),
+        consent_policy_version: "owner".to_owned(),
+        recipient: String::new(),
+        params,
+    }
+}
+
 /// Decides every due row (see the module docs). A receipt's `Send` request lacks its `amount` and
 /// `cafe` parameters; [`SnapshotReader::notify_plan`] adds them.
 pub fn plan(
@@ -207,8 +247,21 @@ pub fn plan(
         let action = if now_ms - row.not_before > NOTIFY_EXPIRY_MS {
             DrainAction::Expire
         } else {
-            let player = store.player(&row.player_id)?;
-            let consent = store.latest_consent(&row.player_id, &row.purpose)?;
+            let alert = is_alert(&row);
+            let player = if alert {
+                None
+            } else {
+                store.player(&row.player_id)?
+            };
+            let consent = if alert {
+                None
+            } else {
+                store.latest_consent(&row.player_id, &row.purpose)?
+            };
+            let alert_open = match (&row.source_ref, row.kind.as_str()) {
+                (Some(id), "low_stock") if alert => store.alert_is_open(id)?,
+                _ => false,
+            };
             let order = match &row.order_id {
                 Some(id) => store.invoice_order(id)?,
                 None => None,
@@ -222,6 +275,10 @@ pub fn plan(
             };
             total_minor = match row.kind.as_str() {
                 NOTIFY_KIND_CREDIT_REMINDER => owed_minor,
+                _ if alert => stored_params(&row)
+                    .get("amount_minor")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0),
                 NOTIFY_KIND_LOW_BALANCE => stored_params(&row)
                     .get("amount_minor")
                     .and_then(|v| v.parse().ok())
@@ -239,11 +296,13 @@ pub fn plan(
                 order: order.as_ref(),
                 session,
                 owed_minor,
+                alert_open,
                 now_ms,
             };
             match (decide(&ctx), &player) {
                 (Verdict::Wait, _) => DrainAction::Wait,
                 (Verdict::Skip(reason), _) => DrainAction::Skip(reason.to_owned()),
+                (Verdict::Pass, _) if alert => DrainAction::Send(Box::new(alert_request(&row))),
                 (Verdict::Pass, None) => DrainAction::Skip("player_gone".to_owned()),
                 (Verdict::Pass, Some((p, _, wrapped))) => {
                     let open =
@@ -267,29 +326,44 @@ pub fn plan(
     Ok(items)
 }
 
+/// `minor` as the branch writes money (raw minor units when the branch has no locale yet).
+fn money_text(minor: i64, locale: Option<&SnapshotLocale>) -> String {
+    match locale {
+        Some(l) => format_minor(
+            minor,
+            usize::from(l.exponent),
+            &l.symbol,
+            l.symbol_position,
+            l.number_format,
+        ),
+        None => minor.to_string(),
+    }
+}
+
 /// Adds the money (as the branch writes it) and `cafe` parameters the templates need: `amount`
 /// for a receipt, `balance` for a low-balance message, `cafe` for all.
 fn complete(item: &mut DrainItem, cafe: &str, locale: Option<&SnapshotLocale>) {
     let DrainAction::Send(req) = &mut item.action else {
         return;
     };
+    if req.purpose == NOTIFY_PURPOSE_OWNER_ALERT {
+        // An alert names the branch itself, so it has no `cafe`; its money is `amount`.
+        let has_amount = OwnerAlertKind::parse(&req.kind)
+            .is_some_and(|k| k.required_params().contains(&"amount"));
+        if has_amount {
+            req.params
+                .insert("amount".to_owned(), money_text(item.total_minor, locale));
+        }
+        return;
+    }
     let money = match req.kind.as_str() {
         NOTIFY_KIND_RECEIPT | NOTIFY_KIND_CREDIT_REMINDER => Some("amount"),
         NOTIFY_KIND_LOW_BALANCE => Some("balance"),
         _ => None,
     };
     if let Some(name) = money {
-        let amount = match locale {
-            Some(l) => format_minor(
-                item.total_minor,
-                usize::from(l.exponent),
-                &l.symbol,
-                l.symbol_position,
-                l.number_format,
-            ),
-            None => item.total_minor.to_string(),
-        };
-        req.params.insert(name.to_owned(), amount);
+        req.params
+            .insert(name.to_owned(), money_text(item.total_minor, locale));
     }
     req.params.insert("cafe".to_owned(), cafe.to_owned());
 }

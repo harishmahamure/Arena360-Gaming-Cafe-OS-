@@ -56,8 +56,9 @@ test("on Free, Add branch and Standby are locked; on paid, Add branch is a form"
 }) => {
   await stubCloud(page, FREE);
   await page.goto("/account/branches");
-  // The branch card (Back up now), Add branch and Standby.
-  await expect(page.getByText(t("staff.tier.available_on", { tier: "Basic" }))).toHaveCount(3);
+  // The branch card (Back up now) and Add branch lock on Basic; the card's Standby PC on Premium.
+  await expect(page.getByText(t("staff.tier.available_on", { tier: "Basic" }))).toHaveCount(2);
+  await expect(page.getByText(t("staff.tier.available_on", { tier: "Premium" }))).toHaveCount(1);
   await expect(page.getByRole("button", { name: t("owner.branches.add") })).toHaveCount(0);
   await page.unroute("**/v1/**");
   await stubCloud(page, PAID);
@@ -65,4 +66,6 @@ test("on Free, Add branch and Standby are locked; on paid, Add branch is a form"
   await expect(page.getByRole("button", { name: t("owner.branches.add") })).toBeVisible();
   // Only the Free branch in the list keeps its lock (Back up now).
   await expect(page.getByText(t("staff.tier.available_on", { tier: "Basic" }))).toHaveCount(1);
+  // Neither of these branches has the standby flag.
+  await expect(page.getByText(t("staff.tier.available_on", { tier: "Premium" }))).toHaveCount(2);
 });

@@ -84,6 +84,36 @@ pub enum HubPlatform {
     Android,
 }
 
+/// What a Hub device is to its branch (Story 9.18): the one `main` Hub that serves the floor, or
+/// the one LAN `standby` that waits to take over.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum HubRole {
+    #[default]
+    Main,
+    Standby,
+}
+
+impl HubRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Standby => "standby",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        [Self::Main, Self::Standby]
+            .into_iter()
+            .find(|r| r.as_str() == s)
+    }
+}
+
+fn is_main(role: &HubRole) -> bool {
+    *role == HubRole::Main
+}
+
 impl HubPlatform {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -106,6 +136,10 @@ pub struct HubPairRequest {
     pub platform: HubPlatform,
     pub hub_instance_id: String,
     pub version: String,
+    /// What this install pairs as. A standby code pairs only a `standby` request, and the Hub
+    /// code only a `main` one, so a code typed on the wrong PC is refused before it is used.
+    #[serde(default, skip_serializing_if = "is_main")]
+    pub role: HubRole,
 }
 
 impl std::fmt::Debug for HubPairRequest {
@@ -115,6 +149,7 @@ impl std::fmt::Debug for HubPairRequest {
             .field("platform", &self.platform)
             .field("hub_instance_id", &self.hub_instance_id)
             .field("version", &self.version)
+            .field("role", &self.role)
             .finish()
     }
 }
@@ -140,6 +175,10 @@ pub struct HubPairResponse {
     pub restore_pending: bool,
     #[serde(default)]
     pub branch_name: String,
+    /// `standby` for a standby code (Story 9.18): the response then carries no bootstrap and the
+    /// Hub never runs `branch.bootstrap`.
+    #[serde(default, skip_serializing_if = "is_main")]
+    pub role: HubRole,
 }
 
 pub const SETUP_CODE_HUB_TTL_MS: i64 = 72 * 60 * 60 * 1000;
@@ -581,7 +620,11 @@ mod tests {
             platform: HubPlatform::Android,
             hub_instance_id: "i".into(),
             version: "0.1.0".into(),
+            role: HubRole::Main,
         };
+        assert_eq!(HubRole::parse("standby"), Some(HubRole::Standby));
+        assert_eq!(HubRole::parse("backup"), None);
+        assert!(!serde_json::to_string(&req).unwrap().contains("role"));
         assert!(!format!("{req:?}").contains("7K2M9PQR"));
         let res = HubPairResponse {
             hub_id: "h".into(),
@@ -615,6 +658,7 @@ mod tests {
             }),
             restore_pending: false,
             branch_name: "n".into(),
+            role: HubRole::Main,
         };
         assert!(!format!("{res:?}").contains("secret"));
         let hub = PairHubRequest {

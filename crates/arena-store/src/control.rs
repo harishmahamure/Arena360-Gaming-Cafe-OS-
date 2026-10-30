@@ -235,6 +235,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
         version: 32,
         sql: include_str!("../control-migrations/0032_hub_backup_view.sql"),
     },
+    ControlMigration {
+        version: 33,
+        sql: include_str!("../control-migrations/0033_standby_hub.sql"),
+    },
 ];
 
 /// The `gz_control` schema version this binary writes.

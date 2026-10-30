@@ -91,6 +91,8 @@ pub enum ErrorCode {
     FeatureNotEntitled,
     /// The branch's Hub cannot run the feature on its platform (live view needs the Windows Hub).
     PlatformUnsupported,
+    /// The branch already has a standby Hub (or a standby code waiting); only one is allowed.
+    StandbyExists,
     CloudUnreachable,
     HubNotPaired,
     /// The group still has devices; move them out first.
@@ -272,6 +274,7 @@ impl ErrorCode {
             Self::PairCodeExpired => "PAIR_CODE_EXPIRED",
             Self::FeatureNotEntitled => "FEATURE_NOT_ENTITLED",
             Self::PlatformUnsupported => "PLATFORM_UNSUPPORTED",
+            Self::StandbyExists => "STANDBY_EXISTS",
             Self::CloudUnreachable => "CLOUD_UNREACHABLE",
             Self::HubNotPaired => "HUB_NOT_PAIRED",
             Self::GroupNotEmpty => "GROUP_NOT_EMPTY",
@@ -454,6 +457,7 @@ mod tests {
             (ErrorCode::PairCodeExpired, "PAIR_CODE_EXPIRED"),
             (ErrorCode::FeatureNotEntitled, "FEATURE_NOT_ENTITLED"),
             (ErrorCode::PlatformUnsupported, "PLATFORM_UNSUPPORTED"),
+            (ErrorCode::StandbyExists, "STANDBY_EXISTS"),
             (ErrorCode::CloudUnreachable, "CLOUD_UNREACHABLE"),
             (ErrorCode::HubNotPaired, "HUB_NOT_PAIRED"),
             (ErrorCode::GroupNotEmpty, "GROUP_NOT_EMPTY"),

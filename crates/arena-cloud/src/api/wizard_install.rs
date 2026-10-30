@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use arena_proto::{
-    ActivePairingCode, AppError, ErrorCode, InstallHubState, IssuePairingCode, PAIRING_CODE_TTL_MS,
-    PairingCodeIssued, SetupCodeReveal, Tier,
+    ActivePairingCode, AppError, ErrorCode, HubPlatform, HubRole, InstallHubState,
+    IssuePairingCode, PAIRING_CODE_TTL_MS, PairingCodeIssued, SetupCodeReveal, Tier,
 };
 use arena_store::control::{Branch, IssueOutcome, NewPairingCode, RateRule};
 use axum::extract::{Query, State};
@@ -94,8 +94,59 @@ async fn post_code(
     ApiJson(body): ApiJson<IssuePairingCode>,
 ) -> Result<impl IntoResponse, ApiError> {
     let branch = ready_branch(&st, &signed.owner.id, body.branch_id.as_deref()).await?;
+    issue(&st, &signed.owner.id, &branch, HubRole::Main).await
+}
+
+/// A single-use standby code for the branch's second PC (Story 9.18). It needs a plan with the
+/// `standby` flag and a paired Windows main Hub; a branch keeps one standby (`STANDBY_EXISTS`).
+async fn post_standby_code(
+    State(st): State<Arc<AuthState>>,
+    RequireSetupComplete(signed): RequireSetupComplete,
+    ApiJson(body): ApiJson<IssuePairingCode>,
+) -> Result<impl IntoResponse, ApiError> {
+    let branch = ready_branch(&st, &signed.owner.id, body.branch_id.as_deref()).await?;
+    let tier = st
+        .db
+        .entitlement(&branch.id)
+        .await
+        .map_err(ApiError::internal)?
+        .map_or(Tier::Free, |e| e.tier_at(st.now()));
+    if !tier.defaults().flags.contains(&"standby") {
+        return Err(AppError::new(
+            ErrorCode::TierLocked,
+            "A standby PC is available on Premium.",
+        )
+        .into());
+    }
+    let hub = st
+        .db
+        .active_hub(&branch.id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| {
+            ApiError::from(AppError::new(
+                ErrorCode::StepNotReady,
+                "Pair the main Hub first.",
+            ))
+        })?;
+    if hub.platform != HubPlatform::Windows {
+        return Err(AppError::new(
+            ErrorCode::PlatformUnsupported,
+            "A standby needs the Windows Hub.",
+        )
+        .into());
+    }
+    issue(&st, &signed.owner.id, &branch, HubRole::Standby).await
+}
+
+async fn issue(
+    st: &AuthState,
+    owner_id: &str,
+    branch: &Branch,
+    role: HubRole,
+) -> Result<impl IntoResponse + use<>, ApiError> {
     let now = st.now();
-    let key = format!("{ISSUE_PREFIX}{}", branch.id);
+    let key = format!("{ISSUE_PREFIX}{}:{}", branch.id, role.as_str());
     let rule = RateRule {
         key: &key,
         prune_prefix: ISSUE_PREFIX,
@@ -124,6 +175,7 @@ async fn post_code(
                 id: &id,
                 branch_id: &branch.id,
                 code_hash: &hash,
+                role,
                 now,
                 expires_at,
             })
@@ -131,7 +183,7 @@ async fn post_code(
             .map_err(ApiError::internal)?;
         match outcome {
             IssueOutcome::Issued => {
-                tracing::info!(owner_id = %signed.owner.id, branch_id = %branch.id, pairing_code_id = %id, "hub pairing code issued");
+                tracing::info!(owner_id = %owner_id, branch_id = %branch.id, role = role.as_str(), pairing_code_id = %id, "hub pairing code issued");
                 return Ok((
                     [(header::CACHE_CONTROL, "no-store")],
                     Json(PairingCodeIssued {
@@ -142,6 +194,13 @@ async fn post_code(
                 ));
             }
             IssueOutcome::NotReady => return Err(step_not_ready()),
+            IssueOutcome::StandbyExists => {
+                return Err(AppError::new(
+                    ErrorCode::StandbyExists,
+                    "This branch already has a standby PC.",
+                )
+                .into());
+            }
             IssueOutcome::HashTaken => {
                 tracing::warn!(branch_id = %branch.id, "pairing code collided; drawing another");
             }
@@ -204,6 +263,7 @@ pub(super) fn router(st: Arc<AuthState>) -> Router {
     Router::new()
         .route("/wizard/install-hub", get(get_install_hub))
         .route("/wizard/install-hub/code", post(post_code))
+        .route("/wizard/install-hub/standby-code", post(post_standby_code))
         .route("/wizard/setup-code/reveal", post(post_reveal_setup_code))
         .with_state(st)
 }

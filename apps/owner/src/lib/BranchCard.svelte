@@ -132,6 +132,43 @@
     }
   }
 
+  let standbyIssued: PairingCodeIssued | null = $state(null);
+  let standbyBusy = $state(false);
+  let standbyError: MessageKey | null = $state(null);
+
+  /** The standby PC (Story 9.18): a plan with the `standby` flag and a paired Windows main Hub. */
+  const standbyOn = $derived(branch.flags.includes("standby"));
+  const standbyPaired = $derived(branch.standby?.paired === true);
+  const standbySeen = $derived.by(() => {
+    const at = branch.standby?.last_seen_at;
+    if (at === undefined) return t("owner.branches.standby.paired");
+    const [key, n] = age(new Date(at).toISOString());
+    return t("owner.branches.standby.seen", { age: t(key, { n }) });
+  });
+
+  async function addStandby() {
+    standbyBusy = true;
+    standbyError = null;
+    const res = await send<PairingCodeIssued>("POST", "/wizard/install-hub/standby-code", {
+      branch_id: branch.id,
+    });
+    standbyBusy = false;
+    if (res.ok) {
+      standbyIssued = res.data;
+      await refresh();
+      return;
+    }
+    standbyError =
+      res.code === "STANDBY_EXISTS"
+        ? "owner.branches.standby.exists"
+        : res.code === "STEP_NOT_READY"
+          ? "owner.branches.standby.needs_hub"
+          : res.code === "PLATFORM_UNSUPPORTED"
+            ? "owner.branches.standby.needs_windows"
+            : "owner.branches.error.generic";
+    if (res.code === "STANDBY_EXISTS" || res.code === "TIER_LOCKED") await refresh();
+  }
+
   async function edit() {
     name = branch.name;
     timezone = branch.timezone;
@@ -307,6 +344,49 @@
         <CommandRow row={backupRow} {now} />
       </ul>
     {/if}
+    <div class="standby" data-testid="standby">
+      <p class="type-hub-label">{t("owner.branches.standby")}</p>
+      {#if !standbyOn}
+        <TierLock tier="Premium" />
+      {:else if branch.hub.platform === "android"}
+        <p>{t("owner.branches.standby.needs_windows")}</p>
+      {:else if standbyPaired}
+        <p data-testid="standby-paired">{standbySeen}</p>
+      {:else if !branch.hub.paired}
+        <p class="hint">{t("owner.branches.standby.needs_hub")}</p>
+      {:else}
+        {#if standbyIssued}
+          <PairingCode
+            code={standbyIssued.code}
+            expiresAt={standbyIssued.expires_at}
+            serverNow={standbyIssued.server_now}
+            onregenerate={addStandby}
+            regenerating={standbyBusy}
+          />
+          <p class="hint">{t("owner.branches.standby.note")}</p>
+        {:else}
+          {#if branch.standby?.code}
+            <p data-testid="standby-waiting">
+              {t("owner.branches.standby.waiting", {
+                time: formatTime(branch.standby.code.expires_at, branch.timezone),
+              })}
+            </p>
+          {/if}
+          <div class="actions">
+            <Button
+              label={branch.standby?.code
+                ? "owner.branches.standby.new"
+                : "owner.branches.standby.add"}
+              variant="secondary"
+              onclick={addStandby}
+              disabled={standbyBusy}
+              disabledReason="owner.branches.standby.working"
+            />
+          </div>
+        {/if}
+        {#if standbyError}<p role="alert">{t(standbyError)}</p>{/if}
+      {/if}
+    </div>
     {#if branch.key_request}
       {@const ask = branch.key_request}
       {@const [ageKey, ageN] = age(new Date(ask.requested_at).toISOString())}
@@ -426,6 +506,12 @@
     padding: var(--space-3);
     border: 1px solid var(--line);
     border-radius: var(--radius-sm);
+  }
+
+  .standby {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
   }
 
   .replaced {

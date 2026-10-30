@@ -3,7 +3,7 @@
 #[path = "support/sqld.rs"]
 mod sqld;
 
-use arena_proto::Tier;
+use arena_proto::{HubRole, Tier};
 use arena_store::control::{
     BranchProfile, ControlDb, IssueOutcome, NewOtpChallenge, NewOwner, NewOwnerSession,
     NewPairingCode, NewTenantBranch, PAIRING_HISTORY_MS, RedeemInvalid, Redeemed, SignupCompletion,
@@ -86,6 +86,7 @@ fn code<'a>(id: &'a str, branch_id: &'a str, hash: &'a str, now: i64) -> NewPair
         id,
         branch_id,
         code_hash: hash,
+        role: HubRole::Main,
         now,
         expires_at: now + MIN15,
     }
@@ -301,6 +302,68 @@ async fn exercise(db: &ControlDb, second: &ControlDb) {
         .collect();
     assert_eq!(ids, ["p10"]);
     assert!(db.pairing_codes_of("b2").await.unwrap().is_empty());
+
+    // Story 9.18: a standby code lives next to the Hub code of the same branch, and each role
+    // replaces only its own.
+    let s = later + 1_000;
+    let standby = |id, hash, now| NewPairingCode {
+        role: HubRole::Standby,
+        ..code(id, "b1", hash, now)
+    };
+    assert_eq!(
+        db.issue_pairing_code(&standby("p11", "h11", s))
+            .await
+            .unwrap(),
+        IssueOutcome::Issued
+    );
+    let hub_code = db.active_pairing_code("b1", s).await.unwrap().unwrap();
+    assert_eq!(
+        (hub_code.id.as_str(), hub_code.role),
+        ("p10", HubRole::Main)
+    );
+    let standby_code = db.active_standby_code("b1", s).await.unwrap().unwrap();
+    assert_eq!(
+        (standby_code.id.as_str(), standby_code.role),
+        ("p11", HubRole::Standby)
+    );
+    assert_eq!(
+        db.issue_pairing_code(&standby("p12", "h12", s + 1_000))
+            .await
+            .unwrap(),
+        IssueOutcome::Issued
+    );
+    assert_eq!(
+        db.active_standby_code("b1", s + 1_000)
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        "p12"
+    );
+    assert_eq!(
+        db.active_pairing_code("b1", s + 1_000)
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        "p10",
+        "a new standby code leaves the Hub code alone"
+    );
+    assert_eq!(
+        db.issue_pairing_code(&code("p13", "b1", "h13", s + 2_000))
+            .await
+            .unwrap(),
+        IssueOutcome::Issued
+    );
+    assert_eq!(
+        db.active_standby_code("b1", s + 2_000)
+            .await
+            .unwrap()
+            .unwrap()
+            .id,
+        "p12",
+        "a new Hub code leaves the standby code alone"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

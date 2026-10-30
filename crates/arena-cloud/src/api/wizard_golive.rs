@@ -53,6 +53,14 @@ async fn view(st: &AuthState, branch: &Branch) -> Result<GoLiveView, ApiError> {
         .transpose()
         .map_err(ApiError::internal)?
         .and_then(|s| s.status);
+    // The item is advisory and never blocks Go live; it is done while a standby PC is paired
+    // (Story 9.18) and not done again once the owner replaces it.
+    let standby_paired = st
+        .db
+        .standby_hub(&branch.id)
+        .await
+        .map_err(ApiError::internal)?
+        .is_some();
     let items = vec![
         GoLiveItemView {
             key: GoLiveItem::OpeningHours,
@@ -64,7 +72,7 @@ async fn view(st: &AuthState, branch: &Branch) -> Result<GoLiveView, ApiError> {
         },
         GoLiveItemView {
             key: GoLiveItem::Standby,
-            done: false,
+            done: standby_paired,
         },
     ]
     .into_iter()

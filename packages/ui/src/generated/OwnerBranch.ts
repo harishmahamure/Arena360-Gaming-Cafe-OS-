@@ -2,6 +2,7 @@
 import type { BranchHub } from "./BranchHub";
 import type { BranchSetupProgress } from "./BranchSetupProgress";
 import type { OwnerBackup } from "./OwnerBackup";
+import type { OwnerStandby } from "./OwnerStandby";
 import type { PendingKeyRequest } from "./PendingKeyRequest";
 import type { Tier } from "./Tier";
 
@@ -30,4 +31,8 @@ export type OwnerBranch = {
    * before a paid Hub has sent one.
    */
   backup?: OwnerBackup;
+  /**
+   * The branch's standby PC (Story 9.18): present while one is paired or its code is waiting.
+   */
+  standby?: OwnerStandby;
 };

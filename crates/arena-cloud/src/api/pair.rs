@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use arena_proto::{
     AppError, BOOTSTRAP_DAY_START_MIN, BootstrapOwner, BootstrapProfile, BranchBootstrapCommand,
-    ErrorCode, HUB_TOKEN_PREFIX, HubPairRequest, HubPairResponse, HubPlatform, OWNER_ROLE,
+    ErrorCode, HUB_TOKEN_PREFIX, HubPairRequest, HubPairResponse, HubPlatform, HubRole, OWNER_ROLE,
     PAIR_ATTEMPTS_PER_IP_PER_HOUR, PAIR_FAILURES_PER_CODE, SETUP_CODE_HUB_TTL_MS, TaxSettings,
     Tier, check_bootstrap, normalize_pairing_code, valid_pairing_code,
 };
@@ -65,6 +65,16 @@ fn expired() -> ApiError {
         "That code has expired. Get a new code from your browser.",
     )
     .into()
+}
+
+fn wrong_role(code: HubRole) -> ApiError {
+    let message = match code {
+        HubRole::Standby => "That is a standby code. Enter it on the standby PC.",
+        HubRole::Main => {
+            "That is a Hub code, not a standby code. Get a standby code from your browser."
+        }
+    };
+    AppError::new(ErrorCode::PairCodeInvalid, message).into()
 }
 
 fn not_entitled() -> ApiError {
@@ -144,6 +154,7 @@ async fn classify(
     st: &AuthState,
     code_hash: &str,
     platform: HubPlatform,
+    role: HubRole,
     now: i64,
 ) -> Result<Candidate, ApiError> {
     let Some(code) = st
@@ -160,6 +171,9 @@ async fn classify(
     if now >= code.expires_at {
         return Err(expired());
     }
+    if code.role != role {
+        return Err(wrong_role(code.role));
+    }
     let branch = st
         .db
         .branch(&code.branch_id)
@@ -172,6 +186,23 @@ async fn classify(
         .await
         .map_err(ApiError::internal)?;
     let tier = entitlement.as_ref().map_or(Tier::Free, |e| e.tier_at(now));
+    if role == HubRole::Standby {
+        // A standby is a second Windows PC on a plan that includes it (Story 9.18).
+        if platform != HubPlatform::Windows {
+            return Err(AppError::new(
+                ErrorCode::PlatformUnsupported,
+                "A standby needs the Windows Hub.",
+            )
+            .into());
+        }
+        if !tier.defaults().flags.contains(&"standby") {
+            return Err(AppError::new(
+                ErrorCode::TierLocked,
+                "A standby Hub is available on Premium.",
+            )
+            .into());
+        }
+    }
     if platform == HubPlatform::Windows && tier == Tier::Free {
         record_failure(st, &code, now).await;
         tracing::info!(
@@ -271,7 +302,7 @@ async fn pair(
         return Err(invalid());
     }
     let code_hash = st.pairing_code_hash(&code);
-    let c = classify(&st, &code_hash, body.platform, now).await?;
+    let c = classify(&st, &code_hash, body.platform, body.role, now).await?;
 
     let hub_id = ulid::Ulid::generate().to_string();
     let secret = URL_SAFE_NO_PAD.encode(random_bytes::<32>().map_err(ApiError::internal)?);
@@ -285,51 +316,83 @@ async fn pair(
     );
     let licence = st.licence.sign(&claims).map_err(ApiError::internal)?;
 
-    let setup_code = new_pairing_code().map_err(ApiError::internal)?;
-    let setup_hash = {
-        let code = setup_code.clone();
-        blocking(move || hash_secret(&code)).await?
+    let standby = body.role == HubRole::Standby;
+    if standby
+        && st
+            .db
+            .active_hub(&c.branch.id)
+            .await
+            .map_err(ApiError::internal)?
+            .is_some_and(|h| h.hub_instance_id == body.hub_instance_id)
+    {
+        return Err(AppError::new(
+            ErrorCode::PairCodeInvalid,
+            "This PC is already the main Hub. Use a second PC as the standby.",
+        )
+        .into());
+    }
+    // A standby makes no owner sign-in code and applies no bootstrap: it only joins the branch
+    // (Story 9.18). The main Hub's owner code and bootstrap are made first, so a branch that cannot
+    // bootstrap refuses before the code is spent.
+    let main_parts = if standby {
+        None
+    } else {
+        let setup_code = new_pairing_code().map_err(ApiError::internal)?;
+        let setup_hash = {
+            let code = setup_code.clone();
+            blocking(move || hash_secret(&code)).await?
+        };
+        let sealed = st
+            .mfa_key
+            .seal(&c.branch.id, setup_code.as_bytes())
+            .map_err(ApiError::internal)?;
+        let owner = st
+            .db
+            .owner_of_branch(&c.branch.id)
+            .await
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::internal("branch without an owner"))?;
+        bootstrap_of(
+            &c.branch,
+            &owner,
+            setup_hash.clone(),
+            now + SETUP_CODE_HUB_TTL_MS,
+        )?;
+        Some((setup_hash, sealed, owner))
     };
-    let sealed = st
-        .mfa_key
-        .seal(&c.branch.id, setup_code.as_bytes())
-        .map_err(ApiError::internal)?;
-
-    let owner = st
-        .db
-        .owner_of_branch(&c.branch.id)
-        .await
-        .map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError::internal("branch without an owner"))?;
-    bootstrap_of(
-        &c.branch,
-        &owner,
-        setup_hash.clone(),
-        now + SETUP_CODE_HUB_TTL_MS,
-    )?;
 
     // Decided before the pairing revokes the earlier Hub: a branch with history is restored on the
     // new Hub, not started again.
-    let restore_pending = st
-        .db
-        .branch_has_history(&c.branch.id, &body.hub_instance_id)
-        .await
-        .map_err(ApiError::internal)?;
+    let restore_pending = !standby
+        && st
+            .db
+            .branch_has_history(&c.branch.id, &body.hub_instance_id)
+            .await
+            .map_err(ApiError::internal)?;
     let outcome = st
         .db
         .pair_hub(&NewHub {
             id: &hub_id,
             branch_id: &c.branch.id,
             platform: body.platform,
+            role: body.role,
             hub_instance_id: &body.hub_instance_id,
             version: &body.version,
             token_hash: &token_hash,
             code_hash: &code_hash,
-            setup: NewSetupCode {
-                code_hash: &setup_hash,
-                hub_expires_at: now + SETUP_CODE_HUB_TTL_MS,
-                ciphertext: &sealed.ciphertext,
-                nonce: &sealed.nonce,
+            setup: match &main_parts {
+                Some((setup_hash, sealed, _)) => NewSetupCode {
+                    code_hash: setup_hash,
+                    hub_expires_at: now + SETUP_CODE_HUB_TTL_MS,
+                    ciphertext: &sealed.ciphertext,
+                    nonce: &sealed.nonce,
+                },
+                None => NewSetupCode {
+                    code_hash: "",
+                    hub_expires_at: 0,
+                    ciphertext: &[],
+                    nonce: &[],
+                },
             },
             now,
         })
@@ -343,24 +406,26 @@ async fn pair(
                 pairing_code_id = %c.code.id,
                 "hub pairing lost to a concurrent use of the code"
             );
-            return Err(classify(&st, &code_hash, body.platform, now)
+            return Err(classify(&st, &code_hash, body.platform, body.role, now)
                 .await
                 .err()
                 .unwrap_or_else(invalid));
         }
     };
-    let bootstrap = if restore_pending {
-        None
-    } else {
-        let setup = st
-            .db
-            .setup_code(&c.branch.id)
-            .await
-            .map_err(ApiError::internal)?
-            .ok_or_else(|| ApiError::internal("pairing left no owner setup code"))?;
-        let mut bootstrap = bootstrap_of(&c.branch, &owner, setup.code_hash, setup.hub_expires_at)?;
-        bootstrap.template = super::setup_start::bootstrap_link(&st, &c.branch, now).await;
-        Some(bootstrap)
+    let bootstrap = match &main_parts {
+        Some((_, _, owner)) if !restore_pending => {
+            let setup = st
+                .db
+                .setup_code(&c.branch.id)
+                .await
+                .map_err(ApiError::internal)?
+                .ok_or_else(|| ApiError::internal("pairing left no owner setup code"))?;
+            let mut bootstrap =
+                bootstrap_of(&c.branch, owner, setup.code_hash, setup.hub_expires_at)?;
+            bootstrap.template = super::setup_start::bootstrap_link(&st, &c.branch, now).await;
+            Some(bootstrap)
+        }
+        _ => None,
     };
     tracing::info!(
         hub_id = %hub_id,
@@ -368,6 +433,7 @@ async fn pair(
         branch_id = %c.branch.id,
         pairing_code_id = %c.code.id,
         platform = body.platform.as_str(),
+        role = body.role.as_str(),
         tier = c.tier.as_str(),
         revoked_hubs = revoked.len(),
         restore_pending,
@@ -384,6 +450,7 @@ async fn pair(
         bootstrap,
         restore_pending,
         branch_name: c.branch.name,
+        role: body.role,
     }))
 }
 

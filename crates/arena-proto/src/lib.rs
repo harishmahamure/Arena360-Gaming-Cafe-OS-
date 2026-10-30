@@ -338,7 +338,7 @@ pub use pairing::{
     ActivePairingCode, BOOTSTRAP_DAY_START_MIN, BootstrapOwner, BootstrapProfile,
     BranchBootstrapCommand, HEARTBEAT_BOOT_INTERVAL_S, HEARTBEAT_LIVE_INTERVAL_S,
     HEARTBEAT_MIN_GAP_MS, HUB_TOKEN_PREFIX, HeartbeatBackup, HeartbeatFence, HeartbeatRequest,
-    HeartbeatResponse, HubPairRequest, HubPairResponse, HubPlatform, InstallHubState,
+    HeartbeatResponse, HubPairRequest, HubPairResponse, HubPlatform, HubRole, InstallHubState,
     IssuePairingCode, OWNER_ROLE, PAIR_ATTEMPTS_PER_IP_PER_HOUR, PAIR_FAILURES_PER_CODE,
     PAIRING_CODE_ALPHABET, PAIRING_CODE_LEN, PAIRING_CODE_TTL_MS, PairHubOk, PairHubRequest,
     PairingCodeIssued, ResendUnavailable, SETUP_CODE_HUB_TTL_MS, SETUP_CODE_PLAINTEXT_TTL_MS,
@@ -576,9 +576,9 @@ pub use wizard::{
     AddBranch, BRANCH_CODE_MAX, BRANCH_CODE_MIN, BranchCodeSet, BranchHub, BranchSetupProgress,
     COUNTRIES, CafeDetails, ChooseTier, Country, CountryRow, GoLiveBlocker, GoLiveItem,
     GoLiveItemView, GoLiveView, KEY_BRANCH_CODE, KEY_BRANCH_CODE_LOCKED_AT, KEY_BRANCH_NAME,
-    OwnerBackup, OwnerBranch, SetBranchCode, StepState, TierChoices, TierOption, TierUnavailable,
-    UpdateBranch, WizardBranch, WizardState, WizardStep, WizardStepInfo, WizardTenant, country,
-    current_step, valid_branch_code,
+    OwnerBackup, OwnerBranch, OwnerStandby, SetBranchCode, StepState, TierChoices, TierOption,
+    TierUnavailable, UpdateBranch, WizardBranch, WizardState, WizardStep, WizardStepInfo,
+    WizardTenant, country, current_step, valid_branch_code,
 };
 
 /// Returns this crate's name.

@@ -2677,3 +2677,353 @@ fn claim_body(expected: &str, instance: &str, parent_seq: i64) -> Value {
         "fork": {"parent_epoch": expected, "parent_seq": parent_seq},
     })
 }
+
+// ---- Story 9.18: the owner issues a standby code and a second PC pairs as standby ----
+
+impl Harness {
+    async fn pair_as(
+        &self,
+        code: &str,
+        platform: &str,
+        instance: &str,
+        role: Option<&str>,
+    ) -> Reply {
+        let mut body = json!({
+            "code": code,
+            "platform": platform,
+            "hub_instance_id": instance,
+            "version": "0.1.0",
+        });
+        if let Some(role) = role {
+            body["role"] = json!(role);
+        }
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/v1/pair")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::new(PEER.parse().unwrap(), 40000)));
+        reply(self.app.clone().oneshot(req).await.unwrap()).await
+    }
+
+    async fn standby_code(&self, access: &str, branch: &str) -> Reply {
+        self.call(
+            "POST",
+            "/v1/wizard/install-hub/standby-code",
+            Some(json!({"branch_id": branch})),
+            access,
+        )
+        .await
+    }
+
+    async fn comp(&self, branch: &str, tier: Tier) {
+        self.db
+            .grant_comp(&CompGrant {
+                branch_id: branch,
+                tier,
+                until: T0 + 30 * 24 * 60 * 60 * 1000,
+                audit_id: &ulid::Ulid::generate().to_string(),
+                operator: "ops",
+                reason: "standby cafe",
+                details_json: "{}",
+                now: T0,
+            })
+            .await
+            .unwrap();
+    }
+
+    /// A Premium café whose Windows main Hub is paired (instance `MAIN`).
+    async fn premium_with_main(&self) -> (String, String, Reply) {
+        let (a, branch) = self.ready().await;
+        self.comp(&branch, Tier::Premium).await;
+        let (code, _) = self.issue(&a).await;
+        let main = self.pair_as(&code, "windows", "MAIN", None).await;
+        assert_eq!(main.status, 200, "{}", main.body);
+        (a, branch, main)
+    }
+
+    async fn owner_branch(&self, access: &str) -> Value {
+        let r = self.call("GET", "/v1/branches", None, access).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        r.body[0].clone()
+    }
+}
+
+fn code_of(r: &Reply) -> String {
+    r.body["code"].as_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn a_premium_owner_issues_a_standby_code_and_a_second_pc_pairs_as_standby_beside_the_main_hub()
+ {
+    let h = Harness::new().await;
+    let (a, branch, main) = h.premium_with_main().await;
+    assert!(h.owner_branch(&a).await.get("standby").is_none());
+
+    let issued = h.standby_code(&a, &branch).await;
+    assert_eq!(issued.status, 200, "{}", issued.body);
+    let code = code_of(&issued);
+    assert_eq!(code.len(), 8);
+    assert_eq!(
+        issued.body["expires_at"].as_i64().unwrap(),
+        h.now.load(Ordering::SeqCst) + MIN15
+    );
+    let waiting = h.owner_branch(&a).await;
+    assert_eq!(
+        waiting["standby"],
+        json!({"paired": false, "code": {"expires_at": issued.body["expires_at"]}})
+    );
+
+    let paired = h.pair_as(&code, "windows", "SECOND", Some("standby")).await;
+    assert_eq!(paired.status, 200, "{}", paired.body);
+    assert_eq!(paired.body["role"], "standby");
+    assert_eq!(paired.body["restore_pending"], false);
+    assert!(paired.body.get("bootstrap").is_none(), "{}", paired.body);
+    assert_eq!(paired.body["tier"], "premium");
+    assert_ne!(paired.body["hub_id"], main.body["hub_id"]);
+    assert_ne!(paired.body["token"], main.body["token"]);
+    let claims = verify(
+        paired.body["licence"].as_str().unwrap(),
+        DEV_LICENCE_VERIFY_KEYS,
+        T0,
+    )
+    .unwrap();
+    assert!(claims.flags.iter().any(|f| f == "standby"));
+
+    // The main Hub keeps its place and token; the standby is a second row.
+    let hubs = h.hubs();
+    assert_eq!(hubs.len(), 2);
+    assert_eq!(hubs[0][8], "", "the main Hub is not revoked");
+    assert_eq!(hubs[1][0], paired.body["hub_id"].as_str().unwrap());
+    assert_eq!((hubs[1][3].as_str(), hubs[1][8].as_str()), ("SECOND", ""));
+    let live = h.db.active_hub(&branch).await.unwrap().unwrap();
+    assert_eq!(live.id, main.body["hub_id"].as_str().unwrap());
+    let standby = h.db.standby_hub(&branch).await.unwrap().unwrap();
+    assert_eq!(standby.id, paired.body["hub_id"].as_str().unwrap());
+    let code_rows = h.db.pairing_codes_of(&branch).await.unwrap();
+    assert!(code_rows.iter().all(|c| c.used_at.is_some()));
+
+    let after = h.owner_branch(&a).await;
+    assert_eq!(after["standby"], json!({"paired": true}));
+    assert_eq!(after["hub"]["paired"], true);
+
+    // A second standby is refused while this one is paired.
+    let again = h.standby_code(&a, &branch).await;
+    assert_eq!((again.status, again.code()), (409, "STANDBY_EXISTS"));
+    assert_eq!(
+        h.db.pairing_codes_of(&branch).await.unwrap().len(),
+        code_rows.len(),
+        "no code was written"
+    );
+
+    // The standby token proves the pairing only: it reaches none of the main Hub's endpoints.
+    let secret = paired.body["token"].as_str().unwrap().to_owned();
+    h.advance(10_000);
+    let beat = h.beat(&secret, "1:SECOND").await;
+    assert_eq!((beat.status, beat.code()), (403, "FORBIDDEN"));
+    assert_eq!(
+        h.beat(main.body["token"].as_str().unwrap(), "1:MAIN")
+            .await
+            .status,
+        200
+    );
+}
+
+#[tokio::test]
+async fn pairing_a_standby_never_touches_the_main_hubs_fence_and_re_pairing_main_keeps_the_standby()
+{
+    let h = Harness::new().await;
+    let (a, branch, main) = h.premium_with_main().await;
+    h.advance(10_000);
+    let token = main.body["token"].as_str().unwrap().to_owned();
+    assert_eq!(h.beat(&token, "1:MAIN").await.status, 200);
+    let fence = h.fence_row(&branch);
+
+    let code = code_of(&h.standby_code(&a, &branch).await);
+    let standby = h.pair_as(&code, "windows", "SECOND", Some("standby")).await;
+    assert_eq!(standby.status, 200, "{}", standby.body);
+    assert_eq!(h.fence_row(&branch), fence, "the fence is the main Hub's");
+
+    // A new main Hub replaces the main Hub only.
+    h.advance(1_000);
+    let (second_main, _) = h.issue(&a).await;
+    let replaced = h.pair_as(&second_main, "windows", "MAIN2", None).await;
+    assert_eq!(replaced.status, 200, "{}", replaced.body);
+    assert_eq!(
+        h.db.active_hub(&branch).await.unwrap().unwrap().id,
+        replaced.body["hub_id"].as_str().unwrap()
+    );
+    assert_eq!(
+        h.db.standby_hub(&branch).await.unwrap().unwrap().id,
+        standby.body["hub_id"].as_str().unwrap()
+    );
+    assert_eq!(h.hubs().iter().filter(|r| r[8].is_empty()).count(), 2);
+}
+
+#[tokio::test]
+async fn a_new_standby_code_replaces_the_unused_one_and_leaves_the_hub_code_alone() {
+    let h = Harness::new().await;
+    let (a, branch, _main) = h.premium_with_main().await;
+    let first = code_of(&h.standby_code(&a, &branch).await);
+    let (hub_code, _) = h.issue(&a).await;
+    h.advance(1_000);
+    let second = code_of(&h.standby_code(&a, &branch).await);
+    assert_ne!(first, second);
+    let old = h
+        .pair_as(&first, "windows", "SECOND", Some("standby"))
+        .await;
+    assert_eq!((old.status, old.code()), (401, "PAIR_CODE_INVALID"));
+    let new = h
+        .pair_as(&second, "windows", "SECOND", Some("standby"))
+        .await;
+    assert_eq!(new.status, 200, "{}", new.body);
+    // The Hub code issued in between is still good for a main Hub.
+    let still = h.pair_as(&hub_code, "windows", "MAIN2", None).await;
+    assert_eq!(still.status, 200, "{}", still.body);
+}
+
+#[tokio::test]
+async fn a_standby_code_is_refused_below_premium_and_on_an_android_main_hub() {
+    let h = Harness::new().await;
+    // Free: the Android Hub is paired; the standby is tier-locked.
+    let (a, branch) = h.ready().await;
+    let (code, _) = h.issue(&a).await;
+    assert_eq!(h.pair(&code, "android").await.status, 200);
+    let free = h.standby_code(&a, &branch).await;
+    assert_eq!((free.status, free.code()), (403, "TIER_LOCKED"));
+
+    // Basic has no standby flag either.
+    h.comp(&branch, Tier::Basic).await;
+    let basic = h.standby_code(&a, &branch).await;
+    assert_eq!((basic.status, basic.code()), (403, "TIER_LOCKED"));
+    assert_eq!(h.db.pairing_codes_of(&branch).await.unwrap().len(), 1);
+
+    // Premium on an Android Hub: standby needs the Windows Hub.
+    h.comp(&branch, Tier::Premium).await;
+    let android = h.standby_code(&a, &branch).await;
+    assert_eq!(
+        (android.status, android.code()),
+        (409, "PLATFORM_UNSUPPORTED")
+    );
+    assert_eq!(h.db.pairing_codes_of(&branch).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_standby_code_needs_a_paired_main_hub_and_the_owners_own_branch() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    h.comp(&branch, Tier::Premium).await;
+    let early = h.standby_code(&a, &branch).await;
+    assert_eq!((early.status, early.code()), (409, "STEP_NOT_READY"));
+
+    let b = h.owner("+919876543299", "Other Arena").await;
+    let other = h.tier_done(&b).await;
+    h.comp(&other, Tier::Premium).await;
+    let foreign = h.standby_code(&a, &other).await;
+    assert_eq!(foreign.status, 403, "{}", foreign.body);
+    let signed_out = h.standby_code("", &branch).await;
+    assert_eq!(signed_out.status, 401);
+}
+
+#[tokio::test]
+async fn a_code_pairs_only_the_role_it_was_issued_for() {
+    let h = Harness::new().await;
+    let (a, branch, _main) = h.premium_with_main().await;
+    let standby_code = code_of(&h.standby_code(&a, &branch).await);
+    let (hub_code, _) = h.issue(&a).await;
+
+    // A standby code typed into the Hub installer, and a Hub code into the standby installer.
+    let as_main = h.pair_as(&standby_code, "windows", "SECOND", None).await;
+    assert_eq!((as_main.status, as_main.code()), (401, "PAIR_CODE_INVALID"));
+    assert!(
+        as_main.body["message"]
+            .as_str()
+            .unwrap()
+            .contains("standby")
+    );
+    let as_standby = h
+        .pair_as(&hub_code, "windows", "SECOND", Some("standby"))
+        .await;
+    assert_eq!(
+        (as_standby.status, as_standby.code()),
+        (401, "PAIR_CODE_INVALID")
+    );
+    // Neither code was spent.
+    let unused =
+        h.db.pairing_codes_of(&branch)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|c| c.used_at.is_none() && c.invalidated_at.is_none())
+            .count();
+    assert_eq!(unused, 2);
+
+    // The same PC cannot be its own standby, and an Android PC cannot be a standby.
+    let same = h
+        .pair_as(&standby_code, "windows", "MAIN", Some("standby"))
+        .await;
+    assert_eq!((same.status, same.code()), (401, "PAIR_CODE_INVALID"));
+    let android = h
+        .pair_as(&standby_code, "android", "SECOND", Some("standby"))
+        .await;
+    assert_eq!(
+        (android.status, android.code()),
+        (409, "PLATFORM_UNSUPPORTED")
+    );
+    let good = h
+        .pair_as(&standby_code, "windows", "SECOND", Some("standby"))
+        .await;
+    assert_eq!(good.status, 200, "{}", good.body);
+}
+
+#[tokio::test]
+async fn an_expired_standby_code_pairs_no_standby() {
+    let h = Harness::new().await;
+    let (a, branch, _main) = h.premium_with_main().await;
+    let code = code_of(&h.standby_code(&a, &branch).await);
+    // The code expires (and the comp ends) before the second PC pairs.
+    h.advance(31 * 24 * 60 * 60 * 1000);
+    let r = h.pair_as(&code, "windows", "SECOND", Some("standby")).await;
+    assert!(r.status >= 400, "{} {}", r.status, r.body);
+    assert!(h.db.standby_hub(&branch).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn the_go_live_standby_item_follows_the_real_standby_and_never_blocks() {
+    let h = Harness::new().await;
+    let (a, branch, main) = h.premium_with_main().await;
+    h.advance(10_000);
+    let beat = h.beat(main.body["token"].as_str().unwrap(), "1:MAIN").await;
+    assert_eq!(beat.status, 200, "{}", beat.body);
+    let standby_done = |v: &Value| {
+        v["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["key"] == "standby")
+            .unwrap()["done"]
+            .clone()
+    };
+    let view = h.call("GET", "/v1/wizard/go-live", None, &a).await;
+    assert_eq!(standby_done(&view.body), json!(false));
+    let code = code_of(&h.standby_code(&a, &branch).await);
+    let paired = h.pair_as(&code, "windows", "SECOND", Some("standby")).await;
+    assert_eq!(paired.status, 200, "{}", paired.body);
+    let view = h.call("GET", "/v1/wizard/go-live", None, &a).await;
+    assert_eq!(standby_done(&view.body), json!(true));
+    assert_ne!(
+        view.body["blocker"],
+        json!({"item": "standby"}),
+        "the item is advisory"
+    );
+
+    // Revoking the standby makes the item not done again.
+    rusqlite::Connection::open(h.dir.path().join("gz_control.db"))
+        .unwrap()
+        .execute("UPDATE hubs SET revoked_at = 1 WHERE role = 'standby'", [])
+        .unwrap();
+    let view = h.call("GET", "/v1/wizard/go-live", None, &a).await;
+    assert_eq!(standby_done(&view.body), json!(false));
+}

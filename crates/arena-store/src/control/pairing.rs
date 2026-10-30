@@ -1,4 +1,4 @@
-use arena_proto::Tier;
+use arena_proto::{HubRole, Tier};
 
 use super::{ControlDb, ControlError, SqlValue, Stmt, col_int, col_opt_int, col_text, text};
 
@@ -7,6 +7,8 @@ pub struct NewPairingCode<'a> {
     pub id: &'a str,
     pub branch_id: &'a str,
     pub code_hash: &'a str,
+    /// `Standby` issues a standby code (Story 9.18): a branch keeps one live code per role.
+    pub role: HubRole,
     pub now: i64,
     pub expires_at: i64,
 }
@@ -16,6 +18,8 @@ pub enum IssueOutcome {
     Issued,
     NotReady,
     HashTaken,
+    /// A standby code was asked for while the branch already has a live standby Hub.
+    StandbyExists,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +32,7 @@ pub struct PairingCodeRow {
     pub expires_at: i64,
     pub used_at: Option<i64>,
     pub invalidated_at: Option<i64>,
+    pub role: HubRole,
 }
 
 impl PairingCodeRow {
@@ -48,8 +53,8 @@ pub struct RedeemInvalid;
 
 pub const PAIRING_HISTORY_MS: i64 = 24 * 60 * 60 * 1000;
 
-const PAIRING_COLUMNS: &str =
-    "id, branch_id, code_hash, tier_at_issue, created_at, expires_at, used_at, invalidated_at";
+const PAIRING_COLUMNS: &str = "id, branch_id, code_hash, tier_at_issue, created_at, expires_at, \
+     used_at, invalidated_at, role";
 
 fn tier_of(raw: &str) -> Result<Tier, ControlError> {
     Tier::parse(raw).ok_or_else(|| ControlError::Db(format!("unknown tier {raw:?}")))
@@ -65,6 +70,11 @@ fn pairing_from(row: &[SqlValue]) -> Result<PairingCodeRow, ControlError> {
         expires_at: col_int(row, 5)?,
         used_at: col_opt_int(row, 6)?,
         invalidated_at: col_opt_int(row, 7)?,
+        role: {
+            let role = col_text(row, 8)?;
+            HubRole::parse(&role)
+                .ok_or_else(|| ControlError::Db(format!("unknown hub role {role:?}")))?
+        },
     })
 }
 
@@ -91,19 +101,25 @@ impl ControlDb {
                     vec![SqlValue::Integer(c.now - PAIRING_HISTORY_MS)],
                 ),
                 Stmt::new(
-                    "UPDATE pairing_codes SET invalidated_at = ? WHERE branch_id = ? \
+                    "UPDATE pairing_codes SET invalidated_at = ? WHERE branch_id = ? AND role = ? \
                      AND used_at IS NULL AND invalidated_at IS NULL",
-                    vec![SqlValue::Integer(c.now), text(c.branch_id)],
+                    vec![
+                        SqlValue::Integer(c.now),
+                        text(c.branch_id),
+                        text(c.role.as_str()),
+                    ],
                 ),
                 Stmt::new(
                     "INSERT INTO pairing_codes (id, branch_id, code_hash, tier_at_issue, \
-                     created_at, expires_at, used_at, invalidated_at) \
+                     created_at, expires_at, used_at, invalidated_at, role) \
                      SELECT ?, ?, ?, COALESCE((SELECT CASE WHEN e.until IS NOT NULL \
                      AND ? > e.until THEN 'free' ELSE e.tier END FROM entitlements e \
-                     WHERE e.branch_id = ?), 'free'), ?, ?, NULL, NULL \
+                     WHERE e.branch_id = ?), 'free'), ?, ?, NULL, NULL, ? \
                      WHERE (SELECT COUNT(*) FROM onboarding_progress WHERE branch_id = ? \
                      AND step IN ('cafe', 'tier') AND state = 'done') = 2 \
-                     AND NOT EXISTS (SELECT 1 FROM pairing_codes WHERE code_hash = ?)",
+                     AND NOT EXISTS (SELECT 1 FROM pairing_codes WHERE code_hash = ?) \
+                     AND (? <> 'standby' OR NOT EXISTS (SELECT 1 FROM hubs \
+                     WHERE branch_id = ? AND role = 'standby' AND revoked_at IS NULL))",
                     vec![
                         text(c.id),
                         text(c.branch_id),
@@ -112,8 +128,11 @@ impl ControlDb {
                         text(c.branch_id),
                         SqlValue::Integer(c.now),
                         SqlValue::Integer(c.expires_at),
+                        text(c.role.as_str()),
                         text(c.branch_id),
                         text(c.code_hash),
+                        text(c.role.as_str()),
+                        text(c.branch_id),
                     ],
                 )
                 .expect(1),
@@ -124,6 +143,9 @@ impl ControlDb {
         }
         if !self.pairing_steps_ready(c.branch_id).await? {
             return Ok(IssueOutcome::NotReady);
+        }
+        if c.role == HubRole::Standby && self.standby_hub(c.branch_id).await?.is_some() {
+            return Ok(IssueOutcome::StandbyExists);
         }
         Ok(IssueOutcome::HashTaken)
     }
@@ -145,13 +167,34 @@ impl ControlDb {
         branch_id: &str,
         now: i64,
     ) -> Result<Option<PairingCodeRow>, ControlError> {
+        self.active_code_of(branch_id, HubRole::Main, now).await
+    }
+
+    /// The branch's unused, unexpired standby code (Story 9.18).
+    pub async fn active_standby_code(
+        &self,
+        branch_id: &str,
+        now: i64,
+    ) -> Result<Option<PairingCodeRow>, ControlError> {
+        self.active_code_of(branch_id, HubRole::Standby, now).await
+    }
+
+    async fn active_code_of(
+        &self,
+        branch_id: &str,
+        role: HubRole,
+        now: i64,
+    ) -> Result<Option<PairingCodeRow>, ControlError> {
         let sql = format!(
-            "SELECT {PAIRING_COLUMNS} FROM pairing_codes WHERE branch_id = ? \
+            "SELECT {PAIRING_COLUMNS} FROM pairing_codes WHERE branch_id = ? AND role = ? \
              AND used_at IS NULL AND invalidated_at IS NULL AND expires_at > ? \
              ORDER BY created_at DESC, id DESC LIMIT 1"
         );
         let rows = self
-            .query(&sql, vec![text(branch_id), SqlValue::Integer(now)])
+            .query(
+                &sql,
+                vec![text(branch_id), text(role.as_str()), SqlValue::Integer(now)],
+            )
             .await?;
         rows.first().map(|r| pairing_from(r)).transpose()
     }

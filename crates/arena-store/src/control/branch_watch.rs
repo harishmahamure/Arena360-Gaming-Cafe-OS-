@@ -115,6 +115,7 @@ impl ControlDb {
                         e.tier, e.until \
                  FROM branches b \
                  JOIN hubs h ON h.branch_id = b.id AND h.revoked_at IS NULL \
+                      AND h.role = 'main' \
                  JOIN entitlements e ON e.branch_id = b.id \
                  LEFT JOIN branch_opening o ON o.branch_id = b.id \
                  LEFT JOIN branch_watch w ON w.branch_id = b.id \

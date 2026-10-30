@@ -153,7 +153,8 @@ impl ControlDb {
                     "INSERT INTO commands (branch_id, idempotency_key, kind, schema_version, \
                      payload, issued_by, status, created_at, resolved_at, group_id, elevated_by) \
                      SELECT ?, ?, ?, ?, ?, ?, 'applied', ?, ?, NULL, ? \
-                     WHERE EXISTS (SELECT 1 FROM hubs WHERE branch_id = ? AND revoked_at IS NULL) \
+                     WHERE EXISTS (SELECT 1 FROM hubs WHERE branch_id = ? AND role = 'main' \
+                     AND revoked_at IS NULL) \
                      ON CONFLICT (branch_id, idempotency_key) DO NOTHING",
                     vec![
                         text(c.branch_id),
@@ -170,7 +171,8 @@ impl ControlDb {
                 )
                 .expect(1),
                 Stmt::new(
-                    "UPDATE hubs SET revoked_at = ? WHERE branch_id = ? AND revoked_at IS NULL \
+                    "UPDATE hubs SET revoked_at = ? WHERE branch_id = ? AND role = 'main' \
+                     AND revoked_at IS NULL \
                      RETURNING id",
                     vec![SqlValue::Integer(c.now), text(c.branch_id)],
                 )
@@ -303,8 +305,10 @@ impl ControlDb {
                 Stmt::new(
                     "UPDATE commands SET status = 'rejected', error = ?, resolved_at = ? \
                      WHERE status IN ('pending', 'fetched') \
-                     AND EXISTS (SELECT 1 FROM hubs h WHERE h.branch_id = commands.branch_id) \
+                     AND EXISTS (SELECT 1 FROM hubs h WHERE h.branch_id = commands.branch_id \
+                                 AND h.role = 'main') \
                      AND NOT EXISTS (SELECT 1 FROM hubs h WHERE h.branch_id = commands.branch_id \
+                                     AND h.role = 'main' \
                                      AND h.revoked_at IS NULL) RETURNING id",
                     vec![text(&revoked), SqlValue::Integer(now)],
                 )

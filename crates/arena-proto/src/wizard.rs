@@ -360,6 +360,26 @@ pub struct OwnerBranch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub backup: Option<OwnerBackup>,
+    /// The branch's standby PC (Story 9.18): present while one is paired or its code is waiting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub standby: Option<OwnerStandby>,
+}
+
+/// A branch's second PC, as the owner sees it on Account -> Branches (Story 9.18).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OwnerStandby {
+    /// A standby PC has paired with its code.
+    pub paired: bool,
+    /// When the standby PC last beat; null before its first beat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub last_seen_at: Option<i64>,
+    /// The standby code that has not been used yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub code: Option<crate::ActivePairingCode>,
 }
 
 /// How a paid branch's cloud backup stands, as its Hub last reported (Story 9.17). Times are Hub

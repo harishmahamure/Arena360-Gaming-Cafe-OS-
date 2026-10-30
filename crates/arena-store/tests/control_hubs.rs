@@ -3,7 +3,7 @@
 #[path = "support/sqld.rs"]
 mod sqld;
 
-use arena_proto::{AdCounts, AdDayCount, AdSlot, HubPlatform, Tier};
+use arena_proto::{AdCounts, AdDayCount, AdSlot, HubPlatform, HubRole, Tier};
 use arena_store::control::{
     AdMetric, BranchProfile, CompGrant, ControlDb, IssueOutcome, NewHub, NewOtpChallenge, NewOwner,
     NewOwnerSession, NewPairingCode, NewSetupCode, NewTenantBranch, PairOutcome, RateRule,
@@ -86,6 +86,7 @@ fn code<'a>(id: &'a str, branch_id: &'a str, hash: &'a str, now: i64) -> NewPair
         id,
         branch_id,
         code_hash: hash,
+        role: HubRole::Main,
         now,
         expires_at: now + MIN15,
     }
@@ -96,6 +97,7 @@ fn hub<'a>(id: &'a str, code_hash: &'a str, platform: HubPlatform, now: i64) -> 
         id,
         branch_id: "b1",
         platform,
+        role: HubRole::Main,
         hub_instance_id: "inst-1",
         version: "0.1.0",
         token_hash: "$argon2id$hash",
@@ -329,6 +331,114 @@ async fn hubs_on_the_remote_backend() {
     db.migrate(1).await.unwrap();
     let second = ControlDb::connect(&t.url, "").await.unwrap();
     exercise(&db, &second).await;
+}
+
+/// Story 9.18: a branch keeps one live Hub per role; a standby pairs beside the main Hub.
+async fn exercise_standby(db: &ControlDb) {
+    owner(db, "o1", "+919876543210").await;
+    branch(db, "o1", "t1", "b1", "PAG").await;
+    db.choose_free_tier("t1", "b1", 20_000).await.unwrap();
+    let t = 100_000;
+    let standby_code = |id, hash, now| NewPairingCode {
+        role: HubRole::Standby,
+        ..code(id, "b1", hash, now)
+    };
+
+    issued(db, "p1", "h1", t).await;
+    assert!(matches!(
+        db.pair_hub(&hub("H1", "h1", HubPlatform::Android, t + 1))
+            .await
+            .unwrap(),
+        PairOutcome::Paired { .. }
+    ));
+    assert_eq!(
+        db.issue_pairing_code(&standby_code("s1", "sh1", t + 2))
+            .await
+            .unwrap(),
+        IssueOutcome::Issued
+    );
+    // A Hub code does not pair a standby, and a standby code does not pair a Hub.
+    let as_standby = NewHub {
+        role: HubRole::Standby,
+        hub_instance_id: "inst-2",
+        ..hub("H2", "h1", HubPlatform::Android, t + 3)
+    };
+    assert_eq!(
+        db.pair_hub(&as_standby).await.unwrap(),
+        PairOutcome::CodeRefused
+    );
+    let as_main = hub("H2", "sh1", HubPlatform::Android, t + 3);
+    assert_eq!(
+        db.pair_hub(&as_main).await.unwrap(),
+        PairOutcome::CodeRefused
+    );
+
+    let paired = NewHub {
+        role: HubRole::Standby,
+        hub_instance_id: "inst-2",
+        ..hub("H2", "sh1", HubPlatform::Android, t + 4)
+    };
+    assert_eq!(
+        db.pair_hub(&paired).await.unwrap(),
+        PairOutcome::Paired { revoked: vec![] }
+    );
+    let main = db.active_hub("b1").await.unwrap().unwrap();
+    let standby = db.standby_hub("b1").await.unwrap().unwrap();
+    assert_eq!(
+        (main.id.as_str(), main.role, main.revoked_at),
+        ("H1", HubRole::Main, None)
+    );
+    assert_eq!(
+        (standby.id.as_str(), standby.role, standby.revoked_at),
+        ("H2", HubRole::Standby, None)
+    );
+    assert!(
+        db.setup_code("b1").await.unwrap().is_some(),
+        "the main Hub's owner code stays"
+    );
+
+    // One live standby per branch.
+    assert_eq!(
+        db.issue_pairing_code(&standby_code("s2", "sh2", t + 5))
+            .await
+            .unwrap(),
+        IssueOutcome::StandbyExists
+    );
+    assert!(db.active_standby_code("b1", t + 5).await.unwrap().is_none());
+
+    // A new main Hub replaces the main Hub only.
+    issued(db, "p2", "h2", t + 6).await;
+    let again = NewHub {
+        hub_instance_id: "inst-3",
+        ..hub("H3", "h2", HubPlatform::Android, t + 7)
+    };
+    assert_eq!(
+        db.pair_hub(&again).await.unwrap(),
+        PairOutcome::Paired {
+            revoked: vec!["H1".to_owned()]
+        }
+    );
+    assert_eq!(db.active_hub("b1").await.unwrap().unwrap().id, "H3");
+    assert_eq!(db.standby_hub("b1").await.unwrap().unwrap().id, "H2");
+    assert_eq!(db.hubs_of_branch("b1").await.unwrap().len(), 3);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_standby_pairs_beside_the_main_hub_on_the_local_backend() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = ControlDb::open_local(&dir.path().join("gz_control.db"))
+        .await
+        .unwrap();
+    db.migrate(1).await.unwrap();
+    exercise_standby(&db).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_standby_pairs_beside_the_main_hub_on_the_remote_backend() {
+    let Some(t) = sqld::fresh().await else { return };
+    let db = ControlDb::connect(&t.url, "").await.unwrap();
+    db.migrate(1).await.unwrap();
+    exercise_standby(&db).await;
 }
 
 fn block(after: Option<i64>, through: i64, rows: &[(&str, AdSlot, i64)]) -> AdCounts {

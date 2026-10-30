@@ -284,7 +284,7 @@ development_status:
   9-15-backups-are-kept-for-the-plan-s-retention-and-gst-records-fo: done
   9-16-cloud-backup-status-in-the-hub-header-and-system-screen: done
   9-17-owner-sees-backup-status-and-sends-backup-now: done
-  9-18-owner-issues-a-standby-code-and-a-second-pc-pairs-as-standby: backlog
+  9-18-owner-issues-a-standby-code-and-a-second-pc-pairs-as-standby: review
   9-19-the-standby-bootstraps-from-the-main-hub-and-follows-it-live: backlog
   9-20-the-standby-keeps-its-own-catalogue-media-and-licence-and-sh: backlog
   9-21-promote-the-standby-to-main-with-a-manager-pin: backlog

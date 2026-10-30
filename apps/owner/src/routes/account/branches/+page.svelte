@@ -44,8 +44,6 @@
   {#if isFree()}
     <p class="type-hub-label">{t("owner.branches.add")}</p>
     <TierLock tier="Basic" />
-    <p class="type-hub-label">{t("owner.branches.standby")}</p>
-    <TierLock tier="Basic" />
   {:else}
     <form onsubmit={add}>
       <TextField label="owner.branches.add_name" bind:value={name} required />

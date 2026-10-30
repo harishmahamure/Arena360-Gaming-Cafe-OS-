@@ -29,7 +29,11 @@ test("a paid branch shows last upload, last snapshot and pending batches as ages
     "Last upload 4 min ago · Last snapshot 3 h ago · 2 batches pending",
   );
   await expect(button(page)).toBeVisible();
-  await expect(card(page).locator('[data-component="tier-lock"]')).toHaveCount(0);
+  await expect(
+    card(page)
+      .locator('[data-component="tier-lock"]')
+      .filter({ hasText: t("staff.tier.available_on", { tier: "Basic" }) }),
+  ).toHaveCount(0);
 });
 
 test("one batch pending is singular, and a missing time says so", async ({ page }) => {
@@ -133,7 +137,9 @@ test("a Free branch shows Available on Basic in place of the button, and no back
 }) => {
   await stubCloud(page, [{ ...PAID[0], tier: "free", flags: [] }]);
   await page.goto("/account/branches");
-  const lock = card(page).locator('[data-component="tier-lock"]');
+  const lock = card(page)
+    .locator('[data-component="tier-lock"]')
+    .filter({ hasText: t("staff.tier.available_on", { tier: "Basic" }) });
   await expect(lock).toContainText(t("staff.tier.available_on", { tier: "Basic" }));
   await expect(button(page)).toHaveCount(0);
   await expect(line(page)).toHaveCount(0);

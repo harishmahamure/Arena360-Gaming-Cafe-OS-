@@ -112,7 +112,8 @@ impl ControlDb {
     ) -> Result<Option<u32>, ControlError> {
         let rows = self
             .query(
-                "SELECT command_schema_max FROM hubs WHERE branch_id = ? AND revoked_at IS NULL \
+                "SELECT command_schema_max FROM hubs WHERE branch_id = ? AND role = 'main' \
+                 AND revoked_at IS NULL \
                  ORDER BY paired_at DESC, id DESC LIMIT 1",
                 vec![text(branch_id)],
             )

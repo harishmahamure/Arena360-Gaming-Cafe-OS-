@@ -66,6 +66,7 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::PairCodeExpired
         | ErrorCode::FeatureNotEntitled
         | ErrorCode::PlatformUnsupported
+        | ErrorCode::StandbyExists
         | ErrorCode::MfaRequired
         | ErrorCode::GroupNotEmpty
         | ErrorCode::GroupKindMismatch

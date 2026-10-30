@@ -6,7 +6,7 @@ use arena_core::{Clock, HubPairer, HubStatus, PairFuture, PairGate, WriterHandle
 use arena_proto::{
     AppError, CATALOG_MANIFEST_PATH, CatalogManifest, CommandResult, CommandResultAck,
     CommandsPage, ErrorCode, FenceClaimRequest, FenceClaimResponse, HeartbeatRequest,
-    HeartbeatResponse, HubPairRequest, HubPairResponse, HubPlatform, KekEscrowRequest,
+    HeartbeatResponse, HubPairRequest, HubPairResponse, HubPlatform, HubRole, KekEscrowRequest,
     KekEscrowResponse, KekFetchRequest, KekFetchResponse, KekRequest, KekRequestResponse,
     NotifyRequest, NotifyResponse, PresignRequest, PresignResponse, RestorePlan,
     RestorePlanRequest, SETUP_MAX_BYTES, SetupTemplateOutcome, SetupTemplateStored, UiError,
@@ -793,6 +793,9 @@ impl CloudPairer {
                 platform: self.platform,
                 hub_instance_id: self.hub_instance_id.clone(),
                 version: self.version.clone(),
+                // This install pairs as the main Hub; the standby install arrives with the
+                // standby Hub itself (Story 9.19).
+                role: HubRole::Main,
             })
             .await
             .map_err(map_failure)?;
@@ -969,6 +972,7 @@ mod tests {
                 platform: HubPlatform::Android,
                 hub_instance_id: "i".into(),
                 version: "0".into(),
+                role: HubRole::Main,
             })
             .await
             .unwrap_err();

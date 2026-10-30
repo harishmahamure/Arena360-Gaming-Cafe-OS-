@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use arena_proto::{
-    AddBranch, AppError, BranchCodeSet, BranchHub, BranchSetupProgress, ErrorCode, OwnerBackup,
-    OwnerBranch, PendingKeyRequest, SetBranchCode, Tier, UpdateBranch, valid_branch_code,
+    ActivePairingCode, AddBranch, AppError, BranchCodeSet, BranchHub, BranchSetupProgress,
+    ErrorCode, OwnerBackup, OwnerBranch, OwnerStandby, PendingKeyRequest, SetBranchCode, Tier,
+    UpdateBranch, valid_branch_code,
 };
 use arena_store::control::{Branch, BranchCodeOutcome, BranchProfile};
 use axum::extract::State;
@@ -65,6 +66,7 @@ async fn row(st: &AuthState, b: &Branch) -> Result<OwnerBranch, ApiError> {
         }
         _ => None,
     };
+    let standby = standby_of(st, &b.id, now).await?;
     let states: Vec<_> = st
         .db
         .onboarding_progress(&b.id)
@@ -100,7 +102,37 @@ async fn row(st: &AuthState, b: &Branch) -> Result<OwnerBranch, ApiError> {
             .map_err(ApiError::internal)?,
         key_request,
         backup,
+        standby,
     })
+}
+
+/// The branch's standby PC or its waiting standby code; `None` when it has neither (Story 9.18).
+async fn standby_of(
+    st: &AuthState,
+    branch_id: &str,
+    now: i64,
+) -> Result<Option<OwnerStandby>, ApiError> {
+    let hub = st
+        .db
+        .standby_hub(branch_id)
+        .await
+        .map_err(ApiError::internal)?;
+    let code = st
+        .db
+        .active_standby_code(branch_id, now)
+        .await
+        .map_err(ApiError::internal)?
+        .map(|c| ActivePairingCode {
+            expires_at: c.expires_at,
+        });
+    if hub.is_none() && code.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(OwnerStandby {
+        paired: hub.is_some(),
+        last_seen_at: hub.and_then(|h| h.last_seen_at),
+        code,
+    }))
 }
 
 async fn list(

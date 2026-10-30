@@ -155,6 +155,8 @@ export function rangeOfBranch(id: string, over: Partial<OwnerRange> = {}): Owner
 }
 
 export type StubOptions = {
+  /** Answers `POST /v1/wizard/install-hub/standby-code` (Story 9.18); unset: a code. Each body is recorded in `calls.bodies["standby"]`. */
+  standby?: (body: { branch_id?: string }) => { status: number; body: unknown } | undefined;
   /** The `summary` answer per branch id; a function gets the request's query string. */
   range?: Record<string, OwnerRange | ((query: URLSearchParams) => OwnerRange)>;
   /** The `live` answer per branch id (a function is called on every request); default: online. */
@@ -394,6 +396,13 @@ export async function stubCloud(
     if (path === "/v1/meta/timezones") return json(["Asia/Dubai", "Asia/Kolkata"]);
     if (path === "/v1/wizard/install-hub/code")
       return json({ code: "ABCD2345", expires_at: Date.now() + 900_000, server_now: Date.now() });
+    if (path === "/v1/wizard/install-hub/standby-code") {
+      const body = req.postDataJSON();
+      (bodies["standby"] ??= []).push(body);
+      const answer = opts.standby?.(body);
+      if (answer) return json(answer.body, answer.status);
+      return json({ code: "WXYZ6789", expires_at: Date.now() + 900_000, server_now: Date.now() });
+    }
     if (path === "/v1/signout") return json(null, 200);
     return json({ code: "NOT_FOUND", message: "" }, 404);
   });

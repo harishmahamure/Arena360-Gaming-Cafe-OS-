@@ -75,9 +75,10 @@ impl ControlDb {
     ) -> Result<bool, ControlError> {
         let rows = self
             .query(
-                "SELECT EXISTS (SELECT 1 FROM hubs WHERE branch_id = ?1 \
+                "SELECT EXISTS (SELECT 1 FROM hubs WHERE branch_id = ?1 AND role = 'main' \
                     AND hub_instance_id <> ?2 AND last_seen_at IS NOT NULL) \
-                 OR (EXISTS (SELECT 1 FROM hubs WHERE branch_id = ?1 AND hub_instance_id <> ?2) \
+                 OR (EXISTS (SELECT 1 FROM hubs WHERE branch_id = ?1 AND role = 'main' \
+                    AND hub_instance_id <> ?2) \
                     AND EXISTS (SELECT 1 FROM commands WHERE branch_id = ?1 \
                     AND kind = 'hub.revoke' AND status = 'applied'))",
                 vec![text(branch_id), text(hub_instance_id)],

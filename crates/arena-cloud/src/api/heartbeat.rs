@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use arena_proto::{
     AppError, ErrorCode, HEARTBEAT_MIN_GAP_MS, HUB_TOKEN_PREFIX, HeartbeatFence, HeartbeatRequest,
-    HeartbeatResponse, HubPlatform, LicenceClaims, SeqRange, TUNNEL_FLAG, Tier, TunnelAnswer,
-    TunnelReport, tunnel_hostname,
+    HeartbeatResponse, HubPlatform, HubRole, LicenceClaims, SeqRange, TUNNEL_FLAG, Tier,
+    TunnelAnswer, TunnelReport, tunnel_hostname,
 };
 use arena_store::control::{
     AdMetric, Beat, BranchTunnel, FenceMove, HubRow, HubUploadView, NewBranchTunnel, RateRule,
@@ -84,6 +84,14 @@ pub(super) async fn authenticate(
         return Err(refused(
             ErrorCode::TokenRevoked,
             "This Hub is no longer paired.",
+        ));
+    }
+    // A standby follows the main Hub and calls none of the main Hub's cloud endpoints yet
+    // (Story 9.19 onwards); until then its token only proves the pairing.
+    if hub.role == HubRole::Standby {
+        return Err(refused(
+            ErrorCode::Forbidden,
+            "This Hub is the standby. Only the main Hub talks to the cloud.",
         ));
     }
     Ok(hub)

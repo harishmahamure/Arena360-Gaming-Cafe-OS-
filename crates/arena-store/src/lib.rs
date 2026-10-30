@@ -7,6 +7,7 @@ mod ad;
 mod admin;
 mod alerts;
 mod audit;
+mod backup_state;
 mod branch;
 mod commands;
 #[cfg(feature = "control")]
@@ -71,6 +72,10 @@ pub use alerts::{
 pub use audit::{
     AuditCursor, AuditFilter, AuditRow, find_change, list_audit, list_device_labels, list_orphaned,
     list_staff_names, previous_row_image, reverted_intent,
+};
+pub use backup_state::{
+    BackupState, PlayerKeyRow, clear_kek_escrow, list_player_keys, read_backup_state,
+    write_kek_escrowed, write_keys_backed_up, write_keys_error,
 };
 pub use branch::{
     BranchLocale, BranchSummary, ChangeOp, ChangeRecord, NewBranch, NewDeviceEvent, NewReadGrant,

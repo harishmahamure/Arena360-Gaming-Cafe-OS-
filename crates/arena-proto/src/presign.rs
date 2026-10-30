@@ -36,7 +36,7 @@ pub struct PresignRequest {
     pub batch: Option<PresignBatch>,
     #[serde(default)]
     pub summary: bool,
-    /// `rollup` or `snapshot`; with `date`.
+    /// `rollup` or `snapshot` (with `date`), or `keys` (without one).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub kind: Option<String>,

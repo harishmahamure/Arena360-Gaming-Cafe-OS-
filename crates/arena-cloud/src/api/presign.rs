@@ -10,8 +10,8 @@
 use std::sync::Arc;
 
 use arena_proto::{
-    AppError, ErrorCode, PRESIGN_KIND_ROLLUP, PRESIGN_KIND_SNAPSHOT, PresignRequest,
-    PresignResponse, Tier, valid_date,
+    AppError, ErrorCode, PRESIGN_KIND_KEYS, PRESIGN_KIND_ROLLUP, PRESIGN_KIND_SNAPSHOT,
+    PresignRequest, PresignResponse, Tier, valid_date,
 };
 use arena_store::control::{HubRow, NewAdminAudit, RateRule};
 use axum::extract::State;
@@ -26,7 +26,7 @@ use super::signup::ceil_s;
 use crate::auth::AuthState;
 use crate::presign::{
     Epoch, EpochError, MAX_SEQ, PutKind, batch_key, branch_prefix, has_path_chars, is_fenced,
-    rollup_key, snapshot_key, summary_key,
+    keys_key, rollup_key, snapshot_key, summary_key,
 };
 
 const RATE_PREFIX: &str = "presign:";
@@ -52,6 +52,8 @@ enum Want {
         kind: PutKind,
         date: String,
     },
+    /// The player key backup (Story 9.2): one fixed key, no date.
+    Keys,
 }
 
 /// Why a request was not understood.
@@ -86,6 +88,12 @@ fn plan(body: &PresignRequest) -> Result<(Epoch, Want), Refusal> {
         let kind = match kind {
             PRESIGN_KIND_ROLLUP => PutKind::Rollup,
             PRESIGN_KIND_SNAPSHOT => PutKind::Snapshot,
+            PRESIGN_KIND_KEYS => {
+                if body.date.is_some() {
+                    return Err(ApiError::validation("date", "A key backup has no date.").into());
+                }
+                return Ok((epoch, Want::Keys));
+            }
             _ => {
                 return Err(ApiError::from(AppError::with_field(
                     ErrorCode::Unsupported,
@@ -253,6 +261,12 @@ async fn presign(
                 }
             }
         }
+        Want::Keys => {
+            if stale {
+                return Err(fenced());
+            }
+            links.push((PutKind::Keys, keys_key(&prefix)));
+        }
         Want::Dated { kind, date } => {
             if stale {
                 return Err(fenced());
@@ -303,7 +317,7 @@ async fn presign(
         match kind {
             PutKind::Batch => response.batch_url = Some(url),
             PutKind::Summary => response.summary_url = Some(url),
-            PutKind::Rollup | PutKind::Snapshot => response.url = Some(url),
+            PutKind::Rollup | PutKind::Snapshot | PutKind::Keys => response.url = Some(url),
         }
     }
     Ok(Json(response))

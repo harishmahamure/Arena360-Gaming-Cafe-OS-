@@ -296,6 +296,52 @@ impl WriterHandle {
         .await
     }
 
+    /// Story 9.2: records that a key backup holding key-table `version` was stored in the cloud.
+    /// A maintenance write outside `apply()` (no change rows), only while this writer is primary
+    /// and holds its epoch (`NOT_PRIMARY` otherwise).
+    pub async fn record_key_backup(&self, version: i64) -> Result<(), AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        self.run(move |store| {
+            let ctx = ctx_from(clock.as_ref(), &status);
+            store.write_tx(|tx| {
+                crate::apply::check_epoch(tx, &ctx)?;
+                arena_store::write_keys_backed_up(tx, version, clock.now_ms())
+            })
+        })
+        .await
+    }
+
+    /// Story 9.2: records why the last key backup attempt failed (a short code, never player
+    /// data). Same rules as [`Self::record_key_backup`].
+    pub async fn record_key_backup_error(&self, error: String) -> Result<(), AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        self.run(move |store| {
+            let ctx = ctx_from(clock.as_ref(), &status);
+            store.write_tx(|tx| {
+                crate::apply::check_epoch(tx, &ctx)?;
+                arena_store::write_keys_error(tx, &error, clock.now_ms())
+            })
+        })
+        .await
+    }
+
+    /// Story 9.2: records that the cloud accepted this Hub's escrowed branch key. Same rules as
+    /// [`Self::record_key_backup`].
+    pub async fn record_kek_escrow(&self) -> Result<(), AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        self.run(move |store| {
+            let ctx = ctx_from(clock.as_ref(), &status);
+            store.write_tx(|tx| {
+                crate::apply::check_epoch(tx, &ctx)?;
+                arena_store::write_kek_escrowed(tx, clock.now_ms())
+            })
+        })
+        .await
+    }
+
     /// Story 8.8: raises the branch-level alert `kind` as the system (`alert.raise`, so it shows
     /// in the Hub header list and writes an audit row). `STALE` when one is already open.
     pub async fn raise_branch_alert(
@@ -382,6 +428,8 @@ impl WriterHandle {
                     return Ok(false);
                 }
                 arena_store::store_licence(tx, &licence, identity.paired_at)?;
+                // The branch key is minted again after this: the cloud holds the old one.
+                arena_store::clear_kek_escrow(tx)?;
                 Ok(true)
             })
         })

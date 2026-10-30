@@ -30,6 +30,7 @@ mod game_catalog;
 mod gst;
 mod import;
 mod intent;
+mod kek;
 mod kiosk;
 mod kiosk_pairing;
 mod kitchen;
@@ -208,6 +209,12 @@ pub use intent::{
     IntentCategory, IntentKind, IntentPayload, MAINTENANCE_NOTE_MAX, PermEffect, RATE_MAX_MINOR,
     RateUpsert, ReasonCode, RolePerm, RoleUpsert, SettingsSet, StaffDeactivate,
     StaffSetCredentials, StaffUpsert, ZoneDelete, ZoneUpsert, reasons_json,
+};
+#[cfg(any(test, feature = "dev-keys"))]
+pub use kek::DEV_KEK_ESCROW_RECIPIENTS;
+pub use kek::{
+    AGE_MAGIC, KEK_ESCROW_MAX_BYTES, KEK_ESCROW_RECIPIENTS, KEYS_OBJECT_KEY, KekEscrowRequest,
+    KekEscrowResponse, PRESIGN_KIND_KEYS,
 };
 pub use kiosk::{
     GameMediaRef, KioskGameLaunched, KioskGamePlayRecorded, KioskHubState, KioskHubStatus,

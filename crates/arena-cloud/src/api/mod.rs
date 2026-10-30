@@ -25,6 +25,7 @@ mod error;
 pub mod gate;
 mod heartbeat;
 mod json;
+mod kek;
 mod live;
 mod meta;
 pub mod mfa;
@@ -94,6 +95,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>, commands_only: bool) -> Router {
             .merge(pair::router(Arc::clone(st)))
             .merge(heartbeat::router(Arc::clone(st)))
             .merge(presign::router(Arc::clone(st)))
+            .merge(kek::router(Arc::clone(st)))
             .merge(notify::router(Arc::clone(st)))
             .merge(setup_template::router(Arc::clone(st)))
             .merge(setup_start::router(Arc::clone(st)))

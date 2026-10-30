@@ -9,6 +9,7 @@ pub mod disk;
 pub mod heartbeat;
 pub mod housekeeping;
 pub mod invoice;
+pub mod keys;
 pub mod keystore;
 pub mod lease;
 pub mod mdns;
@@ -37,6 +38,7 @@ pub use housekeeping::{
     DEDUPE_RETENTION_MS, HOUSEKEEPING_INTERVAL, Housekeeping, HousekeepingTask,
 };
 pub use invoice::{INVOICE_BATCH, INVOICE_RETRY_MS, INVOICE_TICK, InvoiceTask};
+pub use keys::{KeyBackupTask, wrap_kek};
 pub use keystore::{
     AndroidKeystore, AndroidSecrets, FileKeystore, HUB_TOKEN_FILE, KEK_FILE, KeyLost, Keystore,
     KeystoreKek, SecretWrapper, WrapError, WrappedKeystore, is_key_lost, key_lost_error, mint_kek,

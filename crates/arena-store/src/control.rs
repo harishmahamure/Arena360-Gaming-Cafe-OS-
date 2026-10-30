@@ -25,6 +25,7 @@ mod commands;
 mod dump;
 mod entitlement;
 mod hubs;
+mod kek_escrow;
 mod mfa;
 mod otp;
 mod owner;
@@ -205,6 +206,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 26,
         sql: include_str!("../control-migrations/0026_branch_tunnels.sql"),
+    },
+    ControlMigration {
+        version: 27,
+        sql: include_str!("../control-migrations/0027_kek_escrow.sql"),
     },
 ];
 

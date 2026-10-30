@@ -13,7 +13,7 @@ export type PresignRequest = {
   batch?: PresignBatch;
   summary: boolean;
   /**
-   * `rollup` or `snapshot`; with `date`.
+   * `rollup` or `snapshot` (with `date`), or `keys` (without one).
    */
   kind?: string;
   /**

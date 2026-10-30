@@ -6,8 +6,9 @@ use arena_core::{Clock, HubPairer, PairFuture, PairGate, WriterHandle};
 use arena_proto::{
     AppError, CATALOG_MANIFEST_PATH, CatalogManifest, CommandResult, CommandResultAck,
     CommandsPage, ErrorCode, HeartbeatRequest, HeartbeatResponse, HubPairRequest, HubPairResponse,
-    HubPlatform, NotifyRequest, NotifyResponse, PresignRequest, PresignResponse, SETUP_MAX_BYTES,
-    SetupTemplateOutcome, SetupTemplateStored, UiError, normalize_pairing_code, valid_pairing_code,
+    HubPlatform, KekEscrowRequest, KekEscrowResponse, NotifyRequest, NotifyResponse,
+    PresignRequest, PresignResponse, SETUP_MAX_BYTES, SetupTemplateOutcome, SetupTemplateStored,
+    UiError, normalize_pairing_code, valid_pairing_code,
 };
 use arena_store::HubIdentity;
 use sha2::{Digest, Sha256};
@@ -220,6 +221,15 @@ impl CloudClient {
         req: &NotifyRequest,
     ) -> Result<NotifyResponse, CloudFailure> {
         self.post("/v1/notify", Some(token), req).await
+    }
+
+    /// Leaves the branch key, wrapped for the escrow public key, with the cloud (Story 9.2).
+    pub async fn kek_escrow(
+        &self,
+        token: &str,
+        req: &KekEscrowRequest,
+    ) -> Result<KekEscrowResponse, CloudFailure> {
+        self.post("/v1/kek/escrow", Some(token), req).await
     }
 
     /// Asks for short-lived upload links under the branch's prefix of the data bucket (Story 8.1).

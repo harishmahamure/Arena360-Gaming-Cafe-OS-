@@ -539,10 +539,35 @@ async fn run(
             Arc::clone(&snapshots),
             pair_gate.clone(),
             status_tx.clone(),
-            verify_keys,
+            verify_keys.clone(),
         )
         .with_resend(resend)
         .with_backup(backup_responder)
+        .run(),
+    );
+    // The branch key is escrowed on every tier and, on paid tiers, the player key table is backed
+    // up when it changes (Story 9.2).
+    let escrow_recipients: Vec<String> = [
+        arena_proto::KEK_ESCROW_RECIPIENTS,
+        #[cfg(feature = "dev-fixtures")]
+        arena_proto::DEV_KEK_ESCROW_RECIPIENTS,
+    ]
+    .concat()
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    let key_backup_job = tokio::spawn(
+        arena_tasks::KeyBackupTask::new(
+            cloud.clone(),
+            Arc::clone(&keystore),
+            Arc::clone(&player_kek),
+            writer.clone(),
+            Arc::clone(&snapshots),
+            pair_gate.clone(),
+            status_tx.clone(),
+            verify_keys,
+            escrow_recipients,
+        )
         .run(),
     );
     let command_job = tokio::spawn(
@@ -842,6 +867,8 @@ async fn run(
     let _ = command_job.await;
     upload_job.abort();
     let _ = upload_job.await;
+    key_backup_job.abort();
+    let _ = key_backup_job.await;
     template_job.abort();
     let _ = template_job.await;
     template_apply_job.abort();

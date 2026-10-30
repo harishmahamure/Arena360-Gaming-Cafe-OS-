@@ -602,3 +602,10 @@
 - A real cancelled ticket shows no lines (Story 7.3 deletes them on cancel), so the "struck-through lines" cue only appears if the feed carries lines; decide whether a cancelled ticket should keep its lines for the board.
 - The top-bar clock shows Hub time in the tablet's time zone (a `kds` session cannot read `branch.tz`).
 - The board feed is read on every ticket change for every connected display (a few small queries); no measurement on reference hardware (Story 7.11).
+
+## Deferred from: Story 9.2 (player key backup and KEK escrow)
+
+- `KEK_ESCROW_RECIPIENTS` is empty in release builds (like `LICENCE_VERIFY_KEYS`): the production escrow public key must be compiled in at release, once its SOPS-managed private half exists, or no production Hub escrows its branch key (it logs one warning and retries every 15 minutes).
+- Nothing reads `gz_control.kek_escrow` yet; Story 9.10 adds the one reader (key release to a replacement Hub) and must write its `admin_audit` row in the same transaction like `put_kek_escrow` does.
+- The retention sweep (Story 9.15) must never touch `keys/`; the standby (9.19) must replicate `player_keys` and its `backup_state` triggers fire on the standby too.
+- Key backup status (`keys_backed_up_at`, `keys_error`) is stored but not shown: the Hub header and System screen are Stories 9.16 and 9.17.

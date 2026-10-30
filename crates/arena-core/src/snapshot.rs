@@ -655,6 +655,14 @@ fn read_locale(store: &Store, now_ms: i64) -> Result<Option<SnapshotLocale>, App
     Ok(Some(snapshot_locale(&rows, now_ms)))
 }
 
+/// The key backup's read (Story 9.2): the bookkeeping row, and the key table when it changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyBackupPlan {
+    pub state: arena_store::BackupState,
+    /// Every key row; `None` when nothing changed since the last successful backup.
+    pub rows: Option<Vec<arena_store::PlayerKeyRow>>,
+}
+
 /// What the timer owes running sessions for rule changes: the sessions with a rate change due
 /// now, and the earliest upcoming rule boundary for the others (`None` when no rule is near).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1902,6 +1910,25 @@ impl SnapshotReader {
                     .map(|r| r.built_at),
                 last_rollup_date: arena_store::last_rollup_date(conn)?,
             })
+        })
+    }
+
+    /// What the key backup needs (Story 9.2), read in one snapshot: `backup_state` and every
+    /// `player_keys` row. The rows are read only when the key table changed since the last
+    /// successful backup. Blocking (SQLite).
+    pub fn key_backup_plan(&self) -> Result<KeyBackupPlan, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        store.read_with(|conn| {
+            let state = arena_store::read_backup_state(conn)?;
+            let rows = if state.keys_dirty() {
+                Some(arena_store::list_player_keys(conn)?)
+            } else {
+                None
+            };
+            Ok(KeyBackupPlan { state, rows })
         })
     }
 

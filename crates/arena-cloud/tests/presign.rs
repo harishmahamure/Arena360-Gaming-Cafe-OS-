@@ -763,6 +763,187 @@ async fn without_a_data_bucket_the_cloud_says_it_is_unavailable() {
     assert_eq!((r.status, r.code()), (503, "INTERNAL"));
 }
 
+#[tokio::test]
+async fn the_player_key_backup_has_one_fixed_key_on_paid_tiers_and_follows_the_fence() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe(Some("5:HUBA")).await;
+    let prefix = format!("tenants/{}/branches/{}/", a.tenant, a.branch);
+    let r = h
+        .presign(&a.token, json!({"epoch": "5:HUBA", "kind": "keys"}))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body.as_object().unwrap().len(), 1);
+    assert_eq!(
+        key_of(url_of(&r, "url")),
+        format!("{prefix}keys/player-keys.bin")
+    );
+    assert_valid_600(url_of(&r, "url"));
+    assert_eq!(h.counts(&a).keys, 1);
+
+    // No date for it, and a Hub below the fence gets nothing.
+    let r = h
+        .presign(
+            &a.token,
+            json!({"epoch": "5:HUBA", "kind": "keys", "date": "2026-10-29"}),
+        )
+        .await;
+    assert_eq!((r.status, r.code()), (422, "VALIDATION_FAILED"));
+    let r = h
+        .presign(&a.token, json!({"epoch": "4:HUBA", "kind": "keys"}))
+        .await;
+    assert_eq!((r.status, r.code()), (409, "FENCED"));
+    assert_eq!(h.counts(&a).issued(), 1);
+}
+
+#[tokio::test]
+async fn a_free_branch_gets_no_key_backup_link() {
+    let h = Harness::new().await;
+    let a = h.cafe(PHONE_A, "Pixel Arena", "198.51.100.4").await;
+    let r = h
+        .presign(&a.token, json!({"epoch": "1:HUBA", "kind": "keys"}))
+        .await;
+    assert_eq!((r.status, r.code()), (403, "FEATURE_NOT_ENTITLED"));
+    assert_eq!(h.counts(&a), PutCounts::default());
+}
+
+/// A stand-in for an age file: what the cloud checks is its first line.
+fn wrapped(extra: &str) -> String {
+    use base64::Engine as _;
+    let mut file = arena_proto::AGE_MAGIC.to_vec();
+    file.extend_from_slice(extra.as_bytes());
+    base64::engine::general_purpose::STANDARD.encode(file)
+}
+
+impl Harness {
+    async fn escrow(&self, token: &str, body: Value) -> Reply {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/v1/kek/escrow")
+            .header("content-type", "application/json");
+        if !token.is_empty() {
+            req = req.header("authorization", format!("Bearer {token}"));
+        }
+        let req = req.body(Body::from(body.to_string())).unwrap();
+        reply(self.app.clone().oneshot(req).await.unwrap()).await
+    }
+
+    fn escrowed(&self) -> Vec<(String, String, String, i64)> {
+        let conn = rusqlite::Connection::open(self.dir.path().join("gz_control.db")).unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT branch_id, hub_instance_id, wrapped_kek, created_at FROM kek_escrow \
+                 ORDER BY branch_id",
+            )
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    async fn escrow_audit(&self) -> Vec<arena_store::control::AdminAuditRow> {
+        self.db
+            .admin_audit_rows()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.action == "kek.escrow.write")
+            .collect()
+    }
+}
+
+#[tokio::test]
+async fn a_free_hub_escrows_its_branch_key_and_every_write_is_audited() {
+    let h = Harness::new().await;
+    let a = h.cafe(PHONE_A, "Pixel Arena", "198.51.100.4").await;
+    let first = wrapped("-> X25519 first\n");
+    let r = h.escrow(&a.token, json!({"wrapped_kek": first})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body, json!({"stored": true}), "nothing comes back");
+    assert_eq!(
+        h.escrowed(),
+        vec![(a.branch.clone(), "01HUBINSTANCE".into(), first.clone(), T0)]
+    );
+
+    // The same Hub escrowing a new key replaces its row; the audit keeps both writes.
+    h.now.fetch_add(HOUR, Ordering::SeqCst);
+    let second = wrapped("-> X25519 second\n");
+    let r = h.escrow(&a.token, json!({"wrapped_kek": second})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(
+        h.escrowed(),
+        vec![(
+            a.branch.clone(),
+            "01HUBINSTANCE".into(),
+            second.clone(),
+            T0 + HOUR
+        )]
+    );
+    let audit = h.escrow_audit().await;
+    assert_eq!(audit.len(), 2);
+    for row in &audit {
+        assert_eq!(
+            (row.actor_kind.as_str(), row.actor_id.as_str()),
+            ("system", a.hub.as_str())
+        );
+        assert_eq!(
+            (row.target_kind.as_str(), row.target_id.as_str()),
+            ("branch", a.branch.as_str())
+        );
+        assert!(
+            !row.summary.contains(&first) && !row.summary.contains(&second),
+            "the audit never holds the key: {}",
+            row.summary
+        );
+    }
+    assert_eq!(h.db.kek_escrow_count(&a.branch).await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn only_a_wrapped_key_from_a_valid_hub_is_stored() {
+    use base64::Engine as _;
+    let h = Harness::new().await;
+    let a = h.cafe(PHONE_A, "Pixel Arena", "198.51.100.4").await;
+    let bare = base64::engine::general_purpose::STANDARD.encode([7u8; 32]);
+    for body in [
+        json!({"wrapped_kek": bare}),
+        json!({"wrapped_kek": ""}),
+        json!({"wrapped_kek": "not base64!"}),
+        json!({"wrapped_kek": wrapped(&"x".repeat(2000))}),
+    ] {
+        let r = h.escrow(&a.token, body.clone()).await;
+        assert_eq!(
+            (r.status, r.code()),
+            (422, "VALIDATION_FAILED"),
+            "{body}: {}",
+            r.body
+        );
+    }
+    assert!(h.escrowed().is_empty());
+    assert!(h.escrow_audit().await.is_empty());
+
+    let ok = json!({"wrapped_kek": wrapped("-> X25519 k\n")});
+    let r = h.escrow("", ok.clone()).await;
+    assert_eq!((r.status, r.code()), (401, "TOKEN_INVALID"));
+    h.revoke_hubs(&a.branch);
+    let r = h.escrow(&a.token, ok).await;
+    assert_eq!((r.status, r.code()), (401, "TOKEN_REVOKED"));
+    assert!(h.escrowed().is_empty());
+}
+
+#[tokio::test]
+async fn escrow_calls_are_rate_limited_per_branch() {
+    let h = Harness::new().await;
+    let a = h.cafe(PHONE_A, "Pixel Arena", "198.51.100.4").await;
+    let ok = json!({"wrapped_kek": wrapped("-> X25519 k\n")});
+    for _ in 0..12 {
+        assert_eq!(h.escrow(&a.token, ok.clone()).await.status, 200);
+    }
+    let r = h.escrow(&a.token, ok).await;
+    assert_eq!((r.status, r.code()), (429, "RATE_LIMITED"));
+    assert!(r.retry_after.is_some());
+}
+
 /// A PUT of `body` to a presigned `http://host:port/path?query` URL: the status code.
 fn put(url: &str, body: &[u8]) -> u16 {
     let rest = url.strip_prefix("http://").expect("an http URL");

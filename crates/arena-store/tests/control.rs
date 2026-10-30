@@ -34,6 +34,7 @@ const ALL_TABLES: &[&str] = &[
     "commands",
     "entitlements",
     "hubs",
+    "kek_escrow",
     "message_templates",
     "onboarding_progress",
     "ops_audit",

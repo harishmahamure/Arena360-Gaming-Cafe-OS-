@@ -228,6 +228,8 @@ export type { KdsPairingCode } from "./KdsPairingCode";
 export type { KdsRevoke } from "./KdsRevoke";
 export type { KdsSeen } from "./KdsSeen";
 export type { KdsStatus } from "./KdsStatus";
+export type { KekEscrowRequest } from "./KekEscrowRequest";
+export type { KekEscrowResponse } from "./KekEscrowResponse";
 export type { KioskCleanupFailed } from "./KioskCleanupFailed";
 export type { KioskGameLaunched } from "./KioskGameLaunched";
 export type { KioskGamePlayRecorded } from "./KioskGamePlayRecorded";

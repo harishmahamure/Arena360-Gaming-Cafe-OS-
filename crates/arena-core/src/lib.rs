@@ -22,6 +22,7 @@ pub mod import_players;
 pub mod import_products;
 pub mod import_starter;
 pub mod invoice;
+pub mod key_backup;
 pub mod launch_times;
 pub mod live_floor;
 pub mod locale;
@@ -84,7 +85,7 @@ pub use settings_defaults::{
     bootstrap_locale_settings, setting_rule,
 };
 pub use snapshot::{
-    KotJob, RateFlips, SnapshotReader, branch_setup, build_snapshot, read_snapshot,
+    KeyBackupPlan, KotJob, RateFlips, SnapshotReader, branch_setup, build_snapshot, read_snapshot,
 };
 pub use staff::StaffDirectory;
 pub use status::{

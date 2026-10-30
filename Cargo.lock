@@ -412,10 +412,12 @@ dependencies = [
 name = "arena-tasks"
 version = "0.1.0"
 dependencies = [
+ "age",
  "arena-core",
  "arena-proto",
  "arena-replay",
  "arena-store",
+ "base64 0.22.1",
  "if-addrs",
  "libc",
  "mdns-sd",
@@ -429,6 +431,7 @@ dependencies = [
  "tokio",
  "tokio-rustls 0.26.6",
  "tracing",
+ "tracing-subscriber",
  "ulid",
  "webpki-roots 1.0.9",
  "windows",

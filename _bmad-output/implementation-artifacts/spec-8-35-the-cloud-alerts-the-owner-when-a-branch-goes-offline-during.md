@@ -2,7 +2,7 @@
 title: "Story 8.35: The cloud alerts the owner when a branch goes offline during opening hours"
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 baseline_commit: 'e2abd132cf436c49fddeb175980eb60be638d7b3'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -90,6 +90,10 @@ An episode key is the timestamp that started the silence (`last_seen_at` or the 
 
 ## Auto Run Result
 
-Status: in-review
+Status: done
 Implemented by subagent; verified with cargo test (proto, store, core, tasks, cloud), clippy and fmt on the five crates, check:strings, check:pins, owner svelte-check and `pnpm gen:types`. Pre-existing unrelated failures: cloud backup `a_hung_run_times_out_with_its_own_code`, cloud binary `unreachable_at_start_retries_then_exits_1_without_logging_the_token`, tasks `trusted_time_is_cloud_time_plus_monotonic_elapsed` and `a_printer_that_stops_reading_times_out`. `arena-core` `proptest_apply` failed once (stock-in change count 168 vs 167 after an owner command, threshold and stock case) and passed on four reruns including a clean baseline: a flake that comes from the Story 8.34 outbox rows, not from this story. `check:deploy` could not run (no kubectl).
 Open notes for review: branches already alerted do not count toward the mass hold; `branch_online` minutes run from the last alerted `last_seen_at`; the job needs the control role's secrets and migration 24 applied first.
+
+## Code Review Result
+
+Reviewed against the spec: offline, not-uploading, back-online, mass-hold and `Raise.whatsapp` logic match the Always rules. No blocking findings. Clippy and fmt are clean; the proto, store and cloud tests pass except the two pre-existing unrelated cloud failures listed above. Status: done.

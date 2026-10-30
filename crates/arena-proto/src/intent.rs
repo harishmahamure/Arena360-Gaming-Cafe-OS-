@@ -291,6 +291,10 @@ pub enum IntentKind {
     /// `player.pc_settings_set` frame (Story 6.35).
     #[serde(rename = "player.pc_settings_set")]
     PlayerPcSettingsSet,
+    /// A player's personal data erased by crypto-shredding (Story 9.1), built by the Hub from
+    /// `POST /ui/players/erase`.
+    #[serde(rename = "player.erased")]
+    PlayerErased,
     #[serde(rename = "session.start")]
     SessionStart,
     #[serde(rename = "session.end")]
@@ -414,7 +418,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 129] = [
+    pub const ALL: [IntentKind; 130] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -505,6 +509,7 @@ impl IntentKind {
         Self::PlayerPasswordReset,
         Self::PlayerPasswordChange,
         Self::PlayerPcSettingsSet,
+        Self::PlayerErased,
         Self::SessionStart,
         Self::SessionEnd,
         Self::SessionSettle,
@@ -639,6 +644,7 @@ impl IntentKind {
             Self::PlayerPasswordReset => "player.password_reset",
             Self::PlayerPasswordChange => "player.password_change",
             Self::PlayerPcSettingsSet => "player.pc_settings_set",
+            Self::PlayerErased => "player.erased",
             Self::SessionStart => "session.start",
             Self::SessionEnd => "session.end",
             Self::SessionSettle => "session.settle",
@@ -789,6 +795,7 @@ impl IntentKind {
             | Self::PlayerUpdate
             | Self::PlayerPasswordReset
             | Self::PlayerPasswordChange
+            | Self::PlayerErased
             | Self::PlayerPcSettingsSet => IntentCategory::Player,
             Self::SessionStart
             | Self::SessionEnd
@@ -912,6 +919,7 @@ impl IntentKind {
             | Self::PlayerUpdate
             | Self::PlayerPasswordReset
             | Self::PlayerPasswordChange
+            | Self::PlayerErased
             | Self::PlayerPcSettingsSet => Requirement::Perm(Permission::PlayerManage),
             Self::SessionStart
             | Self::SessionAssignPlayer
@@ -1070,6 +1078,7 @@ impl IntentKind {
             | Self::PlayerUpdate
             | Self::PlayerPasswordReset
             | Self::PlayerPasswordChange
+            | Self::PlayerErased
             | Self::PlayerPcSettingsSet
             | Self::SessionStart
             | Self::SessionEnd
@@ -1711,6 +1720,8 @@ pub enum IntentPayload {
     PlayerPasswordChange(crate::PlayerPasswordChange),
     #[serde(rename = "player.pc_settings_set")]
     PlayerPcSettingsSet(crate::PlayerPcSettingsSet),
+    #[serde(rename = "player.erased")]
+    PlayerErased(crate::PlayerErase),
     #[serde(rename = "session.start")]
     SessionStart(crate::SessionStart),
     #[serde(rename = "session.end")]
@@ -1884,6 +1895,7 @@ impl IntentPayload {
             Self::PlayerPasswordReset(_) => IntentKind::PlayerPasswordReset,
             Self::PlayerPasswordChange(_) => IntentKind::PlayerPasswordChange,
             Self::PlayerPcSettingsSet(_) => IntentKind::PlayerPcSettingsSet,
+            Self::PlayerErased(_) => IntentKind::PlayerErased,
             Self::SessionStart(_) => IntentKind::SessionStart,
             Self::SessionEnd(_) => IntentKind::SessionEnd,
             Self::SessionSettle(_) => IntentKind::SessionSettle,
@@ -2296,6 +2308,7 @@ mod tests {
                 | "player.update"
                 | "player.password_reset"
                 | "player.password_change"
+                | "player.erased"
                 | "player.pc_settings_set" => Requirement::Perm(Permission::PlayerManage),
                 "session.start" | "session.assign_player" | "session.group" | "alert.ack" => {
                     Requirement::Perm(Permission::SessionStart)

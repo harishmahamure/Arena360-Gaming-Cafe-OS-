@@ -7,6 +7,7 @@ import type {
   PlayerHit,
   PlayerPasswordForm,
   SessionStaff,
+  WalletDisposal,
 } from "@arena/ui/generated";
 import en from "../../../packages/ui/src/messages/en.json" with { type: "json" };
 import { ORIGIN } from "./origin";
@@ -39,6 +40,13 @@ const STAFF: Record<string, SessionStaff> = {
 };
 
 type Sent<F = PlayerForm> = { form: F; idempotency_key: string; elevation_ticket?: string };
+type EraseSent = {
+  player_id: string;
+  wallet?: WalletDisposal;
+  note?: string;
+  idempotency_key: string;
+  elevation_ticket?: string;
+};
 type Hub = {
   sent: Sent[];
   elevations: { items: { intent_kind: string }[]; pin: string }[];
@@ -49,6 +57,9 @@ type Hub = {
   staleNext: boolean;
   edits: Sent<PlayerEditForm>[];
   resets: Sent<PlayerPasswordForm>[];
+  erases: EraseSent[];
+  walletMinor: number;
+  eraseFail: { status: number; code: string; message: string } | null;
 };
 
 const ASHA: PlayerHit = {
@@ -73,6 +84,9 @@ const newHub = (): Hub => ({
   staleNext: false,
   edits: [],
   resets: [],
+  erases: [],
+  walletMinor: 0,
+  eraseFail: null,
 });
 
 const snapshot = (): HubSnapshot => ({
@@ -165,6 +179,20 @@ async function open(page: Page, hub: Hub, token = "counter-token") {
           email: "asha@example.com",
           dob: "2000-01-02",
           notes: "corner seat",
+          wallet_minor: hub.walletMinor,
+        });
+      }
+      case "/ui/players/erase": {
+        const body = req.postDataJSON() as EraseSent;
+        hub.erases.push(body);
+        const allowed = STAFF[auth].permissions.includes("player.manage");
+        if (!allowed && !body.elevation_ticket) {
+          return json(route, 403, { code: "PERMISSION_DENIED", message: "denied" });
+        }
+        if (hub.eraseFail) return json(route, hub.eraseFail.status, hub.eraseFail);
+        hub.players = hub.players.filter((p) => p.player_id !== body.player_id);
+        return json(route, 200, {
+          applied: { intent_id: "I", changes: [{ tbl: "players", row_id: body.player_id }] },
         });
       }
       case "/ui/players/update":
@@ -591,4 +619,91 @@ test("a member without player.manage asks for a manager's PIN in place to edit",
   await expect(page.getByTestId("player-status")).toContainText(en["hub.players.edit.done"]);
   expect(hub.elevations.at(-1)).toEqual({ items: [{ intent_kind: "player.update" }], pin: "2222" });
   expect(hub.edits[0].elevation_ticket).toBe("T1");
+});
+
+const openErase = async (page: Page) => {
+  await pickAsha(page);
+  await page.getByRole("button", { name: en["hub.players.erase.open"] }).click();
+  await expect(page.getByTestId("player-erase")).toBeVisible();
+};
+
+test("Erase shows what is erased and kept, then erases with no money to handle", async ({
+  page,
+}) => {
+  const hub = newHub();
+  await open(page, hub);
+  await openErase(page);
+  const panel = page.getByTestId("player-erase");
+  await expect(panel.getByTestId("erase-erased")).toContainText(
+    en["hub.players.erase.erased.name"],
+  );
+  await expect(panel.getByTestId("erase-kept")).toContainText(en["hub.players.erase.kept.money"]);
+  await expect(panel.getByTestId("erase-wallet")).toHaveCount(0);
+  await expectNoSeriousAxe(page);
+  await panel.getByRole("button", { name: en["hub.players.erase.confirm"] }).click();
+  await expect(page.getByTestId("player-status")).toContainText(en["hub.players.erase.done"]);
+  expect(hub.erases).toHaveLength(1);
+  expect(hub.erases[0]).toMatchObject({ player_id: "P1" });
+  expect(hub.erases[0].wallet).toBeUndefined();
+  await expect(page.getByTestId("player-erased")).toContainText(en["hub.players.erased"]);
+  await expect(page.getByTestId("player-profile")).toHaveCount(0);
+});
+
+test("a wallet balance needs a disposal and a reason before anything is sent", async ({ page }) => {
+  const hub = newHub();
+  hub.walletMinor = 50_000;
+  await open(page, hub);
+  await openErase(page);
+  const panel = page.getByTestId("player-erase");
+  await panel.getByRole("button", { name: en["hub.players.erase.confirm"] }).click();
+  await expect(panel.getByTestId("erase-wallet")).toContainText(
+    en["hub.players.erase.invalid.wallet"],
+  );
+  expect(hub.erases).toEqual([]);
+  await panel.getByLabel(en["hub.players.erase.wallet.forfeited"]).check();
+  await panel.getByRole("button", { name: en["hub.players.erase.confirm"] }).click();
+  await expect(panel).toContainText(en["hub.players.erase.invalid.note"]);
+  expect(hub.erases).toEqual([]);
+  await panel.getByLabel(en["hub.players.erase.note"]).fill("left the area");
+  await panel.getByRole("button", { name: en["hub.players.erase.confirm"] }).click();
+  await expect(page.getByTestId("player-status")).toContainText(en["hub.players.erase.done"]);
+  expect(hub.erases[0]).toMatchObject({
+    player_id: "P1",
+    wallet: "forfeited",
+    note: "left the area",
+  });
+});
+
+test("an open session blocks the erasure with its reason", async ({ page }) => {
+  const hub = newHub();
+  hub.eraseFail = { status: 409, code: "ERASE_BLOCKED", message: "End the session first" };
+  await open(page, hub);
+  await openErase(page);
+  await page
+    .getByTestId("player-erase")
+    .getByRole("button", { name: en["hub.players.erase.confirm"] })
+    .click();
+  await expect(page.getByTestId("erase-refusal")).toContainText(
+    en["hub.players.erase.blocked.session"],
+  );
+  await expect(page.getByTestId("player-erase")).toBeVisible();
+});
+
+test("a member without player.manage asks for a manager's PIN in place to erase", async ({
+  page,
+}) => {
+  const hub = newHub();
+  await open(page, hub, "viewer-token");
+  await openErase(page);
+  await page
+    .getByTestId("player-erase")
+    .getByRole("button", { name: en["hub.players.erase.confirm"] })
+    .click();
+  await expect(page.getByTestId("player-approval")).toBeVisible();
+  expect(hub.erases).toEqual([]);
+  await page.keyboard.type("2222");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("player-status")).toContainText(en["hub.players.erase.done"]);
+  expect(hub.elevations.at(-1)).toEqual({ items: [{ intent_kind: "player.erased" }], pin: "2222" });
+  expect(hub.erases[0].elevation_ticket).toBe("T1");
 });

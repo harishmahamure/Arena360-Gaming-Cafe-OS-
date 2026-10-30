@@ -179,6 +179,11 @@ async fn the_raw_intent_route_refuses_player_create() {
         arena_proto::IntentPayload::PlayerCreate(sealed),
         arena_proto::IntentPayload::PlayerUpdate(update),
         arena_proto::IntentPayload::PlayerPasswordReset(reset),
+        arena_proto::IntentPayload::PlayerErased(arena_proto::PlayerErase {
+            player_id: "p".into(),
+            wallet: None,
+            note: None,
+        }),
     ] {
         let intent = crate::ui_auth::tests::intent_as(
             arena_proto::Actor {
@@ -1049,4 +1054,122 @@ async fn ending_a_wallet_session_settles_at_once_and_offers_no_undo() {
     .await;
     assert_eq!(wallet["balance_minor"], 11_000);
     assert_eq!(wallet["txns"][0]["reason"], "bill");
+}
+
+async fn erase(
+    hub: &Hub,
+    token: &str,
+    player: &str,
+    extra: Value,
+    ticket: Option<&str>,
+) -> (StatusCode, Value) {
+    let mut body = json!({
+        "player_id": player,
+        "idempotency_key": ulid::Ulid::generate().to_string(),
+    });
+    for (k, v) in extra.as_object().unwrap() {
+        body[k] = v.clone();
+    }
+    if let Some(t) = ticket {
+        body["elevation_ticket"] = json!(t);
+    }
+    call(hub, "POST", "/ui/players/erase", Some(token), Some(body)).await
+}
+
+#[tokio::test]
+async fn erasing_a_player_needs_the_permission_a_disposal_for_money_and_leaves_them_unfound() {
+    let hub = hub().await;
+    let counter = token_for(&hub, "counter", "c-pass").await;
+    let kitchen = token_for(&hub, "kitchen", "k-pass").await;
+    let (_, reply) = create(
+        &hub,
+        &counter,
+        body(form("Asha_9", "+91 98765 43210"), None),
+    )
+    .await;
+    let player = reply["applied"]["changes"][0]["row_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (_, ok) = call(
+        &hub,
+        "POST",
+        "/ui/intent",
+        Some(&counter),
+        Some(topup_body(
+            &hub,
+            &player,
+            500,
+            json!([{"method": "upi", "amount_minor": 500, "reference": "1234"}]),
+        )),
+    )
+    .await;
+    assert!(ok["applied"].is_object(), "{ok}");
+    let before = written(&hub);
+
+    // No permission and no ticket.
+    let (status, denied) = erase(&hub, &kitchen, &player, json!({}), None).await;
+    assert_eq!(
+        (status, denied["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("PERMISSION_DENIED"))
+    );
+    // A balance without its disposal, then without a reason.
+    let (status, err) = erase(&hub, &counter, &player, json!({}), None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{err}");
+    assert_eq!(err["field"], "wallet");
+    let (status, err) = erase(&hub, &counter, &player, json!({"wallet": "refunded"}), None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{err}");
+    assert_eq!(err["field"], "note");
+    assert_eq!(written(&hub), before);
+
+    // A member without the permission erases with a manager's PIN.
+    let (_, ticket) = call(
+        &hub,
+        "POST",
+        "/ui/elevate",
+        Some(&kitchen),
+        Some(json!({"items": [{"intent_kind": "player.erased"}], "pin": "2222"})),
+    )
+    .await;
+    let ticket = ticket["ticket"].as_str().unwrap().to_owned();
+    let (status, done) = erase(
+        &hub,
+        &kitchen,
+        &player,
+        json!({"wallet": "forfeited", "note": " moved away "}),
+        Some(&ticket),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let last = store(&hub).changes().unwrap().pop().unwrap();
+    assert_eq!(last.intent_kind, "player.erased");
+    assert_eq!(
+        last.elevated_by_id.as_deref(),
+        Some(hub.manager_id.as_str())
+    );
+    let log = String::from_utf8_lossy(&last.row).into_owned();
+    for plain in ["Asha Rao", "9876543210", "asha@example.com", "$argon2id$"] {
+        assert!(!log.contains(plain), "{plain}");
+    }
+
+    // Gone: not found by phone, no profile (KEY_ERASED), no second erasure.
+    let (_, hits) = call(&hub, "GET", "/ui/players?q=98765", Some(&counter), None).await;
+    assert_eq!(hits.as_array().unwrap().len(), 0);
+    let (status, gone) = call(
+        &hub,
+        "GET",
+        &format!("/ui/players/profile?id={player}"),
+        Some(&counter),
+        None,
+    )
+    .await;
+    assert_eq!(
+        (status, gone["code"].as_str()),
+        (StatusCode::GONE, Some("KEY_ERASED"))
+    );
+    let (status, again) = erase(&hub, &counter, &player, json!({}), None).await;
+    assert_eq!(
+        (status, again["code"].as_str()),
+        (StatusCode::NOT_FOUND, Some("NOT_FOUND"))
+    );
 }

@@ -222,6 +222,21 @@ pub fn reseal(
     )
 }
 
+/// Opens `enc` with the player's wrapped key, or fails `KEY_ERASED` when there is no key row: the
+/// player was erased (Story 9.1) and nothing sealed under their key can be read again. UI callers
+/// show "Erased player".
+pub fn open_field_of(
+    kek: &[u8; KEK_LEN],
+    player_id: &str,
+    wrapped_key: Option<&str>,
+    field: &str,
+    enc: &str,
+) -> Result<String, AppError> {
+    let wrapped_key = wrapped_key
+        .ok_or_else(|| AppError::new(ErrorCode::KeyErased, "this player's data was erased"))?;
+    open_field(kek, player_id, wrapped_key, field, enc)
+}
+
 pub fn open_field(
     kek: &[u8; KEK_LEN],
     player_id: &str,
@@ -285,7 +300,13 @@ fn hit(kek: &[u8; KEK_LEN], row: PlayerRow, wrapped: &str) -> Result<PlayerHit, 
 
 impl PlayerIndex {
     fn sync(&mut self, reader: &SnapshotReader, kek: &[u8; KEK_LEN]) -> Result<(), AppError> {
-        for (id, rev) in reader.player_revs()? {
+        let revs = reader.player_revs()?;
+        // An erased (or deleted) player is no longer listed: drop them at once.
+        let live: std::collections::HashSet<&str> =
+            revs.iter().map(|(id, _)| id.as_str()).collect();
+        self.entries.retain(|id, _| live.contains(id.as_str()));
+        self.seen.retain(|id, _| live.contains(id.as_str()));
+        for (id, rev) in revs {
             if self.seen.get(&id) == Some(&rev) {
                 continue;
             }
@@ -344,9 +365,13 @@ pub fn profile(
     kek: &[u8; KEK_LEN],
     player_id: &str,
 ) -> Result<PlayerProfile, AppError> {
-    let (row, rev, wrapped) = reader
-        .player(player_id)?
-        .ok_or_else(|| AppError::new(ErrorCode::NotFound, "no such player"))?;
+    let Some((row, rev, wrapped)) = reader.player(player_id)? else {
+        return Err(if reader.player_erased(player_id)? {
+            AppError::new(ErrorCode::KeyErased, "this player's data was erased")
+        } else {
+            AppError::new(ErrorCode::NotFound, "no such player")
+        });
+    };
     let optional = |field, enc: &Option<String>| {
         enc.as_deref().map_or(Ok(String::new()), |e| {
             open_field(kek, player_id, &wrapped, field, e)

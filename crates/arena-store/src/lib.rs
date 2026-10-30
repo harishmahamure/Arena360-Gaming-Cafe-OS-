@@ -177,8 +177,9 @@ pub use player_packs::{
     pack_in_use, restore_pack_minutes,
 };
 pub use players::{
-    PlayerRow, find_player, find_player_by_username, find_player_key, insert_consent,
-    insert_player, insert_player_key, latest_consent, list_player_revs, phone_holder,
+    ERASED_USERNAME, EraseState, PlayerRow, delete_player_key, erase_player, find_player,
+    find_player_by_username, find_player_key, insert_consent, insert_player, insert_player_key,
+    latest_consent, list_player_revs, phone_holder, player_erase_state, player_erased,
     player_import_keys, set_player_password, update_player, username_taken,
 };
 pub use pricing_rules::{
@@ -274,8 +275,9 @@ pub use upload::{
 };
 pub use wallet::{
     NewTopupOrder, NewWalletTxn, OrderTxn, WalletRow, WalletTxnRow, adjust_wallet, find_wallet,
-    insert_import_wallet_txn, insert_topup_order, insert_wallet, insert_wallet_txn,
-    list_order_wallet_txns, list_wallet_txns, order_player_and_kind, wallet_balance,
+    insert_erase_wallet_txn, insert_import_wallet_txn, insert_topup_order, insert_wallet,
+    insert_wallet_txn, list_order_wallet_txns, list_wallet_txns, order_player_and_kind,
+    wallet_balance,
 };
 pub use zreport::{
     ZCashEventRow, ZPaymentRow, ZRefundRow, ZReportRows, ZVoidRow, ZWasteRow, load_z_report_rows,
@@ -933,6 +935,14 @@ impl Store {
             return Ok(Vec::new());
         }
         list_player_revs(&self.conn)
+    }
+
+    /// Whether the player was erased (Story 9.1).
+    pub fn player_erased(&self, player_id: &str) -> Result<bool, AppError> {
+        if !self.table_exists("players")? {
+            return Ok(false);
+        }
+        player_erased(&self.conn, player_id)
     }
 
     pub fn player(&self, player_id: &str) -> Result<Option<(PlayerRow, i64, String)>, AppError> {
@@ -2442,6 +2452,74 @@ mod tests {
                 ] {
                     assert!(tx.execute(sql, []).is_err(), "{sql}");
                 }
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn an_erased_player_leaves_the_indexes_the_readers_and_keeps_the_ledger_reasons() {
+        let (_dir, path) = temp_db();
+        let mut store = Store::open(&path, T).unwrap();
+        let player = |id: &str, username: &str, phone: &str| PlayerRow {
+            player_id: id.into(),
+            username: username.into(),
+            password_hash: "h".into(),
+            phone_lookup: phone.into(),
+            name_enc: "n".into(),
+            phone_enc: "p".into(),
+            email_enc: Some("e".into()),
+            dob_enc: None,
+            notes_enc: Some("x".into()),
+            tags: "[\"vip\"]".into(),
+        };
+        store
+            .write_tx(|tx| {
+                insert_player(tx, &player("A", "asha", "L1"))?;
+                insert_player_key(tx, "A", "k")?;
+                insert_wallet(tx, "A")?;
+                assert_eq!(
+                    player_erase_state(tx, "A")?.map(|s| s.open_session),
+                    Some(false)
+                );
+                erase_player(tx, "A", 9)?;
+                delete_player_key(tx, "A")?;
+                // The tombstone is not a live player and frees its username and phone.
+                assert!(player_erase_state(tx, "A")?.is_none());
+                assert!(player_erased(tx, "A")? && !player_erased(tx, "nobody")?);
+                assert!(find_player(tx, "A")?.is_none());
+                assert!(!username_taken(tx, "asha")? && phone_holder(tx, "L1")?.is_none());
+                assert!(!username_taken(tx, ERASED_USERNAME)?);
+                assert!(list_player_revs(tx)?.is_empty());
+                insert_player(tx, &player("B", "asha", "L1"))?;
+                insert_player(tx, &player("C", "ravi", "L2"))?;
+                erase_player(tx, "C", 10)?;
+                let (lookups, names) = player_import_keys(tx)?;
+                assert_eq!((lookups.len(), names.len()), (1, 1));
+                // Two tombstones share the username; the ledger takes the erasure reasons.
+                let (a, c) = tx
+                    .query_row(
+                        "SELECT (SELECT username FROM players WHERE player_id = 'A'),
+                                (SELECT username FROM players WHERE player_id = 'C')",
+                        [],
+                        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+                    )
+                    .map_err(db_error)?;
+                assert_eq!((a.as_str(), c.as_str()), ("erased", "erased"));
+                for (id, reason) in [("T1", "erase_refund"), ("T2", "erase_forfeit")] {
+                    insert_erase_wallet_txn(
+                        tx,
+                        id,
+                        "A",
+                        -5,
+                        reason,
+                        "S",
+                        ("2027-01-15", "2026-27"),
+                    )?;
+                }
+                assert!(
+                    insert_erase_wallet_txn(tx, "T3", "A", -5, "other", "S", ("d", "f")).is_err()
+                );
                 Ok(())
             })
             .unwrap();

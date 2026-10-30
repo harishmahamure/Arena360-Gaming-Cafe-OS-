@@ -194,6 +194,10 @@ pub enum ErrorCode {
     /// The audit builder could not rebuild the month: a batch is missing or does not match its
     /// checksum (Story 8.36).
     AuditBuildFailed,
+    /// An erasure refused: the player has an open session or credit owed (Story 9.1); the message says which.
+    EraseBlocked,
+    /// A player ciphertext whose key was shredded by an erasure cannot be opened (Story 9.1).
+    KeyErased,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -310,6 +314,8 @@ impl ErrorCode {
             Self::MfaRequired => "MFA_REQUIRED",
             Self::AuditBuilding => "AUDIT_BUILDING",
             Self::AuditBuildFailed => "AUDIT_BUILD_FAILED",
+            Self::EraseBlocked => "ERASE_BLOCKED",
+            Self::KeyErased => "KEY_ERASED",
         }
     }
 }
@@ -487,6 +493,8 @@ mod tests {
             (ErrorCode::MfaRequired, "MFA_REQUIRED"),
             (ErrorCode::AuditBuilding, "AUDIT_BUILDING"),
             (ErrorCode::AuditBuildFailed, "AUDIT_BUILD_FAILED"),
+            (ErrorCode::EraseBlocked, "ERASE_BLOCKED"),
+            (ErrorCode::KeyErased, "KEY_ERASED"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

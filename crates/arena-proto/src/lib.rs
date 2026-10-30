@@ -343,14 +343,14 @@ pub use player_signup::{
     MAX_SIGNUP_USERNAME_BYTES, PLAYER_POLICY_VERSION, PlayerSignup, PlayerSignupResult,
 };
 pub use players::{
-    CONSENT_TRANSACTIONAL, PLAYER_EMAIL_MAX_CHARS, PLAYER_NAME_MAX_CHARS, PLAYER_NOTES_MAX_CHARS,
-    PLAYER_PASSWORD_MAX_CHARS, PLAYER_PASSWORD_MIN_CHARS, PLAYER_PHONE_MAX_DIGITS,
-    PLAYER_PHONE_MIN_DIGITS, PLAYER_TAG_MAX_CHARS, PLAYER_TAGS_MAX, PLAYER_USERNAME_MAX_CHARS,
-    PLAYER_USERNAME_MIN_CHARS, POLICY_VERSION_MAX_CHARS, PlayerConsent, PlayerCreate,
-    PlayerEditForm, PlayerForm, PlayerHit, PlayerPasswordChange, PlayerPasswordForm,
-    PlayerPasswordReset, PlayerProfile, PlayerUpdate, UiPasswordResetRequest, UiPlayerEditRequest,
-    UiPlayerRequest, normalize_phone, normalize_username, valid_phone, valid_policy_version,
-    valid_tags, valid_username,
+    CONSENT_TRANSACTIONAL, ERASE_NOTE_MAX_CHARS, PLAYER_EMAIL_MAX_CHARS, PLAYER_NAME_MAX_CHARS,
+    PLAYER_NOTES_MAX_CHARS, PLAYER_PASSWORD_MAX_CHARS, PLAYER_PASSWORD_MIN_CHARS,
+    PLAYER_PHONE_MAX_DIGITS, PLAYER_PHONE_MIN_DIGITS, PLAYER_TAG_MAX_CHARS, PLAYER_TAGS_MAX,
+    PLAYER_USERNAME_MAX_CHARS, PLAYER_USERNAME_MIN_CHARS, POLICY_VERSION_MAX_CHARS, PlayerConsent,
+    PlayerCreate, PlayerEditForm, PlayerErase, PlayerForm, PlayerHit, PlayerPasswordChange,
+    PlayerPasswordForm, PlayerPasswordReset, PlayerProfile, PlayerUpdate, UiPasswordResetRequest,
+    UiPlayerEditRequest, UiPlayerEraseRequest, UiPlayerRequest, WalletDisposal, normalize_phone,
+    normalize_username, valid_phone, valid_policy_version, valid_tags, valid_username,
 };
 pub use pos::{
     CounterOrder, InvoiceIssue, KioskSale, MAX_SALE_LINES, MAX_SALE_QTY, MOVE_COUNT_ADJUST,

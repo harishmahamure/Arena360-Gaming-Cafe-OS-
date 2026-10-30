@@ -3,8 +3,9 @@
 //! [`plan`] reads the rows whose `not_before` has passed and decides each one: send it, wait for
 //! something (a receipt waits for its invoice number), skip it for good (the action was reverted,
 //! the player no longer agrees), or expire it (still unsent after 7 days). The decision of a row
-//! runs through [`RULES`], one small check each, so a later story adds its rule (the erasure rule
-//! of Epic 9) without touching the drain. Story 8.30 added the "session no longer near its end"
+//! runs through [`RULES`], one small check each, so a later story adds its rule without touching
+//! the drain (Story 9.1 added the first: a message for an erased player is skipped with reason
+//! `erased`, also one queued before the erasure). Story 8.30 added the "session no longer near its end"
 //! rule for the session and console messages, and Story 8.31 the "credit still owed" rule for the
 //! credit reminder. Story 8.34 added the owner-alert rows: they name no player, so the player and
 //! consent rules pass them, a `low_stock` alert is skipped once its Hub alert is no longer open, and
@@ -44,6 +45,8 @@ pub struct RowContext<'a> {
     pub row: &'a NotifyRow,
     /// The player, `None` once they are gone (erased or deleted).
     pub player: Option<&'a PlayerRow>,
+    /// Whether the row's player was erased (Story 9.1), also a message queued before the erasure.
+    pub erased: bool,
     /// The player's current consent to the row's purpose: (granted, policy version).
     pub consent: Option<(bool, String)>,
     pub order: Option<&'a InvoiceOrder>,
@@ -61,6 +64,7 @@ type Rule = fn(&RowContext<'_>) -> Verdict;
 /// The per-row eligibility check, in the order the rules run. The first rule that does not pass
 /// decides the row.
 pub const RULES: &[Rule] = &[
+    player_erased,
     player_exists,
     consent_current,
     receipt_ready,
@@ -72,6 +76,15 @@ pub const RULES: &[Rule] = &[
 /// Whether the row raises an owner alert (it names no player and needs no consent).
 fn is_alert(row: &NotifyRow) -> bool {
     row.purpose == NOTIFY_PURPOSE_OWNER_ALERT
+}
+
+/// A message for an erased player is never sent, whenever it was queued.
+fn player_erased(c: &RowContext<'_>) -> Verdict {
+    if !is_alert(c.row) && c.erased {
+        Verdict::Skip("erased")
+    } else {
+        Verdict::Pass
+    }
 }
 
 fn player_exists(c: &RowContext<'_>) -> Verdict {
@@ -253,6 +266,7 @@ pub fn plan(
             } else {
                 store.player(&row.player_id)?
             };
+            let erased = !alert && store.player_erased(&row.player_id)?;
             let consent = if alert {
                 None
             } else {
@@ -292,6 +306,7 @@ pub fn plan(
             let ctx = RowContext {
                 row: &row,
                 player: player.as_ref().map(|(p, _, _)| p),
+                erased,
                 consent,
                 order: order.as_ref(),
                 session,

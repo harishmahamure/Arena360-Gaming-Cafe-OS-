@@ -1530,6 +1530,14 @@ impl SnapshotReader {
             .player_revs()
     }
 
+    /// Whether the player was erased (Story 9.1).
+    pub fn player_erased(&self, player_id: &str) -> Result<bool, AppError> {
+        self.reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?
+            .player_erased(player_id)
+    }
+
     pub fn player(
         &self,
         player_id: &str,

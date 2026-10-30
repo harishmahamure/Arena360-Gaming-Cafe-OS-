@@ -946,6 +946,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::VarianceOverThreshold
         | ErrorCode::BundleShort
         | ErrorCode::ControllersUnchecked
+        | ErrorCode::EraseBlocked
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::NotPrimary | ErrorCode::HubSlow | ErrorCode::NoHub => {
             StatusCode::SERVICE_UNAVAILABLE
@@ -957,6 +958,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::CommandExpired => StatusCode::CONFLICT,
         ErrorCode::AuditBuilding => StatusCode::ACCEPTED,
         ErrorCode::AuditBuildFailed => StatusCode::BAD_GATEWAY,
+        ErrorCode::KeyErased => StatusCode::GONE,
         ErrorCode::HubIncompatible => StatusCode::CONFLICT,
         ErrorCode::PairPinPaused => StatusCode::TOO_MANY_REQUESTS,
         ErrorCode::TokenRevoked | ErrorCode::TokenInvalid => StatusCode::UNAUTHORIZED,
@@ -2031,6 +2033,7 @@ async fn intent(
             | arena_proto::IntentPayload::ImportPlayers(_)
             | arena_proto::IntentPayload::PlayerUpdate(_)
             | arena_proto::IntentPayload::PlayerPasswordReset(_)
+            | arena_proto::IntentPayload::PlayerErased(_)
     ) {
         return fail(ui_error(AppError::new(
             ErrorCode::Unsupported,
@@ -2988,6 +2991,46 @@ async fn player_password(
     run_intent(&auth, &token, &me, intent, elevation_ticket).await
 }
 
+async fn player_erase(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let (token, me, request) = match player_write::<arena_proto::UiPlayerEraseRequest>(
+        &auth,
+        &headers,
+        &body,
+        "the body must be {\"player_id\", \"wallet\"?, \"note\"?, \"idempotency_key\", \"elevation_ticket\"?}",
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let arena_proto::UiPlayerEraseRequest {
+        player_id,
+        wallet,
+        note,
+        idempotency_key,
+        elevation_ticket,
+    } = request;
+    if let Err(e) = require_manage(&me, &elevation_ticket, "erasing a player") {
+        return fail(e);
+    }
+    let intent = player_intent(
+        &me,
+        auth.clock.now_ms(),
+        idempotency_key,
+        None,
+        arena_proto::IntentPayload::PlayerErased(arena_proto::PlayerErase {
+            player_id,
+            wallet,
+            note: note.map(|n| n.trim().to_owned()),
+        }),
+    );
+    run_intent(&auth, &token, &me, intent, elevation_ticket).await
+}
+
 async fn player_read<T: serde::Serialize + Send + 'static>(
     auth: Arc<UiAuth>,
     headers: HeaderMap,
@@ -3383,6 +3426,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/sessions/convert", post(session_convert))
         .route("/ui/players/update", post(player_update))
         .route("/ui/players/password", post(player_password))
+        .route("/ui/players/erase", post(player_erase))
         .route("/ui/settings", get(settings))
         .route("/ui/media-cache", get(media_cache))
         .route("/ui/library", get(crate::ui_library::list))

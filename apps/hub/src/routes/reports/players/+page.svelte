@@ -106,7 +106,12 @@
             <tbody>
               {#each view.top as p (p.player_id)}
                 <tr data-testid="top-row" data-erased={p.erased}>
-                  <th scope="row" class:muted={p.erased}>{who(p)}</th>
+                  <th scope="row" class:muted={p.erased}
+                    >{who(p)}
+                    {#if p.erased}<span class="muted type-hub-label"
+                        >{t("hub.players.erased.id", { id: p.player_id })}</span
+                      >{/if}</th
+                  >
                   <td class="num tabular-nums">{p.visits}</td>
                   <td class="num tabular-nums">{formatMoney(p.spend_minor, locale)}</td>
                 </tr>
@@ -192,7 +197,12 @@
             <tbody>
               {#each view.debtors as d (d.player_id)}
                 <tr data-testid="debtor-row" data-erased={d.erased}>
-                  <th scope="row" class:muted={d.erased}>{who(d)}</th>
+                  <th scope="row" class:muted={d.erased}
+                    >{who(d)}
+                    {#if d.erased}<span class="muted type-hub-label"
+                        >{t("hub.players.erased.id", { id: d.player_id })}</span
+                      >{/if}</th
+                  >
                   <td class="num tabular-nums">{formatMoney(d.outstanding_minor, locale)}</td>
                   <td class="num tabular-nums">{d.oldest_age_days}</td>
                 </tr>

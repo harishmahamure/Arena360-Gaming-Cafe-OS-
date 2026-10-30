@@ -86,6 +86,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::VarianceOverThreshold
         | ErrorCode::BundleShort
         | ErrorCode::ControllersUnchecked
+        | ErrorCode::EraseBlocked
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired | ErrorCode::SetupCodeInvalid => {
             StatusCode::UNAUTHORIZED
@@ -109,6 +110,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         ErrorCode::PairPinPaused => StatusCode::TOO_MANY_REQUESTS,
         ErrorCode::AuditBuilding => StatusCode::ACCEPTED,
         ErrorCode::AuditBuildFailed => StatusCode::BAD_GATEWAY,
+        ErrorCode::KeyErased => StatusCode::GONE,
         ErrorCode::SchemaTooNew | ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }

@@ -57,6 +57,7 @@ mod pc_settings;
 mod people_reports;
 mod plans;
 mod player_account_page;
+mod player_erase;
 mod player_extend;
 mod player_signup;
 mod player_start;

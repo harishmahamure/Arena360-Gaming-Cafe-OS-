@@ -67,7 +67,12 @@
             data-testid="overdue-row"
             onclick={() => onpick(row.player_id)}
           >
-            <span class="name">{row.erased ? t("hub.players.overdue.erased") : row.name}</span>
+            <span class="name"
+              >{row.erased ? t("hub.players.overdue.erased") : row.name}
+              {#if row.erased}<span class="type-hub-label"
+                  >{t("hub.players.erased.id", { id: row.player_id })}</span
+                >{/if}</span
+            >
             <span class="amount tabular-nums" data-testid="overdue-amount">
               {money(row.outstanding_minor)}
             </span>

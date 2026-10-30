@@ -490,3 +490,29 @@ async fn the_summary_lists_the_players_reminded_today_that_are_queued_or_sent() 
     let json = serde_json::to_string(&summary(&f)).unwrap();
     assert!(!json.contains("+91") && !json.contains("Asha"));
 }
+
+#[tokio::test]
+async fn a_message_queued_before_an_erasure_is_skipped_as_erased() {
+    let (f, p) = owing().await;
+    let r = reminders(&f, "2027-01-18 12:00").remove(0);
+    queue(&f, r).await.unwrap();
+    let after = f.clock.now_ms() + UNDO_WINDOW_MS;
+    assert!(matches!(
+        plan(&reopen(&f), &KEK, after, 10).unwrap()[0].action,
+        DrainAction::Send(_)
+    ));
+
+    // The tab is cleared, then the player is erased with the reminder still queued.
+    sql(
+        &f,
+        format!("UPDATE credit_balances SET outstanding_minor = 0 WHERE player_id = '{p}'"),
+    )
+    .await;
+    super::player_erase::erase(&f, owner(), &p, None, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        plan(&reopen(&f), &KEK, after, 10).unwrap()[0].action,
+        DrainAction::Skip("erased".into())
+    );
+}

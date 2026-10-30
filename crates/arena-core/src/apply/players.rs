@@ -1,12 +1,13 @@
 use arena_proto::{
-    AppError, CONSENT_TRANSACTIONAL, ErrorCode, Intent, IntentPayload, PlayerCreate,
-    PlayerPasswordChange, PlayerPasswordReset, PlayerUpdate, valid_policy_version, valid_tags,
-    valid_username,
+    AppError, CONSENT_TRANSACTIONAL, ERASE_NOTE_MAX_CHARS, ErrorCode, Intent, IntentPayload,
+    PlayerCreate, PlayerErase, PlayerPasswordChange, PlayerPasswordReset, PlayerUpdate,
+    valid_policy_version, valid_tags, valid_username,
 };
 use arena_store::{
-    ChangeOp, PlayerRow, RowKey, StoreTx, find_player, insert_consent, insert_player,
-    insert_player_key, insert_wallet, latest_consent, phone_holder, set_player_password,
-    update_player, username_taken,
+    ChangeOp, EraseState, PlayerRow, RowKey, StoreTx, adjust_wallet, delete_player_key,
+    erase_player, find_player, insert_consent, insert_erase_wallet_txn, insert_player,
+    insert_player_key, insert_wallet, latest_consent, phone_holder, player_erase_state,
+    set_player_password, update_player, username_taken,
 };
 
 use super::mutate::Written;
@@ -26,6 +27,8 @@ pub(crate) struct PlayerTarget {
     username_taken: bool,
     phone_holder: Option<String>,
     existing: Option<Existing>,
+    /// `player.erased`: the checks of a live player, `None` for one missing or already erased.
+    erase: Option<EraseState>,
 }
 
 fn invalid(field: &str, message: &str) -> AppError {
@@ -37,6 +40,7 @@ pub(super) fn load_create(tx: &StoreTx<'_>, c: &PlayerCreate) -> Result<PlayerTa
         username_taken: username_taken(tx, &c.username)?,
         phone_holder: phone_holder(tx, &c.phone_lookup)?,
         existing: None,
+        erase: None,
     })
 }
 
@@ -44,6 +48,12 @@ pub(super) fn load(tx: &StoreTx<'_>, p: &IntentPayload) -> Result<PlayerTarget, 
     let id = match p {
         IntentPayload::PlayerCreate(c) => return load_create(tx, c),
         IntentPayload::PlayerUpdate(u) => &u.player_id,
+        IntentPayload::PlayerErased(e) => {
+            return Ok(PlayerTarget {
+                erase: player_erase_state(tx, &e.player_id)?,
+                ..PlayerTarget::default()
+            });
+        }
         IntentPayload::PlayerPasswordReset(r) => &r.player_id,
         IntentPayload::PlayerPasswordChange(c) => &c.player_id,
         _ => return Ok(PlayerTarget::default()),
@@ -64,6 +74,7 @@ pub(super) fn load(tx: &StoreTx<'_>, p: &IntentPayload) -> Result<PlayerTarget, 
         username_taken: false,
         phone_holder,
         existing,
+        erase: None,
     })
 }
 
@@ -328,4 +339,100 @@ pub(super) fn mutate_reset(
         op: ChangeOp::Update,
         before: None,
     }])
+}
+
+fn erase_state(t: &PlayerTarget) -> Result<&EraseState, AppError> {
+    t.erase
+        .as_ref()
+        .ok_or_else(|| AppError::new(ErrorCode::NotFound, "no such player"))
+}
+
+fn erase_blocked(message: &str) -> AppError {
+    AppError::new(ErrorCode::EraseBlocked, message)
+}
+
+/// `player.erased` (Story 9.1): the player must be live, with no session in progress and no credit
+/// owed. A wallet balance needs its disposal and the manager's reason; no balance takes neither.
+pub(super) fn validate_erase(p: &PlayerErase, t: &PlayerTarget) -> Result<(), AppError> {
+    let state = erase_state(t)?;
+    if state.open_session {
+        return Err(erase_blocked("End the session first"));
+    }
+    if state.outstanding_minor > 0 {
+        return Err(erase_blocked("Collect or write off credit first"));
+    }
+    if state.wallet_minor > 0 {
+        if p.wallet.is_none() {
+            return Err(invalid(
+                "wallet",
+                "say whether the wallet balance was refunded or forfeited",
+            ));
+        }
+        let note = p.note.as_deref().map_or("", str::trim);
+        if note.is_empty() || note.chars().count() > ERASE_NOTE_MAX_CHARS {
+            return Err(invalid("note", "give a reason of up to 120 characters"));
+        }
+    } else {
+        if p.wallet.is_some() {
+            return Err(invalid(
+                "wallet",
+                "there is no wallet balance to dispose of",
+            ));
+        }
+        if p.note.is_some() {
+            return Err(invalid("note", "there is no wallet balance to explain"));
+        }
+    }
+    Ok(())
+}
+
+/// One transaction: the wallet is zeroed by a negative ledger row first, then the player row is
+/// tombstoned and the key row deleted. Consents, orders, sessions and the rest of the money stay.
+pub(super) fn mutate_erase(
+    tx: &StoreTx<'_>,
+    intent: &Intent,
+    p: &PlayerErase,
+    t: &PlayerTarget,
+    now_ms: i64,
+) -> Result<Vec<Written>, AppError> {
+    let state = erase_state(t)?;
+    let mut written = Vec::new();
+    if let (true, Some(disposal)) = (state.wallet_minor > 0, p.wallet) {
+        let (business_day, fy) = crate::locale::stamp(tx, now_ms)?.ok_or_else(|| {
+            AppError::new(ErrorCode::Internal, "the branch has not been bootstrapped")
+        })?;
+        adjust_wallet(tx, &p.player_id, -state.wallet_minor)?;
+        written.push(Written {
+            key: RowKey::Wallets {
+                player_id: p.player_id.clone(),
+            },
+            op: ChangeOp::Update,
+            before: None,
+        });
+        let txn_id = ulid::Ulid::generate().to_string();
+        insert_erase_wallet_txn(
+            tx,
+            &txn_id,
+            &p.player_id,
+            -state.wallet_minor,
+            disposal.reason(),
+            &intent.actor.id,
+            (&business_day, &fy),
+        )?;
+        written.push(Written {
+            key: RowKey::WalletTxns { id: txn_id },
+            op: ChangeOp::Insert,
+            before: None,
+        });
+    }
+    erase_player(tx, &p.player_id, now_ms)?;
+    delete_player_key(tx, &p.player_id)?;
+    written.push(Written {
+        key: RowKey::Players {
+            player_id: p.player_id.clone(),
+        },
+        op: ChangeOp::Update,
+        before: None,
+    });
+    Ok(written)
 }

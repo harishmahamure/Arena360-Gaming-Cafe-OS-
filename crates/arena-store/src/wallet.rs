@@ -216,3 +216,33 @@ pub fn insert_import_wallet_txn(
     .map_err(db_error)?;
     Ok(())
 }
+
+/// The ledger row that zeroes a wallet balance at erasure (Story 9.1): reason `erase_refund` (paid
+/// out at the counter) or `erase_forfeit`, negative, belonging to no order, so no cash event and no
+/// invoice sits behind it.
+pub fn insert_erase_wallet_txn(
+    conn: &Connection,
+    id: &str,
+    player_id: &str,
+    delta_minor: i64,
+    reason: &str,
+    staff_id: &str,
+    (business_day, fy): (&str, &str),
+) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO wallet_txns (id, player_id, delta_minor, reason, method, staff_id, order_id,
+                                  business_day, fy, rev, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, NULL, ?5, NULL, ?6, ?7, 0, 0, 0)",
+        params![
+            id,
+            player_id,
+            delta_minor,
+            reason,
+            staff_id,
+            business_day,
+            fy
+        ],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}

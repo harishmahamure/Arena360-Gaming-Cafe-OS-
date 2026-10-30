@@ -10,7 +10,7 @@ use arena_store::Store;
 
 use crate::SnapshotReader;
 use crate::locale::current_business_day;
-use crate::players::{KEK_LEN, open_field};
+use crate::players::{KEK_LEN, open_field_of};
 
 fn bucket(age_days: i64) -> &'static str {
     if age_days >= CREDIT_OVERDUE_DAYS {
@@ -44,12 +44,9 @@ pub fn overdue_view(
             .is_some_and(|s| tier_is_paid(&s.value));
         let mut rows = Vec::new();
         for d in store.debtors(&today)? {
-            let name = match (&d.name_enc, &d.dek_wrapped) {
-                (Some(enc), Some(wrapped)) => {
-                    open_field(kek, &d.player_id, wrapped, "name", enc).ok()
-                }
-                _ => None,
-            };
+            let name = d.name_enc.as_deref().and_then(|enc| {
+                open_field_of(kek, &d.player_id, d.dek_wrapped.as_deref(), "name", enc).ok()
+            });
             rows.push(OverdueRow {
                 consent: store
                     .latest_consent(&d.player_id, CONSENT_TRANSACTIONAL)?

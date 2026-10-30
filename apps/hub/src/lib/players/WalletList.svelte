@@ -8,6 +8,8 @@
   const REASON: Record<string, MessageKey> = {
     topup: "hub.wallet.reason.topup",
     bill: "hub.wallet.reason.bill",
+    erase_refund: "hub.wallet.reason.erase_refund",
+    erase_forfeit: "hub.wallet.reason.erase_forfeit",
   };
   const METHOD: Record<string, MessageKey> = {
     cash: "hub.wallet.method.cash",

@@ -17,6 +17,8 @@ pub const PLAYER_PHONE_MIN_DIGITS: usize = 8;
 pub const PLAYER_PHONE_MAX_DIGITS: usize = 15;
 pub const POLICY_VERSION_MAX_CHARS: usize = 16;
 pub const CONSENT_TRANSACTIONAL: &str = "transactional";
+/// The longest reason a manager gives for disposing of a wallet balance on an erasure (Story 9.1).
+pub const ERASE_NOTE_MAX_CHARS: usize = 120;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
@@ -158,6 +160,58 @@ pub struct UiPlayerEditRequest {
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct UiPasswordResetRequest {
     pub form: PlayerPasswordForm,
+    pub idempotency_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub elevation_ticket: Option<String>,
+}
+
+/// What happened to a wallet balance an erasure found (Story 9.1): paid out at the counter, or
+/// given up by the player.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum WalletDisposal {
+    Refunded,
+    Forfeited,
+}
+
+impl WalletDisposal {
+    /// The `wallet_txns.reason` of the row that zeroes the wallet.
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::Refunded => "erase_refund",
+            Self::Forfeited => "erase_forfeit",
+        }
+    }
+}
+
+/// A player's personal data erased by crypto-shredding (Story 9.1). It holds the player id, how a
+/// wallet balance was disposed of and the manager's reason, never any personal data.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PlayerErase {
+    pub player_id: String,
+    /// Required exactly when the wallet balance is above zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub wallet: Option<WalletDisposal>,
+    /// The manager's reason for the disposal (1 to 120 characters); absent with no `wallet`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct UiPlayerEraseRequest {
+    pub player_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub wallet: Option<WalletDisposal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub note: Option<String>,
     pub idempotency_key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

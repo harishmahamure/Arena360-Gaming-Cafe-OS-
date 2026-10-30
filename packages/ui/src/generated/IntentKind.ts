@@ -94,6 +94,7 @@ export type IntentKind =
   | "player.password_reset"
   | "player.password_change"
   | "player.pc_settings_set"
+  | "player.erased"
   | "session.start"
   | "session.end"
   | "session.settle"

@@ -91,6 +91,7 @@ const INTENT_LABELS: Record<string, MessageKey> = {
   "player.update": "hub.audit.intent.player.update",
   "player.password_reset": "hub.audit.intent.player.password_reset",
   "player.password_change": "hub.audit.intent.player.password_change",
+  "player.erased": "hub.audit.intent.player.erased",
   "player.pc_settings_set": "hub.audit.intent.player.pc_settings_set",
   "ads.consent": "hub.audit.intent.ads.consent",
   "printer.status": "hub.audit.intent.printer.status",

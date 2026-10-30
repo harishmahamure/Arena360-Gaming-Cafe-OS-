@@ -21,7 +21,7 @@ use arena_store::{
 use chrono::{NaiveDate, TimeZone, Timelike};
 use chrono_tz::Tz;
 
-use crate::players::{KEK_LEN, open_field};
+use crate::players::{KEK_LEN, open_field_of};
 
 const HOUR_MS: i64 = 3_600_000;
 const MINUTE_MS: i64 = 60_000;
@@ -511,8 +511,7 @@ fn open_name(
     name_enc: Option<&str>,
     dek_wrapped: Option<&str>,
 ) -> Option<String> {
-    let (enc, wrapped) = (name_enc?, dek_wrapped?);
-    open_field(kek, player_id, wrapped, "name", enc).ok()
+    open_field_of(kek, player_id, dek_wrapped, "name", name_enc?).ok()
 }
 
 /// The Players report (Story 5.30): top spenders, the guest total, new against returning players

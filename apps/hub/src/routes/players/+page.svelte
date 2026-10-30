@@ -11,6 +11,7 @@
   import OverdueList from "../../lib/players/OverdueList.svelte";
   import CreateProfile from "../../lib/players/CreateProfile.svelte";
   import EditProfile from "../../lib/players/EditProfile.svelte";
+  import ErasePlayer from "../../lib/players/ErasePlayer.svelte";
   import PlayerLookup from "../../lib/players/PlayerLookup.svelte";
   import PlayerPlans from "../../lib/players/PlayerPlans.svelte";
   import SellPlan from "../../lib/players/SellPlan.svelte";
@@ -33,6 +34,8 @@
   let lookup: PlayerLookup | undefined = $state();
   let created: string | null = $state(null);
   let editing = $state(false);
+  let erasing = $state(false);
+  let erasedId: string | null = $state(null);
   let edited: MessageKey | null = $state(null);
   let stale = $state(false);
   let trigger: HTMLElement | undefined = $state();
@@ -76,6 +79,8 @@
     guestSell = false;
     failed = false;
     editing = false;
+    erasing = false;
+    erasedId = null;
     edited = null;
     stale = false;
     toppingUp = false;
@@ -86,8 +91,19 @@
     const outcome = await loadPlayer(id);
     if (mine !== turn) return;
     if (outcome.kind === "signed_out") return void (await invalidate(SESSION_DEPENDENCY));
-    failed = outcome.kind !== "ok";
+    erasedId = outcome.kind === "error" && outcome.error?.code === "KEY_ERASED" ? id : null;
+    failed = outcome.kind !== "ok" && !erasedId;
     profile = outcome.kind === "ok" ? outcome.value : null;
+  }
+
+  function erased() {
+    const id = profile?.player.player_id ?? null;
+    erasing = false;
+    profile = null;
+    erasedId = id;
+    edited = "hub.players.erase.done";
+    created = null;
+    void lookup?.search();
   }
 
   onMount(() => {
@@ -176,6 +192,13 @@
     {#if failed}<span aria-hidden="true">⚠</span> {t("hub.players.lookup.failed")}{/if}
   </div>
 
+  {#if erasedId}
+    <p class="type-hub-body" data-testid="player-erased">
+      <strong>{t("hub.players.erased")}</strong>
+      {t("hub.players.erased.id", { id: erasedId })}
+    </p>
+  {/if}
+
   {#if guest && hasPermission(staff, "wallet.topup")}
     <div class="actions" data-testid="guest-actions">
       <Button label="hub.plans.sell" variant="secondary" onclick={() => (guestSell = true)} />
@@ -242,6 +265,18 @@
           />
         </div>
       {/if}
+      {#if !erasing && !editing}
+        <div class="actions" data-testid="player-erase-open">
+          <Button
+            label="hub.players.erase.open"
+            variant="secondary"
+            onclick={() => {
+              edited = null;
+              erasing = true;
+            }}
+          />
+        </div>
+      {/if}
     </section>
     {#key p.player_id}
       <CreditBlock playerId={p.player_id} {staff} />
@@ -282,6 +317,9 @@
           <WalletList {wallet} locale={branchLocale.current} />
         {/if}
       </section>
+    {/if}
+    {#if erasing}
+      <ErasePlayer {staff} {profile} ondone={erased} oncancel={() => (erasing = false)} />
     {/if}
     {#if editing}
       {#key profile.rev}

@@ -102,4 +102,6 @@ export type ErrorCode =
   | "COMMAND_EXPIRED"
   | "MFA_REQUIRED"
   | "AUDIT_BUILDING"
-  | "AUDIT_BUILD_FAILED";
+  | "AUDIT_BUILD_FAILED"
+  | "ERASE_BLOCKED"
+  | "KEY_ERASED";

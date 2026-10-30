@@ -15,6 +15,7 @@ import type {
   PlayerForm,
   PlayerHit,
   PlayerPasswordForm,
+  WalletDisposal,
   PlayerProfile,
   OverdueView,
   WalletView,
@@ -42,6 +43,7 @@ export const MEDIA_CACHE_URL = "http://127.0.0.1:7409/ui/media-cache";
 export const SESSION_CONVERT_URL = "http://127.0.0.1:7409/ui/sessions/convert";
 export const PLAYER_UPDATE_URL = "http://127.0.0.1:7409/ui/players/update";
 export const PLAYER_PASSWORD_URL = "http://127.0.0.1:7409/ui/players/password";
+export const PLAYER_ERASE_URL = "http://127.0.0.1:7409/ui/players/erase";
 export const ELEVATE_URL = "http://127.0.0.1:7409/ui/elevate";
 export const ELEVATE_DROP_URL = "http://127.0.0.1:7409/ui/elevate/drop";
 export const SETTINGS_URL = "http://127.0.0.1:7409/ui/settings";
@@ -373,6 +375,20 @@ export const editPlayer = (form: PlayerEditForm, ticket?: string) =>
 
 export const resetPlayerPassword = (form: PlayerPasswordForm, ticket?: string) =>
   sendPlayerForm(PLAYER_PASSWORD_URL, form, ticket);
+
+/** `POST /ui/players/erase`: erases a player's personal data by crypto-shredding (Story 9.1). */
+export async function erasePlayer(
+  request: { player_id: string; wallet?: WalletDisposal; note?: string },
+  elevationTicket?: string,
+): Promise<IntentOutcome> {
+  const token = getToken();
+  if (!token) return { kind: "signed_out" };
+  return postIntent(PLAYER_ERASE_URL, token, TIMEOUT_MS * 3, {
+    ...request,
+    idempotency_key: newIdempotencyKey(),
+    elevation_ticket: elevationTicket,
+  });
+}
 
 export type ReadOutcome<T> =
   | { kind: "ok"; value: T }

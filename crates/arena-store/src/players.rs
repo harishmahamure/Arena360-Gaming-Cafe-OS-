@@ -19,7 +19,7 @@ pub struct PlayerRow {
 
 pub fn username_taken(conn: &Connection, username: &str) -> Result<bool, AppError> {
     conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM players WHERE username = ?1 AND deleted_at IS NULL)",
+        "SELECT EXISTS (SELECT 1 FROM players WHERE username = ?1 AND deleted_at IS NULL AND erased_at IS NULL)",
         [username],
         |r| r.get(0),
     )
@@ -28,7 +28,7 @@ pub fn username_taken(conn: &Connection, username: &str) -> Result<bool, AppErro
 
 pub fn phone_holder(conn: &Connection, phone_lookup: &str) -> Result<Option<String>, AppError> {
     conn.query_row(
-        "SELECT player_id FROM players WHERE phone_lookup = ?1 AND deleted_at IS NULL",
+        "SELECT player_id FROM players WHERE phone_lookup = ?1 AND deleted_at IS NULL AND erased_at IS NULL",
         [phone_lookup],
         |r| r.get(0),
     )
@@ -132,7 +132,9 @@ pub fn set_player_password(conn: &Connection, player_id: &str, hash: &str) -> Re
 
 pub fn list_player_revs(conn: &Connection) -> Result<Vec<(String, i64)>, AppError> {
     let mut stmt = conn
-        .prepare("SELECT player_id, rev FROM players WHERE deleted_at IS NULL")
+        .prepare(
+            "SELECT player_id, rev FROM players WHERE deleted_at IS NULL AND erased_at IS NULL",
+        )
         .map_err(db_error)?;
     stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
         .map_err(db_error)?
@@ -148,7 +150,7 @@ pub fn find_player(
         "SELECT p.player_id, p.username, p.password_hash, p.phone_lookup, p.name_enc, p.phone_enc,
                 p.email_enc, p.dob_enc, p.notes_enc, p.tags, p.rev, k.dek_wrapped
          FROM players p JOIN player_keys k ON k.player_id = p.player_id
-         WHERE p.player_id = ?1 AND p.deleted_at IS NULL",
+         WHERE p.player_id = ?1 AND p.deleted_at IS NULL AND p.erased_at IS NULL",
         [player_id],
         |r| {
             Ok((
@@ -183,7 +185,7 @@ pub fn find_player_by_username(
         "SELECT p.player_id, p.username, p.password_hash, p.phone_lookup, p.name_enc, p.phone_enc,
                 p.email_enc, p.dob_enc, p.notes_enc, p.tags, k.dek_wrapped
          FROM players p JOIN player_keys k ON k.player_id = p.player_id
-         WHERE p.username = ?1 AND p.deleted_at IS NULL",
+         WHERE p.username = ?1 AND p.deleted_at IS NULL AND p.erased_at IS NULL",
         [username],
         |r| {
             Ok((
@@ -236,7 +238,10 @@ pub fn player_import_keys(
     let mut lookups = std::collections::HashSet::new();
     let mut names = std::collections::HashSet::new();
     let mut stmt = conn
-        .prepare("SELECT phone_lookup, username FROM players WHERE deleted_at IS NULL")
+        .prepare(
+            "SELECT phone_lookup, username FROM players
+             WHERE deleted_at IS NULL AND erased_at IS NULL",
+        )
         .map_err(db_error)?;
     let rows = stmt
         .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
@@ -247,4 +252,69 @@ pub fn player_import_keys(
         names.insert(name);
     }
     Ok((lookups, names))
+}
+
+/// What an erasure (Story 9.1) must check about a live player before it tombstones them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EraseState {
+    /// The player has a session that is not over (active, paused, in grace or expired and unsettled).
+    pub open_session: bool,
+    pub outstanding_minor: i64,
+    pub wallet_minor: i64,
+}
+
+/// The erase checks of a live player; `None` for one who is missing, deleted or already erased.
+pub fn player_erase_state(
+    conn: &Connection,
+    player_id: &str,
+) -> Result<Option<EraseState>, AppError> {
+    let live: bool = conn
+        .query_row(
+            "SELECT EXISTS (SELECT 1 FROM players
+                            WHERE player_id = ?1 AND deleted_at IS NULL AND erased_at IS NULL)",
+            [player_id],
+            |r| r.get(0),
+        )
+        .map_err(db_error)?;
+    if !live {
+        return Ok(None);
+    }
+    Ok(Some(EraseState {
+        open_session: crate::live_session_device_of_player(conn, player_id)?.is_some(),
+        outstanding_minor: crate::find_credit(conn, player_id)?.map_or(0, |c| c.outstanding_minor),
+        wallet_minor: crate::wallet_balance(conn, player_id)?,
+    }))
+}
+
+/// Whether the player was erased (Story 9.1).
+pub fn player_erased(conn: &Connection, player_id: &str) -> Result<bool, AppError> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM players WHERE player_id = ?1 AND erased_at IS NOT NULL)",
+        [player_id],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}
+
+/// The username every erased player carries.
+pub const ERASED_USERNAME: &str = "erased";
+
+/// Tombstones the player row: every personal column cleared to a constant, `erased_at` set.
+pub fn erase_player(conn: &Connection, player_id: &str, at: i64) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE players SET name_enc = '', phone_enc = '', email_enc = NULL, dob_enc = NULL,
+                            notes_enc = NULL, username = ?3, password_hash = '',
+                            phone_lookup = '', tags = '[]', erased_at = ?2
+         WHERE player_id = ?1",
+        params![player_id, at, ERASED_USERNAME],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// Deletes the player's wrapped data key: the shred. Nothing sealed under it can be opened again.
+pub fn delete_player_key(conn: &Connection, player_id: &str) -> Result<(), AppError> {
+    conn.execute("DELETE FROM player_keys WHERE player_id = ?1", [player_id])
+        .map_err(db_error)?;
+    Ok(())
 }

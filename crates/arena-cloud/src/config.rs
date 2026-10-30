@@ -8,7 +8,7 @@ use std::time::Duration;
 pub const USAGE: &str =
     "usage: arena-cloud --role control|command|all [--listen <addr:port>] [--help] [--version]
        arena-cloud --role control|command|all --dev [--data-dir <dir>] [--listen <loopback addr:port>]
-       arena-cloud --role jobs --task control-backup [--dev [--data-dir <dir>]]
+       arena-cloud --role jobs --task control-backup|command-sweep [--dev [--data-dir <dir>]]
        arena-cloud ops restore-control (--from-key <key> | --from-file <path|->)
                                        (--identity <file> | --plaintext) [--dev [--data-dir <dir>]]
        arena-cloud ops grant-comp --branch <id> --tier basic|premium --until <YYYY-MM-DD>
@@ -21,6 +21,8 @@ pub const USAGE: &str =
   --role jobs  run one --task and exit (0 on success, 1 on failure)
   --task       control-backup: dump gz_control, age-encrypt it, put it in the backup bucket
                under gz_control/nightly/ and keep the newest 30
+               command-sweep: return stale fetched commands to pending, expire week-old pending
+               ones and log the command backlog (run every minute)
   --dev        local dev mode: gz_control is <data-dir>/gz_control.db (SQLite), no env or
                token needed, loopback only (default 127.0.0.1:8080), dev routes under /v1/dev
   --data-dir   dev data directory, created if missing (default ./.arena-cloud-dev)
@@ -122,12 +124,15 @@ impl Role {
 pub enum Task {
     /// The nightly `gz_control` backup.
     ControlBackup,
+    /// The command mailbox sweeper (Story 8.20).
+    CommandSweep,
 }
 
 impl Task {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ControlBackup => "control-backup",
+            Self::CommandSweep => "command-sweep",
         }
     }
 }
@@ -537,8 +542,11 @@ pub fn parse(
     }
     if role == Role::Jobs {
         let task = match task.as_deref() {
-            None => return Err("--role jobs needs --task (control-backup)".to_owned()),
+            None => {
+                return Err("--role jobs needs --task (control-backup or command-sweep)".to_owned());
+            }
             Some("control-backup") => Task::ControlBackup,
+            Some("command-sweep") => Task::CommandSweep,
             Some(other) => return Err(format!("unknown --task {other}")),
         };
         if listen.is_some() {

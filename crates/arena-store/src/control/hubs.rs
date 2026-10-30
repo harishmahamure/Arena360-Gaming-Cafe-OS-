@@ -199,6 +199,51 @@ impl ControlDb {
         rows.first().map(|r| col_text(r, 0)).transpose()
     }
 
+    /// Moves the branch fence to `epoch` (the control role's commit of a takeover, Story 8.20).
+    /// In the same transaction, commands applied at the old fence epoch past `fork_seq`, and
+    /// commands still `fetched` by the old Hub, return to `pending`; the number is returned.
+    pub async fn move_branch_fence(
+        &self,
+        branch_id: &str,
+        epoch: &str,
+        hub_id: &str,
+        fork_seq: i64,
+        now: i64,
+    ) -> Result<u64, ControlError> {
+        let rows = self
+            .transact_rows(vec![
+                Stmt::new(
+                    "UPDATE commands SET status = 'pending', applied_seq = NULL, error = NULL, \
+                     resolved_at = NULL, fetched_at = NULL, applied_epoch = NULL \
+                     WHERE branch_id = ? AND (status = 'fetched' OR (status = 'applied' \
+                     AND applied_seq > ? AND applied_epoch = \
+                     (SELECT epoch FROM branch_fence WHERE branch_id = ?))) RETURNING id",
+                    vec![
+                        text(branch_id),
+                        SqlValue::Integer(fork_seq),
+                        text(branch_id),
+                    ],
+                )
+                .fetch(),
+                Stmt::new(
+                    "INSERT INTO branch_fence (branch_id, epoch, hub_id, created_at) \
+                     VALUES (?, ?, ?, ?) ON CONFLICT (branch_id) DO UPDATE SET \
+                     epoch = excluded.epoch, hub_id = excluded.hub_id, \
+                     created_at = excluded.created_at",
+                    vec![
+                        text(branch_id),
+                        text(epoch),
+                        text(hub_id),
+                        SqlValue::Integer(now),
+                    ],
+                ),
+            ])
+            .await?;
+        Ok(rows
+            .and_then(|r| r.first().map(|x| x.len() as u64))
+            .unwrap_or(0))
+    }
+
     pub async fn hub(&self, hub_id: &str) -> Result<Option<HubRow>, ControlError> {
         let sql = format!("SELECT {HUB_COLUMNS} FROM hubs WHERE id = ?");
         let rows = self.query(&sql, vec![text(hub_id)]).await?;

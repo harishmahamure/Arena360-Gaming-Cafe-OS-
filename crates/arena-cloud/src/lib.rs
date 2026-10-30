@@ -20,6 +20,7 @@ pub mod backup;
 pub mod branch_code;
 pub mod catalog;
 pub mod client_ip;
+pub mod command_sweep;
 pub mod config;
 pub mod crypto;
 pub mod data_age;

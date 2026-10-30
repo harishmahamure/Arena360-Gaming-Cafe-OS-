@@ -43,6 +43,8 @@ pub mod code {
     pub const UPLOAD_FAILED: &str = "BACKUP_UPLOAD_FAILED";
     pub const RETENTION_FAILED: &str = "BACKUP_RETENTION_FAILED";
     pub const TIMEOUT: &str = "BACKUP_TIMEOUT";
+    pub const SWEEP_FAILED: &str = "COMMAND_SWEEP_FAILED";
+    pub const SWEEP_TIMEOUT: &str = "COMMAND_SWEEP_TIMEOUT";
     pub const RESTORE_CONFIG_INVALID: &str = "RESTORE_CONFIG_INVALID";
     pub const SOURCE_FAILED: &str = "RESTORE_SOURCE_FAILED";
     pub const DECRYPT_FAILED: &str = "RESTORE_DECRYPT_FAILED";
@@ -56,7 +58,7 @@ pub struct JobError {
 }
 
 impl JobError {
-    fn new(code: &'static str, detail: impl Into<String>) -> Self {
+    pub(crate) fn new(code: &'static str, detail: impl Into<String>) -> Self {
         Self {
             code,
             detail: detail.into(),
@@ -380,7 +382,7 @@ async fn supervise(
 }
 
 /// Opens `db` without migrating it (a backup or restore never changes the schema).
-async fn open(db: &Database) -> Result<ControlDb, ControlError> {
+pub(crate) async fn open(db: &Database) -> Result<ControlDb, ControlError> {
     match db {
         Database::Remote { url, token } => ControlDb::connect(url, token).await,
         Database::Local { data_dir } => {
@@ -419,6 +421,7 @@ pub async fn run_job(job: &JobConfig, env: impl Fn(&str) -> Option<OsString>) ->
             };
             supervise(&target, RUN_TIMEOUT, run).await.is_ok()
         }
+        Task::CommandSweep => crate::command_sweep::run_job(job, &env, &target).await,
     }
 }
 

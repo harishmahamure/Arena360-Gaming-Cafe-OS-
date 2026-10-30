@@ -18,6 +18,10 @@ pub const SETTINGS_COMMAND_KEYS: [&str; 2] = ["branch.name", "branch.tz"];
 pub const COMMAND_SCHEMA_VERSION: u32 = 1;
 pub const COMMAND_PAYLOAD_MAX: usize = 16 * 1024;
 pub const COMMANDS_PAGE: usize = 50;
+/// A `fetched` command with no result after this long goes back to `pending` (Story 8.20).
+pub const COMMAND_FETCH_TIMEOUT_MS: i64 = 10 * 60 * 1000;
+/// A `pending` command older than this becomes `expired` (Story 8.20).
+pub const COMMAND_EXPIRY_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
 pub fn is_setup_command(kind: &str) -> bool {
     SETUP_COMMAND_KINDS.contains(&kind)
@@ -31,6 +35,8 @@ pub enum CommandStatus {
     Fetched,
     Applied,
     Rejected,
+    /// Waited 7 days unfetched; swept with `COMMAND_EXPIRED` (Story 8.20).
+    Expired,
 }
 
 impl CommandStatus {
@@ -40,13 +46,20 @@ impl CommandStatus {
             Self::Fetched => "fetched",
             Self::Applied => "applied",
             Self::Rejected => "rejected",
+            Self::Expired => "expired",
         }
     }
 
     pub fn parse(s: &str) -> Option<Self> {
-        [Self::Pending, Self::Fetched, Self::Applied, Self::Rejected]
-            .into_iter()
-            .find(|k| k.as_str() == s)
+        [
+            Self::Pending,
+            Self::Fetched,
+            Self::Applied,
+            Self::Rejected,
+            Self::Expired,
+        ]
+        .into_iter()
+        .find(|k| k.as_str() == s)
     }
 }
 
@@ -105,6 +118,7 @@ mod tests {
             CommandStatus::Fetched,
             CommandStatus::Applied,
             CommandStatus::Rejected,
+            CommandStatus::Expired,
         ] {
             assert_eq!(CommandStatus::parse(s.as_str()), Some(s));
         }

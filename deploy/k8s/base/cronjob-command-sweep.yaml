@@ -1,0 +1,80 @@
+# Command mailbox sweeper (Story 8.20): `arena-cloud --role jobs --task command-sweep` every minute
+# returns `fetched` commands with no answer for 10 minutes to `pending`, expires `pending` commands
+# older than 7 days (`COMMAND_EXPIRED`) and logs the command backlog per branch. A failure exits 1
+# and POSTs ARENA_ALERT_WEBHOOK_URL. Same image and security context as the backup job.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: arena-cloud-command-sweep
+  labels:
+    app.kubernetes.io/name: arena-cloud-command-sweep
+    app.kubernetes.io/component: jobs
+spec:
+  schedule: "* * * * *"
+  # Never two at once; a slot missed by a few minutes still runs.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # The next minute is the retry.
+      backoffLimit: 0
+      # The binary gives up after 50 s; a hung pod is killed before the next slot piles up.
+      activeDeadlineSeconds: 55
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: arena-cloud-command-sweep
+            app.kubernetes.io/component: jobs
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          imagePullSecrets:
+            - name: ghcr-pull
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: command-sweep
+              image: ghcr.io/arena360/arena-cloud:unset
+              imagePullPolicy: IfNotPresent
+              args: ["--role", "jobs", "--task", "command-sweep"]
+              env:
+                - name: ARENA_ENV
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+                - name: ARENA_CONTROL_DB_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: arena-cloud-secrets
+                      key: ARENA_CONTROL_DB_URL
+                - name: ARENA_CONTROL_DB_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: arena-cloud-secrets
+                      key: ARENA_CONTROL_DB_TOKEN
+                # Optional: a missing key must not block the pod (CreateContainerConfigError).
+                - name: ARENA_ALERT_WEBHOOK_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: arena-cloud-backup
+                      key: ARENA_ALERT_WEBHOOK_URL
+                      optional: true
+              resources:
+                requests:
+                  cpu: 25m
+                  memory: 32Mi
+                limits:
+                  cpu: 250m
+                  memory: 128Mi
+              securityContext:
+                runAsNonRoot: true
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]

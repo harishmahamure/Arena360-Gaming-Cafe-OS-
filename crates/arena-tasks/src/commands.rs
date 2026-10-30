@@ -35,6 +35,8 @@ pub struct CommandTask {
 enum Stop {
     Revoked,
     Failed,
+    /// A newer Hub holds the branch fence (Story 8.20): this one stops being primary.
+    Fenced,
 }
 
 impl CommandTask {
@@ -121,6 +123,12 @@ impl CommandTask {
                     .send_modify(|s| s.pairing = PairingState::Revoked);
                 REVOKED_BACKOFF
             }
+            Err(Stop::Fenced) => {
+                tracing::warn!("commands: fenced by a newer Hub; closing the writer");
+                writer.close().await;
+                self.status.send_modify(|s| s.role = Role::Follower);
+                self.interval
+            }
             Err(Stop::Failed) => {
                 self.fails += 1;
                 backoff(
@@ -152,7 +160,9 @@ impl CommandTask {
                 .await
                 .map_err(|f| cloud_failed("fetch", f))?;
             let n = page.commands.len();
-            for cmd in page.commands.into_iter().filter(|c| c.id > cursor) {
+            // A re-queued command can sit below the cursor; one this Hub already answered is
+            // reported again from its stored result, never applied twice.
+            for cmd in page.commands {
                 self.run_one(writer, token, epoch, cmd).await?;
             }
             if n < COMMANDS_PAGE {
@@ -266,6 +276,11 @@ fn failed(what: &str, e: &AppError) -> Stop {
 }
 
 fn cloud_failed(what: &str, f: CloudFailure) -> Stop {
+    if let CloudFailure::Refused { error, .. } = &f
+        && error.code == ErrorCode::Fenced
+    {
+        return Stop::Fenced;
+    }
     if let CloudFailure::Refused { error, .. } = &f
         && matches!(
             error.code,
@@ -581,6 +596,59 @@ mod tests {
         assert_eq!(f.task.poll().await, REVOKED_BACKOFF);
         assert_eq!(f.status.borrow().pairing, PairingState::Revoked);
         assert_eq!(f.task.poll().await, REVOKED_BACKOFF);
+    }
+
+    #[tokio::test]
+    async fn a_fenced_fetch_closes_the_writer_and_makes_the_hub_a_follower() {
+        let (port, seen) = serve(Box::new(|_, _| {
+            (
+                409,
+                r#"{"code":"FENCED","message":"A newer Hub has taken over this branch (epoch 2:HUBB)."}"#
+                    .to_owned(),
+            )
+        }))
+        .await;
+        let mut f = fx(port).await;
+        assert_eq!(f.task.poll().await, COMMAND_POLL_INTERVAL);
+        assert_eq!(f.status.borrow().role, Role::Follower);
+        assert_eq!(
+            f.writer.command_cursor().await.unwrap_err().code,
+            ErrorCode::NotPrimary
+        );
+        // A follower asks for nothing more.
+        assert_eq!(f.task.poll().await, COMMAND_POLL_INTERVAL);
+        assert_eq!(calls(&seen, "GET").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_requeued_command_below_the_cursor_is_answered_again_without_a_second_apply() {
+        let cmd = command(1, "Row A");
+        let mut served = 0;
+        let (port, seen) = serve(Box::new(move |line, _| {
+            if line.starts_with("GET /v1/commands") {
+                served += 1;
+                // The cloud returns the row on the first two fetches (the second is a re-queue
+                // after a sweep, below the Hub's cursor), then nothing.
+                return if served <= 2 {
+                    page(vec![cmd.clone()])
+                } else {
+                    page(vec![])
+                };
+            }
+            ack()
+        }))
+        .await;
+        let mut f = fx(port).await;
+        f.task.poll().await;
+        f.task.poll().await;
+        assert_eq!(group_names(&f.path), ["Row A"]);
+        let posts = calls(&seen, "POST");
+        assert_eq!(posts.len(), 2, "{posts:?}");
+        assert!(
+            posts.iter().all(|p| p.1.contains("applied_seq")),
+            "{posts:?}"
+        );
+        assert_eq!(f.writer.command_cursor().await.unwrap(), 1);
     }
 
     #[tokio::test]

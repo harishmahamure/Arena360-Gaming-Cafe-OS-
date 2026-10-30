@@ -1,8 +1,28 @@
-use arena_proto::CommandStatus;
+use arena_proto::{
+    AppError, COMMAND_EXPIRY_MS, COMMAND_FETCH_TIMEOUT_MS, CommandStatus, ErrorCode,
+};
 
 use super::{
     ControlDb, ControlError, SqlValue, Stmt, col_int, col_opt_int, col_opt_text, col_text, text,
 };
+
+/// What one sweep did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SweepReport {
+    /// `pending` commands past 7 days, now `expired`.
+    pub expired: u64,
+    /// `fetched` commands with no answer after 10 minutes, back to `pending`.
+    pub requeued: u64,
+}
+
+/// One branch's waiting commands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandBacklog {
+    pub branch_id: String,
+    pub pending: u64,
+    pub fetched: u64,
+    pub oldest_created_at: i64,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewCommand<'a> {
@@ -37,9 +57,15 @@ const SELECT_BY_KEY: &str = "SELECT id, branch_id, idempotency_key, kind, schema
      payload, issued_by, status, error, applied_seq, created_at, resolved_at FROM commands \
      WHERE branch_id = ? AND idempotency_key = ?";
 
-const SELECT_OPEN: &str = "SELECT id, branch_id, idempotency_key, kind, schema_version, \
+const SELECT_MAILBOX: &str = "SELECT id, branch_id, idempotency_key, kind, schema_version, \
      payload, issued_by, status, error, applied_seq, created_at, resolved_at FROM commands \
-     WHERE branch_id = ? AND id > ? AND status IN ('pending', 'fetched') ORDER BY id LIMIT ?";
+     WHERE branch_id = ? AND (status = 'pending' OR (status = 'fetched' AND id > ?)) \
+     ORDER BY id LIMIT ?";
+
+const MARK_FETCHED: &str = "UPDATE commands SET status = 'fetched', \
+     fetched_at = COALESCE(fetched_at, ?) WHERE status = 'pending' AND id IN (SELECT id \
+     FROM commands WHERE branch_id = ? AND (status = 'pending' OR (status = 'fetched' AND id > ?)) \
+     ORDER BY id LIMIT ?)";
 
 const SELECT_BY_ID: &str = "SELECT id, branch_id, idempotency_key, kind, schema_version, \
      payload, issued_by, status, error, applied_seq, created_at, resolved_at FROM commands \
@@ -103,6 +129,9 @@ impl ControlDb {
         .ok_or_else(|| ControlError::Db("submitted command not found".into()))?
     }
 
+    /// The Hub's mailbox: every `pending` row of the branch in `id` order whatever `after` is (a
+    /// re-queued row can sit below the Hub's cursor), then `fetched` rows past `after` (a lost
+    /// reply is delivered again). Pending rows become `fetched`.
     pub async fn fetch_commands(
         &self,
         branch_id: &str,
@@ -111,40 +140,31 @@ impl ControlDb {
         now: i64,
     ) -> Result<Vec<CommandRow>, ControlError> {
         let limit = SqlValue::Integer(i64::try_from(limit).unwrap_or(i64::MAX));
+        let params = || vec![text(branch_id), SqlValue::Integer(after), limit.clone()];
         let rows = self
             .transact_rows(vec![
+                Stmt::new(SELECT_MAILBOX, params()).fetch(),
                 Stmt::new(
-                    "UPDATE commands SET status = 'fetched', fetched_at = COALESCE(fetched_at, ?) \
-                     WHERE id IN (SELECT id FROM commands WHERE branch_id = ? AND id > ? \
-                     AND status IN ('pending', 'fetched') ORDER BY id LIMIT ?) \
-                     AND status = 'pending'",
-                    vec![
-                        SqlValue::Integer(now),
-                        text(branch_id),
-                        SqlValue::Integer(after),
-                        limit.clone(),
-                    ],
+                    MARK_FETCHED,
+                    [vec![SqlValue::Integer(now)], params()].concat(),
                 ),
-                Stmt::new(
-                    SELECT_OPEN,
-                    vec![text(branch_id), SqlValue::Integer(after), limit],
-                )
-                .fetch(),
             ])
             .await?;
         rows.and_then(|r| {
-            r.get(1)
+            r.first()
                 .map(|x| x.iter().map(|row| command_from(row)).collect())
         })
         .unwrap_or_else(|| Ok(Vec::new()))
     }
 
+    /// Records the Hub's answer, applied at `epoch`. A command already answered keeps its answer.
     pub async fn resolve_command(
         &self,
         branch_id: &str,
         id: i64,
         applied_seq: Option<i64>,
         error: Option<&str>,
+        epoch: &str,
         now: i64,
     ) -> Result<Option<CommandStatus>, ControlError> {
         let status = if error.is_some() {
@@ -155,13 +175,15 @@ impl ControlDb {
         let rows = self
             .transact_rows(vec![
                 Stmt::new(
-                    "UPDATE commands SET status = ?, applied_seq = ?, error = ?, resolved_at = ? \
+                    "UPDATE commands SET status = ?, applied_seq = ?, error = ?, resolved_at = ?, \
+                     applied_epoch = ? \
                      WHERE id = ? AND branch_id = ? AND status IN ('pending', 'fetched')",
                     vec![
                         text(status.as_str()),
                         applied_seq.map_or(SqlValue::Null, SqlValue::Integer),
                         error.map_or(SqlValue::Null, text),
                         SqlValue::Integer(now),
+                        text(epoch),
                         SqlValue::Integer(id),
                         text(branch_id),
                     ],
@@ -182,6 +204,83 @@ impl ControlDb {
                     .ok_or_else(|| ControlError::Db(format!("unknown command status {s:?}")))
             })
             .transpose()
+    }
+
+    /// The command sweeper (Story 8.20). `pending` rows older than the expiry become `expired`
+    /// with `COMMAND_EXPIRED` first (so a row requeued below is not expired in the same run), then
+    /// `fetched` rows with no answer for the fetch timeout return to `pending`.
+    pub async fn sweep_commands(&self, now: i64) -> Result<SweepReport, ControlError> {
+        let expired = serde_json::to_string(&AppError::new(
+            ErrorCode::CommandExpired,
+            "The branch did not pick this change up within 7 days.",
+        ))
+        .map_err(|e| ControlError::Db(e.to_string()))?;
+        let rows = self
+            .transact_rows(vec![
+                Stmt::new(
+                    "UPDATE commands SET status = 'expired', error = ?, resolved_at = ? \
+                     WHERE status = 'pending' AND created_at < ? RETURNING id",
+                    vec![
+                        text(&expired),
+                        SqlValue::Integer(now),
+                        SqlValue::Integer(now - COMMAND_EXPIRY_MS),
+                    ],
+                )
+                .fetch(),
+                Stmt::new(
+                    "UPDATE commands SET status = 'pending', fetched_at = NULL \
+                     WHERE status = 'fetched' AND fetched_at < ? RETURNING id",
+                    vec![SqlValue::Integer(now - COMMAND_FETCH_TIMEOUT_MS)],
+                )
+                .fetch(),
+            ])
+            .await?;
+        let count = |i: usize| {
+            rows.as_ref()
+                .and_then(|r| r.get(i))
+                .map_or(0, |x| x.len() as u64)
+        };
+        Ok(SweepReport {
+            expired: count(0),
+            requeued: count(1),
+        })
+    }
+
+    /// Waiting commands per branch: pending, fetched and the age of the oldest (Story 8.20).
+    pub async fn command_backlog(&self) -> Result<Vec<CommandBacklog>, ControlError> {
+        let rows = self
+            .query(
+                "SELECT branch_id, SUM(status = 'pending'), SUM(status = 'fetched'), \
+                 MIN(created_at) FROM commands WHERE status IN ('pending', 'fetched') \
+                 GROUP BY branch_id ORDER BY branch_id",
+                Vec::new(),
+            )
+            .await?;
+        rows.iter()
+            .map(|r| {
+                Ok(CommandBacklog {
+                    branch_id: col_text(r, 0)?,
+                    pending: u64::try_from(col_int(r, 1)?).unwrap_or(0),
+                    fetched: u64::try_from(col_int(r, 2)?).unwrap_or(0),
+                    oldest_created_at: col_int(r, 3)?,
+                })
+            })
+            .collect()
+    }
+
+    /// Sends a command a fenced Hub fetched back to `pending` (its result was refused).
+    pub async fn requeue_fetched_command(
+        &self,
+        branch_id: &str,
+        id: i64,
+    ) -> Result<(), ControlError> {
+        self.execute(
+            "UPDATE commands SET status = 'pending', fetched_at = NULL \
+             WHERE id = ? AND branch_id = ? AND status = 'fetched'",
+            vec![SqlValue::Integer(id), text(branch_id)],
+        )
+        .await?;
+        Ok(())
     }
 
     pub async fn pending_commands(&self, branch_id: &str) -> Result<u32, ControlError> {

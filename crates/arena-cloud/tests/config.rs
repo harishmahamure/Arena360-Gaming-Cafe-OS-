@@ -315,6 +315,21 @@ fn dev_ignores_a_bad_retry_env() {
 }
 
 #[test]
+fn the_command_sweeper_is_a_jobs_task() {
+    assert_eq!(
+        parse(
+            args(&["--role", "jobs", "--task", "command-sweep"]),
+            env_of(&[])
+        ),
+        Ok(Command::Job(JobConfig {
+            task: Task::CommandSweep,
+            dev_data_dir: None,
+        }))
+    );
+    assert_eq!(Task::CommandSweep.as_str(), "command-sweep");
+}
+
+#[test]
 fn jobs_run_one_task_and_read_no_env_at_parse_time() {
     assert_eq!(
         parse(

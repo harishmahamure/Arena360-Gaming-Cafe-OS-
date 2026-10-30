@@ -182,6 +182,8 @@ pub enum ErrorCode {
     RollupSchemaOld,
     /// The branch's Hub reports a command schema below the one the command needs (Story 8.18).
     BranchUpdateRequired,
+    /// An owner command waited 7 days without being fetched and was swept (Story 8.20).
+    CommandExpired,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -293,6 +295,7 @@ impl ErrorCode {
             Self::Fenced => "FENCED",
             Self::RollupSchemaOld => "ROLLUP_SCHEMA_OLD",
             Self::BranchUpdateRequired => "BRANCH_UPDATE_REQUIRED",
+            Self::CommandExpired => "COMMAND_EXPIRED",
         }
     }
 }
@@ -465,6 +468,7 @@ mod tests {
             (ErrorCode::Fenced, "FENCED"),
             (ErrorCode::RollupSchemaOld, "ROLLUP_SCHEMA_OLD"),
             (ErrorCode::BranchUpdateRequired, "BRANCH_UPDATE_REQUIRED"),
+            (ErrorCode::CommandExpired, "COMMAND_EXPIRED"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

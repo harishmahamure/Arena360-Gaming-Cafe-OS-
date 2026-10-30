@@ -27,6 +27,7 @@ use super::json::ApiJson;
 use super::pair::check_field;
 use super::signup::ceil_s;
 use crate::auth::AuthState;
+use crate::presign::{Epoch, is_fenced};
 
 const POST_RATE_PREFIX: &str = "cmdpost:";
 const POST_WINDOW_MS: i64 = 60 * 1000;
@@ -108,6 +109,33 @@ fn wire(row: CommandRow) -> Result<CommandWire, ApiError> {
     })
 }
 
+/// `FENCED` (naming the current fence) when `epoch` is below the branch fence: a newer Hub has
+/// taken over, so this one neither fetches nor answers commands (Story 8.20).
+async fn refuse_fenced(st: &AuthState, branch_id: &str, epoch: &str) -> Result<(), ApiError> {
+    let Ok(parsed) = Epoch::parse(epoch) else {
+        return Err(ApiError::validation(
+            "epoch",
+            "Send an epoch like 3:HUBINSTANCE.",
+        ));
+    };
+    let fence = st
+        .db
+        .branch_fence_epoch(branch_id)
+        .await
+        .map_err(ApiError::internal)?;
+    match fence {
+        Some(fence) if is_fenced(&parsed, Some(&fence)) => {
+            tracing::warn!(branch_id, epoch, fence = %fence, "commands: fenced Hub refused");
+            Err(AppError::new(
+                ErrorCode::Fenced,
+                format!("A newer Hub has taken over this branch (epoch {fence})."),
+            )
+            .into())
+        }
+        _ => Ok(()),
+    }
+}
+
 async fn fetch(
     State(st): State<Arc<AuthState>>,
     headers: HeaderMap,
@@ -116,6 +144,7 @@ async fn fetch(
     let now = st.now();
     let hub = authenticate(&st, &headers, now).await?;
     check_field("epoch", &q.epoch)?;
+    refuse_fenced(&st, &hub.branch_id, &q.epoch).await?;
     let rows = st
         .db
         .fetch_commands(&hub.branch_id, q.after.max(0), COMMANDS_PAGE, now)
@@ -135,6 +164,13 @@ async fn result(
     let now = st.now();
     let hub = authenticate(&st, &headers, now).await?;
     check_field("epoch", &body.epoch)?;
+    if let Err(fenced) = refuse_fenced(&st, &hub.branch_id, &body.epoch).await {
+        st.db
+            .requeue_fetched_command(&hub.branch_id, id)
+            .await
+            .map_err(ApiError::internal)?;
+        return Err(fenced);
+    }
     let error = body
         .error
         .as_ref()
@@ -142,7 +178,14 @@ async fn result(
         .transpose()?;
     let status = st
         .db
-        .resolve_command(&hub.branch_id, id, body.applied_seq, error.as_deref(), now)
+        .resolve_command(
+            &hub.branch_id,
+            id,
+            body.applied_seq,
+            error.as_deref(),
+            &body.epoch,
+            now,
+        )
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(ApiError::not_found)?;

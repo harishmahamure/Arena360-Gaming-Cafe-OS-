@@ -43,7 +43,7 @@ pub use catalog::{
     CatalogImport, CatalogImportOutcome, CatalogMediaRow, CatalogRow, CatalogSignatureRow,
     GameWrite,
 };
-pub use commands::{CommandRow, NewCommand};
+pub use commands::{CommandBacklog, CommandRow, NewCommand, SweepReport};
 pub use dump::{DUMP_HEADER, DUMP_PAGE_ROWS, Dump, DumpManifest, RestoreReport, read_manifest};
 pub use entitlement::{CompGrant, Entitlement, FreeTierOutcome, GrantOutcome, OpsAuditRow};
 pub use hubs::{Beat, HubRow, HubUploadView, NewHub, PairOutcome};
@@ -164,6 +164,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 19,
         sql: include_str!("../control-migrations/0019_owner_commands.sql"),
+    },
+    ControlMigration {
+        version: 20,
+        sql: include_str!("../control-migrations/0020_command_sweeper.sql"),
     },
 ];
 

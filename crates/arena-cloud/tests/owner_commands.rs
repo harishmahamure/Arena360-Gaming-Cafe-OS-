@@ -662,7 +662,7 @@ async fn the_list_shows_state_error_and_done_time_and_never_another_cafes_rows()
     let id = mine.body["commands"][0]["id"].as_i64().unwrap();
     let error = serde_json::to_string(&json!({"code": "VALIDATION_FAILED", "message": "no group"}))
         .unwrap();
-    h.db.resolve_command(&a.branch, id, None, Some(&error), T0 + 5_000)
+    h.db.resolve_command(&a.branch, id, None, Some(&error), "1:HUB", T0 + 5_000)
         .await
         .unwrap();
 
@@ -700,4 +700,339 @@ async fn the_hub_still_fetches_its_mailbox_from_the_same_path() {
     assert_eq!(fetched.status, 200, "{}", fetched.body);
     assert_eq!(fetched.body["commands"][0]["kind"], "rate.upsert");
     assert_eq!(fetched.body["commands"][0]["idempotency_key"], K1);
+}
+
+// ---- Story 8.20: the sweeper, expiry and epoch fencing ----
+
+const MIN: i64 = 60 * 1000;
+const HUB_A: &str = "1:HUBA";
+const HUB_B: &str = "2:HUBB";
+
+impl Harness {
+    async fn hub_fetch(&self, c: &Cafe, after: i64, epoch: &str) -> Reply {
+        let req = Request::builder()
+            .method("GET")
+            .uri(format!("/v1/commands?after={after}&epoch={epoch}"))
+            .header("authorization", format!("Bearer {}", c.token))
+            .body(Body::empty())
+            .unwrap();
+        reply(self.app.clone().oneshot(req).await.unwrap()).await
+    }
+
+    async fn hub_result(&self, c: &Cafe, id: i64, body: Value) -> Reply {
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/v1/commands/{id}/result"))
+            .header("authorization", format!("Bearer {}", c.token))
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        reply(self.app.clone().oneshot(req).await.unwrap()).await
+    }
+
+    async fn sweep(&self) -> arena_cloud::command_sweep::SweepOutcome {
+        arena_cloud::command_sweep::sweep_once(&self.db, self.now.load(Ordering::SeqCst))
+            .await
+            .unwrap()
+    }
+
+    async fn status_of(&self, c: &Cafe, key: &str) -> String {
+        let id = self.id_of(&c.branch, key);
+        let list = self.get(c, "/v1/commands?limit=200").await;
+        let cmds = list.body["commands"].as_array().unwrap();
+        cmds.iter()
+            .find(|cmd| cmd["id"] == id)
+            .map_or_else(String::new, |cmd| {
+                cmd["status"].as_str().unwrap().to_owned()
+            })
+    }
+
+    fn id_of(&self, branch: &str, key: &str) -> i64 {
+        rusqlite::Connection::open(self._dir.path().join("gz_control.db"))
+            .unwrap()
+            .query_row(
+                "SELECT id FROM commands WHERE branch_id = ? AND idempotency_key = ?",
+                [branch, key],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    /// A command row queued `age_ms` ago (the owner's session would not outlive the wait).
+    async fn queue_aged(&self, c: &Cafe, key: &str, age_ms: i64) {
+        self.db
+            .submit_command(&arena_store::control::NewCommand {
+                branch_id: &c.branch,
+                idempotency_key: key,
+                kind: "rate.upsert",
+                schema_version: 1,
+                payload: &rate().to_string(),
+                issued_by: "owner",
+                group_id: None,
+                now: self.now.load(Ordering::SeqCst) - age_ms,
+            })
+            .await
+            .unwrap();
+    }
+
+    async fn set_fence(&self, c: &Cafe, epoch: &str, fork_seq: i64) -> u64 {
+        let hub = self.db.active_hub(&c.branch).await.unwrap().unwrap();
+        self.db
+            .move_branch_fence(
+                &c.branch,
+                epoch,
+                &hub.id,
+                fork_seq,
+                self.now.load(Ordering::SeqCst),
+            )
+            .await
+            .unwrap()
+    }
+}
+
+fn applied(epoch: &str, seq: i64) -> Value {
+    json!({"epoch": epoch, "applied_seq": seq})
+}
+
+#[tokio::test]
+async fn a_fetch_with_no_answer_for_ten_minutes_is_swept_back_and_delivered_again() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    let r = h.send(&a, post(&a.branch, K1, "rate.upsert", rate())).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let first = h.hub_fetch(&a, 0, HUB_A).await;
+    let id = first.body["commands"][0]["id"].as_i64().unwrap();
+    assert_eq!(h.status_of(&a, K1).await, "fetched");
+
+    h.advance(9 * MIN);
+    let early = h.sweep().await;
+    assert_eq!((early.requeued, early.expired), (0, 0));
+    assert_eq!(h.status_of(&a, K1).await, "fetched");
+
+    h.advance(2 * MIN);
+    let swept = h.sweep().await;
+    assert_eq!((swept.requeued, swept.expired), (1, 0));
+    assert_eq!(h.status_of(&a, K1).await, "pending");
+    assert_eq!(swept.backlog.len(), 1);
+    assert_eq!(swept.backlog[0].pending, 1);
+    assert_eq!(swept.backlog[0].fetched, 0);
+    assert_eq!(swept.backlog[0].oldest_created_at, T0);
+
+    // The Hub's cursor is already past the row; a re-queued row is still delivered.
+    let again = h.hub_fetch(&a, id + 100, HUB_A).await;
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert_eq!(again.body["commands"].as_array().unwrap().len(), 1);
+    assert_eq!(again.body["commands"][0]["id"], id);
+
+    let ack = h.hub_result(&a, id, applied(HUB_A, 4)).await;
+    assert_eq!(ack.body["status"], "applied");
+    assert!(h.sweep().await.backlog.is_empty());
+}
+
+#[tokio::test]
+async fn pending_commands_expire_after_seven_days_and_are_never_fetched() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    h.queue_aged(&a, K1, 7 * DAY + MIN).await;
+    h.queue_aged(&a, K2, 6 * DAY).await;
+    let swept = h.sweep().await;
+    assert_eq!((swept.expired, swept.requeued), (1, 0));
+    assert_eq!(h.status_of(&a, K1).await, "expired");
+    assert_eq!(h.status_of(&a, K2).await, "pending");
+
+    let list = h.get(&a, "/v1/commands?status=expired").await;
+    let cmds = list.body["commands"].as_array().unwrap();
+    assert_eq!(cmds.len(), 1);
+    assert_eq!(cmds[0]["error"]["code"], "COMMAND_EXPIRED");
+    assert!(cmds[0]["done_at"].as_i64().is_some());
+
+    let fetched = h.hub_fetch(&a, 0, HUB_A).await;
+    let keys: Vec<&str> = fetched.body["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["idempotency_key"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys, [K2]);
+    // A second sweep changes nothing.
+    let again = h.sweep().await;
+    assert_eq!((again.expired, again.requeued), (0, 0));
+}
+
+#[tokio::test]
+async fn a_hub_below_the_fence_neither_fetches_nor_answers() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    h.set_fence(&a, HUB_B, 0).await;
+    let r = h.send(&a, post(&a.branch, K1, "rate.upsert", rate())).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+
+    let old = h.hub_fetch(&a, 0, HUB_A).await;
+    assert_eq!((old.status, old.code()), (409, "FENCED"));
+    assert!(old.body["message"].as_str().unwrap().contains(HUB_B));
+    assert!(old.body.get("commands").is_none());
+    assert_eq!(h.status_of(&a, K1).await, "pending");
+
+    let new = h.hub_fetch(&a, 0, HUB_B).await;
+    let id = new.body["commands"][0]["id"].as_i64().unwrap();
+    assert_eq!(h.status_of(&a, K1).await, "fetched");
+
+    let refused = h.hub_result(&a, id, applied(HUB_A, 5)).await;
+    assert_eq!((refused.status, refused.code()), (409, "FENCED"));
+    assert_eq!(h.status_of(&a, K1).await, "pending");
+
+    let ok = h.hub_result(&a, id, applied(HUB_B, 1)).await;
+    assert_eq!(ok.status, 200, "{}", ok.body);
+    assert_eq!(h.status_of(&a, K1).await, "applied");
+}
+
+#[tokio::test]
+async fn a_fence_move_returns_commands_applied_past_the_fork() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    h.set_fence(&a, HUB_A, 0).await;
+    for k in [K1, K2, K3] {
+        let r = h.send(&a, post(&a.branch, k, "rate.upsert", rate())).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+    }
+    let page = h.hub_fetch(&a, 0, HUB_A).await;
+    let ids: Vec<i64> = page.body["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_i64().unwrap())
+        .collect();
+    assert_eq!(ids.len(), 3);
+    h.hub_result(&a, ids[0], applied(HUB_A, 7)).await;
+    h.hub_result(&a, ids[1], applied(HUB_A, 12)).await;
+    let err = json!({"epoch": HUB_A, "error": {"code": "VALIDATION_FAILED", "message": "no"}});
+    h.hub_result(&a, ids[2], err).await;
+
+    assert_eq!(h.set_fence(&a, HUB_B, 9).await, 1);
+    assert_eq!(h.status_of(&a, K1).await, "applied");
+    assert_eq!(h.status_of(&a, K2).await, "pending");
+    assert_eq!(h.status_of(&a, K3).await, "rejected");
+
+    // The new Hub's cursor is past every row; the returned one is delivered anyway.
+    let next = h.hub_fetch(&a, ids[2], HUB_B).await;
+    let cmds = next.body["commands"].as_array().unwrap();
+    assert_eq!(cmds.len(), 1);
+    assert_eq!(cmds[0]["id"], ids[1]);
+    let ack = h.hub_result(&a, ids[1], applied(HUB_B, 10)).await;
+    assert_eq!(ack.body["status"], "applied");
+}
+
+#[tokio::test]
+async fn a_fence_moved_during_a_burst_of_100_applies_every_command_exactly_once() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    h.set_fence(&a, HUB_A, 0).await;
+    let keys: Vec<String> = (0..100u128)
+        .map(|i| ulid::Ulid::from_parts(1_800_000_000_000, i).to_string())
+        .collect();
+    let payload = rate().to_string();
+    for k in &keys {
+        h.db.submit_command(&arena_store::control::NewCommand {
+            branch_id: &a.branch,
+            idempotency_key: k,
+            kind: "rate.upsert",
+            schema_version: 1,
+            payload: &payload,
+            issued_by: "owner",
+            group_id: None,
+            now: T0,
+        })
+        .await
+        .unwrap();
+    }
+
+    // The old Hub applies the first 60 (seq 1..=60) and answers, having fetched 40 more; the fence
+    // then moves at fork 30, and the new Hub's database holds only what it was forked at.
+    let mut old_applied: Vec<(String, i64)> = Vec::new();
+    let mut after = 0;
+    'old: loop {
+        let page = h.hub_fetch(&a, after, HUB_A).await;
+        let cmds = page.body["commands"].as_array().unwrap().clone();
+        if cmds.is_empty() {
+            break;
+        }
+        for c in cmds {
+            if old_applied.len() == 60 {
+                break 'old;
+            }
+            let seq = i64::try_from(old_applied.len()).unwrap() + 1;
+            let id = c["id"].as_i64().unwrap();
+            after = id;
+            let r = h.hub_result(&a, id, applied(HUB_A, seq)).await;
+            assert_eq!(r.status, 200, "{}", r.body);
+            old_applied.push((c["idempotency_key"].as_str().unwrap().to_owned(), seq));
+        }
+    }
+    // The 30 applied past the fork plus the 40 fetched and never answered.
+    assert_eq!(h.set_fence(&a, HUB_B, 30).await, 70);
+
+    // A late answer from the old Hub is refused.
+    let late = h
+        .hub_result(&a, h.id_of(&a.branch, &keys[70]), applied(HUB_A, 61))
+        .await;
+    assert_eq!(late.code(), "FENCED");
+
+    // The new Hub holds the first 30; it applies every other command once, and answers the
+    // delivered ones from what it holds.
+    let mut held: std::collections::BTreeMap<String, i64> = old_applied
+        .iter()
+        .filter(|(_, seq)| *seq <= 30)
+        .cloned()
+        .collect();
+    let cursor = h.id_of(&a.branch, &old_applied[29].0);
+    let mut applies = 0;
+    let mut next_seq = 31;
+    loop {
+        let page = h.hub_fetch(&a, cursor, HUB_B).await;
+        let cmds = page.body["commands"].as_array().unwrap().clone();
+        if cmds.is_empty() {
+            break;
+        }
+        for c in cmds {
+            let key = c["idempotency_key"].as_str().unwrap().to_owned();
+            let seq = *held.entry(key).or_insert_with(|| {
+                applies += 1;
+                next_seq += 1;
+                next_seq - 1
+            });
+            let r = h
+                .hub_result(&a, c["id"].as_i64().unwrap(), applied(HUB_B, seq))
+                .await;
+            assert_eq!(r.status, 200, "{}", r.body);
+        }
+    }
+
+    assert_eq!(held.len(), 100);
+    assert_eq!(applies, 70);
+    let conn = rusqlite::Connection::open(h._dir.path().join("gz_control.db")).unwrap();
+    let count = |sql: &str, p: &[&str]| -> i64 {
+        conn.query_row(sql, rusqlite::params_from_iter(p), |r| r.get(0))
+            .unwrap()
+    };
+    assert_eq!(
+        count(
+            "SELECT COUNT(*) FROM commands WHERE status = 'applied'",
+            &[]
+        ),
+        100
+    );
+    assert_eq!(
+        count(
+            "SELECT COUNT(*) FROM commands WHERE applied_epoch = ?",
+            &[HUB_A]
+        ),
+        30
+    );
+    assert_eq!(
+        count(
+            "SELECT COUNT(*) FROM commands WHERE applied_epoch = ?",
+            &[HUB_B]
+        ),
+        70
+    );
 }

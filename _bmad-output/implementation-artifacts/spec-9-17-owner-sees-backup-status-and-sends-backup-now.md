@@ -2,7 +2,7 @@
 title: 'Story 9.17: Owner sees backup status and sends "Backup now"'
 type: 'feature'
 created: '2026-10-31'
-status: 'in-review'
+status: 'done'
 baseline_revision: '113a944d78ed07b69e02a3d777bea48eb71772fb'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -87,3 +87,10 @@ Times in the heartbeat block are Hub-clock ms, like `last_upload_at` already is;
 **Commands:**
 - `cargo test -p arena-proto -p arena-store -p arena-core -p arena-tasks -p arena-cloud`, `cargo clippy` on them `--all-targets -- -D warnings`, `cargo fmt --check`
 - `pnpm run gen:types`, `pnpm run check:strings`, `npx playwright test tests/backup-now.spec.ts` in `apps/owner`
+
+## Code Review (2026-10-31)
+
+- Reviewed the 9.17 diff (heartbeat block, store view, rate limit, Owner app). No blocking findings; no code changes needed.
+- Checks: `cargo fmt --check`, `cargo clippy -D warnings`, tests for arena-proto/store/core/cloud (owner_commands, backup) and Playwright `backup-now` + `branches` all green.
+- Not from this story (Windows/environment, code untouched here): `arena-cloud` `binary::unreachable_at_start_retries_then_exits_1...`, `arena-tasks` `trusted_time_is_cloud_time_plus_monotonic_elapsed` and `printer::lan::...times_out`; `backup::a_hung_run_times_out_with_its_own_code` is timing-flaky (passed on re-run).
+- Accepted limit: the 15-minute check is read-then-insert (documented above).

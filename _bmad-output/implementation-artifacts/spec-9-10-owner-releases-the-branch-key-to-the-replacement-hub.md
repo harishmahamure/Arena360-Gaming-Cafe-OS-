@@ -2,7 +2,7 @@
 title: 'Story 9.10: Owner releases the branch key to the replacement Hub'
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 baseline_revision: '62c50d21fbac5046a4b0c03a1cb26352133b2159'
 review_loop_iteration: 0
 context:
@@ -85,6 +85,8 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+Code review (2026-10-31): no blocking findings. fmt, clippy (story crates), cargo tests, Hub pairing test, check:strings/layers/protocol, format:check green; remaining failures are the pre-existing Windows ones listed in Auto Run Result.
 
 ## Design Notes
 

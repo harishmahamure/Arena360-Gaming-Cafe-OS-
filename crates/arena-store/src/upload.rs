@@ -336,6 +336,9 @@ pub struct EpochProgress {
     pub last_seq_uploaded: i64,
     /// The parent `seq` the lease's epoch was forked from.
     pub fork_seq: Option<i64>,
+    /// The last `seq` of the lease's epoch that the upgrade snapshot holds instead of batches
+    /// (Story 9.11), when the snapshot ended in the lease's epoch.
+    pub base_seq: Option<i64>,
 }
 
 /// The upload position in the lease's epoch (Story 8.3).
@@ -347,9 +350,15 @@ pub fn read_epoch_progress(conn: &Connection) -> Result<EpochProgress, AppError>
         (Some(l), Some(c)) if &c.epoch == l => c.last_seq_uploaded,
         _ => fork.unwrap_or(0),
     };
+    let state = crate::read_backup_state(conn)?;
+    let base_seq = match (&lease, state.base_epoch) {
+        (Some(l), Some(base)) if *l == base => state.base_seq,
+        _ => None,
+    };
     Ok(EpochProgress {
         last_seq_uploaded,
         fork_seq: fork,
+        base_seq,
     })
 }
 
@@ -1174,7 +1183,8 @@ mod tests {
             progress(&store),
             EpochProgress {
                 last_seq_uploaded: 40,
-                fork_seq: Some(40)
+                fork_seq: Some(40),
+                base_seq: None,
             }
         );
 
@@ -1183,8 +1193,26 @@ mod tests {
             progress(&store),
             EpochProgress {
                 last_seq_uploaded: 55,
-                fork_seq: Some(40)
+                fork_seq: Some(40),
+                base_seq: None,
             }
         );
+    }
+
+    #[test]
+    fn the_upgrade_snapshots_last_seq_is_reported_only_in_the_leases_epoch() {
+        let (_d, mut store) = store();
+        lease(&mut store, 2, "B");
+        let progress = |store: &Store| store.read_with(read_epoch_progress).unwrap();
+        store
+            .write_tx(|tx| crate::complete_first_snapshot(tx, "2:B", 30, 1))
+            .unwrap();
+        let p = progress(&store);
+        assert_eq!((p.last_seq_uploaded, p.base_seq), (30, Some(30)));
+        // A snapshot that ended in an older epoch says nothing about this one.
+        store
+            .write_tx(|tx| crate::complete_first_snapshot(tx, "1:A", 30, 1))
+            .unwrap();
+        assert_eq!(progress(&store).base_seq, None);
     }
 }

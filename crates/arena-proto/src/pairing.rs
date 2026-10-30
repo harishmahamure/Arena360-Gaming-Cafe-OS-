@@ -316,6 +316,11 @@ pub struct HeartbeatRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub fork_seq: Option<i64>,
+    /// The last `seq` of `epoch` the Hub's upgrade snapshot holds (Story 9.11): the cloud has no
+    /// batches up to it, so it looks for missing batches only after it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub base_seq: Option<i64>,
     /// A range the cloud asked for that the Hub no longer holds (Story 8.3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

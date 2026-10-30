@@ -87,7 +87,8 @@ pub use settings_defaults::{
     bootstrap_locale_settings, setting_rule,
 };
 pub use snapshot::{
-    KeyBackupPlan, KotJob, RateFlips, SnapshotReader, branch_setup, build_snapshot, read_snapshot,
+    KeyBackupPlan, KotJob, RateFlips, SnapshotReader, UploadStart, branch_setup, build_snapshot,
+    read_snapshot,
 };
 pub use staff::StaffDirectory;
 pub use status::{

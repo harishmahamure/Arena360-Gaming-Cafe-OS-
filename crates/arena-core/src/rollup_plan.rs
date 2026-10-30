@@ -142,6 +142,18 @@ pub fn plan(input: &PlanInput<'_>) -> RollupPlan {
     }
 }
 
+/// The business day of `now_ms` (`yyyy-mm-dd`) in the branch's zone and day-start rule; the UTC
+/// date before the branch exists.
+pub fn business_day(store: &Store, now_ms: i64) -> Result<String, AppError> {
+    let Some(branch) = store.branch_locale()? else {
+        return Ok(chrono::DateTime::from_timestamp_millis(now_ms)
+            .map_or_else(String::new, |t| t.date_naive().to_string()));
+    };
+    let settings = store.settings()?;
+    let rows = locale_rows(&branch, &settings);
+    Ok(resolve(&rows, now_ms).0.to_string())
+}
+
 /// Plans the rollups of the branch as of `now_ms`. `changes` are the ledger changes heard since
 /// the last plan and `carried` the days still waiting from earlier plans; `rescan` says changes were
 /// missed, so every day published within the last `RESCAN_DAYS` is treated as changed. `None`

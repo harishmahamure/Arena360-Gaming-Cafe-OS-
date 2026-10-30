@@ -77,8 +77,9 @@ pub use audit::{
     list_staff_names, previous_row_image, reverted_intent,
 };
 pub use backup_state::{
-    BackupState, PlayerKeyRow, clear_kek_escrow, list_player_keys, read_backup_state,
-    write_kek_escrowed, write_keys_backed_up, write_keys_error,
+    BackupState, PlayerKeyRow, clear_kek_escrow, complete_first_snapshot, list_player_keys,
+    read_backup_state, stop_uploads, write_first_snapshot_pending, write_kek_escrowed,
+    write_keys_backed_up, write_keys_error,
 };
 pub use branch::{
     BranchLocale, BranchSummary, ChangeOp, ChangeRecord, NewBranch, NewDeviceEvent, NewReadGrant,

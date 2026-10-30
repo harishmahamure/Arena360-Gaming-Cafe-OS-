@@ -519,9 +519,13 @@ async fn find_gap(
         // A run the Hub no longer has is not asked for again.
         held.push((u.from, u.to));
     }
-    let base = body
-        .fork_seq
+    // History before the fork belongs to the parent epoch; history before the upgrade snapshot
+    // (Story 9.11) is in the snapshot, not in batches.
+    let base = [body.fork_seq, body.base_seq]
+        .into_iter()
+        .flatten()
         .filter(|s| (0..MAX_SEQ).contains(s))
+        .max()
         .unwrap_or(0)
         + 1;
     let Some(gap) = first_missing(held, base, body.last_seq_uploaded) else {

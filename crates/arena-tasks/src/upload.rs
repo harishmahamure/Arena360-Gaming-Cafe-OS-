@@ -11,6 +11,13 @@
 //! After a day's rollup has published, the same cycle stores that day's snapshot (Story 8.8): a
 //! zstd copy of the database without the player key table, PUT to `snapshots/<date>.db.zst`.
 //!
+//! A branch that goes from Free to paid uploads a full snapshot first (Story 9.11): until its
+//! upload cursor exists, the cycle waits for the player key backup, stores a snapshot of today
+//! under `snapshots/<today>.db.zst` and only then sets the cursor to the snapshot's last change
+//! row, so batching starts one after it. Until then `backup_state` says "first snapshot pending"
+//! with the last error and no batch goes up. A lapse back to Free forgets the cursor, so the next
+//! upgrade starts again with a fresh snapshot.
+//!
 //! A Free Hub (or one whose tier is not known yet), a follower and an unpaired Hub make no
 //! request at all. The task reads through the [`SnapshotReader`], never inside `apply()`.
 
@@ -59,6 +66,10 @@ const MAX_HEARD_CHANGES: usize = 5_000;
 const RATE_LIMIT_WAIT: Duration = Duration::from_secs(60);
 /// The longest Retry-After honoured.
 const RATE_LIMIT_CEILING: Duration = Duration::from_secs(3600);
+/// `backup_state.first_snapshot_error` while the player key backup has not been stored yet.
+const FIRST_SNAPSHOT_KEYS_PENDING: &str = "KEY_BACKUP_PENDING";
+/// `backup_state.first_snapshot_error` while the disk is too full for the copy.
+const FIRST_SNAPSHOT_DISK: &str = "BACKUP_DISK";
 
 /// What the task does after a cycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,6 +304,10 @@ pub struct UploadTask {
     unbuildable: BTreeSet<String>,
     /// Whether the cycle also stores the daily snapshot (Story 8.8).
     daily_snapshot: bool,
+    /// Whether a branch that has never uploaded stores its full snapshot first (Story 9.11).
+    first_snapshot: bool,
+    /// The lapse back to Free was already looked at (Story 9.11); a paid cycle resets it.
+    lapse_seen: bool,
     /// The free bytes on the disk holding a folder; tests swap it.
     free_space: fn(&Path) -> Option<u64>,
     /// The day the "not enough disk space" alert was already raised for in this run, so a disk
@@ -340,6 +355,8 @@ impl UploadTask {
             regenerated: VecDeque::new(),
             unbuildable: BTreeSet::new(),
             daily_snapshot: true,
+            first_snapshot: true,
+            lapse_seen: false,
             free_space: crate::disk::free_bytes,
             disk_alerted: None,
             backup: None,
@@ -364,12 +381,14 @@ impl UploadTask {
         self.summary = false;
         self.rollups = false;
         self.daily_snapshot = false;
+        self.first_snapshot = false;
         self
     }
 
     /// Tests: the cycle does not store the daily snapshot.
     pub fn without_snapshot(mut self) -> Self {
         self.daily_snapshot = false;
+        self.first_snapshot = false;
         self
     }
 
@@ -522,12 +541,16 @@ impl UploadTask {
             return Next::idle(REVOKED_BACKOFF);
         }
         let Some(tier) = tier.filter(|t| *t != Tier::Free) else {
+            if tier == Some(Tier::Free) {
+                self.stop_uploads(&writer).await;
+            }
             self.outcome = Some(AppError::new(
                 ErrorCode::FeatureNotEntitled,
                 "this branch does not upload",
             ));
             return Next::idle(TIER_RECHECK);
         };
+        self.lapse_seen = false;
         let keystore = Arc::clone(&self.keystore);
         let token = match tokio::task::spawn_blocking(move || keystore.get()).await {
             Ok(Ok(Some(t))) => String::from_utf8_lossy(&t).into_owned(),
@@ -544,6 +567,14 @@ impl UploadTask {
         let summary_due =
             self.summary && self.summary_due(self.summary_interval(&writer, tier).await);
         let epoch = lease.epoch().to_string();
+        if self.first_snapshot
+            && let Err(next) = self
+                .first_snapshot_pass(&writer, &token, &epoch, interval)
+                .await
+        {
+            self.refresh_progress().await;
+            return next;
+        }
         if let Some(next) = self.resend_pass(&token, &epoch, interval, schema).await {
             self.refresh_progress().await;
             return next;
@@ -613,6 +644,215 @@ impl UploadTask {
             active: true,
             early: true,
         }
+    }
+
+    /// A lapse back to Free (Story 9.11): uploads stop at once and the cursor is forgotten, so
+    /// re-upgrading starts again with a fresh full snapshot. Objects already stored stay in the
+    /// cloud. Looked at once per lapse.
+    async fn stop_uploads(&mut self, writer: &WriterHandle) {
+        if std::mem::replace(&mut self.lapse_seen, true) {
+            return;
+        }
+        match writer.stop_uploads().await {
+            Ok(true) => tracing::info!("upload: the branch is on Free, uploads stopped"),
+            Ok(false) => {}
+            // Not the primary any more; the next lease holder looks at it.
+            Err(e) if e.code == ErrorCode::NotPrimary => {}
+            Err(e) => {
+                tracing::warn!(code = e.code.as_str(), "upload: could not stop the uploads");
+                self.lapse_seen = false;
+            }
+        }
+    }
+
+    /// The first snapshot of a branch that has never uploaded (Story 9.11): waits for the player
+    /// key backup, stores a full snapshot of today under `snapshots/<today>.db.zst`, records it
+    /// in `snapshot_log` and moves the cursor to its last change row, so the batches that follow
+    /// start one after it. `Ok` when the cursor exists and the cycle goes on; `Err` is what to do
+    /// instead, with `backup_state` saying "first snapshot pending" and the last error.
+    async fn first_snapshot_pass(
+        &mut self,
+        writer: &WriterHandle,
+        token: &str,
+        lease_epoch: &str,
+        interval: Duration,
+    ) -> Result<(), Next> {
+        let snapshots = Arc::clone(&self.snapshots);
+        let now = writer.now_ms();
+        let start = match tokio::task::spawn_blocking(move || snapshots.upload_start(now)).await {
+            Ok(Ok(start)) => start,
+            Ok(Err(e)) => {
+                tracing::warn!(code = e.code.as_str(), error = %e, "first snapshot: could not plan");
+                return Err(self.failed(interval));
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "first snapshot: plan task failed");
+                return Err(self.failed(interval));
+            }
+        };
+        if start.started {
+            return Ok(());
+        }
+        let date = start.today;
+        let known = start.state.first_snapshot_error.clone();
+        if !start.state.first_snapshot_pending {
+            self.note_first_snapshot(writer, None, None).await;
+        }
+        // The key backup goes up first: a snapshot without it could not be opened after a loss.
+        if start.state.keys_dirty() {
+            self.note_first_snapshot(writer, Some(FIRST_SNAPSHOT_KEYS_PENDING), known.as_deref())
+                .await;
+            return Err(Next::backing_off(TIER_RECHECK));
+        }
+        let snapshots = Arc::clone(&self.snapshots);
+        let scratch = tokio::task::spawn_blocking(move || snapshots.snapshot_scratch()).await;
+        let Ok(Ok((dir, db_bytes))) = scratch else {
+            tracing::warn!("first snapshot: could not find the database folder");
+            self.note_first_snapshot(writer, Some(ErrorCode::Internal.as_str()), known.as_deref())
+                .await;
+            return Err(self.failed(interval));
+        };
+        let free = (self.free_space)(&dir);
+        let needed = db_bytes.saturating_mul(SNAPSHOT_DISK_FACTOR);
+        if free.is_some_and(|f| f < needed) {
+            tracing::warn!(date, free, needed, "first snapshot: not enough disk space");
+            self.alert_disk_low(writer, &date).await;
+            self.note_first_snapshot(writer, Some(FIRST_SNAPSHOT_DISK), known.as_deref())
+                .await;
+            return Err(Next::backing_off(interval));
+        }
+        let snapshots = Arc::clone(&self.snapshots);
+        let build_date = date.clone();
+        let built = tokio::task::spawn_blocking(move || {
+            let file = snapshots.snapshot_file(&dir, &build_date)?;
+            let bytes = file.read()?;
+            Ok::<_, AppError>((bytes, file.epoch.clone(), file.last_seq))
+        })
+        .await;
+        let (bytes, snapshot_epoch, last_seq) = match built {
+            Ok(Ok(built)) => built,
+            other => {
+                let code = match &other {
+                    Ok(Err(e)) => e.code,
+                    _ => ErrorCode::Internal,
+                };
+                tracing::warn!(
+                    date,
+                    code = code.as_str(),
+                    "first snapshot: could not build"
+                );
+                self.note_first_snapshot(writer, Some(code.as_str()), known.as_deref())
+                    .await;
+                return Err(self.failed(interval));
+            }
+        };
+        let req = PresignRequest {
+            epoch: lease_epoch.to_owned(),
+            kind: Some(PRESIGN_KIND_SNAPSHOT.to_owned()),
+            date: Some(date.clone()),
+            ..PresignRequest::default()
+        };
+        let links = match self.cloud.presign(token, &req).await {
+            Ok(l) => l,
+            Err(f) => {
+                return Err(self
+                    .first_snapshot_refused(writer, f, known, interval)
+                    .await);
+            }
+        };
+        let Some(url) = links.url else {
+            tracing::warn!(date, "first snapshot: the cloud issued no snapshot link");
+            self.note_first_snapshot(writer, Some(ErrorCode::Internal.as_str()), known.as_deref())
+                .await;
+            return Err(self.failed(interval));
+        };
+        let size = bytes.len();
+        if let Err(f) = self.cloud.put_object(&url, bytes).await {
+            return Err(self
+                .first_snapshot_refused(writer, f, known, interval)
+                .await);
+        }
+        self.fails = 0;
+        // A branch whose log holds no row yet starts at the lease's epoch, seq 0.
+        let (cursor_epoch, cursor_seq) = if snapshot_epoch.is_empty() {
+            (lease_epoch.to_owned(), 0)
+        } else {
+            (snapshot_epoch.clone(), last_seq)
+        };
+        let row = SnapshotLogRow {
+            key: snapshot_object_key(&date),
+            date: date.clone(),
+            epoch: snapshot_epoch,
+            last_seq,
+            bytes: i64::try_from(size).unwrap_or(i64::MAX),
+            uploaded_at: writer.now_ms(),
+        };
+        match writer
+            .record_first_snapshot(row, cursor_epoch, cursor_seq)
+            .await
+        {
+            Ok(()) => {
+                tracing::info!(
+                    date,
+                    last_seq = cursor_seq,
+                    bytes = size,
+                    "first snapshot stored"
+                );
+                Ok(())
+            }
+            Err(e) if e.code == ErrorCode::NotPrimary => {
+                tracing::info!("first snapshot: this hub is no longer the primary");
+                Err(Next::idle(TIER_RECHECK))
+            }
+            Err(e) => {
+                // The cloud has the file; the next cycle sends it again under the same key.
+                tracing::warn!(
+                    date,
+                    code = e.code.as_str(),
+                    "first snapshot: could not record the upload"
+                );
+                Err(self.failed(interval))
+            }
+        }
+    }
+
+    /// Marks the first snapshot pending in `backup_state`. An `error` equal to the one already
+    /// held (`known`) is not written again.
+    async fn note_first_snapshot(
+        &self,
+        writer: &WriterHandle,
+        error: Option<&str>,
+        known: Option<&str>,
+    ) {
+        if error.is_some() && error == known {
+            return;
+        }
+        if let Err(e) = writer
+            .record_first_snapshot_pending(error.map(str::to_owned))
+            .await
+        {
+            tracing::warn!(
+                code = e.code.as_str(),
+                "first snapshot: could not record the state"
+            );
+        }
+    }
+
+    /// The cloud refused or could not be reached while the first snapshot was going up.
+    async fn first_snapshot_refused(
+        &mut self,
+        writer: &WriterHandle,
+        f: CloudFailure,
+        known: Option<String>,
+        interval: Duration,
+    ) -> Next {
+        let code = match &f {
+            CloudFailure::Refused { error, .. } => error.code,
+            CloudFailure::Unreachable(_) => ErrorCode::CloudUnreachable,
+        };
+        self.note_first_snapshot(writer, Some(code.as_str()), known.as_deref())
+            .await;
+        self.refused(f, interval)
     }
 
     /// Sends again the run the cloud asked for (Story 8.3), batch by batch under keys for exactly
@@ -1699,6 +1939,7 @@ mod tests {
                 pending_rows: 0,
                 last_seq_uploaded: 3,
                 fork_seq: None,
+                base_seq: None,
                 last_summary_at: None,
                 last_rollup_date: None,
             }
@@ -2050,6 +2291,7 @@ mod tests {
                 pending_rows: 3,
                 last_seq_uploaded: 0,
                 fork_seq: None,
+                base_seq: None,
                 last_summary_at: None,
                 last_rollup_date: None,
             }
@@ -3357,5 +3599,219 @@ mod tests {
         drop(responder);
         let err = requester.run(Duration::from_secs(1)).await.unwrap_err();
         assert_eq!(err.code, ErrorCode::FeatureNotEntitled);
+    }
+
+    // ---- Story 9.11: the upgrade snapshot ----
+
+    /// A branch that has never uploaded: the cursor is absent and the first snapshot is on.
+    async fn upgrade_fx(tier: Tier) -> (Fx, Seen, Arc<std::sync::atomic::AtomicBool>) {
+        let (mut f, seen, snapshots_up) = snapshot_fx(tier).await;
+        f.task.rollups = false;
+        f.task.daily_snapshot = false;
+        f.task.first_snapshot = true;
+        (f, seen, snapshots_up)
+    }
+
+    /// The key backup has stored the key table as it is now.
+    async fn keys_backed_up(f: &Fx) {
+        let version = Store::open_reader(&f.path)
+            .unwrap()
+            .read_with(arena_store::read_backup_state)
+            .unwrap()
+            .keys_version;
+        f.writer.record_key_backup(version).await.unwrap();
+    }
+
+    fn backup_state(f: &Fx) -> arena_store::BackupState {
+        Store::open_reader(&f.path)
+            .unwrap()
+            .read_with(arena_store::read_backup_state)
+            .unwrap()
+    }
+
+    /// The kinds of the requests the cloud saw, in order: `snapshot` PUT or `batch` PUT.
+    fn put_order(seen: &Seen) -> Vec<&'static str> {
+        puts(seen)
+            .into_iter()
+            .map(|(k, _)| {
+                if k.starts_with("/put/snapshots/") {
+                    "snapshot"
+                } else {
+                    "batch"
+                }
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn an_upgrade_stores_a_full_snapshot_before_any_batch_and_batches_from_the_next_row() {
+        let (mut f, seen, _) = upgrade_fx(Tier::Basic).await;
+        add_rows(&f.writer, EPOCH, 5).await;
+        keys_backed_up(&f).await;
+        assert!(cursor(&f).is_none(), "a Free branch uploaded nothing");
+
+        f.task.cycle().await;
+        assert_eq!(snapshot_asks(&seen), ["2027-01-15"]);
+        let sent = snapshot_puts(&seen);
+        assert_eq!(sent[0].0, "/put/snapshots/2027-01-15.db.zst");
+        let row = snapshot_row(&f, "2027-01-15").expect("recorded after the PUT");
+        assert_eq!(row.key, "snapshots/2027-01-15.db.zst");
+        assert_eq!(row.epoch, EPOCH);
+        let base = row.last_seq;
+        assert!(base >= 5);
+        assert!(scratch_files(&f).is_empty());
+
+        // Batching starts after the snapshot: nothing is shipped for the history it holds.
+        let c = cursor(&f).expect("the cursor is set by the snapshot");
+        assert_eq!((c.epoch.as_str(), c.last_seq_uploaded), (EPOCH, base));
+        assert_eq!(put_order(&seen), ["snapshot"]);
+        let state = backup_state(&f);
+        assert!(!state.first_snapshot_pending);
+        assert_eq!(state.first_snapshot_error, None);
+        assert_eq!(
+            (state.base_epoch.as_deref(), state.base_seq),
+            (Some(EPOCH), Some(base))
+        );
+        // The heartbeat reports the base, so the cloud asks for no history before it.
+        let p = progress(&f);
+        assert_eq!((p.last_seq_uploaded, p.base_seq), (base, Some(base)));
+        assert_eq!(p.pending_rows, 0);
+
+        add_rows(&f.writer, EPOCH, 3).await;
+        f.task.cycle().await;
+        assert_eq!(put_order(&seen), ["snapshot", "batch"]);
+        let batch = &puts(&seen)[1];
+        assert_eq!(batch.0, format!("/put/{EPOCH}/{}-{}", base + 1, base + 3));
+        assert_eq!(snapshot_asks(&seen).len(), 1, "taken once");
+    }
+
+    #[tokio::test]
+    async fn the_snapshot_and_the_cursor_are_one_step_a_failed_put_leaves_neither() {
+        let (mut f, seen, snapshots_up) = upgrade_fx(Tier::Basic).await;
+        add_rows(&f.writer, EPOCH, 5).await;
+        keys_backed_up(&f).await;
+        snapshots_up.store(false, std::sync::atomic::Ordering::SeqCst);
+
+        f.task.cycle().await;
+        assert!(snapshot_row(&f, "2027-01-15").is_none());
+        assert!(cursor(&f).is_none());
+        assert_eq!(
+            put_order(&seen),
+            ["snapshot"],
+            "no batch while the snapshot is missing"
+        );
+        let state = backup_state(&f);
+        assert!(state.first_snapshot_pending);
+        assert_eq!(
+            state.first_snapshot_error.as_deref(),
+            Some("CLOUD_UNREACHABLE")
+        );
+        assert!(state.first_snapshot_error_at.is_some());
+        assert!(scratch_files(&f).is_empty());
+        assert_eq!(progress(&f).pending_rows, 5, "the rows wait");
+
+        // The cloud is back: the same snapshot goes up, then the batches follow.
+        snapshots_up.store(true, std::sync::atomic::Ordering::SeqCst);
+        f.task.fails = 0;
+        f.task.cycle().await;
+        assert!(snapshot_row(&f, "2027-01-15").is_some());
+        let state = backup_state(&f);
+        assert!(!state.first_snapshot_pending);
+        assert_eq!(state.first_snapshot_error, None);
+        assert_eq!(snapshot_asks(&seen), ["2027-01-15", "2027-01-15"]);
+        assert!(cursor(&f).is_some());
+    }
+
+    #[tokio::test]
+    async fn the_snapshot_waits_for_the_player_key_backup() {
+        let (mut f, seen, _) = upgrade_fx(Tier::Basic).await;
+        add_rows(&f.writer, EPOCH, 2).await;
+
+        let next = f.task.cycle().await;
+        assert_eq!(next.wait, TIER_RECHECK);
+        assert!(
+            presigns(&seen).is_empty(),
+            "nothing goes up before the keys"
+        );
+        let state = backup_state(&f);
+        assert!(state.first_snapshot_pending);
+        assert_eq!(
+            state.first_snapshot_error.as_deref(),
+            Some("KEY_BACKUP_PENDING")
+        );
+
+        keys_backed_up(&f).await;
+        f.task.cycle().await;
+        assert_eq!(snapshot_asks(&seen), ["2027-01-15"]);
+        assert!(cursor(&f).is_some());
+    }
+
+    #[tokio::test]
+    async fn the_snapshot_is_skipped_with_an_alert_when_the_disk_is_too_full_and_no_batch_goes_up()
+    {
+        let (mut f, seen, _) = upgrade_fx(Tier::Basic).await;
+        add_rows(&f.writer, EPOCH, 2).await;
+        keys_backed_up(&f).await;
+        f.task.free_space = |_| Some(0);
+
+        f.task.cycle().await;
+        assert!(presigns(&seen).is_empty());
+        assert_eq!(
+            backup_state(&f).first_snapshot_error.as_deref(),
+            Some("BACKUP_DISK")
+        );
+        assert_eq!(
+            count(&f, "SELECT COUNT(*) FROM alerts WHERE kind = 'backup_disk'"),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn a_branch_that_already_uploads_takes_no_upgrade_snapshot() {
+        let (mut f, seen, _) = upgrade_fx(Tier::Basic).await;
+        paid_since(&f, 0).await;
+        add_rows(&f.writer, EPOCH, 3).await;
+        f.task.cycle().await;
+        assert!(snapshot_asks(&seen).is_empty());
+        assert_eq!(put_order(&seen), ["batch"]);
+    }
+
+    #[tokio::test]
+    async fn a_lapse_stops_uploads_at_once_and_the_next_upgrade_starts_with_a_fresh_snapshot() {
+        let (mut f, seen, _) = upgrade_fx(Tier::Basic).await;
+        add_rows(&f.writer, EPOCH, 4).await;
+        keys_backed_up(&f).await;
+        f.task.cycle().await;
+        assert!(cursor(&f).is_some());
+        assert!(backup_state(&f).base_seq.is_some());
+        let before = presigns(&seen).len();
+
+        f.status.send_modify(|s| s.tier = Some(Tier::Free));
+        add_rows(&f.writer, EPOCH, 2).await;
+        f.task.cycle().await;
+        assert_eq!(presigns(&seen).len(), before, "nothing goes up on Free");
+        assert!(cursor(&f).is_none());
+        let state = backup_state(&f);
+        assert_eq!((state.base_epoch, state.base_seq), (None, None));
+        assert!(!state.first_snapshot_pending);
+        assert!(
+            snapshot_row(&f, "2027-01-15").is_some(),
+            "what is stored stays recorded"
+        );
+
+        f.status.send_modify(|s| s.tier = Some(Tier::Basic));
+        f.task.cycle().await;
+        assert_eq!(snapshot_asks(&seen), ["2027-01-15", "2027-01-15"]);
+        let row = snapshot_row(&f, "2027-01-15").unwrap();
+        assert!(
+            row.last_seq >= 6,
+            "the fresh snapshot holds the rows added on Free"
+        );
+        assert_eq!(cursor(&f).unwrap().last_seq_uploaded, row.last_seq);
+        assert_eq!(
+            put_order(&seen),
+            ["snapshot", "snapshot"],
+            "the rows from Free are in the snapshot, not in batches"
+        );
     }
 }

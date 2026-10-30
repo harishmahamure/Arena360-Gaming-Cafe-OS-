@@ -45,6 +45,10 @@ backup_state.id: Always 1; the table has only one row.
 backup_state.keys_version: A counter that goes up every time a player encryption key is added, changed or removed.
 backup_state.keys_backed_up_version: The value of the key counter at the last successful key backup.
 backup_state.keys_error: A short code for why the last key backup failed; it never contains player data.
+backup_state.base_epoch: The epoch of the last change in the full snapshot uploaded when the branch went from Free to a paid plan; empty before that.
+backup_state.base_seq: The number of that last change; the cloud holds no change batches up to it, so checks for missing batches start after it.
+backup_state.first_snapshot_pending: 1 while the branch is on a paid plan but that first full snapshot is not stored yet, so no change batch is uploaded; otherwise 0.
+backup_state.first_snapshot_error: A short code for why the last attempt at that first snapshot failed; it never contains player data.
 branch: The branch (cafe location) this Hub runs: its name, code, currency and time settings.
 branch.branch_id: Unique id of the branch.
 branch.name: The branch's name as shown to staff and on receipts.

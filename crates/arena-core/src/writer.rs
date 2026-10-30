@@ -349,6 +349,74 @@ impl WriterHandle {
         .await
     }
 
+    /// Story 9.11: marks the upgrade snapshot as pending, with why the last attempt failed
+    /// (`error` is a short code). Same rules as [`Self::record_key_backup`].
+    pub async fn record_first_snapshot_pending(
+        &self,
+        error: Option<String>,
+    ) -> Result<(), AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        self.run(move |store| {
+            let ctx = ctx_from(clock.as_ref(), &status);
+            store.write_tx(|tx| {
+                crate::apply::check_epoch(tx, &ctx)?;
+                arena_store::write_first_snapshot_pending(tx, error.as_deref(), clock.now_ms())
+            })
+        })
+        .await
+    }
+
+    /// Story 9.11: records that the upgrade snapshot was stored. In one transaction the snapshot
+    /// goes into `snapshot_log`, the upload cursor moves to `epoch`/`last_seq` (the snapshot's
+    /// last change row, so batching starts one after it), the base is kept for the heartbeat and
+    /// the pending mark is cleared. Same rules as [`Self::record_key_backup`].
+    pub async fn record_first_snapshot(
+        &self,
+        row: arena_store::SnapshotLogRow,
+        epoch: String,
+        last_seq: i64,
+    ) -> Result<(), AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        self.run(move |store| {
+            let ctx = ctx_from(clock.as_ref(), &status);
+            store.write_tx(|tx| {
+                crate::apply::check_epoch(tx, &ctx)?;
+                if epoch
+                    .split_once(':')
+                    .and_then(|(c, _)| c.parse::<i64>().ok())
+                    .is_none()
+                    || last_seq < 0
+                {
+                    return Err(AppError::new(
+                        ErrorCode::Internal,
+                        format!("cannot start uploads at {epoch:?} seq {last_seq}"),
+                    ));
+                }
+                arena_store::write_snapshot_log(tx, &row)?;
+                arena_store::complete_first_snapshot(tx, &epoch, last_seq, clock.now_ms())
+            })
+        })
+        .await
+    }
+
+    /// Story 9.11: the branch lapsed back to Free, so uploads stop: the cursor, the base and the
+    /// pending mark are forgotten and the next upgrade starts with a fresh full snapshot. Answers
+    /// whether anything was forgotten. Same rules as [`Self::record_key_backup`].
+    pub async fn stop_uploads(&self) -> Result<bool, AppError> {
+        let clock = Arc::clone(&self.clock);
+        let status = self.status.clone();
+        self.run(move |store| {
+            let ctx = ctx_from(clock.as_ref(), &status);
+            store.write_tx(|tx| {
+                crate::apply::check_epoch(tx, &ctx)?;
+                arena_store::stop_uploads(tx)
+            })
+        })
+        .await
+    }
+
     /// Story 9.3: raises the highest epoch counter this Hub has seen (from a heartbeat answer, a
     /// claim reply or the LAN) and answers the value held afterwards. A lower counter changes
     /// nothing. Like [`Self::record_upload`] it is a maintenance write outside `apply()`, but it

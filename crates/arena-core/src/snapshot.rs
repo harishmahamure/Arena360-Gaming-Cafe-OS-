@@ -665,6 +665,17 @@ pub struct KeyBackupPlan {
     pub rows: Option<Vec<arena_store::PlayerKeyRow>>,
 }
 
+/// Where the change-log upload stands before its first batch (Story 9.11).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UploadStart {
+    /// A batch or the upgrade snapshot was accepted before: the cursor exists.
+    pub started: bool,
+    /// The bookkeeping row: the pending mark and whether the key backup is up to date.
+    pub state: arena_store::BackupState,
+    /// The business day of the read (`yyyy-mm-dd`, branch zone), the date of the upgrade snapshot.
+    pub today: String,
+}
+
 /// What the timer owes running sessions for rule changes: the sessions with a rate change due
 /// now, and the earliest upcoming rule boundary for the others (`None` when no rule is near).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1944,6 +1955,23 @@ impl SnapshotReader {
         ))
     }
 
+    /// Whether the change-log upload has started and, if not, what the upgrade snapshot needs
+    /// (Story 9.11). Blocking (SQLite).
+    pub fn upload_start(&self, now_ms: i64) -> Result<UploadStart, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        let today = crate::rollup_plan::business_day(&store, now_ms)?;
+        store.read_with(|conn| {
+            Ok(UploadStart {
+                started: arena_store::read_upload_cursor(conn)?.is_some(),
+                state: arena_store::read_backup_state(conn)?,
+                today,
+            })
+        })
+    }
+
     /// The next change-log batch to upload (Story 8.2): up to `limit` rows of one epoch after the
     /// upload cursor, `None` when everything is uploaded. Blocking (SQLite).
     pub fn pending_batch(
@@ -2026,6 +2054,7 @@ impl SnapshotReader {
                 pending_rows: arena_store::count_pending_rows(conn)?,
                 last_seq_uploaded: progress.last_seq_uploaded,
                 fork_seq: progress.fork_seq,
+                base_seq: progress.base_seq,
                 last_summary_at: arena_store::find_rollup_log(conn, arena_proto::SUMMARY_LOG_DATE)?
                     .map(|r| r.built_at),
                 last_rollup_date: arena_store::last_rollup_date(conn)?,

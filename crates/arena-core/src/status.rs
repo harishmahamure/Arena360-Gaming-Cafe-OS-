@@ -130,6 +130,9 @@ pub struct UploadStatus {
     pub last_seq_uploaded: i64,
     /// The `seq` the lease's epoch was forked from, if it was.
     pub fork_seq: Option<i64>,
+    /// The last `seq` of the lease's epoch the upgrade snapshot holds in place of batches
+    /// (Story 9.11), if it ended in that epoch.
+    pub base_seq: Option<i64>,
     /// When the branch summary was last built and published (Hub clock, ms; `rollup_log`
     /// `latest`) (Story 8.4).
     pub last_summary_at: Option<i64>,

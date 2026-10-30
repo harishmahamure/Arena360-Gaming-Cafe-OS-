@@ -29,6 +29,17 @@ pub struct BackupState {
     pub keys_error_at: Option<i64>,
     /// When (Hub clock, ms) the cloud accepted this Hub's escrowed branch key.
     pub kek_escrowed_at: Option<i64>,
+    /// The epoch of the last change row the upgrade snapshot holds (Story 9.11); `None` until
+    /// one is stored, and again after a lapse.
+    pub base_epoch: Option<String>,
+    /// That row's `seq`: the cloud holds no batches up to it, so gap detection starts after it.
+    pub base_seq: Option<i64>,
+    /// The branch is paid but its upgrade snapshot is not stored yet, so no batch goes up.
+    pub first_snapshot_pending: bool,
+    /// Why the last attempt at the upgrade snapshot failed (a code, never player data).
+    pub first_snapshot_error: Option<String>,
+    /// When (Hub clock, ms) it failed.
+    pub first_snapshot_error_at: Option<i64>,
 }
 
 impl BackupState {
@@ -49,7 +60,8 @@ pub struct PlayerKeyRow {
 pub fn read_backup_state(conn: &Connection) -> Result<BackupState, AppError> {
     conn.query_row(
         "SELECT keys_version, keys_backed_up_version, keys_backed_up_at, keys_error,
-                keys_error_at, kek_escrowed_at
+                keys_error_at, kek_escrowed_at, base_epoch, base_seq, first_snapshot_pending,
+                first_snapshot_error, first_snapshot_error_at
          FROM backup_state WHERE id = 1",
         [],
         |r| {
@@ -60,6 +72,11 @@ pub fn read_backup_state(conn: &Connection) -> Result<BackupState, AppError> {
                 keys_error: r.get(3)?,
                 keys_error_at: r.get(4)?,
                 kek_escrowed_at: r.get(5)?,
+                base_epoch: r.get(6)?,
+                base_seq: r.get(7)?,
+                first_snapshot_pending: r.get(8)?,
+                first_snapshot_error: r.get(9)?,
+                first_snapshot_error_at: r.get(10)?,
             })
         },
     )
@@ -128,6 +145,77 @@ pub fn clear_kek_escrow(conn: &Connection) -> Result<(), AppError> {
     )
     .map_err(db_error)?;
     Ok(())
+}
+
+/// Marks the upgrade snapshot as pending (Story 9.11): the branch is paid and no batch goes up
+/// until it is stored. `error` (cut to a short code) says why the last attempt failed; `None`
+/// leaves the last error as it was.
+pub fn write_first_snapshot_pending(
+    conn: &Connection,
+    error: Option<&str>,
+    at: i64,
+) -> Result<(), AppError> {
+    match error {
+        Some(error) => {
+            let error: String = error.chars().take(MAX_ERROR_CHARS).collect();
+            conn.execute(
+                "UPDATE backup_state SET first_snapshot_pending = 1, first_snapshot_error = ?1,
+                   first_snapshot_error_at = ?2 WHERE id = 1",
+                params![error, at],
+            )
+        }
+        None => conn.execute(
+            "UPDATE backup_state SET first_snapshot_pending = 1 WHERE id = 1",
+            [],
+        ),
+    }
+    .map_err(db_error)?;
+    Ok(())
+}
+
+/// Records that the upgrade snapshot was stored and that batching starts after its last change
+/// row: the pending mark and its error are cleared, the base is kept for the heartbeat, and the
+/// upload cursor is set to `epoch`/`seq`, all in the caller's transaction.
+pub fn complete_first_snapshot(
+    conn: &Connection,
+    epoch: &str,
+    seq: i64,
+    at: i64,
+) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE backup_state SET base_epoch = ?1, base_seq = ?2, first_snapshot_pending = 0,
+           first_snapshot_error = NULL, first_snapshot_error_at = NULL WHERE id = 1",
+        params![epoch, seq],
+    )
+    .map_err(db_error)?;
+    crate::write_upload_cursor(
+        conn,
+        &crate::UploadCursor {
+            epoch: epoch.to_owned(),
+            last_seq_uploaded: seq,
+            uploaded_at: at,
+        },
+    )
+}
+
+/// A lapse back to Free (Story 9.11): uploads stop and the next upgrade starts again with a fresh
+/// full snapshot, so the cursor, the base and the pending mark are forgotten. Objects already in
+/// the cloud stay there. Answers whether anything was forgotten.
+pub fn stop_uploads(conn: &Connection) -> Result<bool, AppError> {
+    let cursor = conn
+        .execute("DELETE FROM upload_cursor WHERE id = 1", [])
+        .map_err(db_error)?;
+    let state = conn
+        .execute(
+            "UPDATE backup_state SET base_epoch = NULL, base_seq = NULL,
+               first_snapshot_pending = 0, first_snapshot_error = NULL,
+               first_snapshot_error_at = NULL
+             WHERE id = 1 AND (base_epoch IS NOT NULL OR base_seq IS NOT NULL
+               OR first_snapshot_pending = 1 OR first_snapshot_error IS NOT NULL)",
+            [],
+        )
+        .map_err(db_error)?;
+    Ok(cursor + state > 0)
 }
 
 #[cfg(test)]
@@ -205,6 +293,61 @@ mod tests {
         let s = read_backup_state(&conn).unwrap();
         assert_eq!(s.kek_escrowed_at, None);
         assert!(s.keys_dirty());
+    }
+
+    #[test]
+    fn the_upgrade_snapshot_is_pending_with_its_error_until_it_sets_the_cursor_and_the_base() {
+        let conn = conn();
+        let s = read_backup_state(&conn).unwrap();
+        assert!(!s.first_snapshot_pending);
+        write_first_snapshot_pending(&conn, None, 1).unwrap();
+        write_first_snapshot_pending(&conn, Some(&"x".repeat(500)), 2).unwrap();
+        // A later call without an error leaves the last error in place.
+        write_first_snapshot_pending(&conn, None, 3).unwrap();
+        let s = read_backup_state(&conn).unwrap();
+        assert!(s.first_snapshot_pending);
+        assert_eq!(s.first_snapshot_error.unwrap().len(), MAX_ERROR_CHARS);
+        assert_eq!(s.first_snapshot_error_at, Some(2));
+        assert_eq!(crate::read_upload_cursor(&conn).unwrap(), None);
+
+        complete_first_snapshot(&conn, "3:01JAAAAAAAAAAAAAAAAAAAAAAA", 41, 9).unwrap();
+        let s = read_backup_state(&conn).unwrap();
+        assert!(!s.first_snapshot_pending);
+        assert_eq!(
+            (s.first_snapshot_error, s.first_snapshot_error_at),
+            (None, None)
+        );
+        assert_eq!(
+            (s.base_epoch.as_deref(), s.base_seq),
+            (Some("3:01JAAAAAAAAAAAAAAAAAAAAAAA"), Some(41))
+        );
+        let c = crate::read_upload_cursor(&conn).unwrap().unwrap();
+        assert_eq!(
+            (c.epoch.as_str(), c.last_seq_uploaded, c.uploaded_at),
+            ("3:01JAAAAAAAAAAAAAAAAAAAAAAA", 41, 9)
+        );
+    }
+
+    #[test]
+    fn a_lapse_forgets_the_cursor_the_base_and_the_pending_mark_once() {
+        let conn = conn();
+        assert!(
+            !stop_uploads(&conn).unwrap(),
+            "a Free branch has nothing to forget"
+        );
+        complete_first_snapshot(&conn, "1:01JAAAAAAAAAAAAAAAAAAAAAAA", 5, 9).unwrap();
+        assert!(stop_uploads(&conn).unwrap());
+        let s = read_backup_state(&conn).unwrap();
+        assert_eq!((s.base_epoch, s.base_seq), (None, None));
+        assert_eq!(crate::read_upload_cursor(&conn).unwrap(), None);
+        assert!(!stop_uploads(&conn).unwrap());
+        write_first_snapshot_pending(&conn, Some("CLOUD_UNREACHABLE"), 1).unwrap();
+        assert!(
+            stop_uploads(&conn).unwrap(),
+            "a pending upgrade is forgotten too"
+        );
+        let s = read_backup_state(&conn).unwrap();
+        assert!(!s.first_snapshot_pending && s.first_snapshot_error.is_none());
     }
 
     #[test]

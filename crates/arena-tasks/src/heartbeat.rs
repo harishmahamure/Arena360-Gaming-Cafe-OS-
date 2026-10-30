@@ -260,6 +260,7 @@ impl HeartbeatTask {
             last_summary_at: upload.last_summary_at,
             last_rollup_date: upload.last_rollup_date.clone(),
             fork_seq: upload.fork_seq,
+            base_seq: upload.base_seq,
             resend_unavailable: self.resend.as_ref().and_then(|r| r.unavailable()),
             setup,
             ad_impressions: ads.impressions,
@@ -1598,6 +1599,7 @@ mod tests {
                 pending_rows: 0,
                 last_seq_uploaded: 42,
                 fork_seq: Some(10),
+                base_seq: Some(7),
                 last_summary_at: None,
                 last_rollup_date: None,
             }

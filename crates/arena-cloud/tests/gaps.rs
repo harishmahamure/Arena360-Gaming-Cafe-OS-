@@ -464,6 +464,25 @@ async fn a_forked_epoch_starts_after_its_parent() {
 }
 
 #[tokio::test]
+async fn history_before_the_upgrade_snapshot_is_not_asked_for() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    // A Free branch went paid at seq 1200: the snapshot holds 1..=1200, batches start at 1201.
+    h.hold(&a, E, &[(1201, 1500)]).await;
+    let mut body = hb(E, 1500);
+    body["base_seq"] = json!(1200);
+    assert_eq!(resend_of(&h.beat(&a.token, body).await), None);
+
+    // A hole after the base is still found; without the base the history would be asked for.
+    h.tick();
+    let mut body = hb(E, 1800);
+    body["base_seq"] = json!(1200);
+    assert_eq!(resend_of(&h.beat(&a.token, body).await), Some((1501, 1800)));
+    h.tick();
+    assert_eq!(resend_of(&h.beat_at(&a, E, 1800).await), Some((1, 1200)));
+}
+
+#[tokio::test]
 async fn a_run_the_hub_no_longer_holds_is_recorded_counted_and_not_asked_for_again() {
     let h = Harness::new().await;
     let a = h.paid_cafe().await;

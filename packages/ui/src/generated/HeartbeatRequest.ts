@@ -31,6 +31,11 @@ export type HeartbeatRequest = {
    */
   fork_seq?: number;
   /**
+   * The last `seq` of `epoch` the Hub's upgrade snapshot holds (Story 9.11): the cloud has no
+   * batches up to it, so it looks for missing batches only after it.
+   */
+  base_seq?: number;
+  /**
    * A range the cloud asked for that the Hub no longer holds (Story 8.3).
    */
   resend_unavailable?: ResendUnavailable;

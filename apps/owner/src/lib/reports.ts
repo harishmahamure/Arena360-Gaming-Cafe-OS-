@@ -2,9 +2,12 @@ import type {
   OwnerBranch,
   OwnerLive,
   OwnerRange,
+  OwnerRangeCredit,
   OwnerRangeShift,
   OwnerRangeStock,
   OwnerRangeTotals,
+  RollupAged,
+  RollupCreditPlayer,
 } from "@arena/ui/generated";
 import { download, load } from "./api";
 
@@ -211,15 +214,19 @@ export const LEVELS_DAYS = 7;
 /** Lots expiring within this many days of today are listed. */
 export const EXPIRY_DAYS = 7;
 
-/** One branch's stock as of its newest rollup in the last week. */
+/**
+ * One branch's stock and credit as of its newest rollup in the last week. A cached answer from
+ * before credit was added lacks `credit`, which reads as no figures.
+ */
 export type LevelsWindow = {
   branchId: string;
   stock: OwnerRangeStock | null;
+  credit: OwnerRangeCredit | null;
   asOf: string;
   fresh: boolean;
 };
 
-/** Fetches the last week's stock levels and expiring lots of each branch. */
+/** Fetches the last week's stock levels, expiring lots and credit of each branch. */
 export async function loadLevels(
   branches: OwnerBranch[],
   today: string,
@@ -234,7 +241,13 @@ export async function loadLevels(
   if (parts.some((p) => p.res === "signed-out")) return "signed-out";
   return parts.map(({ id, res }) => {
     const r = res === "signed-out" ? null : res;
-    return { branchId: id, stock: r?.data.stock ?? null, asOf: r?.asOf ?? "", fresh: !!r?.live };
+    return {
+      branchId: id,
+      stock: r?.data.stock ?? null,
+      credit: r?.data.credit ?? null,
+      asOf: r?.asOf ?? "",
+      fresh: !!r?.live,
+    };
   });
 }
 
@@ -400,9 +413,49 @@ export function stockViews(
   return out;
 }
 
-/** The reports that export to CSV (Story 8.17). */
-export type ExportKind = "revenue" | "cash" | "stock";
-export const EXPORTS = ["revenue", "cash", "stock"] as const satisfies readonly ExportKind[];
+/** One branch's credit: the newest rollup's figures and who may be reminded (Story 8.32). */
+export type CreditBranch = {
+  id: string;
+  name: string;
+  currency: string;
+  /** The business day of the rollup the figures come from; null when the week has none. */
+  asOf: string | null;
+  outstanding: number;
+  aged: RollupAged;
+  players: RollupCreditPlayer[];
+  /** Players with a credit reminder queued or sent for the Hub's current business day. */
+  reminded: string[];
+};
+
+/** The credit of each branch, from its newest rollup of the last week. */
+export function creditViews(reports: BranchReport[], windows: LevelsWindow[]): CreditBranch[] {
+  return reports.flatMap(({ branch, range, live }) => {
+    if (!range) return [];
+    const credit = windows.find((w) => w.branchId === branch.id)?.credit ?? null;
+    return [
+      {
+        id: branch.id,
+        name: branch.name,
+        currency: range.currency,
+        asOf: credit?.as_of ?? null,
+        outstanding: credit?.outstanding ?? 0,
+        aged: credit?.aged ?? { d0_7: 0, d8_14: 0, d15p: 0 },
+        players: credit?.players ?? [],
+        // An older Hub's summary lacks the list: nobody counts as reminded.
+        reminded: live?.summary?.reminded_today ?? [],
+      },
+    ];
+  });
+}
+
+/** The reports that export to CSV (Story 8.17, Credit 8.32). */
+export type ExportKind = "revenue" | "cash" | "stock" | "credit";
+export const EXPORTS = [
+  "revenue",
+  "cash",
+  "stock",
+  "credit",
+] as const satisfies readonly ExportKind[];
 
 /** The export path of `kind`: one branch by id, several through `all` narrowed to the pick. */
 export function exportPath(kind: ExportKind, picked: OwnerBranch[], from: string, to: string) {

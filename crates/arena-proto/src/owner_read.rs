@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::rollup::{
-    RollupAmount, RollupRevenue, RollupSessions, RollupShift, RollupStockLevel, RollupV1,
+    RollupAged, RollupAmount, RollupCreditPlayer, RollupRevenue, RollupSessions, RollupShift,
+    RollupStockLevel, RollupV1,
 };
 use crate::summary::BranchSummary;
 
@@ -311,6 +312,32 @@ impl OwnerRangeStock {
     }
 }
 
+/// The credit owed at a branch (Story 8.32), from the newest accepted rollup of a range: what is
+/// outstanding by the age of each player's oldest unpaid spend and the players who owe it. A player
+/// is told apart by id and username only; the rollup carries no phone, name or email.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OwnerRangeCredit {
+    /// The business day of the rollup the figures come from; null when no day was accepted.
+    pub as_of: Option<String>,
+    #[ts(type = "number")]
+    pub outstanding: i64,
+    pub aged: RollupAged,
+    pub players: Vec<RollupCreditPlayer>,
+}
+
+impl OwnerRangeCredit {
+    /// Takes the credit of the newest of a range's accepted rollups, oldest day first.
+    pub fn from_rollups(days: &[&RollupV1]) -> Self {
+        days.last().map_or_else(Self::default, |newest| Self {
+            as_of: Some(newest.business_day.clone()),
+            outstanding: newest.credit.outstanding,
+            aged: newest.credit.aged.clone(),
+            players: newest.credit.players.clone(),
+        })
+    }
+}
+
 /// `GET /v1/branches/{id}/summary`: one branch over `from`..`to`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
@@ -328,6 +355,8 @@ pub struct OwnerRange {
     pub shifts: Vec<OwnerRangeShift>,
     /// Stock levels, waste and expiring lots from the accepted days (Story 8.16).
     pub stock: OwnerRangeStock,
+    /// Credit owed, aged, from the newest accepted day (Story 8.32).
+    pub credit: OwnerRangeCredit,
 }
 
 /// The branches of one currency over a range, added up.
@@ -607,6 +636,61 @@ mod tests {
             OwnerRangeStock::from_rollups(&[]),
             OwnerRangeStock::default()
         );
+    }
+
+    #[test]
+    fn range_credit_is_the_newest_days_list_and_empty_without_a_day() {
+        use crate::rollup::RollupCredit;
+        let day = |date: &str, owed: i64, ids: &[&str]| RollupV1 {
+            schema: 1,
+            branch_id: "b".into(),
+            business_day: date.into(),
+            currency: "INR".into(),
+            revenue: RollupRevenue::default(),
+            refunds: RollupAmount::default(),
+            discounts: RollupAmount::default(),
+            voids: RollupAmount::default(),
+            sessions: RollupSessions::default(),
+            shifts: Vec::new(),
+            stock: Default::default(),
+            credit: RollupCredit {
+                outstanding: owed,
+                aged: RollupAged {
+                    d0_7: owed - 100,
+                    d8_14: 60,
+                    d15p: 40,
+                },
+                players: ids
+                    .iter()
+                    .map(|id| RollupCreditPlayer {
+                        player_id: (*id).into(),
+                        username: format!("user-{id}"),
+                        outstanding: owed,
+                        oldest_unpaid_on: "2026-10-01".into(),
+                        consent: *id == "P1",
+                    })
+                    .collect(),
+            },
+            play_hours: Vec::new(),
+        };
+        let (a, b) = (
+            day("2026-10-28", 900, &["P9"]),
+            day("2026-10-29", 700, &["P1", "P2"]),
+        );
+        let c = OwnerRangeCredit::from_rollups(&[&a, &b]);
+        assert_eq!(c.as_of.as_deref(), Some("2026-10-29"));
+        assert_eq!(
+            (c.outstanding, c.aged.d0_7, c.aged.d8_14, c.aged.d15p),
+            (700, 600, 60, 40)
+        );
+        let ids: Vec<_> = c.players.iter().map(|p| p.player_id.as_str()).collect();
+        assert_eq!(ids, ["P1", "P2"]);
+        assert!(c.players[0].consent && !c.players[1].consent);
+        assert_eq!(
+            OwnerRangeCredit::from_rollups(&[]),
+            OwnerRangeCredit::default()
+        );
+        assert_eq!(OwnerRangeCredit::default().as_of, None);
     }
 
     #[test]

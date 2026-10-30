@@ -23,6 +23,7 @@
     revenue: { title: "owner.reports.tab.revenue", note: "owner.reports.exports.revenue" },
     cash: { title: "owner.reports.tab.cash", note: "owner.reports.exports.cash" },
     stock: { title: "owner.reports.tab.stock", note: "owner.reports.exports.stock" },
+    credit: { title: "owner.reports.tab.credit", note: "owner.reports.exports.credit" },
   };
 </script>
 

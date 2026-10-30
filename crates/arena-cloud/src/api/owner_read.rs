@@ -16,8 +16,8 @@ use std::sync::Arc;
 use arena_proto::{
     AppError, BRANCH_ONLINE_WINDOW_MS, DataAgeReport, ErrorCode, ExportReport, GroupBy,
     OWNER_ALL_BRANCHES, OWNER_API_LIMIT_PER_MIN, OWNER_RANGE_MAX_DAYS, OwnerLive, OwnerLiveAll,
-    OwnerRange, OwnerRangeAll, OwnerRangeRow, OwnerRangeShift, OwnerRangeStock, OwnerRangeTotals,
-    Tier, dates_between, is_rollup_date, owner_csv,
+    OwnerRange, OwnerRangeAll, OwnerRangeCredit, OwnerRangeRow, OwnerRangeShift, OwnerRangeStock,
+    OwnerRangeTotals, Tier, dates_between, is_rollup_date, owner_csv,
 };
 use arena_store::control::{Branch, RateRule};
 use axum::extract::rejection::QueryRejection;
@@ -282,6 +282,7 @@ async fn range_of(
         missing_days,
         shifts,
         stock: OwnerRangeStock::from_rollups(&accepted),
+        credit: OwnerRangeCredit::from_rollups(&accepted),
     })
 }
 
@@ -306,7 +307,7 @@ async fn summary(
     })
 }
 
-/// `GET /v1/branches/{id}/export?from=&to=&report=revenue|cash|stock` (Story 8.17): the CSV of a
+/// `GET /v1/branches/{id}/export?from=&to=&report=revenue|cash|stock|credit` (Story 8.17, 8.32): the CSV of a
 /// report over a range, built from the same rollups and sums as `summary`, one row per day per
 /// branch. `all` in place of the id exports every paid branch.
 async fn export(
@@ -322,8 +323,8 @@ async fn export(
         ),
         Err(_) => (None, None),
     };
-    let report =
-        report.ok_or_else(|| ApiError::validation("report", "Choose revenue, cash or stock."))?;
+    let report = report
+        .ok_or_else(|| ApiError::validation("report", "Choose revenue, cash, stock or credit."))?;
     // One row per day, whatever `group_by` the caller sent.
     let range = Range {
         group_by: GroupBy::Day,

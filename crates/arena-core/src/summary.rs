@@ -124,6 +124,7 @@ pub fn build_summary(store: &Store, now_ms: i64) -> Result<Option<BranchSummary>
         });
     }
     attention.truncate(SUMMARY_LIST_CAP);
+    let reminded_today = store.credit_reminded_on(&business_day)?;
 
     Ok(Some(BranchSummary {
         schema: SUMMARY_SCHEMA,
@@ -139,5 +140,6 @@ pub fn build_summary(store: &Store, now_ms: i64) -> Result<Option<BranchSummary>
         staff_on_shift,
         attention,
         catalogue: store.summary_catalogue()?,
+        reminded_today,
     }))
 }

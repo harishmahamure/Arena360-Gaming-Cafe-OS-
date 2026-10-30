@@ -65,7 +65,7 @@ const fn reserved(kind: &'static str) -> OwnerCommandKind {
     }
 }
 
-pub const OWNER_COMMAND_KINDS: [OwnerCommandKind; 15] = [
+pub const OWNER_COMMAND_KINDS: [OwnerCommandKind; 16] = [
     handled("rate.upsert"),
     handled("plan.upsert"),
     handled("rule.upsert"),
@@ -79,6 +79,7 @@ pub const OWNER_COMMAND_KINDS: [OwnerCommandKind; 15] = [
     handled("group.upsert"),
     handled("device.assign"),
     sensitive("device.revoke"),
+    handled("credit.remind"),
     reserved("hub.revoke"),
     reserved("backup.restore"),
 ];
@@ -127,6 +128,16 @@ pub const DEVICE_REVOKE_REASONS: [ReasonCode; 4] = [
 pub struct OwnerDeviceRevoke {
     pub device_id: String,
     pub reason: ReasonCode,
+}
+
+/// The payload of an owner `credit.remind` (Story 8.32): the player to remind of what they owe. The
+/// Hub turns it into a `notify.requested` of kind `credit_reminder` and puts what the player owes in
+/// the message itself, so the amount is never sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct CreditRemind {
+    pub player_id: String,
 }
 
 /// One setup code the cloud issued for a new staff member of a branch. It is shown to the owner
@@ -192,6 +203,8 @@ pub fn validate_owner_payload(kind: &str, payload: &serde_json::Value) -> Result
         "staff.deactivate" => parses::<StaffDeactivate>(&fields),
         "group.upsert" => parses::<GroupUpsert>(&fields),
         "device.assign" => parses::<DeviceAssign>(&fields),
+        "credit.remind" => serde_json::from_value::<CreditRemind>(fields)
+            .is_ok_and(|c| !c.player_id.trim().is_empty()),
         "device.revoke" => serde_json::from_value::<OwnerDeviceRevoke>(fields)
             .is_ok_and(|d| DEVICE_REVOKE_REASONS.contains(&d.reason)),
         "role.upsert" => match serde_json::from_value::<RoleUpsert>(fields) {
@@ -526,6 +539,28 @@ mod tests {
         let mut extra = revoke("lost");
         extra["x"] = 1.into();
         assert!(validate_owner_payload("device.revoke", &extra).is_err());
+    }
+
+    #[test]
+    fn a_credit_reminder_is_a_plain_handled_kind_that_names_only_the_player() {
+        let kind = accepted_owner_kind("credit.remind").unwrap();
+        assert!(!kind.sensitive && kind.handled);
+        assert_eq!(kind.min_tier, Tier::Basic);
+        assert_eq!(OWNER_COMMAND_KINDS.len(), 16);
+        assert!(validate_owner_payload("credit.remind", &json!({"player_id": "P1"})).is_ok());
+        for bad in [
+            json!({}),
+            json!({"player_id": ""}),
+            json!({"player_id": " "}),
+            json!({"player_id": 5}),
+            json!({"player_id": "P1", "phone": "+919876543210"}),
+            json!({"player_id": "P1", "amount_minor": "5"}),
+        ] {
+            assert!(
+                validate_owner_payload("credit.remind", &bad).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

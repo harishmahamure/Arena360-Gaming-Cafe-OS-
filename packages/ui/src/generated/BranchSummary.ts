@@ -32,4 +32,9 @@ export type BranchSummary = {
   staff_on_shift: Array<string>;
   attention: Array<SummaryAttention>;
   catalogue: SummaryCatalogue;
+  /**
+   * Ids of the players with a credit reminder for the current business day in state `queued` or
+   * `sent`, automatic or by the owner (Story 8.32). Additive: an older Hub's file lacks it.
+   */
+  reminded_today?: Array<string>;
 };

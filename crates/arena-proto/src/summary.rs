@@ -160,6 +160,11 @@ pub struct BranchSummary {
     pub staff_on_shift: Vec<String>,
     pub attention: Vec<SummaryAttention>,
     pub catalogue: SummaryCatalogue,
+    /// Ids of the players with a credit reminder for the current business day in state `queued` or
+    /// `sent`, automatic or by the owner (Story 8.32). Additive: an older Hub's file lacks it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional, as = "Option<Vec<String>>")]
+    pub reminded_today: Vec<String>,
 }
 
 /// The payload of `summary.publish` (system only): the summary was PUT to the cloud. Writes the

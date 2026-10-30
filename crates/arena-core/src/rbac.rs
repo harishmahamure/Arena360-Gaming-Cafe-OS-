@@ -275,6 +275,14 @@ pub fn check(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
                         &intent.payload,
                         arena_proto::IntentPayload::BranchBootstrap(b) if b.onboarding.is_some()
                     ))
+                // The owner's one-tap credit reminder (Story 8.32): the only `notify.requested`
+                // an owner may submit; every other kind stays system-only.
+                || (actor.kind == ActorKind::Owner
+                    && matches!(
+                        &intent.payload,
+                        arena_proto::IntentPayload::NotifyRequested(n)
+                            if n.kind == arena_proto::NOTIFY_KIND_CREDIT_REMINDER
+                    ))
         }
         Requirement::Device => {
             actor.kind == ActorKind::Device

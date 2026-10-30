@@ -148,6 +148,7 @@ const KINDS: Record<string, { label: MessageKey; catalogue?: (keyof SummaryCatal
   "device.assign": { label: "owner.cmd.kind.assign" },
   "device.revoke": { label: "owner.cmd.kind.revoke" },
   "backup.now": { label: "owner.cmd.kind.backup" },
+  "credit.remind": { label: "owner.cmd.kind.credit_remind" },
 };
 
 /** What a command changes: its kind and, when the payload names the thing, the name. */
@@ -435,6 +436,32 @@ export async function confirm() {
   cmd.sending = false;
   cmd.sent++;
   cancel();
+}
+
+/**
+ * Sends a change at once, with no preview (a one-tap action such as a credit reminder): one post to
+ * one branch with a fresh key. With no signal it waits on this device like any other change.
+ * `"declined"` means the owner cancelled a code prompt.
+ */
+export async function sendNow(
+  branchId: string,
+  kind: string,
+  payload: Record<string, unknown>,
+): Promise<"sent" | "queued" | "failed" | "declined"> {
+  const key = ulid();
+  const res = await post({ branch_id: branchId, idempotency_key: key, kind, payload });
+  if (res === "declined") return "declined";
+  if (!res.ok) {
+    if (res.code !== "OFFLINE") return "failed";
+    await enqueue({ key, branch_id: branchId, kind, payload });
+    cmd.sent++;
+    void drainQueue();
+    return "queued";
+  }
+  cmd.rows = merge(cmd.rows, res.data.commands);
+  cmd.loaded = true;
+  cmd.sent++;
+  return "sent";
 }
 
 /**

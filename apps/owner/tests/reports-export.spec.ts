@@ -36,7 +36,7 @@ test("Export → CSV downloads each report of the picked range and branch from t
   const calls = await stubCloud(page, ONE, { range: { b1: REVENUE } });
   await page.goto("/reports");
   await customRange(page, "2026-10-20", "2026-10-27");
-  for (const tab of ["revenue", "cash", "stock"] as const) {
+  for (const tab of ["revenue", "cash", "stock", "credit"] as const) {
     await page.getByRole("tab", { name: t(`owner.reports.tab.${tab}`) }).click();
     const download = page.waitForEvent("download");
     await csvButton(page).click();
@@ -44,7 +44,7 @@ test("Export → CSV downloads each report of the picked range and branch from t
     expect(file.suggestedFilename()).toBe(`arena360-${tab}-2026-10-20-to-2026-10-27.csv`);
   }
   expect(calls.exports).toEqual(
-    ["revenue", "cash", "stock"].map(
+    ["revenue", "cash", "stock", "credit"].map(
       (r) => `/v1/branches/b1/export?from=2026-10-20&to=2026-10-27&report=${r}`,
     ),
   );
@@ -123,10 +123,11 @@ test("Reports → Exports lists the exports of the current range in one place", 
     ),
   ).toBeVisible();
   const items = panel.getByRole("listitem");
-  await expect(items).toHaveCount(3);
+  await expect(items).toHaveCount(4);
   await expect(items.nth(0)).toContainText(t("owner.reports.tab.revenue"));
   await expect(items.nth(1)).toContainText(t("owner.reports.tab.cash"));
   await expect(items.nth(2)).toContainText(t("owner.reports.tab.stock"));
+  await expect(items.nth(3)).toContainText(t("owner.reports.tab.credit"));
 
   const download = page.waitForEvent("download");
   await items
@@ -135,6 +136,15 @@ test("Reports → Exports lists the exports of the current range in one place", 
     .click();
   expect((await download).suggestedFilename()).toBe("arena360-cash-2026-10-20-to-2026-10-27.csv");
   expect(calls.exports.at(-1)).toContain("report=cash");
+
+  // Credit is exported from the same list.
+  const credit = page.waitForEvent("download");
+  await items
+    .nth(3)
+    .getByRole("button", { name: t("owner.reports.export.csv") })
+    .click();
+  expect((await credit).suggestedFilename()).toBe("arena360-credit-2026-10-20-to-2026-10-27.csv");
+  expect(calls.exports.at(-1)).toContain("report=credit");
 
   // PDF opens that report for printing.
   await items
@@ -156,7 +166,7 @@ for (const theme of ["light", "dark", "hc"] as const) {
     await page.addInitScript((v) => localStorage.setItem("arena.theme", v), theme);
     await page.goto("/reports");
     await page.getByRole("tab", { name: t("owner.reports.tab.exports") }).click();
-    await expect(page.getByRole("tabpanel").getByRole("listitem")).toHaveCount(3);
+    await expect(page.getByRole("tabpanel").getByRole("listitem")).toHaveCount(4);
     await page.evaluate(() => document.fonts.ready);
     expect(
       await page.evaluate(

@@ -230,6 +230,21 @@ pub fn credit_reminder_exists(
     .map_err(db_error)
 }
 
+/// The players with a credit reminder for the business day `day` that is `queued` or `sent`, by id.
+pub fn credit_reminded_on(conn: &Connection, day: &str) -> Result<Vec<String>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT DISTINCT player_id FROM notify_outbox
+             WHERE kind = 'credit_reminder' AND reminder_day = ?1 AND state IN ('queued', 'sent')
+             ORDER BY player_id",
+        )
+        .map_err(db_error)?;
+    stmt.query_map([day], |r| r.get(0))
+        .map_err(db_error)?
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(db_error)
+}
+
 /// The business day of the latest credit reminder of `player_id` the cloud sent.
 pub fn last_credit_reminder_sent(
     conn: &Connection,
@@ -453,6 +468,24 @@ mod tests {
             insert_notify(&conn, &credit("N3", "P1", None)).is_err(),
             "a credit reminder without a day is not a row"
         );
+
+        // Only a queued or sent reminder counts as "reminded today".
+        // N1 was skipped on 2027-01-18, so nobody is reminded that day yet.
+        assert!(credit_reminded_on(&conn, "2027-01-18").unwrap().is_empty());
+        insert_notify(&conn, &credit("N6", "P2", Some("2027-01-18"))).unwrap();
+        insert_notify(&conn, &credit("N7", "P3", Some("2027-01-18"))).unwrap();
+        insert_notify(&conn, &credit("N8", "P4", Some("2027-01-18"))).unwrap();
+        assert_eq!(
+            credit_reminded_on(&conn, "2027-01-18").unwrap(),
+            ["P2", "P3", "P4"]
+        );
+        finish_notify(&conn, "N7", "sent", Some("sms"), None, None).unwrap();
+        finish_notify(&conn, "N8", "failed", None, Some("X"), None).unwrap();
+        assert_eq!(
+            credit_reminded_on(&conn, "2027-01-18").unwrap(),
+            ["P2", "P3"]
+        );
+        assert!(credit_reminded_on(&conn, "2027-01-19").unwrap().is_empty());
 
         // Only a reminder that was sent is "the last reminder", by its day.
         assert_eq!(last_credit_reminder_sent(&conn, "P1").unwrap(), None);

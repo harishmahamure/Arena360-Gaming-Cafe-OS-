@@ -348,6 +348,7 @@ impl Harness {
             staff_on_shift: vec!["Asha".into()],
             attention: vec![],
             catalogue: SummaryCatalogue::default(),
+            reminded_today: Vec::new(),
         };
         self.keys
             .put(
@@ -399,6 +400,31 @@ impl Harness {
         shifts: Vec<RollupShift>,
         stock: RollupStock,
     ) {
+        self.put_rollup_credit(
+            c,
+            date,
+            schema,
+            total,
+            currency,
+            shifts,
+            stock,
+            RollupCredit::default(),
+        )
+        .await;
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn put_rollup_credit(
+        &self,
+        c: &Cafe,
+        date: &str,
+        schema: u32,
+        total: i64,
+        currency: &str,
+        shifts: Vec<RollupShift>,
+        stock: RollupStock,
+        credit: RollupCredit,
+    ) {
         let r = RollupV1 {
             schema,
             branch_id: c.branch.clone(),
@@ -427,7 +453,7 @@ impl Harness {
             },
             shifts,
             stock,
-            credit: RollupCredit::default(),
+            credit,
             play_hours: vec![],
         };
         self.keys
@@ -793,6 +819,95 @@ async fn a_range_carries_the_newest_levels_expiring_lots_and_the_waste_of_every_
         .await;
     assert_eq!(r.body["stock"]["levels_as_of"], Value::Null);
     assert_eq!(r.body["stock"]["levels"], json!([]));
+}
+
+#[tokio::test]
+async fn the_range_carries_the_credit_of_the_newest_accepted_day_without_contact_details() {
+    use arena_proto::{RollupAged, RollupCreditPlayer};
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    let credit = |owed: i64, ids: &[&str]| RollupCredit {
+        outstanding: owed,
+        aged: RollupAged {
+            d0_7: owed - 500,
+            d8_14: 300,
+            d15p: 200,
+        },
+        players: ids
+            .iter()
+            .map(|id| RollupCreditPlayer {
+                player_id: (*id).into(),
+                username: format!("user-{id}"),
+                outstanding: owed,
+                oldest_unpaid_on: "2026-10-10".into(),
+                consent: *id == "P1",
+            })
+            .collect(),
+    };
+    for (date, schema, owed, ids) in [
+        ("2026-10-26", 1, 3_000, vec!["P9"]),
+        ("2026-10-27", 1, 2_000, vec!["P1", "P2"]),
+        // A day at a schema the cloud does not read never supplies the figures.
+        ("2026-10-28", 7, 9_000, vec!["P7"]),
+    ] {
+        h.put_rollup_credit(
+            &a,
+            date,
+            schema,
+            1_000,
+            "INR",
+            vec![],
+            RollupStock::default(),
+            credit(owed, &ids),
+        )
+        .await;
+    }
+    let r = h
+        .get(&a, &summary(&a, "from=2026-10-26&to=2026-10-28"))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let c = &r.body["credit"];
+    assert_eq!(c["as_of"], "2026-10-27");
+    assert_eq!(c["outstanding"], 2_000);
+    assert_eq!(c["aged"], json!({"d0_7": 1_500, "d8_14": 300, "d15p": 200}));
+    assert_eq!(c["players"].as_array().unwrap().len(), 2);
+    assert_eq!(c["players"][0]["player_id"], "P1");
+    assert_eq!(c["players"][0]["username"], "user-P1");
+    assert_eq!(c["players"][0]["consent"], true);
+    assert_eq!(c["players"][1]["consent"], false);
+    let text = c.to_string();
+    for banned in ["phone", "email", "\"name\""] {
+        assert!(!text.contains(banned), "{banned} in {text}");
+    }
+
+    // No accepted day: no date and no one.
+    let r = h
+        .get(&a, &summary(&a, "from=2026-10-29&to=2026-10-29"))
+        .await;
+    assert_eq!(r.body["credit"]["as_of"], Value::Null);
+    assert_eq!(r.body["credit"]["players"], json!([]));
+
+    // The credit export lists one row per player, built from the same rollup.
+    let (status, headers, csv) = h
+        .get_raw(
+            &a,
+            &export(&a, "from=2026-10-26&to=2026-10-28&report=credit"),
+        )
+        .await;
+    assert_eq!(status, 200, "{csv}");
+    assert_eq!(
+        headers["content-disposition"],
+        "attachment; filename=\"arena360-credit-2026-10-26-to-2026-10-28.csv\""
+    );
+    let lines: Vec<&str> = csv.trim_start_matches('﻿').lines().collect();
+    assert_eq!(lines[0], "Report,Credit");
+    assert!(lines[5].starts_with("Branch,Currency,Player id,Username,Outstanding"));
+    assert!(
+        lines[6].contains(",P1,user-P1,20.00,15+ days,2026-10-10,2026-10-27"),
+        "{csv}"
+    );
+    assert!(lines[7].contains(",P2,user-P2,"), "{csv}");
+    assert_eq!(lines.len(), 8, "{csv}");
 }
 
 #[tokio::test]

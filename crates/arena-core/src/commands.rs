@@ -1,7 +1,7 @@
 use arena_proto::{
     Actor, ActorKind, AppError, COMMAND_SCHEMA_VERSION, CommandWire, ElevatedBy, ElevationKind,
-    ElevationMode, ErrorCode, Intent, IntentPayload, KEY_SETUP_LIVE, ReasonCode,
-    SETTINGS_COMMAND_KEYS,
+    ElevationMode, ErrorCode, Intent, IntentPayload, KEY_SETUP_LIVE, NOTIFY_KIND_CREDIT_REMINDER,
+    NotifyRequested, ReasonCode, SETTINGS_COMMAND_KEYS,
 };
 
 use arena_store::{
@@ -19,10 +19,14 @@ const IMAGE_KEEP: &str = "keep";
 /// The command kind that runs outside `apply()`: an upload and summary cycle (Story 8.19).
 pub const BACKUP_NOW: &str = "backup.now";
 
+/// The command kind that asks for a credit reminder to a player (Story 8.32).
+pub const CREDIT_REMIND: &str = "credit.remind";
+
 /// Every command kind this Hub runs, at [`COMMAND_SCHEMA_VERSION`]: the setup kinds (Story 2.15)
-/// the owner kinds (Story 8.19) and the device revoke (Story 8.27). `arena_proto::OWNER_COMMAND_KINDS` lists the same owner kinds
-/// as handled; a test keeps the two in agreement.
-pub const HANDLED_COMMAND_KINDS: [&str; 17] = [
+/// the owner kinds (Story 8.19), the device revoke (Story 8.27) and the credit reminder (Story
+/// 8.32). `arena_proto::OWNER_COMMAND_KINDS` lists the same owner kinds as handled; a test keeps the
+/// two in agreement.
+pub const HANDLED_COMMAND_KINDS: [&str; 18] = [
     "group.upsert",
     "device.assign",
     "device.register",
@@ -39,6 +43,7 @@ pub const HANDLED_COMMAND_KINDS: [&str; 17] = [
     "staff.deactivate",
     "role.upsert",
     "device.revoke",
+    CREDIT_REMIND,
     BACKUP_NOW,
 ];
 
@@ -98,6 +103,9 @@ pub fn command_intent(cmd: &CommandWire, now: i64) -> Result<Intent, AppError> {
             "the payload must be an object",
         ));
     };
+    if cmd.kind == CREDIT_REMIND {
+        return credit_remind_intent(cmd, fields, now);
+    }
     let mut fields = fields.clone();
     let base_rev = match fields.remove("base_rev") {
         None | Some(serde_json::Value::Null) => None,
@@ -175,6 +183,50 @@ pub fn command_intent(cmd: &CommandWire, now: i64) -> Result<Intent, AppError> {
             verifier_version: 0,
         }),
         reason,
+        payload,
+    })
+}
+
+/// An owner `credit.remind`: the Hub's own `notify.requested` of kind `credit_reminder` for the
+/// player, issued by the owner. The command carries only the player; the placeholder
+/// `amount_minor` satisfies the request's parameter check and `notify_request::mutate` replaces it
+/// with what the player owes when the row is queued. A `base_rev` is ignored: nothing is versioned.
+fn credit_remind_intent(
+    cmd: &CommandWire,
+    fields: &serde_json::Map<String, serde_json::Value>,
+    now: i64,
+) -> Result<Intent, AppError> {
+    let player_id = match (
+        fields.get("player_id"),
+        fields.keys().all(|k| k == "player_id" || k == "base_rev"),
+    ) {
+        (Some(serde_json::Value::String(id)), true) if !id.trim().is_empty() => id.clone(),
+        _ => {
+            return Err(refused(
+                ErrorCode::ValidationFailed,
+                "player_id",
+                "credit.remind takes one player",
+            ));
+        }
+    };
+    let payload = IntentPayload::NotifyRequested(NotifyRequested {
+        kind: NOTIFY_KIND_CREDIT_REMINDER.to_owned(),
+        player_id,
+        session_id: None,
+        params: std::collections::BTreeMap::from([("amount_minor".to_owned(), "0".to_owned())]),
+    });
+    Ok(Intent {
+        intent_id: ulid::Ulid::generate().to_string(),
+        kind: payload.kind(),
+        idempotency_key: cmd.idempotency_key.clone(),
+        issued_at: now,
+        base_rev: None,
+        actor: Actor {
+            kind: ActorKind::Owner,
+            id: cmd.issued_by.clone(),
+        },
+        elevated_by: None,
+        reason: None,
         payload,
     })
 }
@@ -368,6 +420,35 @@ mod tests {
             command_intent(&cmd("rate.upsert", json!({"group_id": "g"})), 1)
                 .is_err_and(|e| e.code == ErrorCode::ValidationFailed)
         );
+    }
+
+    #[test]
+    fn a_credit_remind_becomes_an_owner_credit_reminder_request() {
+        let mut c = cmd("credit.remind", json!({"player_id": "P1", "base_rev": 4}));
+        c.elevated_by = None;
+        let i = command_intent(&c, 9).unwrap();
+        assert_eq!(i.kind, arena_proto::IntentKind::NotifyRequested);
+        assert_eq!(
+            (i.actor.kind, i.base_rev, i.issued_at),
+            (ActorKind::Owner, None, 9)
+        );
+        assert_eq!(i.idempotency_key, c.idempotency_key);
+        let IntentPayload::NotifyRequested(n) = i.payload else {
+            panic!("not a notify.requested")
+        };
+        assert_eq!(n.kind, "credit_reminder");
+        assert_eq!((n.player_id.as_str(), n.session_id), ("P1", None));
+        assert_eq!(n.params.get("amount_minor").map(String::as_str), Some("0"));
+        for bad in [
+            json!({}),
+            json!({"player_id": ""}),
+            json!({"player_id": 3}),
+            json!({"player_id": "P1", "phone": "+91"}),
+            json!([1]),
+        ] {
+            let e = command_intent(&cmd("credit.remind", bad), 9).unwrap_err();
+            assert_eq!(e.code, ErrorCode::ValidationFailed);
+        }
     }
 
     #[test]

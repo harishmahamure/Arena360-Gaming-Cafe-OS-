@@ -418,6 +418,34 @@ async fn base_rev_rides_in_the_stored_payload() {
 }
 
 #[tokio::test]
+async fn a_credit_reminder_names_only_the_player_and_needs_no_step_up() {
+    let h = Harness::new().await;
+    let a = h.paid_cafe().await;
+    let r = h
+        .send(
+            &a,
+            post(&a.branch, K1, "credit.remind", json!({"player_id": "P1"})),
+        )
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["commands"][0]["kind"], "credit.remind");
+    assert_eq!(r.body["commands"][0]["status"], "pending");
+    assert_eq!(r.body["commands"][0]["payload"], json!({"player_id": "P1"}));
+    for bad in [
+        json!({}),
+        json!({"player_id": ""}),
+        json!({"player_id": "P1", "phone": "+919876543210"}),
+        json!({"player_id": "P1", "amount_minor": "5"}),
+    ] {
+        let r = h
+            .send(&a, post(&a.branch, K2, "credit.remind", bad.clone()))
+            .await;
+        assert_eq!((r.status, r.code()), (422, "VALIDATION_FAILED"), "{bad}");
+    }
+    assert_eq!(h.rows(), 1);
+}
+
+#[tokio::test]
 async fn kinds_outside_the_catalogue_or_reserved_are_unsupported() {
     let h = Harness::new().await;
     let a = h.paid_cafe().await;

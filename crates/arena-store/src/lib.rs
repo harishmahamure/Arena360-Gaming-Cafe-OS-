@@ -156,9 +156,10 @@ pub use library_installs::{
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
 pub use notify::{
-    NewNotify, NotifyRow, credit_reminder_exists, find_notify, finish_notify, insert_notify,
-    last_credit_reminder_sent, latest_low_balance, latest_receipt_state, list_due_notify,
-    order_player_id, queued_notify_ids, rearm_notify, session_notice_exists, skip_notify,
+    NewNotify, NotifyRow, credit_reminded_on, credit_reminder_exists, find_notify, finish_notify,
+    insert_notify, last_credit_reminder_sent, latest_low_balance, latest_receipt_state,
+    list_due_notify, order_player_id, queued_notify_ids, rearm_notify, session_notice_exists,
+    skip_notify,
 };
 pub use outbox::{
     KIND_DRAWER, KIND_KOT, KIND_PRINT, OutboxRow, ReceiptHead, ReceiptLineRow, ReceiptPaymentRow,
@@ -1397,6 +1398,14 @@ impl Store {
             return Ok(false);
         }
         credit_reminder_exists(&self.conn, player_id, day)
+    }
+
+    /// The players with a credit reminder queued or sent for the business day (Story 8.32).
+    pub fn credit_reminded_on(&self, day: &str) -> Result<Vec<String>, AppError> {
+        if !self.table_exists("notify_outbox")? {
+            return Ok(Vec::new());
+        }
+        credit_reminded_on(&self.conn, day)
     }
 
     /// The business day of the player's latest credit reminder that was sent (Story 8.31).

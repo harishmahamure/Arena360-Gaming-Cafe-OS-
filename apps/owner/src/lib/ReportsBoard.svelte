@@ -3,12 +3,14 @@
   import type { MessageKey } from "@arena/ui/messages";
   import { onMount, tick } from "svelte";
   import CashPanel from "./CashPanel.svelte";
+  import CreditPanel from "./CreditPanel.svelte";
   import ExportsPanel from "./ExportsPanel.svelte";
   import RevenuePanel from "./RevenuePanel.svelte";
   import SetupGate from "./SetupGate.svelte";
   import StockPanel from "./StockPanel.svelte";
   import {
     byCurrency,
+    creditViews,
     dateIn,
     downloadCsv,
     loadLevels,
@@ -34,6 +36,7 @@
     { id: "revenue", label: "owner.reports.tab.revenue" },
     { id: "cash", label: "owner.reports.tab.cash" },
     { id: "stock", label: "owner.reports.tab.stock" },
+    { id: "credit", label: "owner.reports.tab.credit" },
     { id: "exports", label: "owner.reports.tab.exports" },
   ] as const satisfies readonly { id: string; label: MessageKey }[];
   const ALL = "all";
@@ -70,14 +73,17 @@
   const views = $derived(byCurrency(report, range.from, range.to));
   const shifts = $derived(shiftsOf(report));
   const stock = $derived(stockViews(report, windows, today));
+  const credit = $derived(creditViews(report, windows));
+  // Stock and Credit also read the newest rollup of the last week (see `loadLevels`).
+  const weekly = $derived(tab === "stock" || tab === "credit");
   const asOf = $derived(
-    [...report.map((r) => r.asOf), ...(tab === "stock" ? windows.map((w) => w.asOf) : [])]
+    [...report.map((r) => r.asOf), ...(weekly ? windows.map((w) => w.asOf) : [])]
       .filter(Boolean)
       .sort()[0] ?? "",
   );
   const stale = $derived(
     report.length > 0 &&
-      (report.some((r) => !r.fresh) || (tab === "stock" && windows.some((w) => !w.fresh))),
+      (report.some((r) => !r.fresh) || (weekly && windows.some((w) => !w.fresh))),
   );
 
   async function run() {
@@ -101,7 +107,7 @@
     loaded = true;
   }
 
-  // The stock tab also reads the newest levels of the last week, once per branch pick.
+  // The stock and credit tabs also read the newest rollup of the last week, once per branch pick.
   async function runLevels() {
     const mine = ++windowTicket;
     if (!picked.length) return;
@@ -124,7 +130,7 @@
   $effect(() => {
     void [picked.map((b) => b.id).join(), today];
     windowsLoaded = false;
-    if (tab === "stock") void runLevels();
+    if (tab === "stock" || tab === "credit") void runLevels();
   });
 
   // Choosing Custom starts from this week, so both dates always hold something.
@@ -154,7 +160,11 @@
     printing = true;
     tab = kind;
     await tick();
-    for (let i = 0; i < 100 && (loading || (kind === "stock" && !windowsLoaded)); i++) {
+    for (
+      let i = 0;
+      i < 100 && (loading || ((kind === "stock" || kind === "credit") && !windowsLoaded));
+      i++
+    ) {
       await new Promise((r) => setTimeout(r, 100));
     }
     now = Date.now();
@@ -277,6 +287,12 @@
     {:else if tab === "stock"}
       {#if windowsLoaded}
         <StockPanel views={stock} many={picked.length > 1} />
+      {:else}
+        <p>{t("owner.loading")}</p>
+      {/if}
+    {:else if tab === "credit"}
+      {#if windowsLoaded}
+        <CreditPanel branches={credit} many={picked.length > 1} {now} />
       {:else}
         <p>{t("owner.loading")}</p>
       {/if}

@@ -1,12 +1,12 @@
-//! Owner report exports (Story 8.17): the CSV the cloud streams for Revenue, Cash reconciliation
-//! and Stock. It is built from the same [`OwnerRange`] answers the Reports screen shows, so a
+//! Owner report exports (Story 8.17): the CSV the cloud streams for Revenue, Cash reconciliation,
+//! Stock and Credit (Story 8.32). It is built from the same [`OwnerRange`] answers the Reports screen shows, so a
 //! download can never disagree with the screen. Amounts are in major units with the currency code
 //! beside them.
 
 use std::collections::BTreeMap;
 
 use crate::currency::currency;
-use crate::owner_read::{OwnerRange, date_from_days};
+use crate::owner_read::{OwnerRange, date_from_days, days_from_date};
 
 /// Which report a CSV holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,6 +14,7 @@ pub enum ExportReport {
     Revenue,
     Cash,
     Stock,
+    Credit,
 }
 
 impl ExportReport {
@@ -22,6 +23,7 @@ impl ExportReport {
             "revenue" => Some(Self::Revenue),
             "cash" => Some(Self::Cash),
             "stock" => Some(Self::Stock),
+            "credit" => Some(Self::Credit),
             _ => None,
         }
     }
@@ -31,6 +33,7 @@ impl ExportReport {
             Self::Revenue => "revenue",
             Self::Cash => "cash",
             Self::Stock => "stock",
+            Self::Credit => "credit",
         }
     }
 
@@ -39,6 +42,7 @@ impl ExportReport {
             Self::Revenue => "Revenue",
             Self::Cash => "Cash reconciliation",
             Self::Stock => "Stock",
+            Self::Credit => "Credit",
         }
     }
 }
@@ -117,6 +121,7 @@ pub fn owner_csv(
         ExportReport::Revenue => revenue(&mut out, branches),
         ExportReport::Cash => cash(&mut out, branches),
         ExportReport::Stock => stock(&mut out, branches),
+        ExportReport::Credit => credit(&mut out, branches),
     }
     out
 }
@@ -329,6 +334,53 @@ fn stock(out: &mut String, branches: &[(String, OwnerRange)]) {
     }
 }
 
+/// The aging bucket of a player whose oldest unpaid spend is `oldest`, as of the rollup day `as_of`
+/// (the Hub's own buckets: 0-7, 8-14 and 15+ days). Empty when a date is missing.
+fn aging_bucket(as_of: &str, oldest: &str) -> &'static str {
+    match (days_from_date(as_of), days_from_date(oldest)) {
+        (Some(now), Some(then)) => match now - then {
+            ..=7 => "0-7 days",
+            8..=14 => "8-14 days",
+            _ => "15+ days",
+        },
+        _ => "",
+    }
+}
+
+/// Credit: one row per player per branch, from the newest rollup the range holds.
+fn credit(out: &mut String, branches: &[(String, OwnerRange)]) {
+    let head = [
+        "Branch",
+        "Currency",
+        "Player id",
+        "Username",
+        "Outstanding",
+        "Aging bucket",
+        "Oldest unpaid date",
+        "As of",
+    ];
+    row(out, &head.map(String::from));
+    for (name, r) in branches {
+        let c = &r.credit;
+        let as_of = c.as_of.clone().unwrap_or_default();
+        for p in &c.players {
+            row(
+                out,
+                &[
+                    name.clone(),
+                    r.currency.clone(),
+                    p.player_id.clone(),
+                    p.username.clone(),
+                    major(p.outstanding, &r.currency),
+                    aging_bucket(&as_of, &p.oldest_unpaid_on).into(),
+                    p.oldest_unpaid_on.clone(),
+                    as_of.clone(),
+                ],
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,6 +427,7 @@ mod tests {
                 },
             }],
             stock: OwnerRangeStock::default(),
+            credit: Default::default(),
         }
     }
 
@@ -488,5 +541,53 @@ mod tests {
             "Waste,Main,INR,Cola,,Spilled,2,,40.00,2026-10-28 to 2026-10-30"
         );
         assert_eq!(lines[3], "Expiring,Main,INR,Milk,,L7,3,,,2026-11-01");
+    }
+
+    #[test]
+    fn credit_lists_a_row_per_player_with_the_bucket_of_the_oldest_spend() {
+        use crate::owner_read::OwnerRangeCredit;
+        use crate::rollup::{RollupAged, RollupCreditPlayer};
+        let player = |id: &str, name: &str, owed: i64, since: &str| RollupCreditPlayer {
+            player_id: id.into(),
+            username: name.into(),
+            outstanding: owed,
+            oldest_unpaid_on: since.into(),
+            consent: true,
+        };
+        let mut r = range("INR");
+        r.credit = OwnerRangeCredit {
+            as_of: Some("2026-10-29".into()),
+            outstanding: 13_000,
+            aged: RollupAged::default(),
+            players: vec![
+                player("P1", "=cmd", 6_000, "2026-10-01"),
+                player("P2", "asha", 4_000, "2026-10-20"),
+                player("P3", "ravi", 2_000, "2026-10-28"),
+                player("P4", "meena", 1_000, ""),
+            ],
+        };
+        let csv = owner_csv(ExportReport::Credit, &[("Main".into(), r)], 0);
+        let lines: Vec<&str> = csv.trim_start_matches('\u{feff}').lines().collect();
+        assert_eq!(lines[0], "Report,Credit");
+        assert_eq!(
+            lines[5],
+            "Branch,Currency,Player id,Username,Outstanding,Aging bucket,Oldest unpaid date,As of"
+        );
+        assert_eq!(
+            lines[6],
+            "Main,INR,P1,'=cmd,60.00,15+ days,2026-10-01,2026-10-29"
+        );
+        assert_eq!(
+            lines[7],
+            "Main,INR,P2,asha,40.00,8-14 days,2026-10-20,2026-10-29"
+        );
+        assert_eq!(
+            lines[8],
+            "Main,INR,P3,ravi,20.00,0-7 days,2026-10-28,2026-10-29"
+        );
+        assert_eq!(lines[9], "Main,INR,P4,meena,10.00,,,2026-10-29");
+        assert_eq!(lines.len(), 10);
+        assert_eq!(ExportReport::parse("credit"), Some(ExportReport::Credit));
+        assert_eq!(ExportReport::Credit.as_str(), "credit");
     }
 }

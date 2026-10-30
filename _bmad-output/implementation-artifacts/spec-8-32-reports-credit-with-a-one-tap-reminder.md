@@ -2,7 +2,7 @@
 title: "Story 8.32: Reports — credit, with a one-tap reminder"
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 baseline_commit: '8d122df0765f5fd3c7299f401d41c412a2dc29d9'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -76,6 +76,8 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+- Code review (2026-10-30): no blocking findings. clippy, fmt, proto/store/core/cloud tests, svelte-check, protocol and string checks and Playwright credit + reports-export pass. Two arena-cloud tests (backup `a_hung_run_times_out_with_its_own_code`, binary `unreachable_at_start_retries...`) fail on process/network timing in this environment and touch nothing in this story.
 
 ## Design Notes
 

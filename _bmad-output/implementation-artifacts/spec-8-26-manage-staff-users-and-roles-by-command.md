@@ -2,7 +2,7 @@
 title: "Story 8.26: Manage → Staff users and roles by command"
 type: 'feature'
 created: '2026-10-30'
-status: 'review'
+status: 'done'
 baseline_commit: '818ac4b41501f4d8968b098aa9a83f85d7ee4234'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -81,6 +81,8 @@ deferred: []
 - The epic keys one command by "one branch or all"; staff ids differ per branch, so an edit or deactivation reaches the branches where the person's number is on the team (one post per branch, like 8.23), and an add uses the same per-branch posts so each branch gets its own role id and code.
 
 ## Review Triage Log
+
+Code review (2026-10-30): no blocking findings. clippy, cargo tests (proto, store, core, cloud, api), owner svelte-check, staff Playwright spec (20), check:strings/layers/protocol and format:check all green. Unrelated flaky Windows tests (arena-cloud binary `unreachable_at_start...`) not touched by this story.
 
 ## Design Notes
 

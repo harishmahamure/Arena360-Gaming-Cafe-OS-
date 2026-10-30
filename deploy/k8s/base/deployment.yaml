@@ -32,6 +32,11 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       terminationGracePeriodSeconds: 30
+      volumes:
+        # Story 8.37: built audit months unpacked for searches; the service keeps it under 50 GiB.
+        - name: audit-cache
+          emptyDir:
+            sizeLimit: 60Gi
       containers:
         - name: control
           image: ghcr.io/arena360/arena-cloud:unset
@@ -103,6 +108,44 @@ spec:
               value: gupshup
             - name: ARENA_WEB_ORIGINS
               value: https://start.arena360.cloud
+            - name: ARENA_AUDIT_CACHE_DIR
+              value: /audit-cache
+            # Story 8.37: Arena 360 staff credentials for /v1/admin/* (<staff-id>:<sha256 hex>,...).
+            # Without them that API answers 404.
+            - name: ARENA_ADMIN_TOKENS
+              valueFrom:
+                secretKeyRef:
+                  name: arena-cloud-secrets
+                  key: ARENA_ADMIN_TOKENS
+                  optional: true
+            # Story 8.37: audit searches read built months from the data bucket (see the builder).
+            - name: ARENA_DATA_S3_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: arena-cloud-data
+                  key: ARENA_DATA_S3_ENDPOINT
+                  optional: true
+            - name: ARENA_DATA_S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: arena-cloud-data
+                  key: ARENA_DATA_S3_BUCKET
+                  optional: true
+            - name: ARENA_DATA_S3_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: arena-cloud-data
+                  key: ARENA_DATA_S3_ACCESS_KEY_ID
+                  optional: true
+            - name: ARENA_DATA_S3_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: arena-cloud-data
+                  key: ARENA_DATA_S3_SECRET_ACCESS_KEY
+                  optional: true
+          volumeMounts:
+            - name: audit-cache
+              mountPath: /audit-cache
           # /healthz always answers 200 from a cached gz_control check, so a Turso blip never
           # restarts the pod; readiness uses the same path.
           livenessProbe:
@@ -137,10 +180,10 @@ spec:
           resources:
             requests:
               cpu: 50m
-              memory: 64Mi
+              memory: 128Mi
             limits:
               cpu: 500m
-              memory: 256Mi
+              memory: 1Gi
           securityContext:
             runAsNonRoot: true
             allowPrivilegeEscalation: false

@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use arena_cloud::audit_build::{AuditBuilder, Requested, cache_key, request_build};
+use arena_cloud::audit_query::AuditCache;
 use arena_cloud::auth::AuthState;
 use arena_cloud::config::{AuthConfig, Role, SmsProviderConfig};
 use arena_cloud::crypto::MfaKey;
@@ -895,4 +896,429 @@ async fn a_dead_builders_job_is_taken_again_after_the_stale_window() {
             .await
             .unwrap()
     );
+}
+
+// ---- Story 8.37: searches over a built month, and the support path ----
+
+fn with_cache(h: &Harness, dir: &std::path::Path, max_bytes: u64) {
+    assert!(
+        h.st.audit_cache
+            .set(AuditCache::new(dir.to_path_buf(), max_bytes))
+            .is_ok()
+    );
+}
+
+fn audit_path(c: &Cafe, query: &str) -> String {
+    format!("/v1/branches/{}/audit?month={MONTH}&{query}", c.branch)
+}
+
+/// `n` January changes: every tenth is the system's `sessions.start`, the rest the staff
+/// member's `settings.set`.
+fn mixed_log(n: i64) -> Vec<ChangeRecord> {
+    changes("1:HUBA", 1, n)
+        .into_iter()
+        .map(|mut c| {
+            if c.seq % 10 == 0 {
+                c.actor_kind = "system".to_owned();
+                c.actor_id = "hub".to_owned();
+                c.intent_kind = "sessions.start".to_owned();
+            }
+            c
+        })
+        .collect()
+}
+
+/// Queues and builds `month` of `c`'s branch.
+async fn build_month(h: &Harness, c: &Cafe, month: &str, scratch: &std::path::Path) {
+    assert!(matches!(
+        request_build(
+            &h.db,
+            &c.tenant,
+            &c.branch,
+            month,
+            "owner:x",
+            None,
+            h.now.load(Ordering::SeqCst)
+        )
+        .await
+        .unwrap(),
+        Requested::Queued(_)
+    ));
+    let job = builder(h, scratch).run_one().await.unwrap().unwrap();
+    assert_eq!(job.state, AuditBuildState::Ready, "{:?}", job.error);
+}
+
+fn seqs(page: &Value, key: &str) -> Vec<i64> {
+    page[key]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["seq"].as_i64().unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_built_month_answers_the_catalogue_queries_fifty_rows_a_page_from_its_local_copy() {
+    let h = Harness::new().await;
+    let c = h.paid_cafe().await;
+    let prefix = branch_prefix(&c.tenant, &c.branch);
+    let cache = tempfile::tempdir().unwrap();
+    with_cache(&h, cache.path(), u64::MAX);
+    put_batches(&h.keys, &prefix, &mixed_log(60), 20, None);
+    let scratch = tempfile::tempdir().unwrap();
+    build_month(&h, &c, MONTH, scratch.path()).await;
+
+    let first = h.get(&c, &audit_path(&c, "q=recent")).await;
+    assert_eq!(first.status, 200, "{}", first.body);
+    assert_eq!(first.body["month"], MONTH);
+    assert_eq!(first.body["built_at"], T0);
+    assert_eq!(seqs(&first.body, "items").len(), 50);
+    assert_eq!(seqs(&first.body, "items")[0], 60, "newest first");
+    assert!(seqs(&first.body, "orphaned").is_empty());
+    let item = &first.body["items"][1];
+    assert_eq!(item["module"], "settings");
+    assert_eq!(item["actor"]["kind"], "staff");
+    assert_eq!(item["actor"]["id"], "S1");
+    assert!(
+        !first.body.to_string().contains("\"v59\""),
+        "no row image leaves the cache"
+    );
+    let cursor = first.body["next_cursor"].as_str().unwrap().to_owned();
+
+    // The object may go; the local copy answers.
+    remove(&h.keys, &cache_key(&prefix, MONTH));
+    let second = h
+        .get(&c, &audit_path(&c, &format!("q=recent&cursor={cursor}")))
+        .await;
+    assert_eq!(second.status, 200, "{}", second.body);
+    assert_eq!(seqs(&second.body, "items").len(), 10);
+    assert_eq!(seqs(&second.body, "items")[9], 1);
+    assert!(second.body["next_cursor"].is_null());
+
+    let system = h
+        .get(&c, &audit_path(&c, "q=actor&actor_kind=system"))
+        .await;
+    assert_eq!(seqs(&system.body, "items"), vec![60, 50, 40, 30, 20, 10]);
+    assert_eq!(
+        system.body["items"][0]["actor"]["name"],
+        "hub.audit.actor.system"
+    );
+    let nobody = h
+        .get(
+            &c,
+            &audit_path(&c, "q=actor&actor_kind=staff&actor_id=nobody"),
+        )
+        .await;
+    assert!(seqs(&nobody.body, "items").is_empty());
+    let module = h.get(&c, &audit_path(&c, "q=module&module=sessions")).await;
+    assert_eq!(seqs(&module.body, "items").len(), 6);
+    let intent = h
+        .get(&c, &audit_path(&c, "q=intent&intent=sessions.start"))
+        .await;
+    assert_eq!(seqs(&intent.body, "items").len(), 6);
+    let row_id = first.body["items"][1]["row_id"].as_str().unwrap();
+    let entity = h
+        .get(
+            &c,
+            &audit_path(&c, &format!("q=entity&tbl=settings&row_id={row_id}")),
+        )
+        .await;
+    assert_eq!(seqs(&entity.body, "items"), vec![59]);
+    let range = h
+        .get(
+            &c,
+            &audit_path(&c, &format!("q=time&from={}&to={}", T0 + 10, T0 + 20)),
+        )
+        .await;
+    assert_eq!(seqs(&range.body, "items").len(), 10, "to is exclusive");
+}
+
+#[tokio::test]
+async fn any_other_query_shape_is_unsupported_and_a_bad_value_is_a_validation_error() {
+    let h = Harness::new().await;
+    let c = h.paid_cafe().await;
+    for query in [
+        "q=sql&text=select+1",
+        "q=recent&limit=500",
+        "q=recent&where=1%3D1",
+        "q=recent&actor_kind=staff",
+        "text=hello",
+    ] {
+        let r = h.get(&c, &audit_path(&c, query)).await;
+        assert_eq!((r.status, r.code()), (400, "UNSUPPORTED"), "{query}");
+    }
+    let r = h.get(&c, &audit_path(&c, "q=actor")).await;
+    assert_eq!((r.status, r.code()), (422, "VALIDATION_FAILED"));
+    let r = h
+        .get(
+            &c,
+            &format!("/v1/branches/{}/audit?q=recent&month=soon", c.branch),
+        )
+        .await;
+    assert_eq!((r.status, r.code()), (422, "VALIDATION_FAILED"));
+}
+
+#[tokio::test]
+async fn a_month_that_is_not_ready_answers_its_build_state() {
+    let h = Harness::new().await;
+    let c = h.paid_cafe().await;
+    let cache = tempfile::tempdir().unwrap();
+    with_cache(&h, cache.path(), u64::MAX);
+    let never = h.get(&c, &audit_path(&c, "q=recent")).await;
+    assert_eq!((never.status, never.code()), (404, "NOT_FOUND"));
+
+    request(&h, &c, MONTH).await;
+    let queued = h.get(&c, &audit_path(&c, "q=recent")).await;
+    assert_eq!(queued.status, 202, "{}", queued.body);
+    assert_eq!(queued.body["code"], "AUDIT_BUILDING");
+    assert_eq!(queued.body["state"], "queued");
+
+    let now = h.now.load(Ordering::SeqCst);
+    let job =
+        h.db.claim_builder_job(now, now - 15 * 60 * 1000)
+            .await
+            .unwrap()
+            .unwrap();
+    h.db.set_builder_progress(&c.branch, MONTH, job.attempt, 40, now)
+        .await
+        .unwrap();
+    let building = h.get(&c, &audit_path(&c, "q=recent")).await;
+    assert_eq!(building.status, 202);
+    assert_eq!(building.body["state"], "building");
+    assert_eq!(building.body["progress"], 40);
+
+    h.db.fail_builder_job(&c.branch, MONTH, job.attempt, "a batch is missing", now)
+        .await
+        .unwrap();
+    let failed = h.get(&c, &audit_path(&c, "q=recent")).await;
+    assert_eq!((failed.status, failed.code()), (502, "AUDIT_BUILD_FAILED"));
+}
+
+#[tokio::test]
+async fn orphaned_rows_come_back_in_their_own_list_on_the_first_page() {
+    let h = Harness::new().await;
+    let c = h.paid_cafe().await;
+    let prefix = branch_prefix(&c.tenant, &c.branch);
+    let cache = tempfile::tempdir().unwrap();
+    with_cache(&h, cache.path(), u64::MAX);
+    put_batches(&h.keys, &prefix, &changes("1:HUBA", 1, 8), 4, None);
+    put_batches(
+        &h.keys,
+        &prefix,
+        &changes("2:HUBB", 7, 9),
+        4,
+        Some(BatchFork {
+            parent_epoch: "1:HUBA".to_owned(),
+            parent_seq: 6,
+        }),
+    );
+    let scratch = tempfile::tempdir().unwrap();
+    build_month(&h, &c, MONTH, scratch.path()).await;
+
+    let page = h.get(&c, &audit_path(&c, "q=recent")).await;
+    assert_eq!(page.status, 200, "{}", page.body);
+    assert_eq!(
+        seqs(&page.body, "items").len(),
+        9,
+        "six kept, three of epoch 2"
+    );
+    let orphans = page.body["orphaned"].as_array().unwrap();
+    assert!(orphans.iter().all(|o| o["epoch"] == "1:HUBA"));
+    assert_eq!(seqs(&page.body, "orphaned"), vec![8, 7]);
+    let none = h.get(&c, &audit_path(&c, "q=module&module=money")).await;
+    assert!(
+        seqs(&none.body, "orphaned").is_empty(),
+        "orphans follow the filters"
+    );
+}
+
+#[tokio::test]
+async fn a_month_whose_object_is_gone_is_queued_again() {
+    let h = Harness::new().await;
+    let c = h.paid_cafe().await;
+    let prefix = branch_prefix(&c.tenant, &c.branch);
+    let cache = tempfile::tempdir().unwrap();
+    with_cache(&h, cache.path(), u64::MAX);
+    put_batches(&h.keys, &prefix, &changes("1:HUBA", 1, 6), 3, None);
+    let scratch = tempfile::tempdir().unwrap();
+    build_month(&h, &c, MONTH, scratch.path()).await;
+    remove(&h.keys, &cache_key(&prefix, MONTH));
+
+    let r = h.get(&c, &audit_path(&c, "q=recent")).await;
+    assert_eq!(r.status, 202, "{}", r.body);
+    assert_eq!(r.body["code"], "AUDIT_BUILDING");
+    let job = h.db.builder_job(&c.branch, MONTH).await.unwrap().unwrap();
+    assert_eq!(job.state, AuditBuildState::Queued);
+    assert_eq!(job.attempt, 3, "request, claim, queued again");
+    // The builder makes it again and the search answers.
+    let built = builder(&h, scratch.path())
+        .run_one()
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(built.state, AuditBuildState::Ready);
+    let r = h.get(&c, &audit_path(&c, "q=recent")).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+}
+
+#[tokio::test]
+async fn the_local_cache_drops_the_least_recently_used_month_and_fetches_it_again() {
+    let h = Harness::new().await;
+    let c = h.paid_cafe().await;
+    let prefix = branch_prefix(&c.tenant, &c.branch);
+    let cache = tempfile::tempdir().unwrap();
+    // Room for no month but the one in use.
+    with_cache(&h, cache.path(), 1);
+    put_batches(&h.keys, &prefix, &changes("1:HUBA", 1, 6), 3, None);
+    let scratch = tempfile::tempdir().unwrap();
+    build_month(&h, &c, MONTH, scratch.path()).await;
+    build_month(&h, &c, "2026-12", scratch.path()).await;
+    let files = || {
+        std::fs::read_dir(cache.path().join(&c.branch))
+            .map(|d| d.count())
+            .unwrap_or(0)
+    };
+
+    let january = h.get(&c, &audit_path(&c, "q=recent")).await;
+    assert_eq!(january.status, 200, "{}", january.body);
+    assert_eq!(files(), 1);
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    let december = h
+        .get(
+            &c,
+            &format!("/v1/branches/{}/audit?month=2026-12&q=recent", c.branch),
+        )
+        .await;
+    assert_eq!(december.status, 200, "{}", december.body);
+    assert_eq!(files(), 1, "January was evicted for December");
+
+    let again = h.get(&c, &audit_path(&c, "q=recent")).await;
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert_eq!(seqs(&again.body, "items").len(), 6, "fetched from R2 again");
+    assert_eq!(files(), 1);
+}
+
+const STAFF_TOKEN: &str = "staff-secret-token";
+
+fn staff_tokens(h: &Harness) {
+    let spec = format!("asha:{}", arena_cloud::admin::token_hash_hex(STAFF_TOKEN));
+    assert!(
+        h.st.admin_tokens
+            .set(arena_cloud::admin::AdminTokens::parse(&spec).unwrap())
+            .is_ok()
+    );
+}
+
+async fn admin(h: &Harness, method: &str, path: &str, body: Option<Value>, token: &str) -> Reply {
+    let mut req = Request::builder().method(method).uri(path);
+    if !token.is_empty() {
+        req = req.header("authorization", format!("Bearer {token}"));
+    }
+    let req = match body {
+        Some(b) => req
+            .header("content-type", "application/json")
+            .body(Body::from(b.to_string())),
+        None => req.body(Body::empty()),
+    }
+    .unwrap();
+    reply(h.app.clone().oneshot(req).await.unwrap()).await
+}
+
+#[tokio::test]
+async fn the_support_path_needs_a_staff_credential_and_a_reason_and_is_audited() {
+    let h = Harness::new().await;
+    let c = h.paid_cafe().await;
+    let prefix = branch_prefix(&c.tenant, &c.branch);
+    let cache = tempfile::tempdir().unwrap();
+    with_cache(&h, cache.path(), u64::MAX);
+    put_batches(&h.keys, &prefix, &changes("1:HUBA", 1, 6), 3, None);
+    let build = format!("/v1/admin/branches/{}/audit/build", c.branch);
+    let search = format!(
+        "/v1/admin/branches/{}/audit?month={MONTH}&q=recent&reason=refund+dispute",
+        c.branch
+    );
+
+    // No credentials configured: the API is not there.
+    let r = admin(&h, "GET", &search, None, STAFF_TOKEN).await;
+    assert_eq!((r.status, r.code()), (404, "NOT_FOUND"));
+
+    staff_tokens(&h);
+    for token in ["", "wrong"] {
+        let r = admin(&h, "GET", &search, None, token).await;
+        assert_eq!((r.status, r.code()), (401, "AUTH_FAILED"), "{token:?}");
+    }
+    // An owner's session is not a staff credential.
+    let r = h.get(&c, &search).await;
+    assert_eq!(r.status, 401);
+    assert!(h.db.admin_audit_rows().await.unwrap().is_empty());
+
+    // A reason is required, on both calls.
+    let no_reason = format!(
+        "/v1/admin/branches/{}/audit?month={MONTH}&q=recent",
+        c.branch
+    );
+    let r = admin(&h, "GET", &no_reason, None, STAFF_TOKEN).await;
+    assert_eq!((r.status, r.code()), (422, "VALIDATION_FAILED"));
+    assert_eq!(r.body["field"], "reason");
+    let r = admin(
+        &h,
+        "POST",
+        &build,
+        Some(json!({"month": MONTH, "reason": "  "})),
+        STAFF_TOKEN,
+    )
+    .await;
+    assert_eq!((r.status, r.code()), (422, "VALIDATION_FAILED"));
+    assert!(h.db.admin_audit_rows().await.unwrap().is_empty());
+
+    // Searching before a build is a recorded call that finds nothing.
+    let r = admin(&h, "GET", &search, None, STAFF_TOKEN).await;
+    assert_eq!(r.status, 404, "{}", r.body);
+    let r = admin(
+        &h,
+        "POST",
+        &build,
+        Some(json!({"month": MONTH, "reason": "refund dispute"})),
+        STAFF_TOKEN,
+    )
+    .await;
+    assert_eq!((r.status, r.code()), (202, "AUDIT_BUILDING"), "{}", r.body);
+    let job = h.db.builder_job(&c.branch, MONTH).await.unwrap().unwrap();
+    assert_eq!(job.requested_by, "admin:asha");
+    assert_eq!(job.reason.as_deref(), Some("refund dispute"));
+
+    let scratch = tempfile::tempdir().unwrap();
+    let built = builder(&h, scratch.path())
+        .run_one()
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(built.state, AuditBuildState::Ready);
+    let r = admin(&h, "GET", &search, None, STAFF_TOKEN).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(seqs(&r.body, "items").len(), 6);
+
+    let rows = h.db.admin_audit_rows().await.unwrap();
+    let actions: Vec<&str> = rows.iter().map(|r| r.action.as_str()).collect();
+    assert_eq!(actions, vec!["audit.search", "audit.build", "audit.search"]);
+    for row in &rows {
+        assert_eq!(row.actor_kind, "admin");
+        assert_eq!(row.actor_id, "asha");
+        assert_eq!(row.target_kind, "branch");
+        assert_eq!(row.target_id, c.branch);
+        assert_eq!(row.reason.as_deref(), Some("refund dispute"));
+        let summary: Value = serde_json::from_str(&row.summary).unwrap();
+        assert_eq!(summary["month"], MONTH);
+    }
+    let summary: Value = serde_json::from_str(&rows[2].summary).unwrap();
+    assert_eq!(summary["query"]["q"], "recent");
+    assert!(summary["query"].get("reason").is_none());
+
+    // Past 24 hours the cache is stale: the support search queues it again.
+    h.advance(25 * 60 * 60 * 1000);
+    let r = admin(&h, "GET", &search, None, STAFF_TOKEN).await;
+    assert_eq!((r.status, r.code()), (202, "AUDIT_BUILDING"), "{}", r.body);
+    let job = h.db.builder_job(&c.branch, MONTH).await.unwrap().unwrap();
+    assert_eq!(job.state, AuditBuildState::Queued);
+    assert_eq!(job.requested_by, "admin:asha");
 }

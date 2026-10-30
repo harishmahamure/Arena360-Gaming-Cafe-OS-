@@ -380,6 +380,11 @@ stringData:
 # builder itself deletes a month 24 hours after it was built; R2 lifecycle rules match only a
 # key prefix from its start, and the branch prefix comes first, so no single bucket rule can
 # expire these objects.
+# Story 8.37: the control Deployment reads the same Secret (optional references) to search built
+# months, keeping them unpacked on an emptyDir (`ARENA_AUDIT_CACHE_DIR`, 50 GiB, least recently used
+# first). Support calls `/v1/admin/*` with a staff bearer token; the service holds only its SHA-256
+# in `arena-cloud-secrets` as ARENA_ADMIN_TOKENS (`<staff-id>:<sha256 hex>,...`, from
+# `printf %s "$TOKEN" | sha256sum`). Without it that API answers 404.
 ---
 apiVersion: v1
 kind: Secret

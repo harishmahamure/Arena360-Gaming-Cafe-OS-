@@ -11,6 +11,7 @@ mod alert;
 mod attract;
 mod audit;
 mod audit_build;
+mod audit_query;
 mod billing;
 mod booster;
 mod catalog;
@@ -111,6 +112,9 @@ pub use audit::{
 pub use audit_build::{
     AUDIT_BUILD_STALE_MS, AUDIT_BUILDS_PER_HOUR, AUDIT_CACHE_TTL_MS, AuditBuildRequest,
     AuditBuildState, AuditBuildStatus, audit_month_start, is_audit_month,
+};
+pub use audit_query::{
+    AUDIT_LOCAL_CACHE_BYTES, AUDIT_QUERY_PAGE, AuditQueryKind, AuditSearch, AuditSearchPage,
 };
 pub use billing::{
     BILLING_GRACE_RANGE, BILLING_LOW_BALANCE_MAX_MINOR, BILLING_MINIMUM_RANGE,

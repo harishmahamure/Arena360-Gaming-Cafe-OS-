@@ -28,6 +28,12 @@ pub struct AuditFilter {
     /// The intent domain: the generated `module` column (the text of `intent_kind` before its
     /// first '.', or the whole kind when it has none) must equal this.
     pub module: Option<String>,
+    /// `intent_kind` must equal this (the audit builder's search, Story 8.37).
+    pub intent_kind: Option<String>,
+    /// `tbl` must equal this.
+    pub tbl: Option<String>,
+    /// `row_id` must equal this (only with `tbl`).
+    pub row_id: Option<String>,
     /// `at >= from_ms`.
     pub from_ms: Option<i64>,
     /// `at < to_ms`.
@@ -165,33 +171,44 @@ pub fn list_audit(
     Ok(rows)
 }
 
-/// The SQL and parameters of one audit page.
-fn audit_sql(filter: &AuditFilter, limit: u32) -> (String, Vec<Value>) {
-    let mut clauses: Vec<&str> = Vec::new();
+/// The WHERE clause and parameters of `filter`. `module_expr` is the SQL that yields a change's
+/// module: the generated column on `changes`, an expression on `orphaned_changes`.
+fn filter_sql(filter: &AuditFilter, module_expr: &str) -> (String, Vec<Value>) {
+    let mut clauses: Vec<String> = Vec::new();
     let mut values: Vec<Value> = Vec::new();
+    let mut eq = |clause: String, value: &String| {
+        clauses.push(clause);
+        values.push(Value::Text(value.clone()));
+    };
     if let Some(kind) = &filter.actor_kind {
-        clauses.push("actor_kind = ?");
-        values.push(Value::Text(kind.clone()));
+        eq("actor_kind = ?".to_owned(), kind);
         if let Some(id) = &filter.actor_id {
-            clauses.push("actor_id = ?");
-            values.push(Value::Text(id.clone()));
+            eq("actor_id = ?".to_owned(), id);
         }
     }
     if let Some(module) = &filter.module {
         // Equality on the generated column, so `changes_module_at` serves it in keyset order.
-        clauses.push("module = ?");
-        values.push(Value::Text(module.clone()));
+        eq(format!("{module_expr} = ?"), module);
+    }
+    if let Some(kind) = &filter.intent_kind {
+        eq("intent_kind = ?".to_owned(), kind);
+    }
+    if let Some(tbl) = &filter.tbl {
+        eq("tbl = ?".to_owned(), tbl);
+        if let Some(id) = &filter.row_id {
+            eq("row_id = ?".to_owned(), id);
+        }
     }
     if let Some(from) = filter.from_ms {
-        clauses.push("at >= ?");
+        clauses.push("at >= ?".to_owned());
         values.push(Value::Integer(from));
     }
     if let Some(to) = filter.to_ms {
-        clauses.push("at < ?");
+        clauses.push("at < ?".to_owned());
         values.push(Value::Integer(to));
     }
     if let Some(c) = &filter.after {
-        clauses.push("(at, epoch, seq) < (?, ?, ?)");
+        clauses.push("(at, epoch, seq) < (?, ?, ?)".to_owned());
         values.push(Value::Integer(c.at));
         values.push(Value::Text(c.epoch.clone()));
         values.push(Value::Integer(c.seq));
@@ -201,6 +218,12 @@ fn audit_sql(filter: &AuditFilter, limit: u32) -> (String, Vec<Value>) {
     } else {
         format!("WHERE {}", clauses.join(" AND "))
     };
+    (where_sql, values)
+}
+
+/// The SQL and parameters of one audit page.
+fn audit_sql(filter: &AuditFilter, limit: u32) -> (String, Vec<Value>) {
+    let (where_sql, mut values) = filter_sql(filter, "module");
     values.push(Value::Integer(i64::from(limit)));
     let sql = format!(
         "SELECT epoch, seq, at, business_day, actor_kind, actor_id, elevated_by_kind,
@@ -213,6 +236,63 @@ fn audit_sql(filter: &AuditFilter, limit: u32) -> (String, Vec<Value>) {
          LIMIT ?"
     );
     (sql, values)
+}
+
+/// Up to `limit` rows of the audit builder's `orphaned_changes` table (Story 8.37: changes a
+/// fork point kept out of state) matching `filter`, newest first. `filter.after` is ignored:
+/// the orphans are one list, not a paged one.
+pub fn list_orphaned(
+    conn: &Connection,
+    filter: &AuditFilter,
+    limit: u32,
+) -> Result<Vec<AuditRow>, AppError> {
+    let filter = AuditFilter {
+        after: None,
+        ..filter.clone()
+    };
+    let module = "CASE WHEN instr(intent_kind, '.') > 0
+                       THEN substr(intent_kind, 1, instr(intent_kind, '.') - 1)
+                       ELSE intent_kind END";
+    let (where_sql, mut values) = filter_sql(&filter, module);
+    values.push(Value::Integer(i64::from(limit)));
+    let sql = format!(
+        "SELECT epoch, seq, at, business_day, actor_kind, actor_id, elevated_by_kind,
+                elevated_by_id, elevated_by_mode, intent_kind, intent_id, tbl, row_id, op
+         FROM orphaned_changes {where_sql}
+         ORDER BY at DESC, epoch DESC, seq DESC
+         LIMIT ?"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(db_error)?;
+    let rows = stmt
+        .query_map(params_from_iter(values), |r| {
+            let op: String = r.get(13)?;
+            Ok(AuditRow {
+                epoch: r.get(0)?,
+                seq: r.get(1)?,
+                at: r.get(2)?,
+                business_day: r.get(3)?,
+                actor_kind: r.get(4)?,
+                actor_id: r.get(5)?,
+                elevated_by_kind: r.get(6)?,
+                elevated_by_id: r.get(7)?,
+                elevated_by_mode: r.get(8)?,
+                intent_kind: r.get(9)?,
+                intent_id: r.get(10)?,
+                tbl: r.get(11)?,
+                row_id: r.get(12)?,
+                op: ChangeOp::parse(&op).ok_or_else(|| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        13,
+                        rusqlite::types::Type::Text,
+                        format!("unknown op {op}").into(),
+                    )
+                })?,
+                flagged: None,
+                reverts: None,
+            })
+        })
+        .map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
 }
 
 /// The change `(epoch, seq)`, if it exists.
@@ -369,7 +449,7 @@ mod tests {
             module: Some("settings".into()),
             from_ms: Some(100),
             to_ms: Some(400),
-            after: None,
+            ..AuditFilter::default()
         };
         let seqs: Vec<i64> = list_audit(&store.conn, &filter, 50)
             .unwrap()
@@ -377,6 +457,27 @@ mod tests {
             .map(|r| r.seq)
             .collect();
         assert_eq!(seqs, vec![1]);
+        let by_intent = AuditFilter {
+            intent_kind: Some("staff.upsert".into()),
+            ..AuditFilter::default()
+        };
+        let seqs: Vec<i64> = list_audit(&store.conn, &by_intent, 50)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.seq)
+            .collect();
+        assert_eq!(seqs, vec![3]);
+        let by_entity = AuditFilter {
+            tbl: Some("settings".into()),
+            row_id: Some("B/k".into()),
+            ..AuditFilter::default()
+        };
+        assert_eq!(list_audit(&store.conn, &by_entity, 50).unwrap().len(), 5);
+        let other_row = AuditFilter {
+            row_id: Some("nope".into()),
+            ..by_entity
+        };
+        assert!(list_audit(&store.conn, &other_row, 50).unwrap().is_empty());
         let module_only = AuditFilter {
             module: Some("settings".into()),
             ..AuditFilter::default()

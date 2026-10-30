@@ -13,9 +13,11 @@
 //! authenticator app ([`totp`], its secret sealed by [`crypto`]) and backup codes
 //! ([`api::mfa`]), with [`api::gate::RequireSetupComplete`] for routes that need all three.
 
+pub mod admin;
 pub mod alert;
 pub mod api;
 pub mod audit_build;
+pub mod audit_query;
 pub mod auth;
 pub mod backup;
 pub mod branch_code;
@@ -335,6 +337,22 @@ pub async fn serve(
             }
             None => tracing::warn!("no data bucket configured: /v1/presign answers 503"),
         }
+        let cache_dir = std::env::var_os("ARENA_AUDIT_CACHE_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir().join("arena-audit-cache"));
+        let cache_max = std::env::var("ARENA_AUDIT_CACHE_MAX_BYTES")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(arena_proto::AUDIT_LOCAL_CACHE_BYTES);
+        let _ = st
+            .audit_cache
+            .set(audit_query::AuditCache::new(cache_dir, cache_max));
+        let admin = admin::AdminTokens::from_env(&|k| std::env::var_os(k))
+            .map_err(|e| std::io::Error::other(format!("admin credentials: {e}")))?;
+        if admin.is_empty() {
+            tracing::info!("no staff credentials: the admin audit API is off");
+        }
+        let _ = st.admin_tokens.set(admin);
         match config::catalog_cdn_from_env(dev, &|k| std::env::var_os(k)) {
             Some(base) => {
                 let _ = st.catalog_cdn.set(base);

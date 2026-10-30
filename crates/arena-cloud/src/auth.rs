@@ -54,6 +54,12 @@ pub struct AuthState {
     pub catalog_cdn: std::sync::OnceLock<String>,
     /// Signs the upload links of `POST /v1/presign` (Story 8.1); set once by `serve`.
     pub presigner: std::sync::OnceLock<crate::presign::Presigner>,
+    /// The local copies of built audit months searches read (Story 8.37); set once by `serve`.
+    /// Unset: audit searches answer 503.
+    pub audit_cache: std::sync::OnceLock<crate::audit_query::AuditCache>,
+    /// Arena 360 staff credentials for the support audit endpoints (Story 8.37); set once by
+    /// `serve`. Unset or empty: those endpoints answer 404.
+    pub admin_tokens: std::sync::OnceLock<crate::admin::AdminTokens>,
     /// R2 PUT links issued per tenant and branch.
     pub put_metrics: crate::presign::PutMetrics,
     /// Upload gaps found by heartbeats per tenant and branch (Story 8.3).
@@ -89,6 +95,8 @@ impl AuthState {
             templates: std::sync::OnceLock::new(),
             catalog_cdn: std::sync::OnceLock::new(),
             presigner: std::sync::OnceLock::new(),
+            audit_cache: std::sync::OnceLock::new(),
+            admin_tokens: std::sync::OnceLock::new(),
             put_metrics: crate::presign::PutMetrics::default(),
             gap_metrics: crate::gaps::GapMetrics::default(),
             rollup_metrics: crate::rollups::RollupMetrics::default(),

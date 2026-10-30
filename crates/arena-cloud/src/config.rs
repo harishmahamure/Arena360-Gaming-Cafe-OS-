@@ -73,6 +73,11 @@ environment (not with --dev):
   ARENA_DATA_S3_ENDPOINT, ARENA_DATA_S3_BUCKET, ARENA_DATA_S3_ACCESS_KEY_ID,
   ARENA_DATA_S3_SECRET_ACCESS_KEY  the data bucket POST /v1/presign signs upload links for (R2;
                           --dev: the dev MinIO, bucket arena-dev); none set outside --dev: 503
+  ARENA_AUDIT_CACHE_DIR, ARENA_AUDIT_CACHE_MAX_BYTES  where built audit months are kept for searches (default:
+                          the temp dir) and how much of it (default 50 GiB; the least recently used
+                          month goes first)
+  ARENA_ADMIN_TOKENS      <staff-id>:<sha256 hex of the staff token>,... who may call /v1/admin/*;
+                          unset: that API answers 404
   ARENA_BILLING_ENABLED   unset or false: billing is not available in this build (true exits 64)
   ARENA_GUPSHUP_ENDPOINT, ARENA_GUPSHUP_USERID, ARENA_GUPSHUP_PASSWORD, ARENA_GUPSHUP_SENDER,
   ARENA_GUPSHUP_DLT_TEMPLATE_ID  the Gupshup Enterprise SMS account (gupshup only)

@@ -69,7 +69,7 @@ pub use alerts::{
     set_alert_qty, set_alert_threshold,
 };
 pub use audit::{
-    AuditCursor, AuditFilter, AuditRow, find_change, list_audit, list_device_labels,
+    AuditCursor, AuditFilter, AuditRow, find_change, list_audit, list_device_labels, list_orphaned,
     list_staff_names, previous_row_image, reverted_intent,
 };
 pub use branch::{

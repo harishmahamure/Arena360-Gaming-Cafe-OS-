@@ -89,10 +89,58 @@ pub async fn request_build(
     reason: Option<&str>,
     now: i64,
 ) -> Result<Requested, ControlError> {
+    request(
+        db,
+        tenant_id,
+        branch_id,
+        month,
+        requested_by,
+        reason,
+        now,
+        false,
+    )
+    .await
+}
+
+/// Like [`request_build`], but a `ready` month is built again even though it is fresh: its cache
+/// object is gone from the bucket (Story 8.37).
+pub async fn request_rebuild(
+    db: &ControlDb,
+    tenant_id: &str,
+    branch_id: &str,
+    month: &str,
+    requested_by: &str,
+    reason: Option<&str>,
+    now: i64,
+) -> Result<Requested, ControlError> {
+    request(
+        db,
+        tenant_id,
+        branch_id,
+        month,
+        requested_by,
+        reason,
+        now,
+        true,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn request(
+    db: &ControlDb,
+    tenant_id: &str,
+    branch_id: &str,
+    month: &str,
+    requested_by: &str,
+    reason: Option<&str>,
+    now: i64,
+    force: bool,
+) -> Result<Requested, ControlError> {
     let usable = |j: &BuilderJob| match j.state {
         AuditBuildState::Queued => true,
         AuditBuildState::Building => j.updated_at > now.saturating_sub(AUDIT_BUILD_STALE_MS),
-        AuditBuildState::Ready => is_fresh(j, now),
+        AuditBuildState::Ready => !force && is_fresh(j, now),
         AuditBuildState::Failed => false,
     };
     if let Some(job) = db.builder_job(branch_id, month).await?
@@ -124,7 +172,11 @@ pub async fn request_build(
             requested_by,
             reason,
             now,
-            now.saturating_sub(AUDIT_CACHE_TTL_MS),
+            if force {
+                i64::MAX
+            } else {
+                now.saturating_sub(AUDIT_CACHE_TTL_MS)
+            },
             now.saturating_sub(AUDIT_BUILD_STALE_MS),
         )
         .await?;

@@ -107,6 +107,8 @@ pub struct HubStatus {
     pub platform: arena_proto::HubPlatform,
     /// The change-log upload (Story 8.2), as the upload task last saw it.
     pub upload: UploadStatus,
+    /// The Cloudflare Tunnel connector (Story 8.39), as the tunnel task last saw it.
+    pub tunnel: arena_proto::TunnelLine,
 }
 
 /// How far the change-log upload has got. A Hub that does not upload (Free, follower) keeps the
@@ -158,6 +160,7 @@ impl HubStatus {
             clock_wrong: false,
             platform: arena_proto::HubPlatform::Windows,
             upload: UploadStatus::default(),
+            tunnel: arena_proto::TunnelLine::default(),
         }
     }
 }

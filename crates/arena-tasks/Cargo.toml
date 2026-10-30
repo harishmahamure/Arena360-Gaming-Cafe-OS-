@@ -10,7 +10,7 @@ publish.workspace = true
 arena-core.workspace = true
 arena-store.workspace = true
 arena-proto.workspace = true
-tokio = { workspace = true, features = ["net", "io-util", "fs"] }
+tokio = { workspace = true, features = ["net", "io-util", "fs", "process"] }
 tracing.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true

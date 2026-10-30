@@ -10,9 +10,9 @@ use arena_proto::HubPlatform;
 use arena_tasks::{CloudEndpoint, CloudHost, DEFAULT_CLOUD_HOST, default_internet_endpoints};
 
 #[cfg(not(feature = "dev-fixtures"))]
-pub const USAGE: &str = "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--lan-port <port>] [--web-port <port>] [--cloud-host <host:port>] [--probe-internet <ip:port,ip:port>] [--printer system] [--help] [--version]";
+pub const USAGE: &str = "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--lan-port <port>] [--web-port <port>] [--cloud-host <host:port>] [--probe-internet <ip:port,ip:port>] [--cloudflared <path>] [--printer system] [--help] [--version]";
 #[cfg(feature = "dev-fixtures")]
-pub const USAGE: &str = "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--lan-port <port>] [--web-port <port>] [--cloud-host <host:port>] [--probe-internet <ip:port,ip:port>] [--printer <system|fake>] [--platform <windows|android>] [--help] [--version]
+pub const USAGE: &str = "usage: arena-hub [--data-dir <path>] [--health-port <port>] [--lan-port <port>] [--web-port <port>] [--cloud-host <host:port>] [--probe-internet <ip:port,ip:port>] [--cloudflared <path>] [--printer <system|fake>] [--platform <windows|android>] [--help] [--version]
        (dev-fixtures: --cloud-host also takes http://127.0.0.1:<port> for a local arena-cloud --dev)
        arena-hub dev seed [--data-dir <path>] [--kiosk-allow <path_glob>]... [--kiosk-process-mode <enforce|report>]
        arena-hub dev revoke-device <device_id> [--health-port <port>]";
@@ -40,6 +40,10 @@ pub struct Config {
     /// The internet endpoints the probe connects to (`--probe-internet`, default `1.1.1.1:443`
     /// and `8.8.8.8:443`).
     pub probe_internet: Vec<SocketAddr>,
+    /// The `cloudflared` executable the Windows Hub runs for its Cloudflare Tunnel
+    /// (`--cloudflared`, Story 8.39). Without it the Hub looks for `cloudflared.exe` beside its
+    /// own executable (the installer bundles it there).
+    pub cloudflared: Option<PathBuf>,
     pub printer: PrinterChoice,
 }
 
@@ -245,6 +249,7 @@ fn parse_flags(
     let mut cloud_plain_http = false;
     let mut platform = DEFAULT_PLATFORM;
     let mut probe_internet = default_internet_endpoints();
+    let mut cloudflared: Option<PathBuf> = None;
     let mut printer = PrinterChoice::default();
     let mut args = args;
     while let Some(arg) = args.next() {
@@ -284,6 +289,7 @@ fn parse_flags(
                 probe_internet =
                     arena_tasks::parse_internet_endpoints(&value()?.to_string_lossy())?;
             }
+            "--cloudflared" if ports => cloudflared = Some(PathBuf::from(value()?)),
             "--printer" if ports => printer = printer_choice(&value()?)?,
             "--platform" if ports => platform = platform_choice(&value()?)?,
             other => return Err(format!("unknown argument {other}")),
@@ -312,6 +318,7 @@ fn parse_flags(
         cloud_plain_http,
         platform,
         probe_internet,
+        cloudflared,
         printer,
     }))
 }
@@ -468,6 +475,7 @@ mod tests {
                     cloud_plain_http: false,
                     platform: HubPlatform::Windows,
                     probe_internet: default_internet_endpoints(),
+                    cloudflared: None,
                     printer: PrinterChoice::System,
                 },
                 SeedOptions::default()
@@ -623,6 +631,17 @@ mod tests {
         }
         assert!(USAGE.contains("--cloud-host <host:port>"));
         assert!(USAGE.contains("--probe-internet"));
+    }
+
+    #[test]
+    fn the_cloudflared_path_is_optional() {
+        let env = env_of(&[("HOME", "/h")]);
+        assert_eq!(run(&[], &env, false).unwrap().cloudflared, None);
+        let path = r"C:\Arena\cloudflared.exe";
+        let c = run(&["--cloudflared", path], &env, false).unwrap();
+        assert_eq!(c.cloudflared, Some(PathBuf::from(path)));
+        assert!(run(&["--cloudflared"], &env, false).is_err());
+        assert!(USAGE.contains("--cloudflared <path>"));
     }
 
     #[test]

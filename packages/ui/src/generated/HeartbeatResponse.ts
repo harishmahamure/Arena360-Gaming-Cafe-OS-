@@ -2,6 +2,7 @@
 import type { HeartbeatFence } from "./HeartbeatFence";
 import type { SeqRange } from "./SeqRange";
 import type { SetupTemplateLink } from "./SetupTemplateLink";
+import type { TunnelAnswer } from "./TunnelAnswer";
 
 export type HeartbeatResponse = {
   licence: string;
@@ -27,4 +28,9 @@ export type HeartbeatResponse = {
    * before anything else (Story 8.3).
    */
   resend?: SeqRange;
+  /**
+   * What to do about the branch's tunnel (Story 8.39); always present for a Free or paid
+   * branch, absent from an older cloud. It may carry the tunnel credential, once.
+   */
+  tunnel?: TunnelAnswer;
 };

@@ -79,6 +79,7 @@ mod summary;
 mod tax;
 mod test_session;
 pub mod tier;
+mod tunnel;
 mod ui_auth;
 mod undo;
 mod wizard;
@@ -509,6 +510,10 @@ pub use test_session::{
     TEST_SESSION_CONFIRM_MS, TEST_SESSION_MS, TestSessionOutcome, TestSessionStatus,
 };
 pub use tier::{EntitlementSource, TIERS, Tier, TierDefaults, TierLimits};
+pub use tunnel::{
+    TUNNEL_DOMAIN, TUNNEL_FLAG, TUNNEL_ORIGIN, TunnelAnswer, TunnelLine, TunnelReport, TunnelState,
+    tunnel_hostname,
+};
 pub use ui_auth::{
     ElevateDrop, ElevateOk, ElevateRequest, ElevationItem, MAX_STAFF_PASSWORD_CHARS,
     MAX_TICKET_USES, MIN_STAFF_PASSWORD_CHARS, SessionStaff, SettingEntry, SetupCodeRequest,

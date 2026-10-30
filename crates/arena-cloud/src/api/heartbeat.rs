@@ -2,9 +2,12 @@ use std::sync::Arc;
 
 use arena_proto::{
     AppError, ErrorCode, HEARTBEAT_MIN_GAP_MS, HUB_TOKEN_PREFIX, HeartbeatFence, HeartbeatRequest,
-    HeartbeatResponse, SeqRange, Tier,
+    HeartbeatResponse, HubPlatform, LicenceClaims, SeqRange, TUNNEL_FLAG, Tier, TunnelAnswer,
+    TunnelReport, tunnel_hostname,
 };
-use arena_store::control::{AdMetric, Beat, HubRow, HubUploadView, RateRule};
+use arena_store::control::{
+    AdMetric, Beat, BranchTunnel, HubRow, HubUploadView, NewBranchTunnel, RateRule, TunnelRowState,
+};
 use axum::extract::State;
 use axum::http::{HeaderMap, header::AUTHORIZATION};
 use axum::routing::post;
@@ -23,6 +26,8 @@ use crate::presign::{Epoch, MAX_SEQ, branch_prefix};
 
 const TOKEN_CACHE_MS: i64 = 5 * 60 * 1000;
 const RATE_PREFIX: &str = "hb:";
+/// How long the tunnel step may hold a heartbeat answer (the Hub's request times out at 15 s).
+const TUNNEL_BUDGET: std::time::Duration = std::time::Duration::from_secs(8);
 
 fn refused(code: ErrorCode, message: &str) -> ApiError {
     AppError::new(code, message).into()
@@ -202,6 +207,17 @@ async fn heartbeat(
         .inspect_err(|e| tracing::warn!(error = %e, "heartbeat: pending commands unavailable"))
         .unwrap_or(0);
     let setup_template = super::setup_start::retry_link(&st, &hub.branch_id, now).await;
+    // Cloudflare is slow now and then; the licence, fence and commands in this answer must not
+    // wait on it past the Hub's own request timeout. A late answer is "change nothing".
+    let tunnel = tokio::time::timeout(
+        TUNNEL_BUDGET,
+        tunnel_answer(&st, &hub, &claims, body.tunnel, now),
+    )
+    .await
+    .unwrap_or_else(|_| {
+        tracing::warn!(hub_id = %hub.id, "heartbeat: the tunnel step ran out of time");
+        None
+    });
     Ok(Json(HeartbeatResponse {
         licence,
         fence: HeartbeatFence {
@@ -214,7 +230,147 @@ async fn heartbeat(
         ad_requests_through,
         setup_template,
         resend,
+        tunnel,
     }))
+}
+
+/// What the Hub is to do about its tunnel (Story 8.39), decided from the signed licence flags and
+/// the paired Hub's platform. A provider failure never fails the heartbeat: the answer is `off`
+/// and the next heartbeat tries again (the row's state makes create and delete repeatable). The
+/// credential is fetched when the tunnel is created or when the Hub reports it holds none, handed
+/// out in the answer and never stored or logged. `None` only when the cloud's own database could
+/// not be read, which tells the Hub to change nothing.
+async fn tunnel_answer(
+    st: &AuthState,
+    hub: &HubRow,
+    claims: &LicenceClaims,
+    report: Option<TunnelReport>,
+    now: i64,
+) -> Option<TunnelAnswer> {
+    let row = st
+        .db
+        .branch_tunnel(&hub.branch_id)
+        .await
+        .inspect_err(|e| tracing::warn!(error = %e, hub_id = %hub.id, "heartbeat: no tunnel row"))
+        .ok()?;
+    let entitled = claims.tier != Tier::Free && claims.flags.iter().any(|f| f == TUNNEL_FLAG);
+    if !entitled || hub.platform != HubPlatform::Windows {
+        if let Some(row) = row {
+            remove_tunnel(st, &row, now).await;
+        }
+        return Some(if entitled {
+            TunnelAnswer::UnsupportedPlatform
+        } else {
+            TunnelAnswer::Off
+        });
+    }
+    // A failure on the cloud's side is no reason to take down a connector the Hub already runs:
+    // a Hub that holds its credential is told nothing, one that does not is told `off`.
+    let unsettled = || {
+        if report.is_some_and(|r| r.has_credential) {
+            None
+        } else {
+            Some(TunnelAnswer::Off)
+        }
+    };
+    let Some(provider) = st.tunnels.get() else {
+        tracing::warn!(hub_id = %hub.id, "heartbeat: a branch is entitled to a tunnel and none is configured");
+        return unsettled();
+    };
+    // The flag came back while a delete was still being retried: finish it first.
+    let row = match row {
+        Some(row) if row.state == TunnelRowState::Deleting => {
+            if !remove_tunnel(st, &row, now).await {
+                return Some(TunnelAnswer::Off);
+            }
+            None
+        }
+        other => other,
+    };
+    let (hostname, tunnel_id, delivered) = match row {
+        Some(row) => (row.hostname, row.tunnel_id, row.delivered_at.is_some()),
+        None => {
+            let hostname = tunnel_hostname(&hub.branch_id);
+            let made = match provider.ensure(&hub.branch_id, &hostname).await {
+                Ok(made) => made,
+                Err(e) => {
+                    tracing::warn!(error = %e, hub_id = %hub.id, "heartbeat: tunnel not created");
+                    return unsettled();
+                }
+            };
+            if let Err(e) = st
+                .db
+                .insert_branch_tunnel(&NewBranchTunnel {
+                    branch_id: &hub.branch_id,
+                    hostname: &hostname,
+                    tunnel_id: &made.tunnel_id,
+                    access_app_id: &made.access_app_id,
+                    now,
+                })
+                .await
+            {
+                tracing::warn!(error = %e, hub_id = %hub.id, "heartbeat: tunnel not recorded");
+                return unsettled();
+            }
+            tracing::info!(branch_id = %hub.branch_id, "tunnel created");
+            (hostname, made.tunnel_id, false)
+        }
+    };
+    // A Hub that sends no report (an older build) is not asked to take the credential again.
+    if delivered && report.is_none_or(|r| r.has_credential) {
+        return Some(TunnelAnswer::On { hostname });
+    }
+    match provider.credential(&tunnel_id).await {
+        Ok(credential) => {
+            if let Err(e) = st.db.mark_tunnel_delivered(&hub.branch_id, now).await {
+                tracing::warn!(error = %e, hub_id = %hub.id, "heartbeat: tunnel delivery not recorded");
+            }
+            Some(TunnelAnswer::Grant {
+                hostname,
+                credential,
+            })
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, hub_id = %hub.id, "heartbeat: no tunnel credential");
+            unsettled()
+        }
+    }
+}
+
+/// Deletes the Access application, the DNS name and the tunnel of `row`, then the row. The row
+/// stays `deleting` when the provider fails (or there is none), and the next heartbeat retries.
+/// Answers whether the tunnel is gone.
+async fn remove_tunnel(st: &AuthState, row: &BranchTunnel, now: i64) -> bool {
+    if row.state != TunnelRowState::Deleting
+        && let Err(e) = st
+            .db
+            .set_tunnel_state(&row.branch_id, TunnelRowState::Deleting, now)
+            .await
+    {
+        tracing::warn!(error = %e, branch_id = %row.branch_id, "heartbeat: tunnel not marked deleting");
+        return false;
+    }
+    let Some(provider) = st.tunnels.get() else {
+        return false;
+    };
+    let what = crate::tunnel::Provisioned {
+        tunnel_id: row.tunnel_id.clone(),
+        access_app_id: row.access_app_id.clone(),
+    };
+    if let Err(e) = provider.delete(&row.branch_id, &row.hostname, &what).await {
+        tracing::warn!(error = %e, branch_id = %row.branch_id, "heartbeat: tunnel not deleted");
+        return false;
+    }
+    match st.db.delete_branch_tunnel(&row.branch_id).await {
+        Ok(()) => {
+            tracing::info!(branch_id = %row.branch_id, "tunnel deleted");
+            true
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, branch_id = %row.branch_id, "heartbeat: tunnel row not removed");
+            false
+        }
+    }
 }
 
 /// Compares the heartbeat with the cloud's cached view of the Hub's upload (Story 8.3). A

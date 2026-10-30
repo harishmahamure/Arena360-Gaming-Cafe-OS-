@@ -119,6 +119,7 @@ pub const TIERS: &[TierDefaults] = &[
             "kitchen",
             "kitchen_display",
             "standby",
+            "tunnel",
         ],
         features: &[],
         upload_interval_s: 300,
@@ -191,7 +192,8 @@ mod tests {
                 "kiosk_orders",
                 "kitchen",
                 "kitchen_display",
-                "standby"
+                "standby",
+                "tunnel"
             ]
         );
         assert!(premium.features.is_empty());

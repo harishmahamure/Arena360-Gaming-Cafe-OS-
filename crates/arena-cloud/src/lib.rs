@@ -44,6 +44,7 @@ pub mod rollups;
 pub mod store;
 pub mod templates;
 pub mod totp;
+pub mod tunnel;
 pub mod useragent;
 
 use std::future::Future;
@@ -60,6 +61,7 @@ pub use crate::health::CHECK_INTERVAL;
 use crate::health::{CHECK_TIMEOUT, Reachability};
 use crate::messaging::{FakeNotifier, FakeSms, GupshupSms, Messenger, Notifier};
 use crate::push::{FakePush, WebPush};
+use crate::tunnel::{FakeTunnels, TunnelProvider};
 
 /// A source of Unix milliseconds (tests move it by hand).
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
@@ -225,7 +227,20 @@ pub fn auth_state(
             }
         }
     };
+    let tunnels = match &cfg.sms {
+        SmsProviderConfig::Fake => Some(TunnelProvider::Fake(FakeTunnels::new())),
+        SmsProviderConfig::Gupshup(_) => match TunnelProvider::from_env(&|k| std::env::var_os(k)) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(error = %e, "no tunnel provider: branches get no tunnel");
+                None
+            }
+        },
+    };
     let st = Arc::new(AuthState::new(db, sms, clock, cfg));
+    if let Some(t) = tunnels {
+        let _ = st.tunnels.set(t);
+    }
     if let Some(n) = notifier {
         let _ = st.notifier.set(n);
     }

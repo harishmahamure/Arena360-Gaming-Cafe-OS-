@@ -11,6 +11,7 @@
   /** The System sections. */
   const sections: { href: string; label: MessageKey }[] = $derived([
     { href: "/system/audit", label: "hub.system.nav.audit" },
+    { href: "/system/connection", label: "hub.system.nav.connection" },
     ...(service.access
       ? [{ href: "/system/service", label: "hub.system.nav.service" as const }]
       : []),

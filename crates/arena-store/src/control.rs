@@ -40,6 +40,7 @@ mod signin;
 mod staff_invites;
 mod template_choice;
 mod tenant;
+mod tunnels;
 
 pub use admin_audit::{AdminAuditRow, NewAdminAudit};
 pub use ads::{AdFillRow, AdMetric};
@@ -81,6 +82,7 @@ pub use signin::{
 pub use staff_invites::{NewStaffInvite, StaffInviteRow};
 pub use template_choice::TemplateChoice;
 pub use tenant::{Branch, BranchCodeOutcome, BranchProfile, NewTenantBranch, ProgressRow, Tenant};
+pub use tunnels::{BranchTunnel, NewBranchTunnel, TunnelRowState};
 
 use std::fmt;
 use std::ops::Range;
@@ -199,6 +201,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 25,
         sql: include_str!("../control-migrations/0025_builder_jobs.sql"),
+    },
+    ControlMigration {
+        version: 26,
+        sql: include_str!("../control-migrations/0026_branch_tunnels.sql"),
     },
 ];
 

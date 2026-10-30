@@ -24,6 +24,7 @@ mod ui_report;
 #[cfg(test)]
 mod ui_setup_tests;
 mod ui_shift;
+mod ui_tunnel;
 
 pub use health::{
     DEFAULT_HEALTH_PORT, UI_ALLOWED_ORIGINS, bind_health, router, serve_health, serve_router,

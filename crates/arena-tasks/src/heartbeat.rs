@@ -46,6 +46,7 @@ pub struct HeartbeatTask {
     presence: Option<Presence>,
     templates: Option<Arc<crate::SetupTemplateInbox>>,
     resend: Option<Arc<crate::ResendInbox>>,
+    tunnel: Option<Arc<crate::TunnelInbox>>,
 }
 
 pub type Presence = Arc<dyn Fn(&str) -> (bool, Option<i64>) + Send + Sync>;
@@ -74,7 +75,15 @@ impl HeartbeatTask {
             presence: None,
             templates: None,
             resend: None,
+            tunnel: None,
         }
+    }
+
+    /// Where the cloud's tunnel answer is left for the tunnel task, and where the heartbeat reads
+    /// whether the Hub holds a credential (Story 8.39).
+    pub fn with_tunnel(mut self, inbox: Arc<crate::TunnelInbox>) -> Self {
+        self.tunnel = Some(inbox);
+        self
     }
 
     /// Where a resend request in the answer is left for the uploader, and where the uploader
@@ -257,6 +266,7 @@ impl HeartbeatTask {
             ad_requests: ads.requests,
             command_schema: Some(arena_proto::COMMAND_SCHEMA_VERSION),
             opening,
+            tunnel: self.tunnel.as_ref().map(|t| t.report()),
         };
         let sent = Instant::now();
         match self.cloud.heartbeat(&token, &req).await {
@@ -274,6 +284,27 @@ impl HeartbeatTask {
                     if let Some(range) = res.resend {
                         inbox.offer(&req.epoch, range);
                     }
+                }
+                if let (Some(inbox), Some(answer)) = (&self.tunnel, res.tunnel.clone()) {
+                    // No tunnel task runs on a Hub that cannot have one, so the heartbeat sets (and
+                    // clears) the "needs the Windows Hub" line itself.
+                    let unsupported = answer == arena_proto::TunnelAnswer::UnsupportedPlatform;
+                    self.status.send_if_modified(|s| {
+                        let now = s.tunnel.state == arena_proto::TunnelState::UnsupportedPlatform;
+                        if unsupported == now {
+                            return false;
+                        }
+                        s.tunnel = if unsupported {
+                            arena_proto::TunnelLine::new(
+                                arena_proto::TunnelState::UnsupportedPlatform,
+                                None,
+                            )
+                        } else {
+                            arena_proto::TunnelLine::default()
+                        };
+                        true
+                    });
+                    inbox.offer(answer);
                 }
                 self.accept(&writer, &lease, res, at).await;
                 if ack != (None, None)
@@ -1538,6 +1569,77 @@ mod tests {
         // An invalid range is not taken over the good one.
         f.task.beat().await;
         assert_eq!(inbox.pending().map(|(_, r)| r.from), Some(3));
+    }
+
+    fn with_tunnel_answer(reply: (u16, String), tunnel: serde_json::Value) -> (u16, String) {
+        let mut v = serde_json::from_str::<serde_json::Value>(&reply.1).unwrap();
+        v["tunnel"] = tunnel;
+        (reply.0, v.to_string())
+    }
+
+    #[tokio::test]
+    async fn the_tunnel_report_rides_the_heartbeat_and_the_answer_is_left_for_the_tunnel_task() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let port = serve_with(
+            vec![with_tunnel_answer(
+                answer(true, Tier::Premium),
+                serde_json::json!({"state": "grant", "hostname": "B.tunnel.arena360.cloud", "credential": "tok-1"}),
+            )],
+            false,
+            Arc::clone(&seen),
+        )
+        .await;
+        let mut f = fx(port).await;
+        let inbox = crate::TunnelInbox::new();
+        f.task.tunnel = Some(Arc::clone(&inbox));
+        f.task.beat().await;
+        assert_eq!(
+            sent(&seen, 0)["tunnel"],
+            serde_json::json!({"has_credential": false})
+        );
+        assert!(matches!(
+            inbox.take(),
+            Some(arena_proto::TunnelAnswer::Grant { .. })
+        ));
+        assert_eq!(f.status.borrow().tunnel, arena_proto::TunnelLine::default());
+    }
+
+    #[tokio::test]
+    async fn a_hub_without_a_tunnel_task_sends_no_tunnel_block() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let port = serve_with(vec![answer(true, Tier::Basic)], false, Arc::clone(&seen)).await;
+        let mut f = fx(port).await;
+        f.task.beat().await;
+        assert!(sent(&seen, 0).get("tunnel").is_none());
+    }
+
+    #[tokio::test]
+    async fn an_unsupported_platform_answer_sets_the_line_and_the_next_answer_clears_it() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let port = serve_with(
+            vec![
+                with_tunnel_answer(
+                    answer(true, Tier::Premium),
+                    serde_json::json!({"state": "unsupported_platform"}),
+                ),
+                with_tunnel_answer(
+                    answer(true, Tier::Premium),
+                    serde_json::json!({"state": "off"}),
+                ),
+            ],
+            false,
+            Arc::clone(&seen),
+        )
+        .await;
+        let mut f = fx(port).await;
+        f.task.tunnel = Some(crate::TunnelInbox::new());
+        f.task.beat().await;
+        assert_eq!(
+            f.status.borrow().tunnel.state,
+            arena_proto::TunnelState::UnsupportedPlatform
+        );
+        f.task.beat().await;
+        assert_eq!(f.status.borrow().tunnel, arena_proto::TunnelLine::default());
     }
 
     #[tokio::test]

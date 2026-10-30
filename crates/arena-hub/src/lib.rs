@@ -477,6 +477,27 @@ async fn run(
     let command_poke = Arc::new(Notify::new());
     let setup_templates = arena_tasks::SetupTemplateInbox::new();
     let resend = arena_tasks::ResendInbox::new();
+    let tunnel_inbox = arena_tasks::TunnelInbox::new();
+    // The Cloudflare Tunnel (Story 8.39): a Windows Hub keeps the credential DPAPI-protected and
+    // runs the bundled `cloudflared` as a supervised child. It never calls the writer.
+    let tunnel_job = (cfg.platform == arena_proto::HubPlatform::Windows).then(|| {
+        let program = cfg.cloudflared.clone().unwrap_or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(|dir| dir.join("cloudflared.exe")))
+                .unwrap_or_else(|| std::path::PathBuf::from("cloudflared.exe"))
+        });
+        tracing::info!(program = %program.display(), "cloudflare tunnel connector configured");
+        tokio::spawn(
+            arena_tasks::TunnelTask::new(
+                Arc::clone(&tunnel_inbox),
+                arena_tasks::TunnelCredential::in_dir(&cfg.data_dir),
+                Arc::new(arena_tasks::ProcessConnector::new(program)),
+                status_tx.clone(),
+            )
+            .run(),
+        )
+    });
     let heartbeat_job = tokio::spawn(
         HeartbeatTask::new(
             cloud.clone(),
@@ -490,6 +511,7 @@ async fn run(
         .with_poke(Arc::clone(&command_poke))
         .with_templates(Arc::clone(&setup_templates))
         .with_resend(Arc::clone(&resend))
+        .with_tunnel(tunnel_inbox)
         .with_presence({
             let presence = lan_hub.presence();
             Arc::new(move |id| presence.status(id))
@@ -801,6 +823,11 @@ async fn run(
     let _ = probe_job.await;
     heartbeat_job.abort();
     let _ = heartbeat_job.await;
+    // Dropping the task kills the `cloudflared` child (`kill_on_drop`).
+    if let Some(job) = tunnel_job {
+        job.abort();
+        let _ = job.await;
+    }
     command_job.abort();
     let _ = command_job.await;
     upload_job.abort();

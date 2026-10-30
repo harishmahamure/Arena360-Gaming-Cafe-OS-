@@ -35,6 +35,9 @@ pub struct AuthState {
     /// Pushes owner alerts to the owner's browsers (Story 8.33); set once by `auth_state`. Unset: the push
     /// routes answer 503 and alerts reach only the list and WhatsApp.
     pub push: std::sync::OnceLock<crate::push::WebPush>,
+    /// Creates and removes the Cloudflare Tunnels of entitled branches (Story 8.39); set once by
+    /// `auth_state`. Unset: no tunnel is made and a heartbeat answers `off`.
+    pub tunnels: std::sync::OnceLock<crate::tunnel::TunnelProvider>,
     pub clock: Clock,
     pepper: Vec<u8>,
     /// Exact browser origins allowed with credentials.
@@ -82,6 +85,7 @@ impl AuthState {
             sms,
             notifier: std::sync::OnceLock::new(),
             push: std::sync::OnceLock::new(),
+            tunnels: std::sync::OnceLock::new(),
             clock,
             pepper: cfg.pepper.clone(),
             web_origins: cfg.web_origins.clone(),

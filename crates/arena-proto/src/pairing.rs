@@ -332,6 +332,10 @@ pub struct HeartbeatRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub opening: Option<crate::BranchOpening>,
+    /// Whether the Hub holds a tunnel credential (Story 8.39); an older Hub omits it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tunnel: Option<crate::TunnelReport>,
 }
 
 /// A run of change-log `seq`s of the heartbeat's epoch, both ends included.
@@ -425,6 +429,11 @@ pub struct HeartbeatResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub resend: Option<SeqRange>,
+    /// What to do about the branch's tunnel (Story 8.39); always present for a Free or paid
+    /// branch, absent from an older cloud. It may carry the tunnel credential, once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tunnel: Option<crate::TunnelAnswer>,
 }
 
 impl std::fmt::Debug for HeartbeatResponse {
@@ -433,6 +442,7 @@ impl std::fmt::Debug for HeartbeatResponse {
             .field("fence", &self.fence)
             .field("cloud_time", &self.cloud_time)
             .field("pending_commands", &self.pending_commands)
+            .field("tunnel", &self.tunnel)
             .finish_non_exhaustive()
     }
 }

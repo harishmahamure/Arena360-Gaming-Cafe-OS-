@@ -63,6 +63,12 @@ environment (not with --dev):
                           key (base64url) and the mailto:/https: contact the push services see.
                           Unset: the push routes answer 503 and alerts reach the list and
                           WhatsApp only (--dev: the recorded fake and a fixed public key)
+  ARENA_CF_API_TOKEN, ARENA_CF_ACCOUNT_ID, ARENA_CF_ZONE_ID  the Cloudflare account that runs the branch
+                          tunnels (Tunnel, Access and DNS edit rights; the zone of
+                          arena360.cloud). ARENA_CF_ACCESS_POLICY_ID (optional) is the reusable
+                          Access policy put on every branch application, ARENA_CF_API_BASE
+                          (optional) the API base. Unset: no tunnel is made and every heartbeat
+                          answers tunnel off (--dev: the recorded fake)
   ARENA_MFA_KEY           base64 of 32 random bytes: the AES-256-GCM key of owners' TOTP
                           secrets (--dev: a fixed dev key)
   ARENA_LICENCE_SIGNING_KEY  the Ed25519 PKCS#8 PEM that signs branch licences (from

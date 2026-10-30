@@ -254,8 +254,9 @@ async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Resp
 /// The local Hub UI's read API (merged into the loopback health server):
 /// `GET /ui/snapshot` returns a [`arena_proto::HubSnapshot`], its locale resolved at `clock`'s
 /// now, each device's `online` read from the LAN registry through `presence`, and
-/// `connectivity` from `status` (the default `online` without one). Only the
-/// [`UI_ALLOWED_ORIGINS`] may read it from a browser.
+/// `connectivity` from `status` (the default `online` without one). `GET /ui/tunnel` answers
+/// the Cloudflare Tunnel line from `status` (Story 8.39). Only the [`UI_ALLOWED_ORIGINS`] may
+/// read them from a browser.
 pub fn ui_router(
     reader: Arc<SnapshotReader>,
     clock: Arc<dyn Clock>,
@@ -263,6 +264,8 @@ pub fn ui_router(
     status: Option<watch::Receiver<HubStatus>>,
     pairing: Option<arena_core::PairGate>,
 ) -> Router {
+    // `GET /ui/tunnel` (Story 8.39) reads the same status channel.
+    let tunnel = crate::ui_tunnel::router(status.clone());
     Router::new()
         .route("/ui/snapshot", get(ui_snapshot))
         .with_state(SnapshotState {
@@ -272,6 +275,7 @@ pub fn ui_router(
             status,
             pairing,
         })
+        .merge(tunnel)
         .layer(axum::middleware::from_fn(ui_guard))
 }
 
@@ -801,6 +805,34 @@ mod tests {
             let (status, headers, _) = send(Arc::clone(&r), get(None)).await;
             assert_eq!(status, StatusCode::OK);
             assert!(headers.get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
+        }
+
+        #[tokio::test]
+        async fn the_tunnel_line_is_served_by_the_ui_router_behind_the_same_guard() {
+            let (_dir, r) = reader(true);
+            let line = |origin: Option<&str>| {
+                let mut b = Request::get("/ui/tunnel").header(header::HOST, "127.0.0.1:7409");
+                if let Some(o) = origin {
+                    b = b.header(header::ORIGIN, o);
+                }
+                b.body(Body::empty()).unwrap()
+            };
+            let (status, headers, body) =
+                send_with(Arc::clone(&r), line(Some("http://tauri.localhost")), |s| {
+                    s.tunnel = arena_proto::TunnelLine::new(
+                        arena_proto::TunnelState::UnsupportedPlatform,
+                        None,
+                    )
+                })
+                .await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body, json!({"state": "unsupported_platform"}));
+            assert_eq!(
+                headers[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+                "http://tauri.localhost"
+            );
+            let (status, _, _) = send(Arc::clone(&r), line(Some("http://evil.example"))).await;
+            assert_eq!(status, StatusCode::FORBIDDEN);
         }
 
         #[tokio::test]

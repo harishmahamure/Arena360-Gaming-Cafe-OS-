@@ -260,7 +260,7 @@ development_status:
   8-36-the-audit-builder-rebuilds-a-branch-month-on-demand: done
   8-37-the-builder-serves-audit-queries-from-a-local-cache: done
   8-38-audit-search-in-reports-with-preparing-audit: done
-  8-39-a-cloudflare-tunnel-for-entitled-branches-run-by-the-windows: backlog
+  8-39-a-cloudflare-tunnel-for-entitled-branches-run-by-the-windows: review
   8-40-live-view-a-read-only-floor-through-the-tunnel: backlog
   8-41-remote-kiosks-connect-through-the-tunnel-with-their-device-t: backlog
   8-42-the-owner-s-remote-experience-proven-against-its-targets: backlog

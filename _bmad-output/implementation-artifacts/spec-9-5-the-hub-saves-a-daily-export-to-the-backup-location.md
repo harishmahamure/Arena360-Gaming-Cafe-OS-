@@ -2,7 +2,7 @@
 title: 'Story 9.5: The Hub saves a daily export to the backup location'
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'review'
 review_loop_iteration: 0
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/epic-9-context.md'
@@ -75,7 +75,7 @@ deferred: []
 
 ## Auto Run Result
 
-Status: in-review
+Status: review
 
 Implemented per spec. Verified: clippy `-D warnings` clean on proto/store/core/tasks/api/hub; `cargo test` passes for those crates except `heartbeat::trusted_time_is_cloud_time_plus_monotonic_elapsed` and `printer::lan::a_printer_that_stops_reading_times_out`, which fail the same way on the baseline; `check:layers`, `check:strings` clean; `pnpm --filter @arena/hub check` shows only the two baseline `process` errors in `playwright.kitchen.config.ts`; the Playwright spec `backup-export.spec.ts` passes (14 tests).
 

@@ -2,7 +2,7 @@
 title: 'Story 8.20: Commands are swept, expire after 7 days, and are fenced by epoch'
 type: 'feature'
 created: '2026-10-30'
-status: 'in-review'
+status: 'done'
 baseline_commit: '9f88ac9'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -97,3 +97,7 @@ deferred: []
 ## Auto Run Result
 
 Status: in-review. Implemented: migration 0020 (`expired` status, `applied_epoch`), `CommandStatus::Expired` / `ErrorCode::CommandExpired`, `ControlDb::sweep_commands` / `command_backlog` / `requeue_fetched_command` / `move_branch_fence`, the all-pending mailbox fetch, `FENCED` on fetch and result, the `command-sweep` jobs task with a per-minute CronJob, and the Hub's demotion on `FENCED` with no cursor filter. Verified: `cargo fmt --check`, clippy `-D warnings`, tests for arena-proto/-store/-cloud/-tasks/-kiosk-core, `check:protocol`, `check:strings`, `check:layers`, `check:secrets`. Known unrelated failures: arena-cloud `backup::a_hung_run_times_out_with_its_own_code` (flaky) and `binary::unreachable_at_start_*`; arena-tasks `trusted_time_is_cloud_time_plus_monotonic_elapsed` and `printer::lan::a_printer_that_stops_reading_times_out`; `check:deploy` needs `kubectl`; `check:generated` lists the two regenerated files until committed.
+
+## Code Review Result
+
+Reviewed 2026-10-30: no blocking findings. fmt and clippy (`-D warnings`) clean; arena-proto/-store/-cloud/-tasks tests pass apart from the known unrelated failures (`backup::a_hung_run_times_out_with_its_own_code`, `binary::unreachable_at_start_*`, `heartbeat::trusted_time_*`, `printer::lan::a_printer_that_stops_reading_times_out`) and one load-sensitive timing flake (`a_double_submitted_code_signs_in_once_and_counts_no_failure`, passes alone). Noted, not blocking: `move_branch_fence` has no production caller yet (the takeover commit belongs to the fence-claim story, 9.3).

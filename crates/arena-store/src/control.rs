@@ -169,6 +169,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
         version: 20,
         sql: include_str!("../control-migrations/0020_command_sweeper.sql"),
     },
+    ControlMigration {
+        version: 21,
+        sql: include_str!("../control-migrations/0021_stepup.sql"),
+    },
 ];
 
 /// The `gz_control` schema version this binary writes.

@@ -85,6 +85,11 @@ pub struct CommandWire {
     #[ts(type = "unknown")]
     pub payload: serde_json::Value,
     pub issued_by: String,
+    /// The owner id when the cloud posted this command after a step-up (Story 8.25); the Hub records
+    /// it as an MFA elevation on the change row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub elevated_by: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

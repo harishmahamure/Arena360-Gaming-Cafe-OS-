@@ -2268,6 +2268,7 @@ mod tests {
             schema_version: 1,
             payload,
             issued_by: "owner-1".into(),
+            elevated_by: None,
         };
         let group = hub
             .writer

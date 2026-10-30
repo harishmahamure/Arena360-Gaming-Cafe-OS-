@@ -5,7 +5,9 @@
 
 use std::sync::Arc;
 
-use arena_proto::{OTP_DIGITS, SignupStart};
+use arena_proto::{
+    AppError, OTP_DIGITS, OwnerCommandKind, SignupStart, accepted_owner_kind, owner_command_kind,
+};
 use arena_store::control::{ControlDb, NewOwner};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
@@ -56,6 +58,9 @@ pub struct AuthState {
     pub data_age: crate::data_age::DataAgeMetrics,
     /// The branch summaries and rollup months the owner read API serves from memory (Story 8.9).
     pub read_cache: crate::owner_read::ReadCache,
+    /// Owner command kinds searched after `OWNER_COMMAND_KINDS` (Story 8.25): empty in production,
+    /// set by tests that need a sensitive kind before one exists. A payload need only be an object.
+    pub extra_kinds: std::sync::Mutex<Vec<OwnerCommandKind>>,
 }
 
 impl AuthState {
@@ -81,6 +86,24 @@ impl AuthState {
             rollup_metrics: crate::rollups::RollupMetrics::default(),
             data_age: crate::data_age::DataAgeMetrics::default(),
             read_cache: crate::owner_read::ReadCache::default(),
+            extra_kinds: std::sync::Mutex::default(),
+        }
+    }
+
+    /// The owner command kind the cloud accepts under `name`: a handled kind of the catalogue, else a
+    /// handled one of [`Self::extra_kinds`]. `UNSUPPORTED` for anything else.
+    pub fn owner_kind(&self, name: &str) -> Result<OwnerCommandKind, AppError> {
+        let refused = match accepted_owner_kind(name) {
+            Ok(k) => return Ok(*k),
+            Err(e) => e,
+        };
+        let extra = self
+            .extra_kinds
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match extra.iter().find(|k| k.kind == name && k.handled) {
+            Some(k) if owner_command_kind(name).is_none() => Ok(*k),
+            _ => Err(refused),
         }
     }
 

@@ -6,6 +6,7 @@
     cmd,
     queuedText,
     rowKey,
+    sendHeld,
     stateOf,
     whatOf,
     type Row,
@@ -34,9 +35,13 @@
     <StatusBadge tone={view.tone} text={view.text} />
     {#if view.action}
       <Button
-        label={view.action === "retry" ? "common.retry" : "owner.cmd.resend"}
+        label={view.action === "retry"
+          ? "common.retry"
+          : view.action === "send"
+            ? "owner.cmd.send"
+            : "owner.cmd.resend"}
         variant="secondary"
-        onclick={() => again(row)}
+        onclick={() => (row.local && view.action === "send" ? sendHeld(row.local) : again(row))}
         disabled={cmd.again[key] === "sending"}
         disabledReason="owner.cmd.sending"
       />

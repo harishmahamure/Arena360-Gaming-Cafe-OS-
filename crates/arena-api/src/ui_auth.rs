@@ -884,6 +884,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
             StatusCode::UNAUTHORIZED
         }
         ErrorCode::FeatureNotEntitled
+        | ErrorCode::MfaRequired
         | ErrorCode::TierLocked
         | ErrorCode::FeatureNotInTier
         | ErrorCode::DeviceLimit

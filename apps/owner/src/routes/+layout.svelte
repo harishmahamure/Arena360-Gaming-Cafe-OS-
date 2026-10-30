@@ -5,6 +5,7 @@
   import { page } from "$app/state";
   import { onMount, type Snippet } from "svelte";
   import { drainQueue, startQueue } from "../lib/commands.svelte";
+  import StepUpDialog from "../lib/StepUpDialog.svelte";
   import { age, refresh, shell } from "../lib/shell.svelte";
 
   let { children }: { children: Snippet } = $props();
@@ -79,6 +80,7 @@
   </nav>
   <main class="main">{@render children()}</main>
 </div>
+<StepUpDialog />
 
 <style>
   :global(body) {

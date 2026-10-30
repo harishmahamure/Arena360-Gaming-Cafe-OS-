@@ -7,6 +7,8 @@ export const shell = $state({
   asOf: "",
   offline: false,
   ready: false,
+  /** The owner allowed text-message codes (offered beside the authenticator code in a step-up). */
+  smsFallback: false,
 });
 
 export const isFree = () =>
@@ -39,6 +41,7 @@ async function run() {
     return;
   }
   shell.cafe = session?.data.owner.cafe_name ?? shell.cafe;
+  shell.smsFallback = session?.data.owner.sms_fallback ?? shell.smsFallback;
   shell.branches = branches?.data ?? shell.branches;
   shell.asOf = [session?.asOf, branches?.asOf].filter(Boolean).sort()[0] ?? "";
   shell.offline = !session?.live || !branches?.live;

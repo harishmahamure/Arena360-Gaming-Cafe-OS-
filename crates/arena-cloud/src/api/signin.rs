@@ -30,9 +30,9 @@ use crate::auth::{AuthState, new_code, new_token, token_hash, valid_email, valid
 use crate::passwords::{dummy_hash, normalize_backup_code, verify_secret};
 use crate::useragent;
 
-const CHALLENGE_TTL_MS: i64 = SIGNIN_CHALLENGE_TTL_S as i64 * 1000;
+pub(super) const CHALLENGE_TTL_MS: i64 = SIGNIN_CHALLENGE_TTL_S as i64 * 1000;
 const LOCK_MS: i64 = SIGNIN_LOCK_S as i64 * 1000;
-const RESEND_AFTER_MS: i64 = OTP_RESEND_AFTER_S as i64 * 1000;
+pub(super) const RESEND_AFTER_MS: i64 = OTP_RESEND_AFTER_S as i64 * 1000;
 const TRUSTED_TTL_MS: i64 = TRUSTED_DEVICE_TTL_S as i64 * 1000;
 
 pub const SIGNIN_FAILED_MESSAGE: &str = "That didn't work. Check your details and try again.";
@@ -77,9 +77,9 @@ pub fn parse_login(raw: &str) -> Option<Login> {
 
 const MAX_LOGIN_CHARS: usize = 254;
 const MAX_PASSWORD_CHARS: usize = 128;
-const MAX_CODE_CHARS: usize = 32;
+pub(super) const MAX_CODE_CHARS: usize = 32;
 
-fn too_long(field: &str) -> ApiError {
+pub(super) fn too_long(field: &str) -> ApiError {
     ApiError::validation(field, "That is too long.")
 }
 
@@ -293,7 +293,7 @@ async fn live_challenge(
     Ok((c, owner))
 }
 
-fn sms_off() -> ApiError {
+pub(super) fn sms_off() -> ApiError {
     ApiError::forbidden("Text-message codes are turned off for this account.")
 }
 
@@ -373,7 +373,7 @@ fn device_label(given: Option<&str>, headers: &HeaderMap) -> Result<String, ApiE
     Ok(useragent::device_label(ua))
 }
 
-async fn backup_factor(
+pub(super) async fn backup_factor(
     st: &AuthState,
     owner_id: &str,
     code: &str,

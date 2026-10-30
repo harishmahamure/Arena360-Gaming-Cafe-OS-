@@ -432,9 +432,9 @@ pub use shop::{
 };
 pub use signin::{
     BACKUP_CODES_LOW, DEVICE_LABEL_MAX_CHARS, SIGNIN_CHALLENGE_TTL_S, SIGNIN_LOCK_S,
-    SIGNIN_MAX_ATTEMPTS, SIGNIN_MAX_FAILURES, Signin, SigninMethod, SigninNext, SigninReply,
-    SigninSms, SigninSmsSent, SigninVerified, SigninVerify, SmsFallback, TRUSTED_DEVICE_TTL_S,
-    TrustedDevice,
+    SIGNIN_MAX_ATTEMPTS, SIGNIN_MAX_FAILURES, STEPUP_TTL_MS, Signin, SigninMethod, SigninNext,
+    SigninReply, SigninSms, SigninSmsSent, SigninVerified, SigninVerify, SmsFallback,
+    StepupRequest, StepupSms, StepupSmsSent, TRUSTED_DEVICE_TTL_S, TrustedDevice,
 };
 pub use signup::{
     MfaState, OTP_DIGITS, OTP_MAX_ATTEMPTS, OTP_RESEND_AFTER_S, OTP_SENDS_PER_HOUR, OTP_TTL_S,

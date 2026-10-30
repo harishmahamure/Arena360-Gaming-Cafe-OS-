@@ -97,6 +97,37 @@ pub struct SigninVerified {
     pub backup_codes_remaining: Option<u32>,
 }
 
+/// How long a step-up proof lets a sensitive owner command through (Story 8.25).
+pub const STEPUP_TTL_MS: i64 = 5 * 60 * 1000;
+
+/// `POST /v1/session/stepup`: a second factor for the signed-in session. The answer is 204 and the
+/// session holds a proof for [`STEPUP_TTL_MS`].
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct StepupRequest {
+    pub method: SigninMethod,
+    pub code: String,
+}
+
+impl std::fmt::Debug for StepupRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StepupRequest")
+            .field("method", &self.method)
+            .finish_non_exhaustive()
+    }
+}
+
+/// `POST /v1/session/stepup/sms`: send a text-message code for a step-up. No fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct StepupSms {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct StepupSmsSent {
+    pub resend_after_s: u32,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct SmsFallback {

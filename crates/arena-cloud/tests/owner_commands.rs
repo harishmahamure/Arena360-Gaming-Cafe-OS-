@@ -769,6 +769,7 @@ impl Harness {
                 payload: &rate().to_string(),
                 issued_by: "owner",
                 group_id: None,
+                elevated_by: None,
                 now: self.now.load(Ordering::SeqCst) - age_ms,
             })
             .await
@@ -940,6 +941,7 @@ async fn a_fence_moved_during_a_burst_of_100_applies_every_command_exactly_once(
             payload: &payload,
             issued_by: "owner",
             group_id: None,
+            elevated_by: None,
             now: T0,
         })
         .await

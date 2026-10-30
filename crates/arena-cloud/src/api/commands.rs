@@ -6,8 +6,8 @@ use arena_proto::{
     OWNER_ALL_BRANCHES, OWNER_COMMAND_POSTS_PER_MIN, OWNER_COMMANDS_PAGE, OWNER_COMMANDS_PAGE_MAX,
     OwnerCommandKind, OwnerCommandList, OwnerCommandPost, OwnerCommandPosted, OwnerCommandPreview,
     OwnerCommandPreviewRequest, OwnerCommandSkip, OwnerCommandTarget, OwnerCommandView,
-    PRODUCT_COMMAND_PAYLOAD_MAX, SETTINGS_COMMAND_KEYS, Tier, accepted_owner_kind,
-    command_payload_max, is_setup_command, validate_owner_payload,
+    PRODUCT_COMMAND_PAYLOAD_MAX, SETTINGS_COMMAND_KEYS, STEPUP_TTL_MS, Tier, command_payload_max,
+    is_setup_command, owner_command_kind, validate_owner_payload,
 };
 use arena_store::control::{
     Branch, CommandRow, NewCommand, OwnerCommandFilter, OwnerCommandRow, RateRule,
@@ -91,6 +91,7 @@ pub async fn submit_command(
             payload: &payload,
             issued_by,
             group_id: None,
+            elevated_by: None,
             now: st.now(),
         })
         .await
@@ -112,6 +113,7 @@ fn wire(row: CommandRow) -> Result<CommandWire, ApiError> {
         schema_version: row.schema_version,
         payload: serde_json::from_str(&row.payload).map_err(ApiError::internal)?,
         issued_by: row.issued_by,
+        elevated_by: row.elevated_by,
     })
 }
 
@@ -254,6 +256,31 @@ async fn refusal(
     Ok(None)
 }
 
+/// Whether `stepup_at` is a proof still good at `now`.
+pub fn stepup_fresh(stepup_at: Option<i64>, now: i64) -> bool {
+    stepup_at.is_some_and(|at| (0..STEPUP_TTL_MS).contains(&(now - at)))
+}
+
+/// The step-up gate (Story 8.25): a sensitive kind needs a proof younger than [`STEPUP_TTL_MS`] on the
+/// session, else `MFA_REQUIRED` and nothing is queued. `true` when the post is elevated.
+fn step_up_check(
+    kind: &OwnerCommandKind,
+    stepup_at: Option<i64>,
+    now: i64,
+) -> Result<bool, ApiError> {
+    if !kind.sensitive {
+        return Ok(false);
+    }
+    if stepup_fresh(stepup_at, now) {
+        return Ok(true);
+    }
+    Err(AppError::new(
+        ErrorCode::MfaRequired,
+        "Confirm it's you with a code to send this change.",
+    )
+    .into())
+}
+
 /// The row key of one branch in an "all branches" post: a ULID taken from the owner's key and the
 /// branch, so the same post finds the same rows and a ULID is what the Hub accepts.
 fn branch_key(group_key: &str, branch_id: &str) -> String {
@@ -328,14 +355,22 @@ async fn post_command(
         tracing::warn!(tenant_id = %tenant.id, "owner command refused: rate limited");
         return Err(ApiError::rate_limited(ceil_s(wait_ms)));
     }
-    let kind = accepted_owner_kind(&body.kind)?;
+    let kind = st.owner_kind(&body.kind)?;
     if ulid::Ulid::from_string(&body.idempotency_key).is_err() {
         return Err(ApiError::validation(
             "idempotency_key",
             "The key must be a ULID.",
         ));
     }
-    validate_owner_payload(kind.kind, &body.payload)?;
+    if owner_command_kind(kind.kind).is_some() {
+        validate_owner_payload(kind.kind, &body.payload)?;
+    } else if !body.payload.is_object() {
+        // A kind of `AuthState::extra_kinds` (tests only): any object will do.
+        return Err(ApiError::validation(
+            "payload",
+            "Send the payload as an object.",
+        ));
+    }
     let mut payload = body.payload.clone();
     if let (Some(rev), Some(fields)) = (body.base_rev, payload.as_object_mut()) {
         fields.insert("base_rev".into(), rev.into());
@@ -344,6 +379,7 @@ async fn post_command(
     if payload.len() > command_payload_max(kind.kind) {
         return Err(ApiError::validation("payload", "The payload is too large."));
     }
+    let elevated = step_up_check(&kind, signed.session.stepup_at, now)?;
     let branches = st
         .db
         .branches_of_tenant(&tenant.id)
@@ -365,7 +401,7 @@ async fn post_command(
     let mut commands = Vec::new();
     let mut skipped = Vec::new();
     for b in &targets {
-        if let Some(e) = refusal(&st, b, kind).await? {
+        if let Some(e) = refusal(&st, b, &kind).await? {
             if !all {
                 return Err(e.into());
             }
@@ -394,6 +430,7 @@ async fn post_command(
                 payload: &payload,
                 issued_by: &signed.owner.id,
                 group_id: group,
+                elevated_by: elevated.then_some(signed.owner.id.as_str()),
                 now,
             })
             .await
@@ -424,7 +461,7 @@ async fn preview_command(
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(ApiError::not_found)?;
-    let kind = accepted_owner_kind(&body.kind)?;
+    let kind = st.owner_kind(&body.kind)?;
     let branches = st
         .db
         .branches_of_tenant(&tenant.id)
@@ -450,7 +487,7 @@ async fn preview_command(
             .await
             .map_err(ApiError::internal)?
             .and_then(|h| h.last_seen_at);
-        let error = refusal(&st, b, kind).await?;
+        let error = refusal(&st, b, &kind).await?;
         out.push(OwnerCommandTarget {
             branch_id: b.id.clone(),
             name: b.name.clone(),

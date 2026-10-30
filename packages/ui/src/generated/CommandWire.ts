@@ -7,4 +7,9 @@ export type CommandWire = {
   schema_version: number;
   payload: unknown;
   issued_by: string;
+  /**
+   * The owner id when the cloud posted this command after a step-up (Story 8.25); the Hub records
+   * it as an MFA elevation on the change row.
+   */
+  elevated_by?: string;
 };

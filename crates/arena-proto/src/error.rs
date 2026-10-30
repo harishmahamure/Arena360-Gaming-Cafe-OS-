@@ -184,6 +184,9 @@ pub enum ErrorCode {
     BranchUpdateRequired,
     /// An owner command waited 7 days without being fetched and was swept (Story 8.20).
     CommandExpired,
+    /// A sensitive owner command was posted without a step-up proof younger than 5 minutes
+    /// (Story 8.25).
+    MfaRequired,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -296,6 +299,7 @@ impl ErrorCode {
             Self::RollupSchemaOld => "ROLLUP_SCHEMA_OLD",
             Self::BranchUpdateRequired => "BRANCH_UPDATE_REQUIRED",
             Self::CommandExpired => "COMMAND_EXPIRED",
+            Self::MfaRequired => "MFA_REQUIRED",
         }
     }
 }
@@ -469,6 +473,7 @@ mod tests {
             (ErrorCode::RollupSchemaOld, "ROLLUP_SCHEMA_OLD"),
             (ErrorCode::BranchUpdateRequired, "BRANCH_UPDATE_REQUIRED"),
             (ErrorCode::CommandExpired, "COMMAND_EXPIRED"),
+            (ErrorCode::MfaRequired, "MFA_REQUIRED"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

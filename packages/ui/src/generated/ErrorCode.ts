@@ -98,4 +98,5 @@ export type ErrorCode =
   | "FENCED"
   | "ROLLUP_SCHEMA_OLD"
   | "BRANCH_UPDATE_REQUIRED"
-  | "COMMAND_EXPIRED";
+  | "COMMAND_EXPIRED"
+  | "MFA_REQUIRED";

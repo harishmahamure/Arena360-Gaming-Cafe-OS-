@@ -16,6 +16,7 @@ fn cmd(id: i64, kind: &str, payload: Value) -> CommandWire {
         schema_version: 1,
         payload,
         issued_by: "owner-1".into(),
+        elevated_by: None,
     }
 }
 
@@ -535,4 +536,63 @@ async fn an_owner_product_edit_without_an_image_keeps_it_and_sets_the_threshold_
         reopen(&f).tracked_thresholds().unwrap()[0].low_stock_qty,
         Some(6)
     );
+}
+
+/// Story 8.25: a command the cloud posted after a step-up lands in the change row as an MFA
+/// elevation of the owner; the Hub accepts it only for the owner it names.
+#[tokio::test]
+async fn a_stepped_up_owner_command_records_the_mfa_elevation_on_the_change_row() {
+    let f = bootstrapped().await;
+    let create = json!({"code": "WELCOME", "percent_bp": 1000});
+
+    let plain = f
+        .writer
+        .apply_command(cmd(1, "coupon.upsert", create.clone()))
+        .await
+        .unwrap();
+    assert!(plain.applied, "{:?}", plain.error);
+    let change = |f: &Fixture, seq: i64| {
+        reopen(f)
+            .changes()
+            .unwrap()
+            .into_iter()
+            .find(|c| c.seq == seq)
+            .unwrap()
+    };
+    let first = change(&f, plain.applied_seq.unwrap());
+    assert_eq!(first.elevated_by_kind, None);
+
+    let mut elevated = cmd(
+        2,
+        "coupon.upsert",
+        json!({"code": "AGAIN", "percent_bp": 500}),
+    );
+    elevated.elevated_by = Some("owner-1".into());
+    let done = f.writer.apply_command(elevated).await.unwrap();
+    assert!(done.applied, "{:?}", done.error);
+    let c = change(&f, done.applied_seq.unwrap());
+    assert_eq!(
+        (
+            c.elevated_by_kind.as_deref(),
+            c.elevated_by_id.as_deref(),
+            c.elevated_by_mode.as_deref(),
+            c.elevated_by_verifier_version
+        ),
+        (Some("mfa"), Some("owner-1"), Some("hub"), Some(0))
+    );
+    assert_eq!(
+        (c.actor_kind.as_str(), c.actor_id.as_str()),
+        ("owner", "owner-1")
+    );
+
+    let mut someone_else = cmd(
+        3,
+        "coupon.upsert",
+        json!({"code": "OTHER", "percent_bp": 500}),
+    );
+    someone_else.elevated_by = Some("owner-2".into());
+    let refused = f.writer.apply_command(someone_else).await.unwrap();
+    assert!(!refused.applied);
+    let err: AppError = serde_json::from_str(refused.error.as_deref().unwrap()).unwrap();
+    assert_eq!(err.code, ErrorCode::PermissionDenied);
 }

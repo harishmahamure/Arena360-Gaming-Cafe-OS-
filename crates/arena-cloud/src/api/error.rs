@@ -90,6 +90,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
             StatusCode::UNAUTHORIZED
         }
         ErrorCode::FeatureNotEntitled
+        | ErrorCode::MfaRequired
         | ErrorCode::TierLocked
         | ErrorCode::FeatureNotInTier
         | ErrorCode::DeviceLimit
@@ -330,6 +331,7 @@ mod tests {
             (ErrorCode::PairCodeInvalid, 401),
             (ErrorCode::PairCodeExpired, 401),
             (ErrorCode::FeatureNotEntitled, 403),
+            (ErrorCode::MfaRequired, 403),
             (ErrorCode::PayloadTooLarge, 413),
             (ErrorCode::Fenced, 409),
             (ErrorCode::RollupSchemaOld, 409),

@@ -10,6 +10,7 @@ fn cmd(id: i64, kind: &str, payload: serde_json::Value) -> CommandWire {
         schema_version: 1,
         payload,
         issued_by: "owner-1".into(),
+        elevated_by: None,
     }
 }
 

@@ -1,6 +1,6 @@
 use arena_proto::{
-    Actor, ActorKind, AppError, COMMAND_SCHEMA_VERSION, CommandWire, ErrorCode, Intent,
-    IntentPayload, KEY_SETUP_LIVE, SETTINGS_COMMAND_KEYS,
+    Actor, ActorKind, AppError, COMMAND_SCHEMA_VERSION, CommandWire, ElevatedBy, ElevationKind,
+    ElevationMode, ErrorCode, Intent, IntentPayload, KEY_SETUP_LIVE, SETTINGS_COMMAND_KEYS,
 };
 
 use arena_store::{
@@ -146,7 +146,14 @@ pub fn command_intent(cmd: &CommandWire, now: i64) -> Result<Intent, AppError> {
             kind: ActorKind::Owner,
             id: cmd.issued_by.clone(),
         },
-        elevated_by: None,
+        // A step-up the cloud checked (Story 8.25): `ElevationMode` has no cloud value and `changes`
+        // constrains it, so it is recorded as mode `hub`; the kind `mfa` marks it as a step-up.
+        elevated_by: cmd.elevated_by.as_ref().map(|id| ElevatedBy {
+            kind: ElevationKind::Mfa,
+            id: id.clone(),
+            mode: ElevationMode::Hub,
+            verifier_version: 0,
+        }),
         reason: None,
         payload,
     })
@@ -254,6 +261,7 @@ mod tests {
             schema_version: 1,
             payload,
             issued_by: "owner-1".into(),
+            elevated_by: None,
         }
     }
 

@@ -60,6 +60,10 @@ pub(super) fn permission(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppErr
         return admin_exit::permission(tx, intent);
     }
     match &intent.elevated_by {
+        Some(e) if e.kind == ElevationKind::Mfa => {
+            owner_mfa(intent, e)?;
+            rbac::check(tx, intent)?;
+        }
         Some(e) => elevation(tx, intent, e)?,
         None => rbac::check(tx, intent)?,
     }
@@ -70,6 +74,20 @@ pub(super) fn permission(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppErr
     importing_stock(tx, intent)?;
     importing_setup(tx, intent)?;
     importing_players(tx, intent)
+}
+
+/// An owner command the cloud posted after a step-up (Story 8.25) carries an MFA elevation: it is
+/// accepted only for an `Owner` actor whose id is the elevating owner, verified at the cloud (mode
+/// `hub`, verifier version 0). The Hub does not gate on it; it records who approved.
+fn owner_mfa(intent: &Intent, e: &ElevatedBy) -> Result<(), AppError> {
+    if intent.actor.kind == ActorKind::Owner
+        && intent.actor.id == e.id
+        && e.mode == ElevationMode::Hub
+    {
+        Ok(())
+    } else {
+        Err(rbac::denied())
+    }
 }
 
 /// A setup file that creates device groups needs `device.manage` on top of `catalog.edit`: the

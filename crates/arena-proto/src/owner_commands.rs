@@ -27,7 +27,8 @@ pub struct OwnerCommandKind {
     pub min_tier: Tier,
     /// A licence flag the branch must also hold, when the kind needs one.
     pub flag: Option<&'static str>,
-    /// Needs a fresh second factor (Story 8.25); no kind of this story is.
+    /// Needs a step-up proof younger than [`crate::STEPUP_TTL_MS`] on the owner's session (Story
+    /// 8.25); the cloud refuses a post `MFA_REQUIRED` without one.
     pub sensitive: bool,
     /// The Hub runs this kind. A name reserved without a handler is refused `UNSUPPORTED`.
     pub handled: bool,

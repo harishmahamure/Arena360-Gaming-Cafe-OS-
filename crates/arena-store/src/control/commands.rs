@@ -34,6 +34,8 @@ pub struct NewCommand<'a> {
     pub issued_by: &'a str,
     /// The owner's key shared by every row of an "all branches" post (Story 8.18).
     pub group_id: Option<&'a str>,
+    /// The owner id when the post followed a step-up (Story 8.25).
+    pub elevated_by: Option<&'a str>,
     pub now: i64,
 }
 
@@ -51,14 +53,16 @@ pub struct CommandRow {
     pub applied_seq: Option<i64>,
     pub created_at: i64,
     pub resolved_at: Option<i64>,
+    /// The owner id when the post followed a step-up (Story 8.25).
+    pub elevated_by: Option<String>,
 }
 
 const SELECT_BY_KEY: &str = "SELECT id, branch_id, idempotency_key, kind, schema_version, \
-     payload, issued_by, status, error, applied_seq, created_at, resolved_at FROM commands \
+     payload, issued_by, status, error, applied_seq, created_at, resolved_at, elevated_by FROM commands \
      WHERE branch_id = ? AND idempotency_key = ?";
 
 const SELECT_MAILBOX: &str = "SELECT id, branch_id, idempotency_key, kind, schema_version, \
-     payload, issued_by, status, error, applied_seq, created_at, resolved_at FROM commands \
+     payload, issued_by, status, error, applied_seq, created_at, resolved_at, elevated_by FROM commands \
      WHERE branch_id = ? AND (status = 'pending' OR (status = 'fetched' AND id > ?)) \
      ORDER BY id LIMIT ?";
 
@@ -68,7 +72,7 @@ const MARK_FETCHED: &str = "UPDATE commands SET status = 'fetched', \
      ORDER BY id LIMIT ?)";
 
 const SELECT_BY_ID: &str = "SELECT id, branch_id, idempotency_key, kind, schema_version, \
-     payload, issued_by, status, error, applied_seq, created_at, resolved_at FROM commands \
+     payload, issued_by, status, error, applied_seq, created_at, resolved_at, elevated_by FROM commands \
      WHERE id = ?";
 
 pub(super) fn command_from(row: &[SqlValue]) -> Result<CommandRow, ControlError> {
@@ -88,14 +92,15 @@ pub(super) fn command_from(row: &[SqlValue]) -> Result<CommandRow, ControlError>
         applied_seq: col_opt_int(row, 9)?,
         created_at: col_int(row, 10)?,
         resolved_at: col_opt_int(row, 11)?,
+        elevated_by: col_opt_text(row, 12)?,
     })
 }
 
 pub(super) fn insert_command(c: &NewCommand<'_>) -> Stmt {
     Stmt::new(
         "INSERT INTO commands (branch_id, idempotency_key, kind, schema_version, \
-         payload, issued_by, status, created_at, group_id) \
-         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?) \
+         payload, issued_by, status, created_at, group_id, elevated_by) \
+         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?) \
          ON CONFLICT (branch_id, idempotency_key) DO NOTHING",
         vec![
             text(c.branch_id),
@@ -106,6 +111,7 @@ pub(super) fn insert_command(c: &NewCommand<'_>) -> Stmt {
             text(c.issued_by),
             SqlValue::Integer(c.now),
             c.group_id.map_or(SqlValue::Null, text),
+            c.elevated_by.map_or(SqlValue::Null, text),
         ],
     )
 }

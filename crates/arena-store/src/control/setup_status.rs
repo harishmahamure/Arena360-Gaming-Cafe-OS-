@@ -97,7 +97,7 @@ impl ControlDb {
         let kinds = SETUP_KINDS.map(|k| format!("'{k}'")).join(", ");
         let sql = format!(
             "SELECT id, branch_id, idempotency_key, kind, schema_version, payload, issued_by, \
-             status, error, applied_seq, created_at, resolved_at FROM commands \
+             status, error, applied_seq, created_at, resolved_at, elevated_by FROM commands \
              WHERE branch_id = ? AND kind IN ({kinds}) AND (status IN ('pending', 'fetched') \
              OR (status = 'applied' AND resolved_at > ?) \
              OR (status = 'rejected' AND resolved_at > ?)) ORDER BY id"

@@ -3,6 +3,7 @@
 //! its whole family.
 
 use super::owner::{OWNER_COLUMNS, Owner, owner_from};
+use super::signin::SigninFactor;
 use super::{
     ControlDb, ControlError, SqlValue, Stmt, col_int, col_opt_int, col_opt_text, col_text, text,
 };
@@ -42,6 +43,8 @@ pub struct OwnerSession {
     pub revoked_at: Option<i64>,
     pub created_at: i64,
     pub device_id: Option<String>,
+    /// When the owner last passed a step-up on this session (Story 8.25); a refresh carries it over.
+    pub stepup_at: Option<i64>,
 }
 
 /// A live session and its owner.
@@ -82,7 +85,7 @@ pub enum RefreshOutcome {
 
 const SESSION_COLUMNS: &str = "s.id, s.owner_id, s.family_id, s.access_expires_at, \
                                s.refresh_expires_at, s.rotated_at, s.revoked_at, s.created_at, \
-                               s.device_id";
+                               s.device_id, s.stepup_at";
 
 fn session_from(row: &[SqlValue]) -> Result<OwnerSession, ControlError> {
     Ok(OwnerSession {
@@ -95,6 +98,7 @@ fn session_from(row: &[SqlValue]) -> Result<OwnerSession, ControlError> {
         revoked_at: col_opt_int(row, 6)?,
         created_at: col_int(row, 7)?,
         device_id: col_opt_text(row, 8)?,
+        stepup_at: col_opt_int(row, 9)?,
     })
 }
 
@@ -173,7 +177,7 @@ impl ControlDb {
             .map(|r| {
                 Ok(SessionWithOwner {
                     session: session_from(r)?,
-                    owner: owner_from(r, 9)?,
+                    owner: owner_from(r, 10)?,
                 })
             })
             .transpose()
@@ -206,8 +210,9 @@ impl ControlDb {
                 Stmt::new(
                     "INSERT INTO owner_sessions (id, owner_id, family_id, access_hash, \
                      access_expires_at, refresh_hash, refresh_expires_at, rotated_at, revoked_at, \
-                     created_at, device_id) SELECT ?, owner_id, family_id, ?, ?, ?, ?, NULL, NULL, ?, \
-                     device_id FROM owner_sessions WHERE refresh_hash = ?",
+                     created_at, device_id, stepup_at) SELECT ?, owner_id, family_id, ?, ?, ?, ?, \
+                     NULL, NULL, ?, device_id, stepup_at FROM owner_sessions \
+                     WHERE refresh_hash = ?",
                     vec![
                         text(&next.id),
                         text(&next.access_hash),
@@ -250,6 +255,108 @@ impl ControlDb {
             }
             _ => Ok(RefreshOutcome::Invalid),
         }
+    }
+
+    /// Records a passed step-up (Story 8.25): in one transaction, consumes the factor (a TOTP step
+    /// newer than the last accepted one, an unused backup code, or the session's own text-message
+    /// code sent after `sent_after`) and sets `stepup_at = now` on the live session `session_id` of
+    /// `owner_id`. `false`, with nothing changed, when the factor was already used or the session is
+    /// gone.
+    pub async fn complete_stepup(
+        &self,
+        session_id: &str,
+        owner_id: &str,
+        factor: &SigninFactor,
+        now: i64,
+    ) -> Result<bool, ControlError> {
+        let consume = match factor {
+            SigninFactor::Totp { step } => Stmt::new(
+                "UPDATE owner_mfa SET last_step = ? WHERE owner_id = ? \
+                 AND confirmed_at IS NOT NULL AND (last_step IS NULL OR last_step < ?)",
+                vec![
+                    SqlValue::Integer(*step),
+                    text(owner_id),
+                    SqlValue::Integer(*step),
+                ],
+            )
+            .expect(1),
+            SigninFactor::BackupCode { id } => Stmt::new(
+                "UPDATE owner_backup_codes SET used_at = ? WHERE id = ? AND owner_id = ? \
+                 AND used_at IS NULL",
+                vec![SqlValue::Integer(now), text(id), text(owner_id)],
+            )
+            .expect(1),
+            SigninFactor::Sms {
+                code_hash,
+                sent_after,
+            } => Stmt::new(
+                "SELECT 1 FROM owner_sessions WHERE id = ? AND stepup_sms_hash = ? \
+                 AND stepup_sms_sent_at > ?",
+                vec![
+                    text(session_id),
+                    text(code_hash),
+                    SqlValue::Integer(*sent_after),
+                ],
+            )
+            .fetch()
+            .expect(1),
+        };
+        self.transact(vec![
+            consume,
+            Stmt::new(
+                "UPDATE owner_sessions SET stepup_at = ?, stepup_sms_hash = NULL, \
+                 stepup_sms_sent_at = NULL WHERE id = ? AND owner_id = ? \
+                 AND rotated_at IS NULL AND revoked_at IS NULL",
+                vec![SqlValue::Integer(now), text(session_id), text(owner_id)],
+            )
+            .expect(1),
+        ])
+        .await
+    }
+
+    /// The text-message code stored for the session's step-up: its hash and when it was sent.
+    pub async fn stepup_sms(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<(String, i64)>, ControlError> {
+        let rows = self
+            .query(
+                "SELECT stepup_sms_hash, stepup_sms_sent_at FROM owner_sessions WHERE id = ? \
+                 AND stepup_sms_hash IS NOT NULL AND stepup_sms_sent_at IS NOT NULL",
+                vec![text(session_id)],
+            )
+            .await?;
+        rows.first()
+            .map(|r| Ok((col_text(r, 0)?, col_int(r, 1)?)))
+            .transpose()
+    }
+
+    /// Stores (or, with `None`, clears) the session's step-up text-message code. When `seen_sent_at`
+    /// is given it must still be the stored send time, so two sends racing store one code.
+    pub async fn set_stepup_sms(
+        &self,
+        session_id: &str,
+        seen_sent_at: Option<i64>,
+        code: Option<(&str, i64)>,
+    ) -> Result<bool, ControlError> {
+        let (hash, sent) = match code {
+            Some((h, at)) => (text(h), SqlValue::Integer(at)),
+            None => (SqlValue::Null, SqlValue::Null),
+        };
+        let n = self
+            .execute(
+                "UPDATE owner_sessions SET stepup_sms_hash = ?, stepup_sms_sent_at = ? \
+                 WHERE id = ? AND rotated_at IS NULL AND revoked_at IS NULL \
+                 AND stepup_sms_sent_at IS ?",
+                vec![
+                    hash,
+                    sent,
+                    text(session_id),
+                    seen_sent_at.map_or(SqlValue::Null, SqlValue::Integer),
+                ],
+            )
+            .await?;
+        Ok(n == 1)
     }
 
     /// Revokes every live session of a family.

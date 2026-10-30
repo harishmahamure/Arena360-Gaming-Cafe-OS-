@@ -139,6 +139,7 @@ fn command<'a>(branch_id: &'a str, i: &'a Issued, owner_id: &'a str, now: i64) -
         payload: &i.payload,
         issued_by: owner_id,
         group_id: None,
+        elevated_by: None,
         now,
     }
 }

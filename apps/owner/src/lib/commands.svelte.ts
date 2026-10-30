@@ -9,7 +9,7 @@ import type {
   SummaryCatalogue,
 } from "@arena/ui/generated";
 import type { MessageKey } from "@arena/ui/messages";
-import { load, send } from "./api";
+import { load, send, type Sent } from "./api";
 import { getCached, queueAll, queueDelete, queuePut } from "./cache";
 import { age, isLive, refresh, shell } from "./shell.svelte";
 import { fetchLive, live, livePath } from "./today.svelte";
@@ -64,8 +64,11 @@ export type Queued = {
   payload: Record<string, unknown>;
   base_rev?: number;
   created_at: number;
-  /** `queued` waits to send; `expired` passed its 7 days; `refused` was refused by the cloud. */
-  state: "queued" | "expired" | "refused";
+  /**
+   * `queued` waits to send; `held` was refused `MFA_REQUIRED` and waits for the owner to pass a
+   * step-up (Story 8.25); `expired` passed its 7 days; `refused` was refused by the cloud.
+   */
+  state: "queued" | "held" | "expired" | "refused";
 };
 
 /** A command row: the cloud's, or one standing for a change still queued on this device. */
@@ -132,8 +135,8 @@ export const branchOf = (id: string): OwnerBranch | undefined =>
 export type RowView = {
   tone: "info" | "ok" | "danger" | "muted";
   text: string;
-  /** Retry (a rejected row) or Resend (an expired one); none for the rest. */
-  action: "retry" | "resend" | null;
+  /** Retry (a rejected row), Resend (an expired one) or Send (a held one); none for the rest. */
+  action: "retry" | "resend" | "send" | null;
 };
 
 const ago = (ms: number, now: number) => {
@@ -148,6 +151,8 @@ export const queuedText = (row: OwnerCommandView, now: number) =>
 export function stateOf(row: Row, now: number): RowView {
   if (row.local?.state === "queued")
     return { tone: "muted", text: t("owner.cmd.state.queued"), action: null };
+  if (row.local?.state === "held")
+    return { tone: "muted", text: t("owner.cmd.state.queued"), action: "send" };
   switch (row.status) {
     case "applied":
       return {
@@ -357,13 +362,18 @@ export async function confirm() {
   cmd.sendError = null;
   const todo = parts.filter((p) => !d.done?.includes(p.key));
   for (const [i, part] of todo.entries()) {
-    const res = await send<OwnerCommandPosted>("POST", "/commands", {
+    const res = await post({
       branch_id: part.branch_id,
       idempotency_key: part.key,
       kind: d.kind,
       payload: part.payload,
       ...(part.base_rev === undefined ? {} : { base_rev: part.base_rev }),
     });
+    if (res === "declined") {
+      // Cancelled at the code prompt: nothing was sent and the preview stays open.
+      cmd.sending = false;
+      return;
+    }
     if (!res.ok) {
       cmd.sending = false;
       if (res.code === "OFFLINE" && part.key) {
@@ -412,6 +422,103 @@ export function currentBaseRev(row: Row): number | undefined {
   return typeof p?.base_rev === "number" ? p.base_rev : undefined;
 }
 
+// --- Step-up MFA (Story 8.25) ---
+
+export type StepMethod = "totp" | "backup_code" | "sms";
+
+/** The code prompt a sensitive change opens when the cloud answers `MFA_REQUIRED`. */
+export const stepup = $state({
+  open: false,
+  method: "totp" as StepMethod,
+  sending: false,
+  /** Never names the factor: a wrong code reads the same for every method. */
+  error: null as "wrong" | "paused" | "failed" | null,
+  /** Seconds the cloud asked the owner to wait after five wrong codes. */
+  pausedS: 0,
+  smsSent: false,
+  smsFailed: false,
+});
+
+let asking: Promise<boolean> | null = null;
+let settle: ((passed: boolean) => void) | null = null;
+
+function closeStepUp(passed: boolean) {
+  stepup.open = false;
+  const done = settle;
+  asking = null;
+  settle = null;
+  done?.(passed);
+}
+
+/** Opens the code prompt; resolves `true` once step-up passed, `false` if the owner cancelled. */
+export function requestStepUp(): Promise<boolean> {
+  asking ??= new Promise<boolean>((resolve) => {
+    settle = resolve;
+    Object.assign(stepup, {
+      open: true,
+      method: "totp",
+      sending: false,
+      error: null,
+      pausedS: 0,
+      smsSent: false,
+      smsFailed: false,
+    });
+  });
+  return asking;
+}
+
+/** Esc or Cancel: nothing is sent and a queued change stays held. */
+export const declineStepUp = () => closeStepUp(false);
+
+export function pickMethod(method: StepMethod) {
+  stepup.method = method;
+  stepup.error = null;
+}
+
+/** Checks the code with the cloud; on success the prompt closes and the change goes on. */
+export async function submitStepUp(code: string) {
+  if (!stepup.open || stepup.sending) return;
+  stepup.sending = true;
+  stepup.error = null;
+  const res = await send<null>("POST", "/session/stepup", { method: stepup.method, code });
+  stepup.sending = false;
+  if (res.ok) return closeStepUp(true);
+  if (res.code === "RATE_LIMITED") {
+    stepup.pausedS = res.retryAfter ?? 900;
+    stepup.error = "paused";
+  } else stepup.error = res.code === "TOTP_INVALID" ? "wrong" : "failed";
+}
+
+/** Texts the owner a code (only offered when text-message codes are on). */
+export async function sendStepUpSms() {
+  stepup.smsFailed = false;
+  const res = await send<unknown>("POST", "/session/stepup/sms", {});
+  if (res.ok || res.code === "RATE_LIMITED") {
+    // A second tap inside the resend wait still has a code on its way.
+    pickMethod("sms");
+    stepup.smsSent = true;
+  } else stepup.smsFailed = true;
+}
+
+/**
+ * Posts a command; when the cloud wants a step-up the code prompt opens and the same body, with
+ * the same idempotency key, is sent again once it passes. `"declined"`: the owner cancelled.
+ */
+async function post(body: Record<string, unknown>): Promise<Sent<OwnerCommandPosted> | "declined"> {
+  const res = await send<OwnerCommandPosted>("POST", "/commands", body);
+  if (res.ok || res.code !== "MFA_REQUIRED") return res;
+  if (!(await requestStepUp())) return "declined";
+  return send<OwnerCommandPosted>("POST", "/commands", body);
+}
+
+/** Send on a held change: the code prompt first, then the change goes (Cancel keeps it held). */
+export async function sendHeld(q: Queued) {
+  if (!(await requestStepUp())) return;
+  q.state = "queued";
+  await stored(q);
+  await drainQueue();
+}
+
 // --- The queue on this device (Story 8.22) ---
 
 const byCreation = (a: Queued, b: Queued) =>
@@ -438,7 +545,7 @@ export async function loadQueue() {
     .filter((q) => q.cafe === shell.cafe)
     .sort(byCreation);
   for (const q of mine) {
-    if (q.state === "queued" && expired(q)) {
+    if ((q.state === "queued" || q.state === "held") && expired(q)) {
       q.state = "expired";
       await stored(q);
     }
@@ -472,6 +579,11 @@ async function drain() {
       cmd.loaded = true;
     } else if (TRANSIENT.has(res.code)) {
       return; // later changes wait behind this one: creation order
+    } else if (res.code === "MFA_REQUIRED") {
+      // Held until the owner passes a step-up from its Send button; the rest go on.
+      q.state = "held";
+      await stored(q);
+      cmd.announcement = t("owner.stepup.held");
     } else {
       q.state = "refused";
       await stored(q);
@@ -531,13 +643,17 @@ export async function again(row: Row) {
     return;
   }
   const key = ulid();
-  const res = await send<OwnerCommandPosted>("POST", "/commands", {
+  const res = await post({
     branch_id: row.branch_id,
     idempotency_key: key,
     kind: row.kind,
     payload: fields,
     ...(rev === undefined ? {} : { base_rev: rev }),
   });
+  if (res === "declined") {
+    delete cmd.again[k];
+    return;
+  }
   if (!res.ok && res.code === "OFFLINE") {
     await enqueue({
       key,

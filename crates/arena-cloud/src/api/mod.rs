@@ -35,6 +35,7 @@ mod setup_start;
 mod setup_template;
 pub mod signin;
 pub mod signup;
+pub mod stepup;
 pub mod wizard;
 pub mod wizard_devices;
 mod wizard_events;
@@ -67,6 +68,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>, commands_only: bool) -> Router {
         v1 = v1
             .merge(signup::router(Arc::clone(st)))
             .merge(session::router(Arc::clone(st)))
+            .merge(stepup::router(Arc::clone(st)))
             .merge(account::router(Arc::clone(st)))
             .merge(mfa::router(Arc::clone(st)))
             .merge(signin::router(Arc::clone(st)))

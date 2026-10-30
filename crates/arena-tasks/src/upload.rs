@@ -2252,6 +2252,7 @@ mod tests {
                     "name": name, "group_kind": "pc", "colour": "teal", "sort_order": id
                 }),
                 issued_by: "owner-1".into(),
+                elevated_by: None,
             })
             .await
             .unwrap();

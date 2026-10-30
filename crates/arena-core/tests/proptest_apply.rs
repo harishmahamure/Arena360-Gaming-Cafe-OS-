@@ -6820,6 +6820,7 @@ fn owner_command(
         schema_version: 1,
         payload: body,
         issued_by: "owner-px".into(),
+        elevated_by: None,
     };
     let changes_before = hub.change_count();
     let row = hub.rt.block_on(hub.writer.apply_command(cmd)).unwrap();

@@ -635,6 +635,19 @@ async fn run(
             .run(),
         )
     });
+    // The session messages (Story 8.30): low balance, session ending, console 5 minutes. They are
+    // queued in the outbox the drain above sends from.
+    let notify_trigger_job = writer.clone().map(|w| {
+        tokio::spawn(
+            arena_tasks::NotifyTriggerTask::new(
+                w,
+                Arc::clone(&snapshots),
+                Arc::clone(&clock),
+                status_tx.clone(),
+            )
+            .run(),
+        )
+    });
     let mut cloud_pairer = CloudPairer::new(
         cloud,
         writer.clone(),
@@ -802,6 +815,10 @@ async fn run(
         let _ = job.await;
     }
     if let Some(job) = notify_job {
+        job.abort();
+        let _ = job.await;
+    }
+    if let Some(job) = notify_trigger_job {
         job.abort();
         let _ = job.await;
     }

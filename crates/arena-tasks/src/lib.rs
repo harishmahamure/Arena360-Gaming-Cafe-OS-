@@ -12,6 +12,7 @@ pub mod keystore;
 pub mod lease;
 pub mod mdns;
 pub mod notify;
+pub mod notify_trigger;
 pub mod printer;
 pub mod receipts;
 pub mod session_timer;
@@ -44,6 +45,7 @@ pub use mdns::{
     MdnsAdvertiser, MdnsTask, NetworkName, SystemInterfaces, lan_ipv4_addresses, mdns_host_name,
 };
 pub use notify::{IN_DOUBT_RETRY_MS, NOTIFY_TICK, NotifyDrainTask};
+pub use notify_trigger::{NOTIFY_TRIGGER_TICK, NotifyTriggerTask};
 pub use receipts::{PRINT_BATCH, PRINT_TICK, ReceiptPrintTask};
 pub use session_timer::{SessionTimerTask, TIMER_EVENTS_DEPTH, TIMER_TICK};
 pub use template::{NOT_ENTITLED_RETRY, SetupTemplateTask, TIER_RECHECK, UPLOAD_DEBOUNCE};

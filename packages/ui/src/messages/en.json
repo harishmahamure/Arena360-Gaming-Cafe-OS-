@@ -2748,6 +2748,8 @@
   "hub.audit.intent.notify.failed": "Message not sent",
   "hub.audit.intent.notify.skip": "Message skipped",
   "hub.audit.intent.notify.expire": "Message expired",
+  "hub.audit.intent.notify.requested": "Message queued",
+  "hub.audit.intent.notify.rearm": "Low-balance message re-armed",
   "hub.audit.intent.drawer.kicked": "Cash drawer opened",
   "hub.audit.intent.drawer.kick_failed": "Cash drawer did not open",
   "hub.audit.intent.wallet.topup": "Wallet top-up",

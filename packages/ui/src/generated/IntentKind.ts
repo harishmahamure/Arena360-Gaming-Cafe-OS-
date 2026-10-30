@@ -123,6 +123,8 @@ export type IntentKind =
   | "notify.failed"
   | "notify.skip"
   | "notify.expire"
+  | "notify.requested"
+  | "notify.rearm"
   | "drawer.kicked"
   | "drawer.kick_failed"
   | "session.assign_player"

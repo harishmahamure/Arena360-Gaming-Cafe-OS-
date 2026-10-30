@@ -376,6 +376,14 @@ pub enum IntentKind {
     /// A queued message was still unsent after 7 days (system only).
     #[serde(rename = "notify.expire")]
     NotifyExpire,
+    /// A running session, or a wallet that ran low, asks for a player message (system only;
+    /// Story 8.30).
+    #[serde(rename = "notify.requested")]
+    NotifyRequested,
+    /// A wallet rose above its low-balance level, so the next fall is a new crossing (system
+    /// only).
+    #[serde(rename = "notify.rearm")]
+    NotifyRearm,
     /// The print task sent the drawer pulse queued by a cash settle (system only; Story 5.18).
     #[serde(rename = "drawer.kicked")]
     DrawerKicked,
@@ -406,7 +414,7 @@ pub enum IntentKind {
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 127] = [
+    pub const ALL: [IntentKind; 129] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -527,6 +535,8 @@ impl IntentKind {
         Self::NotifyFailed,
         Self::NotifySkip,
         Self::NotifyExpire,
+        Self::NotifyRequested,
+        Self::NotifyRearm,
         Self::DrawerKicked,
         Self::DrawerKickFailed,
         Self::AlertRaise,
@@ -658,6 +668,8 @@ impl IntentKind {
             Self::NotifyFailed => "notify.failed",
             Self::NotifySkip => "notify.skip",
             Self::NotifyExpire => "notify.expire",
+            Self::NotifyRequested => "notify.requested",
+            Self::NotifyRearm => "notify.rearm",
             Self::DrawerKicked => "drawer.kicked",
             Self::DrawerKickFailed => "drawer.kick_failed",
             Self::SessionAssignPlayer => "session.assign_player",
@@ -765,6 +777,8 @@ impl IntentKind {
             | Self::NotifyFailed
             | Self::NotifySkip
             | Self::NotifyExpire
+            | Self::NotifyRequested
+            | Self::NotifyRearm
             | Self::DrawerKicked
             | Self::DrawerKickFailed
             | Self::OrderLineCancel
@@ -846,6 +860,8 @@ impl IntentKind {
             | Self::NotifyFailed
             | Self::NotifySkip
             | Self::NotifyExpire
+            | Self::NotifyRequested
+            | Self::NotifyRearm
             | Self::KotPrinted
             | Self::KotPrintFailed
             | Self::KdsPair
@@ -1082,6 +1098,8 @@ impl IntentKind {
             | Self::NotifyFailed
             | Self::NotifySkip
             | Self::NotifyExpire
+            | Self::NotifyRequested
+            | Self::NotifyRearm
             | Self::DrawerKicked
             | Self::DrawerKickFailed
             | Self::SessionRateFlip
@@ -1751,6 +1769,10 @@ pub enum IntentPayload {
     NotifySkip(crate::NotifySkipped),
     #[serde(rename = "notify.expire")]
     NotifyExpire(crate::NotifyExpired),
+    #[serde(rename = "notify.requested")]
+    NotifyRequested(crate::NotifyRequested),
+    #[serde(rename = "notify.rearm")]
+    NotifyRearm(crate::NotifyRearm),
     #[serde(rename = "drawer.kicked")]
     DrawerKicked(crate::DrawerKicked),
     #[serde(rename = "drawer.kick_failed")]
@@ -1891,6 +1913,8 @@ impl IntentPayload {
             Self::NotifyFailed(_) => IntentKind::NotifyFailed,
             Self::NotifySkip(_) => IntentKind::NotifySkip,
             Self::NotifyExpire(_) => IntentKind::NotifyExpire,
+            Self::NotifyRequested(_) => IntentKind::NotifyRequested,
+            Self::NotifyRearm(_) => IntentKind::NotifyRearm,
             Self::DrawerKicked(_) => IntentKind::DrawerKicked,
             Self::DrawerKickFailed(_) => IntentKind::DrawerKickFailed,
             Self::SessionAssignPlayer(_) => IntentKind::SessionAssignPlayer,
@@ -2218,6 +2242,8 @@ mod tests {
                 | "notify.failed"
                 | "notify.skip"
                 | "notify.expire"
+                | "notify.requested"
+                | "notify.rearm"
                 | "kot.printed"
                 | "kot.print_failed"
                 | "kds.pair"

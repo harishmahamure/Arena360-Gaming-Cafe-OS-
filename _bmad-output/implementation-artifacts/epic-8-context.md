@@ -146,3 +146,10 @@ The café owner sees every branch and changes it from a phone or laptop, without
 - **Rules.** `notify_drain::RULES` is the extendable per-row eligibility list: `player_exists`, `consent_current`, `receipt_ready` (settled order, invoice number present or wait). Story 8.30 and Epic 9 append their rules there.
 - **Results.** System intents `notify.sent` (channel), `notify.failed` (code), `notify.skip` (reason), `notify.expire`; migration 78 adds the `expired` state and `channel`/`error_code`/`reason` columns. `notify.sent` records the irreversible effect `notification_sent` on the row's order, so Undo is refused afterwards.
 - **Receipt params.** `name`, `receipt_no`, `amount` (branch money format) and `cafe` (branch name), as the cloud's `receipt` template names them.
+
+## Story 8.30: Low-balance, session-ending and console 5-minute messages
+
+- **Trigger.** `NotifyTriggerTask` (primary, every 10 s) takes `notify_trigger::triggers`: `Request` or `Rearm` per running session; each is a system intent (`notify.requested`, `notify.rearm`) that re-checks tier, switch, consent and "already queued". The row is due at the end of the Undo window.
+- **Rows.** Migration 79: `order_id` nullable, `session_id`, `params` (JSON of raw values: `amount_minor`, `minutes`, `console`), `rearmed_at`; unique `(session_id, kind)` for `session_ending`/`console_5min` (an Extend never repeats them). `low_balance` is once per crossing, closed by `rearmed_at`.
+- **Switches.** `notify.low_balance` for low balance; `notify.session_ending` covers both the PC and the console message. No console-specific setting.
+- **Drain.** `RULES` gains `session_near_end` (skip `session_changed`); the drain adds `balance` (branch money format) for `low_balance` and `cafe` for every kind. A sent session message registers no irreversible effect.

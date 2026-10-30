@@ -62,6 +62,8 @@ import type { LibraryUpsert } from "./LibraryUpsert";
 import type { LicenceApply } from "./LicenceApply";
 import type { NotifyExpired } from "./NotifyExpired";
 import type { NotifyFailed } from "./NotifyFailed";
+import type { NotifyRearm } from "./NotifyRearm";
+import type { NotifyRequested } from "./NotifyRequested";
 import type { NotifySent } from "./NotifySent";
 import type { NotifySkipped } from "./NotifySkipped";
 import type { OrderLineCancel } from "./OrderLineCancel";
@@ -248,6 +250,8 @@ export type IntentPayload =
   | ({ kind: "notify.failed" } & NotifyFailed)
   | ({ kind: "notify.skip" } & NotifySkipped)
   | ({ kind: "notify.expire" } & NotifyExpired)
+  | ({ kind: "notify.requested" } & NotifyRequested)
+  | ({ kind: "notify.rearm" } & NotifyRearm)
   | ({ kind: "drawer.kicked" } & DrawerKicked)
   | ({ kind: "drawer.kick_failed" } & DrawerKickFailed)
   | ({ kind: "session.assign_player" } & SessionAssignPlayer)

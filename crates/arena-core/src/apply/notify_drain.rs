@@ -17,6 +17,7 @@ use arena_store::{
 };
 
 use super::mutate::Written;
+use super::notify_request;
 use super::session::invalid;
 
 /// The most characters a failure code or a skip reason keeps.
@@ -25,9 +26,20 @@ const NOTE_MAX_CHARS: usize = 100;
 #[derive(Default)]
 pub(crate) struct NotifyTarget {
     row: Option<NotifyRow>,
+    /// For `notify.requested` and `notify.rearm` (Story 8.30).
+    ask: notify_request::Ask,
 }
 
 pub(super) fn load(tx: &StoreTx<'_>, payload: &IntentPayload) -> Result<NotifyTarget, AppError> {
+    if matches!(
+        payload,
+        IntentPayload::NotifyRequested(_) | IntentPayload::NotifyRearm(_)
+    ) {
+        return Ok(NotifyTarget {
+            row: None,
+            ask: notify_request::load(tx, payload)?,
+        });
+    }
     let id = match payload {
         IntentPayload::NotifySent(p) => &p.outbox_id,
         IntentPayload::NotifyFailed(p) => &p.outbox_id,
@@ -37,6 +49,7 @@ pub(super) fn load(tx: &StoreTx<'_>, payload: &IntentPayload) -> Result<NotifyTa
     };
     Ok(NotifyTarget {
         row: find_notify(tx, id)?,
+        ask: notify_request::Ask::default(),
     })
 }
 
@@ -70,6 +83,12 @@ pub(super) fn validate(intent: &Intent, t: &NotifyTarget) -> Result<(), AppError
     if intent.base_rev.is_some() {
         return Err(invalid("base_rev", "notification intents take no base_rev"));
     }
+    if matches!(
+        intent.payload,
+        IntentPayload::NotifyRequested(_) | IntentPayload::NotifyRearm(_)
+    ) {
+        return notify_request::validate(intent, &t.ask);
+    }
     queued(t)?;
     match &intent.payload {
         IntentPayload::NotifySent(_) | IntentPayload::NotifyExpire(_) => Ok(()),
@@ -88,6 +107,12 @@ pub(super) fn mutate(
     t: &NotifyTarget,
     now_ms: i64,
 ) -> Result<Vec<Written>, AppError> {
+    if matches!(
+        intent.payload,
+        IntentPayload::NotifyRequested(_) | IntentPayload::NotifyRearm(_)
+    ) {
+        return notify_request::mutate(tx, intent, &t.ask, now_ms);
+    }
     let row = queued(t)?;
     let (state, channel, code, reason) = match &intent.payload {
         IntentPayload::NotifySent(p) => (
@@ -110,13 +135,16 @@ pub(super) fn mutate(
         }
     };
     finish_notify(tx, &row.id, state, channel, code, reason)?;
-    if state == NOTIFY_STATE_SENT {
+    // Only a message about a sale leaves a sale that can no longer be undone.
+    if state == NOTIFY_STATE_SENT
+        && let Some(order_id) = &row.order_id
+    {
         insert_effect(
             tx,
             &ulid::Ulid::generate().to_string(),
             EffectKind::NotificationSent,
             Some(&intent.intent_id),
-            Some(&row.order_id),
+            Some(order_id),
             now_ms,
         )?;
     }

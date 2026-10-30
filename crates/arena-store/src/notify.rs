@@ -1,6 +1,6 @@
-//! The notification outbox (Story 5.19): `notify_outbox` rows a settle queues for the Epic 8
-//! drain. The table is in the change log, so every write here is reported to `apply()` as a
-//! [`RowKey::NotifyOutbox`](crate::RowKey::NotifyOutbox).
+//! The notification outbox (Story 5.19): `notify_outbox` rows a settle or a running session queues
+//! for the Epic 8 drain. The table is in the change log, so every write here is reported to
+//! `apply()` as a [`RowKey::NotifyOutbox`](crate::RowKey::NotifyOutbox).
 
 use arena_proto::{AppError, NOTIFY_STATE_QUEUED, NOTIFY_STATE_SKIPPED};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -12,10 +12,15 @@ pub struct NewNotify<'a> {
     pub id: &'a str,
     pub purpose: &'a str,
     pub kind: &'a str,
-    pub order_id: &'a str,
+    /// The order a receipt is for; empty for a message about a session.
+    pub order_id: Option<&'a str>,
+    /// The session a `low_balance`, `session_ending` or `console_5min` message is about.
+    pub session_id: Option<&'a str>,
     pub player_id: &'a str,
     pub consent_policy_version: &'a str,
     pub not_before: i64,
+    /// The raw template values, a JSON object of text.
+    pub params: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,27 +28,52 @@ pub struct NotifyRow {
     pub id: String,
     pub purpose: String,
     pub kind: String,
-    pub order_id: String,
+    pub order_id: Option<String>,
+    pub session_id: Option<String>,
     pub player_id: String,
     pub consent_policy_version: String,
     pub not_before: i64,
     pub state: String,
+    pub params: Option<String>,
+    pub rearmed_at: Option<i64>,
+}
+
+const ROW_COLUMNS: &str = "id, purpose, kind, order_id, session_id, player_id, \
+     consent_policy_version, not_before, state, params, rearmed_at";
+
+fn row_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<NotifyRow> {
+    Ok(NotifyRow {
+        id: r.get(0)?,
+        purpose: r.get(1)?,
+        kind: r.get(2)?,
+        order_id: r.get(3)?,
+        session_id: r.get(4)?,
+        player_id: r.get(5)?,
+        consent_policy_version: r.get(6)?,
+        not_before: r.get(7)?,
+        state: r.get(8)?,
+        params: r.get(9)?,
+        rearmed_at: r.get(10)?,
+    })
 }
 
 pub fn insert_notify(conn: &Connection, n: &NewNotify<'_>) -> Result<(), AppError> {
     conn.execute(
-        "INSERT INTO notify_outbox (id, purpose, kind, order_id, player_id, consent_policy_version,
-                                    not_before, state, rev, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, 0, 0)",
+        "INSERT INTO notify_outbox (id, purpose, kind, order_id, session_id, player_id,
+                                    consent_policy_version, not_before, state, params, rev,
+                                    created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, 0, 0)",
         params![
             n.id,
             n.purpose,
             n.kind,
             n.order_id,
+            n.session_id,
             n.player_id,
             n.consent_policy_version,
             n.not_before,
             NOTIFY_STATE_QUEUED,
+            n.params,
         ],
     )
     .map_err(db_error)?;
@@ -82,27 +112,16 @@ pub fn list_due_notify(
     limit: i64,
 ) -> Result<Vec<NotifyRow>, AppError> {
     let mut stmt = conn
-        .prepare(
-            "SELECT id, purpose, kind, order_id, player_id, consent_policy_version, not_before, state
-             FROM notify_outbox WHERE state = 'queued' AND not_before <= ?1
-             ORDER BY not_before, id LIMIT ?2",
-        )
+        .prepare(&format!(
+            "SELECT {ROW_COLUMNS} FROM notify_outbox
+             WHERE state = 'queued' AND not_before <= ?1
+             ORDER BY not_before, id LIMIT ?2"
+        ))
         .map_err(db_error)?;
-    stmt.query_map(params![now_ms, limit], |r| {
-        Ok(NotifyRow {
-            id: r.get(0)?,
-            purpose: r.get(1)?,
-            kind: r.get(2)?,
-            order_id: r.get(3)?,
-            player_id: r.get(4)?,
-            consent_policy_version: r.get(5)?,
-            not_before: r.get(6)?,
-            state: r.get(7)?,
-        })
-    })
-    .map_err(db_error)?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(db_error)
+    stmt.query_map(params![now_ms, limit], row_of)
+        .map_err(db_error)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(db_error)
 }
 
 /// How a queued row ended: its new `state` and what goes with it. False when it was not queued.
@@ -138,24 +157,56 @@ pub fn latest_receipt_state(conn: &Connection, order_id: &str) -> Result<Option<
 
 pub fn find_notify(conn: &Connection, id: &str) -> Result<Option<NotifyRow>, AppError> {
     conn.query_row(
-        "SELECT id, purpose, kind, order_id, player_id, consent_policy_version, not_before, state
-         FROM notify_outbox WHERE id = ?1",
+        &format!("SELECT {ROW_COLUMNS} FROM notify_outbox WHERE id = ?1"),
         [id],
-        |r| {
-            Ok(NotifyRow {
-                id: r.get(0)?,
-                purpose: r.get(1)?,
-                kind: r.get(2)?,
-                order_id: r.get(3)?,
-                player_id: r.get(4)?,
-                consent_policy_version: r.get(5)?,
-                not_before: r.get(6)?,
-                state: r.get(7)?,
-            })
-        },
+        row_of,
     )
     .optional()
     .map_err(db_error)
+}
+
+/// Whether a row of `kind` about `session_id` exists, whatever became of it: a session's
+/// `session_ending` and `console_5min` messages go out once, also after an Extend.
+pub fn session_notice_exists(
+    conn: &Connection,
+    session_id: &str,
+    kind: &str,
+) -> Result<bool, AppError> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM notify_outbox WHERE session_id = ?1 AND kind = ?2)",
+        params![session_id, kind],
+        |r| r.get(0),
+    )
+    .map_err(db_error)
+}
+
+/// The latest `low_balance` row of `player_id`: its id and when the wallet was seen above the
+/// level again (`None` while that crossing is still the current one).
+pub fn latest_low_balance(
+    conn: &Connection,
+    player_id: &str,
+) -> Result<Option<(String, Option<i64>)>, AppError> {
+    conn.query_row(
+        "SELECT id, rearmed_at FROM notify_outbox WHERE player_id = ?1 AND kind = 'low_balance'
+         ORDER BY id DESC LIMIT 1",
+        [player_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .optional()
+    .map_err(db_error)
+}
+
+/// Marks the `low_balance` row `id` as left behind by a wallet that rose above the level. False
+/// when it already was.
+pub fn rearm_notify(conn: &Connection, id: &str, now_ms: i64) -> Result<bool, AppError> {
+    let n = conn
+        .execute(
+            "UPDATE notify_outbox SET rearmed_at = ?2
+             WHERE id = ?1 AND kind = 'low_balance' AND rearmed_at IS NULL",
+            params![id, now_ms],
+        )
+        .map_err(db_error)?;
+    Ok(n == 1)
 }
 
 /// The player an order was sold to, if any.
@@ -189,10 +240,26 @@ mod tests {
             id,
             purpose: "transactional",
             kind: "receipt",
-            order_id,
+            order_id: Some(order_id),
+            session_id: None,
             player_id: "P1",
             consent_policy_version: "1",
             not_before: 8_000,
+            params: None,
+        }
+    }
+
+    fn about_session<'a>(id: &'a str, kind: &'a str, session: &'a str) -> NewNotify<'a> {
+        NewNotify {
+            id,
+            purpose: "transactional",
+            kind,
+            order_id: None,
+            session_id: Some(session),
+            player_id: "P1",
+            consent_policy_version: "1",
+            not_before: 8_000,
+            params: Some("{}"),
         }
     }
 
@@ -254,8 +321,9 @@ mod tests {
         assert_eq!(find_notify(&conn, "N2").unwrap().unwrap().state, "expired");
         assert!(ids(9_000).is_empty());
     }
+
     #[test]
-    fn the_table_only_takes_a_transactional_receipt() {
+    fn the_table_only_takes_a_transactional_message_it_has_a_template_for() {
         let conn = conn();
         let bad = |purpose: &str, kind: &str| {
             conn.execute(
@@ -267,7 +335,50 @@ mod tests {
             )
         };
         assert!(bad("marketing", "receipt").is_err());
-        assert!(bad("transactional", "low_balance").is_err());
-        assert!(bad("transactional", "receipt").is_ok());
+        assert!(bad("transactional", "credit_reminder").is_err());
+        assert!(bad("transactional", "low_balance").is_ok());
+    }
+
+    #[test]
+    fn a_session_gets_each_of_its_two_messages_once() {
+        let conn = conn();
+        assert!(!session_notice_exists(&conn, "S1", "session_ending").unwrap());
+        insert_notify(&conn, &about_session("N1", "session_ending", "S1")).unwrap();
+        assert!(session_notice_exists(&conn, "S1", "session_ending").unwrap());
+        assert!(!session_notice_exists(&conn, "S1", "console_5min").unwrap());
+        assert!(
+            insert_notify(&conn, &about_session("N2", "session_ending", "S1")).is_err(),
+            "the same message of a session is refused"
+        );
+        insert_notify(&conn, &about_session("N3", "session_ending", "S2")).unwrap();
+        // A settled row still counts: an Extend after the send must not send it again.
+        finish_notify(&conn, "N1", "skipped", None, None, Some("session_changed")).unwrap();
+        assert!(session_notice_exists(&conn, "S1", "session_ending").unwrap());
+        // A row about neither an order nor a session is not a row.
+        let mut orphan = about_session("N4", "low_balance", "S1");
+        orphan.session_id = None;
+        assert!(insert_notify(&conn, &orphan).is_err());
+        let stored = find_notify(&conn, "N3").unwrap().unwrap();
+        assert_eq!(stored.session_id.as_deref(), Some("S2"));
+        assert_eq!(stored.order_id, None);
+        assert_eq!(stored.params.as_deref(), Some("{}"));
+    }
+
+    #[test]
+    fn a_low_balance_crossing_is_rearmed_once() {
+        let conn = conn();
+        assert_eq!(latest_low_balance(&conn, "P1").unwrap(), None);
+        insert_notify(&conn, &about_session("N1", "low_balance", "S1")).unwrap();
+        insert_notify(&conn, &about_session("N2", "low_balance", "S1")).unwrap();
+        assert_eq!(
+            latest_low_balance(&conn, "P1").unwrap(),
+            Some(("N2".into(), None))
+        );
+        assert!(rearm_notify(&conn, "N2", 5).unwrap());
+        assert!(!rearm_notify(&conn, "N2", 6).unwrap());
+        assert_eq!(
+            latest_low_balance(&conn, "P1").unwrap(),
+            Some(("N2".into(), Some(5)))
+        );
     }
 }

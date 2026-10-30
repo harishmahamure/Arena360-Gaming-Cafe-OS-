@@ -102,10 +102,12 @@ pub(super) fn queue_on_settle(
             id: &id,
             purpose: NOTIFY_PURPOSE_TRANSACTIONAL,
             kind: NOTIFY_KIND_RECEIPT,
-            order_id,
+            order_id: Some(order_id),
+            session_id: None,
             player_id: &player_id,
             consent_policy_version: &policy_version,
             not_before: now_ms + UNDO_WINDOW_MS,
+            params: None,
         },
     )?;
     written.push(Written {

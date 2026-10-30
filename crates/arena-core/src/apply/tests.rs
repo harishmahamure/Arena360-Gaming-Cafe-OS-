@@ -70,6 +70,7 @@ mod rule_pricing;
 mod rules;
 mod session;
 mod session_expire;
+mod session_notice;
 mod shift;
 mod shift_close;
 mod shop;

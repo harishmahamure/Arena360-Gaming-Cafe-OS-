@@ -240,10 +240,12 @@ pub use matching::{
     is_proposal_key, proposal_key,
 };
 pub use notify::{
-    MESSAGE_KINDS, NOTIFY_DRAIN_INTERVAL_S, NOTIFY_EXPIRY_MS, NOTIFY_PARAM_MAX_CHARS,
-    NOTIFY_STATE_EXPIRED, NOTIFY_STATE_FAILED, NOTIFY_STATE_SENT, NotifyChannel, NotifyExpired,
-    NotifyFailed, NotifyRequest, NotifyResponse, NotifySent, NotifySkipped, NotifyState,
-    valid_e164,
+    MESSAGE_KINDS, NOTIFY_DRAIN_INTERVAL_S, NOTIFY_EXPIRY_MS, NOTIFY_KIND_CONSOLE_5MIN,
+    NOTIFY_KIND_LOW_BALANCE, NOTIFY_KIND_SESSION_ENDING, NOTIFY_PARAM_MAX_CHARS,
+    NOTIFY_STATE_EXPIRED, NOTIFY_STATE_FAILED, NOTIFY_STATE_SENT, NOTIFY_TRIGGER_INTERVAL_S,
+    NotifyChannel, NotifyExpired, NotifyFailed, NotifyRearm, NotifyRequest, NotifyRequested,
+    NotifyResponse, NotifySent, NotifySkipped, NotifyState, SESSION_NEAR_END_MS,
+    SESSION_NOTIFY_KINDS, valid_e164,
 };
 pub use operating::{
     ADS_POLICY_VERSION, ADS_RATINGS, AdConsentState, AdRating, AdsConsent, AdsConsentSet,

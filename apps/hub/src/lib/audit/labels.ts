@@ -74,6 +74,8 @@ const INTENT_LABELS: Record<string, MessageKey> = {
   "notify.failed": "hub.audit.intent.notify.failed",
   "notify.skip": "hub.audit.intent.notify.skip",
   "notify.expire": "hub.audit.intent.notify.expire",
+  "notify.requested": "hub.audit.intent.notify.requested",
+  "notify.rearm": "hub.audit.intent.notify.rearm",
   "drawer.kicked": "hub.audit.intent.drawer.kicked",
   "drawer.kick_failed": "hub.audit.intent.drawer.kick_failed",
   "session.transfer": "hub.audit.intent.session.transfer",

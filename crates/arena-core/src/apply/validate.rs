@@ -445,7 +445,9 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
         IntentPayload::NotifySent(_)
         | IntentPayload::NotifyFailed(_)
         | IntentPayload::NotifySkip(_)
-        | IntentPayload::NotifyExpire(_) => match target {
+        | IntentPayload::NotifyExpire(_)
+        | IntentPayload::NotifyRequested(_)
+        | IntentPayload::NotifyRearm(_) => match target {
             Target::Notify(t) => super::notify_drain::validate(intent, t),
             _ => Err(internal_target()),
         },

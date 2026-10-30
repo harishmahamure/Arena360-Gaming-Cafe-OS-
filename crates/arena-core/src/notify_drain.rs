@@ -4,15 +4,17 @@
 //! something (a receipt waits for its invoice number), skip it for good (the action was reverted,
 //! the player no longer agrees), or expire it (still unsent after 7 days). The decision of a row
 //! runs through [`RULES`], one small check each, so a later story adds its rule (the erasure rule
-//! of Epic 9, the "session no longer near its end" rule of Story 8.30) without touching the
-//! drain. Nothing here writes: the task applies the result as `notify.*` intents.
+//! of Epic 9) without touching the drain. Story 8.30 added the "session no longer near its end"
+//! rule for the session and console messages. Nothing here writes: the task applies the result as `notify.*` intents.
 
 use std::collections::BTreeMap;
 
 use arena_proto::{
-    AppError, NOTIFY_EXPIRY_MS, NOTIFY_KIND_RECEIPT, NotifyRequest, SnapshotLocale, valid_e164,
+    AppError, NOTIFY_EXPIRY_MS, NOTIFY_KIND_CONSOLE_5MIN, NOTIFY_KIND_LOW_BALANCE,
+    NOTIFY_KIND_RECEIPT, NOTIFY_KIND_SESSION_ENDING, NotifyRequest, SESSION_NEAR_END_MS,
+    SnapshotLocale, valid_e164,
 };
-use arena_store::{InvoiceOrder, NotifyRow, PlayerRow, Store};
+use arena_store::{InvoiceOrder, LiveSession, NotifyRow, PlayerRow, Store};
 
 use crate::SnapshotReader;
 use crate::locale::format_minor;
@@ -40,13 +42,21 @@ pub struct RowContext<'a> {
     /// The player's current consent to the row's purpose: (granted, policy version).
     pub consent: Option<(bool, String)>,
     pub order: Option<&'a InvoiceOrder>,
+    /// The session a session message is about, while it is still running.
+    pub session: Option<&'a LiveSession>,
+    pub now_ms: i64,
 }
 
 type Rule = fn(&RowContext<'_>) -> Verdict;
 
 /// The per-row eligibility check, in the order the rules run. The first rule that does not pass
 /// decides the row.
-pub const RULES: &[Rule] = &[player_exists, consent_current, receipt_ready];
+pub const RULES: &[Rule] = &[
+    player_exists,
+    consent_current,
+    receipt_ready,
+    session_near_end,
+];
 
 fn player_exists(c: &RowContext<'_>) -> Verdict {
     if c.player.is_some() {
@@ -80,6 +90,26 @@ fn receipt_ready(c: &RowContext<'_>) -> Verdict {
     }
 }
 
+/// A "session ending" or "console 5 minutes" message goes out only while its session is still
+/// running and five minutes or less from its end. A session that ended, or was extended past that
+/// (say within the Undo window of the moment that raised the message), is skipped.
+fn session_near_end(c: &RowContext<'_>) -> Verdict {
+    if c.row.kind != NOTIFY_KIND_SESSION_ENDING && c.row.kind != NOTIFY_KIND_CONSOLE_5MIN {
+        return Verdict::Pass;
+    }
+    let near = c.session.is_some_and(|s| {
+        matches!(s.state.as_str(), "active" | "paused")
+            && s.ends_at.is_some_and(|at| {
+                (1..=SESSION_NEAR_END_MS).contains(&(at - s.paused_at.unwrap_or(c.now_ms)))
+            })
+    });
+    if near {
+        Verdict::Pass
+    } else {
+        Verdict::Skip("session_changed")
+    }
+}
+
 /// What the drain does with one row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DrainAction {
@@ -95,7 +125,8 @@ pub enum DrainAction {
 pub struct DrainItem {
     pub id: String,
     pub action: DrainAction,
-    /// The total of the order a receipt is for, to write as the `amount` parameter.
+    /// The money a message names: the total of the order a receipt is for (the `amount`
+    /// parameter) or the wallet balance of a low-balance message (the `balance` parameter).
     total_minor: i64,
 }
 
@@ -107,14 +138,23 @@ fn decide(c: &RowContext<'_>) -> Verdict {
         .unwrap_or(Verdict::Pass)
 }
 
-/// The message of a row. The `amount` and `cafe` parameters of a receipt are added by the reader.
+/// The raw values a session message was queued with.
+fn stored_params(row: &NotifyRow) -> BTreeMap<String, String> {
+    row.params
+        .as_deref()
+        .and_then(|p| serde_json::from_str(p).ok())
+        .unwrap_or_default()
+}
+
+/// The message of a row. The money and `cafe` parameters are added by the reader.
 fn request(
     row: &NotifyRow,
     phone: String,
     name: String,
     order: Option<&InvoiceOrder>,
 ) -> NotifyRequest {
-    let mut params = BTreeMap::new();
+    let mut params = stored_params(row);
+    params.remove("amount_minor");
     params.insert("name".to_owned(), name);
     if let Some(o) = order {
         params.insert(
@@ -141,20 +181,41 @@ pub fn plan(
     limit: i64,
 ) -> Result<Vec<DrainItem>, AppError> {
     let mut items = Vec::new();
-    for row in store.due_notify(now_ms, limit)? {
+    let due = store.due_notify(now_ms, limit)?;
+    let live = if due.iter().any(|r| r.session_id.is_some()) {
+        store.live_sessions()?
+    } else {
+        Vec::new()
+    };
+    for row in due {
         let mut total_minor = 0;
         let action = if now_ms - row.not_before > NOTIFY_EXPIRY_MS {
             DrainAction::Expire
         } else {
             let player = store.player(&row.player_id)?;
             let consent = store.latest_consent(&row.player_id, &row.purpose)?;
-            let order = store.invoice_order(&row.order_id)?;
-            total_minor = order.as_ref().map_or(0, |o| o.total_minor);
+            let order = match &row.order_id {
+                Some(id) => store.invoice_order(id)?,
+                None => None,
+            };
+            total_minor = match row.kind.as_str() {
+                NOTIFY_KIND_LOW_BALANCE => stored_params(&row)
+                    .get("amount_minor")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0),
+                _ => order.as_ref().map_or(0, |o| o.total_minor),
+            };
+            let session = row
+                .session_id
+                .as_ref()
+                .and_then(|id| live.iter().find(|s| &s.id == id));
             let ctx = RowContext {
                 row: &row,
                 player: player.as_ref().map(|(p, _, _)| p),
                 consent,
                 order: order.as_ref(),
+                session,
+                now_ms,
             };
             match (decide(&ctx), &player) {
                 (Verdict::Wait, _) => DrainAction::Wait,
@@ -182,26 +243,30 @@ pub fn plan(
     Ok(items)
 }
 
-/// Adds the `amount` (the order's total as the branch writes money) and `cafe` parameters a
-/// receipt template needs.
+/// Adds the money (as the branch writes it) and `cafe` parameters the templates need: `amount`
+/// for a receipt, `balance` for a low-balance message, `cafe` for all.
 fn complete(item: &mut DrainItem, cafe: &str, locale: Option<&SnapshotLocale>) {
     let DrainAction::Send(req) = &mut item.action else {
         return;
     };
-    if req.kind != NOTIFY_KIND_RECEIPT {
-        return;
-    }
-    let amount = match locale {
-        Some(l) => format_minor(
-            item.total_minor,
-            usize::from(l.exponent),
-            &l.symbol,
-            l.symbol_position,
-            l.number_format,
-        ),
-        None => item.total_minor.to_string(),
+    let money = match req.kind.as_str() {
+        NOTIFY_KIND_RECEIPT => Some("amount"),
+        NOTIFY_KIND_LOW_BALANCE => Some("balance"),
+        _ => None,
     };
-    req.params.insert("amount".to_owned(), amount);
+    if let Some(name) = money {
+        let amount = match locale {
+            Some(l) => format_minor(
+                item.total_minor,
+                usize::from(l.exponent),
+                &l.symbol,
+                l.symbol_position,
+                l.number_format,
+            ),
+            None => item.total_minor.to_string(),
+        };
+        req.params.insert(name.to_owned(), amount);
+    }
     req.params.insert("cafe".to_owned(), cafe.to_owned());
 }
 

@@ -80,6 +80,22 @@ pub const NOTIFY_STATE_SENT: &str = "sent";
 pub const NOTIFY_STATE_FAILED: &str = "failed";
 /// A `notify_outbox` row that waited more than [`NOTIFY_EXPIRY_MS`].
 pub const NOTIFY_STATE_EXPIRED: &str = "expired";
+/// The message kind of a wallet that ran low (Story 8.30).
+pub const NOTIFY_KIND_LOW_BALANCE: &str = "low_balance";
+/// The message kind of a PC session five minutes from its end (Story 8.30).
+pub const NOTIFY_KIND_SESSION_ENDING: &str = "session_ending";
+/// The message kind of a console session five minutes from its end (Story 8.30).
+pub const NOTIFY_KIND_CONSOLE_5MIN: &str = "console_5min";
+/// The kinds a running session raises through `notify.requested`.
+pub const SESSION_NOTIFY_KINDS: [&str; 3] = [
+    NOTIFY_KIND_LOW_BALANCE,
+    NOTIFY_KIND_SESSION_ENDING,
+    NOTIFY_KIND_CONSOLE_5MIN,
+];
+/// How close to its end a session is when "session ending" and "console 5 minutes" go out.
+pub const SESSION_NEAR_END_MS: i64 = 5 * 60_000;
+/// How often a Hub looks for session messages to queue, in seconds.
+pub const NOTIFY_TRIGGER_INTERVAL_S: u64 = 10;
 
 /// The payload of `notify.sent` (system): the cloud sent the row's message. The forward action is
 /// now an irreversible effect.
@@ -113,7 +129,32 @@ pub struct NotifyExpired {
     pub outbox_id: String,
 }
 
-/// Whether `s` is a phone in E.164: `+`, then 8 to 15 digits, the first not 0.
+/// The payload of `notify.requested` (system, Story 8.30): a running session, or a wallet that ran
+/// low during one, asks for a player message. It queues one `notify_outbox` row for the end of the
+/// Undo window. `params` holds the raw values the drain turns into template parameters:
+/// `amount_minor` for `low_balance`, `minutes` for `session_ending`, `console` (the TV name) for
+/// `console_5min`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct NotifyRequested {
+    pub kind: String,
+    pub player_id: String,
+    pub session_id: String,
+    #[serde(default)]
+    pub params: BTreeMap<String, String>,
+}
+
+/// The payload of `notify.rearm` (system, Story 8.30): the player's wallet rose above the
+/// low-balance level again, so the next fall below it is a new crossing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct NotifyRearm {
+    pub outbox_id: String,
+}
+
+/// Whether `s` is a phone in E.164:`+`, then 8 to 15 digits, the first not 0.
 pub fn valid_e164(s: &str) -> bool {
     let Some(d) = s.strip_prefix('+') else {
         return false;

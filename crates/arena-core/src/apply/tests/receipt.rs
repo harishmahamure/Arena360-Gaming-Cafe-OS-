@@ -631,7 +631,7 @@ async fn a_failed_kick_keeps_the_sale_raises_the_offline_alert_and_writes_no_cas
 
 const PHONE: &str = "+91 98765-43210";
 
-async fn set_key(f: &Fixture, key: &str, value: &str) {
+pub(super) async fn set_key(f: &Fixture, key: &str, value: &str) {
     let row = reopen(f)
         .rows(Table::Settings)
         .unwrap()
@@ -654,7 +654,7 @@ async fn set_key(f: &Fixture, key: &str, value: &str) {
 }
 
 /// A paid branch with the WhatsApp receipt switched on.
-async fn whatsapp_branch(f: &Fixture) {
+pub(super) async fn whatsapp_branch(f: &Fixture) {
     f.writer
         .apply_licence(arena_proto::LicenceApply {
             standing: arena_proto::LicenceStanding::Verified,

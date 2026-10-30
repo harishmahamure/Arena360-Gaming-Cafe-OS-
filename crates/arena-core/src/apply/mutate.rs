@@ -605,7 +605,9 @@ pub(super) fn mutate(
         IntentPayload::NotifySent(_)
         | IntentPayload::NotifyFailed(_)
         | IntentPayload::NotifySkip(_)
-        | IntentPayload::NotifyExpire(_) => match target {
+        | IntentPayload::NotifyExpire(_)
+        | IntentPayload::NotifyRequested(_)
+        | IntentPayload::NotifyRearm(_) => match target {
             Target::Notify(t) => super::notify_drain::mutate(tx, intent, t, now_ms),
             _ => Err(mismatch()),
         },

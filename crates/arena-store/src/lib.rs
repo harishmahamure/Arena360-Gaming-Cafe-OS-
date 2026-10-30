@@ -156,8 +156,9 @@ pub use library_installs::{
 };
 pub use migrations::LATEST_SCHEMA_VERSION;
 pub use notify::{
-    NewNotify, NotifyRow, find_notify, finish_notify, insert_notify, latest_receipt_state,
-    list_due_notify, order_player_id, queued_notify_ids, skip_notify,
+    NewNotify, NotifyRow, find_notify, finish_notify, insert_notify, latest_low_balance,
+    latest_receipt_state, list_due_notify, order_player_id, queued_notify_ids, rearm_notify,
+    session_notice_exists, skip_notify,
 };
 pub use outbox::{
     KIND_DRAWER, KIND_KOT, KIND_PRINT, OutboxRow, ReceiptHead, ReceiptLineRow, ReceiptPaymentRow,
@@ -1360,6 +1361,26 @@ impl Store {
             return Ok(Vec::new());
         }
         list_due_notify(&self.conn, now_ms, limit)
+    }
+
+    /// The latest `low_balance` row of a player: its id and when the wallet was seen above the
+    /// level again (Story 8.30).
+    pub fn latest_low_balance(
+        &self,
+        player_id: &str,
+    ) -> Result<Option<(String, Option<i64>)>, AppError> {
+        if !self.table_exists("notify_outbox")? {
+            return Ok(None);
+        }
+        latest_low_balance(&self.conn, player_id)
+    }
+
+    /// Whether a session already has a row of this message kind (Story 8.30).
+    pub fn session_notice_exists(&self, session_id: &str, kind: &str) -> Result<bool, AppError> {
+        if !self.table_exists("notify_outbox")? {
+            return Ok(false);
+        }
+        session_notice_exists(&self.conn, session_id, kind)
     }
 
     /// The order a notification is about, with its invoice number once it has one.

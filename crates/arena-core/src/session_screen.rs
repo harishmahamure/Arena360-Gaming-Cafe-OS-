@@ -5,7 +5,7 @@ use arena_proto::{
     KEY_OPENING_HOURS, LockReason, OpeningDay, OrderStatus, SessionScreen, SessionSync,
     parse_opening_hours,
 };
-use arena_store::Store;
+use arena_store::{LiveSession, Store};
 use chrono::{Datelike, Duration, NaiveDate, NaiveTime, TimeZone};
 use chrono_tz::Tz;
 
@@ -86,6 +86,22 @@ pub fn timed_sessions(store: &Store, now_ms: i64) -> Result<Vec<TimedSession>, A
         .collect())
 }
 
+/// What a wallet session has left: the free wallet plus the unused part of the share it set aside
+/// up front. `remaining_ms` is the time the session has left (`None` when it has no end time).
+pub(crate) fn wallet_left(free: i64, s: &LiveSession, remaining_ms: Option<u64>) -> i64 {
+    let span = s
+        .ends_at
+        .map_or(0, |at| (at - s.started_at - s.paused_total_ms).max(0));
+    let unused = match (span, remaining_ms) {
+        (0, _) | (_, None) => 0,
+        (span, Some(rem)) => {
+            let rem = i128::from(rem).min(i128::from(span));
+            i64::try_from(i128::from(s.reserved_minor) * rem / i128::from(span)).unwrap_or(0)
+        }
+    };
+    free.saturating_add(unused)
+}
+
 pub fn session_screens(
     store: &Store,
     now_ms: i64,
@@ -163,20 +179,7 @@ pub fn session_screens(
             };
             // A wallet session sets its whole share aside up front and uses it up as time runs
             // out, so what is left is the free wallet plus the unused part of that share.
-            let wallet_left_minor = free.map(|free| {
-                let span = s
-                    .ends_at
-                    .map_or(0, |at| (at - s.started_at - s.paused_total_ms).max(0));
-                let unused = match (span, remaining_ms) {
-                    (0, _) | (_, None) => 0,
-                    (span, Some(rem)) => {
-                        let rem = i128::from(rem).min(i128::from(span));
-                        i64::try_from(i128::from(s.reserved_minor) * rem / i128::from(span))
-                            .unwrap_or(0)
-                    }
-                };
-                free.saturating_add(unused)
-            });
+            let wallet_left_minor = free.map(|free| wallet_left(free, &s, remaining_ms));
             let screen = SessionScreen {
                 username: s.username,
                 guest_no: s.guest_no,

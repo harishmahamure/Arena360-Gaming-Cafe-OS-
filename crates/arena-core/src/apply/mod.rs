@@ -60,6 +60,7 @@ mod licence;
 mod maintenance;
 mod mutate;
 mod notify_drain;
+mod notify_request;
 mod order_line;
 mod order_place;
 mod order_ready;
@@ -415,9 +416,12 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         | P::DrawerKickFailed(_) => {
             Target::Receipt(Box::new(receipt_print::load(tx, &intent.payload)?))
         }
-        P::NotifySent(_) | P::NotifyFailed(_) | P::NotifySkip(_) | P::NotifyExpire(_) => {
-            Target::Notify(Box::new(notify_drain::load(tx, &intent.payload)?))
-        }
+        P::NotifySent(_)
+        | P::NotifyFailed(_)
+        | P::NotifySkip(_)
+        | P::NotifyExpire(_)
+        | P::NotifyRequested(_)
+        | P::NotifyRearm(_) => Target::Notify(Box::new(notify_drain::load(tx, &intent.payload)?)),
         P::KotReprint(_) | P::KotPrinted(_) | P::KotPrintFailed(_) => {
             Target::Kot(Box::new(kot::load(tx, &intent.payload)?))
         }

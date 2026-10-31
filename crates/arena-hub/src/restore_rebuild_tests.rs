@@ -252,3 +252,48 @@ async fn a_rebuild_without_the_branch_key_fails_and_keeps_the_download() {
     assert!(f.rebuilder.view().is_none());
     assert!(f.status.borrow().restore_pending.is_some());
 }
+
+// Story 9.27: the key backup, opened with the branch key.
+
+fn backup_keys(kek: Option<Vec<u8>>) -> BackupKeys {
+    let dir = tempfile::tempdir().unwrap();
+    let cloud = arena_tasks::CloudClient::new(
+        &arena_tasks::CloudEndpoint::parse("http://127.0.0.1:1", true).unwrap(),
+    )
+    .unwrap();
+    let (status, rx) = status_channel(HubStatus::opened(85, "01INSTANCE"));
+    std::mem::forget(status);
+    let fetcher = RestoreFetcher::new(
+        cloud,
+        Arc::new(MemKey(Mutex::new(Some(b"hub_x.y".to_vec())))),
+        "01INSTANCE".into(),
+        dir.path(),
+        rx,
+    );
+    BackupKeys::new(fetcher, Arc::new(MemKey(Mutex::new(kek))))
+}
+
+#[test]
+fn the_key_backup_names_its_players_only_for_the_branch_key() {
+    let rows = ["P1", "P3"].map(|id| PlayerKeyRow {
+        player_id: id.into(),
+        dek_wrapped: format!("wrapped-{id}"),
+    });
+    let sealed = arena_core::key_backup::seal_key_table(&[7; KEK_LEN], &rows).unwrap();
+    assert_eq!(
+        backup_keys(Some(vec![7; KEK_LEN])).open(&sealed),
+        Some(vec!["P1".to_owned(), "P3".to_owned()])
+    );
+    // Another key, no key, a key of the wrong size and a damaged backup answer nothing.
+    assert_eq!(backup_keys(Some(vec![8; KEK_LEN])).open(&sealed), None);
+    assert_eq!(backup_keys(None).open(&sealed), None);
+    assert_eq!(backup_keys(Some(vec![7; 5])).open(&sealed), None);
+    assert_eq!(backup_keys(Some(vec![7; KEK_LEN])).open(b"junk"), None);
+}
+
+#[tokio::test]
+async fn a_hub_that_cannot_reach_the_cloud_answers_nothing() {
+    // The fetcher sees a Hub with no tier yet, so it asks nothing and nobody is erased.
+    let keys = backup_keys(Some(vec![7; KEK_LEN]));
+    assert_eq!(keys.live_keys().await, None);
+}

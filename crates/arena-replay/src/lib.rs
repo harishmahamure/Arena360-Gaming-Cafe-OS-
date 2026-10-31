@@ -19,6 +19,8 @@ use arena_store::{
 use sha2::{Digest, Sha256};
 
 mod audit;
+#[cfg(test)]
+mod drill;
 mod follow;
 mod rebuild;
 

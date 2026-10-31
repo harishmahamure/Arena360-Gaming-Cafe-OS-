@@ -628,3 +628,45 @@ async fn cancel_removes_the_staging_folder_and_leaves_the_hub_waiting() {
     // Cancelling when nothing runs is harmless.
     fx.fetcher.cancel();
 }
+
+// Story 9.27: the key backup fetched for a restore from an export file.
+
+#[tokio::test]
+async fn the_key_backup_alone_is_fetched_once_and_leaves_nothing_on_disk() {
+    let fx = fx().await;
+    standard_backup(&fx.world);
+    // A live Hub restoring from a file is not waiting in "Restore this branch".
+    fx.status.send_modify(|s| s.restore_pending = None);
+    let bytes = fx.fetcher.key_backup_bytes().await.unwrap();
+    assert_eq!(bytes, vec![9; 40]);
+    assert_eq!(fx.world.plans.lock().unwrap().len(), 1, "one plan call");
+    assert_eq!(fx.world.gets_of("keys"), 1);
+    assert_eq!(fx.world.gets_of("snap"), 0, "nothing else is downloaded");
+    assert!(!fx.dir.path().join(STAGING_DIR).exists());
+    assert!(!fx.dir.path().join("key-backup-lookup.tmp").exists());
+}
+
+#[tokio::test]
+async fn no_key_backup_is_fetched_on_free_when_refused_or_when_there_is_none() {
+    let fx = fx().await;
+    standard_backup(&fx.world);
+    fx.status.send_modify(|s| s.tier = Some(Tier::Free));
+    assert!(fx.fetcher.key_backup_bytes().await.is_none());
+    assert!(
+        fx.world.plans.lock().unwrap().is_empty(),
+        "Free asks nothing"
+    );
+
+    fx.status.send_modify(|s| s.tier = Some(Tier::Premium));
+    *fx.world.refuse.lock().unwrap() = Some((403, "FORBIDDEN"));
+    assert!(fx.fetcher.key_backup_bytes().await.is_none());
+    assert_eq!(fx.world.plans.lock().unwrap().len(), 1, "no retry");
+
+    *fx.world.refuse.lock().unwrap() = None;
+    *fx.world.keys.lock().unwrap() = None;
+    assert!(fx.fetcher.key_backup_bytes().await.is_none());
+
+    // A link the bucket refuses is no backup either.
+    *fx.world.keys.lock().unwrap() = Some("gone".into());
+    assert!(fx.fetcher.key_backup_bytes().await.is_none());
+}

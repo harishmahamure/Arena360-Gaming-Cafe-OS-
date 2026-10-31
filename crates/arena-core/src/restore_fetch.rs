@@ -27,3 +27,15 @@ pub trait RestoreRebuildControl: Send + Sync {
     /// is kept and the Hub stays in "Restore this branch".
     fn cancel(&self);
 }
+
+/// What the cloud key backup says about a branch (Story 9.27), asked before an export is restored
+/// on a paid Hub: `arena-hub` implements it (the fetch runs in `arena-tasks`, the key opens it).
+pub trait KeyBackupLookup: Send + Sync {
+    /// The ids of the players whose key the backup holds. `None` when the Hub is not paid, the
+    /// cloud cannot be reached, there is no backup, or it does not open with the branch key: the
+    /// restore then changes nothing about who is erased. Never waits long.
+    fn live_keys(&self) -> KeyLookupFuture<'_>;
+}
+
+pub type KeyLookupFuture<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Option<Vec<String>>> + Send + 'a>>;

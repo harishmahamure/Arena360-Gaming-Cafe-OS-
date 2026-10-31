@@ -29,6 +29,9 @@ use crate::ui_auth::{
     UiAuth, auth_failed, bad_frame, bearer, fail, internal, player_kek, run_intent, ui_error,
 };
 
+/// The longest a restore waits for the cloud key backup before it goes on without it (Story 9.27).
+const KEY_LOOKUP_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct ExportRequest {
@@ -424,9 +427,23 @@ pub(crate) async fn restore(
         Err(e) => return restore_fail(e),
     };
 
+    // On a paid Hub the cloud key backup is newer than the file: whom it no longer holds a key
+    // for was erased after the export (Story 9.27). Free, offline or unreadable: nothing changes.
+    let paid = auth
+        .status()
+        .and_then(|s| s.borrow().tier)
+        .is_some_and(|t| t != arena_proto::Tier::Free);
+    let live_keys = match auth.key_backup() {
+        Some(lookup) if paid => tokio::time::timeout(KEY_LOOKUP_WAIT, lookup.live_keys())
+            .await
+            .unwrap_or(None),
+        _ => None,
+    };
+
     // One disk-heavy job at a time, and one staged restore.
     let _single = auth.export_lock().lock().await;
-    let staged = tokio::task::spawn_blocking(move || reader.stage_restore(&path, &owner)).await;
+    let staged =
+        tokio::task::spawn_blocking(move || reader.stage_restore(&path, &owner, live_keys)).await;
     let found = match staged {
         Ok(Ok(found)) => found,
         Ok(Err(e)) => return restore_fail(e),

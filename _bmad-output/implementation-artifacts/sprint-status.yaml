@@ -293,7 +293,7 @@ development_status:
   9-24-a-returning-old-main-hub-locks-itself: blocked
   9-25-make-the-old-main-hub-the-standby: blocked
   9-26-failover-and-split-brain-proven-on-the-test-lan: blocked
-  9-27-restore-drill-and-privacy-proof: backlog
+  9-27-restore-drill-and-privacy-proof: review
   epic-9-retrospective: optional
 
   epic-10: backlog

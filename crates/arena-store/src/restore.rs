@@ -232,6 +232,10 @@ struct Marker {
     /// Set when the file was rebuilt from the cloud backup (Story 9.13).
     #[serde(default)]
     cloud: Option<CloudRestoreFacts>,
+    /// The players whose key the cloud key backup holds (Story 9.27), asked on a paid Hub when
+    /// the file was staged. `None` when the backup could not be read: nothing more is erased.
+    #[serde(default)]
+    live_keys: Option<Vec<String>>,
 }
 
 /// What a finished restore leaves for the Hub to record as `ops.restore`.
@@ -257,6 +261,19 @@ pub fn stage_export(
     db_path: &Path,
     file: &Path,
     confirmed_by: &str,
+) -> Result<Inspection, AppError> {
+    stage_export_checked(db_path, file, confirmed_by, None)
+}
+
+/// As [`stage_export`], with what the cloud key backup says (Story 9.27): `live_keys` are the
+/// players whose key it holds, `None` when this Hub is not paid or the backup could not be fetched
+/// and opened with the branch key. At the swap a player the file holds a key for, who is not in
+/// `live_keys`, was erased after the export was made: they are erased before the writer opens.
+pub fn stage_export_checked(
+    db_path: &Path,
+    file: &Path,
+    confirmed_by: &str,
+    live_keys: Option<Vec<String>>,
 ) -> Result<Inspection, AppError> {
     let inspection = inspect_export(db_path, file)?;
     let dir = data_dir(db_path).join(PENDING_DIR);
@@ -285,6 +302,7 @@ pub fn stage_export(
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default(),
             cloud: None,
+            live_keys,
         };
         write_marker(&dir, &marker)
     })();
@@ -330,6 +348,7 @@ pub fn stage_rebuilt(
                 confirmed_by: RESTORE_SYSTEM_ACTOR.to_owned(),
                 file_name: "cloud-backup".to_owned(),
                 cloud: Some(cloud),
+                live_keys: None,
             },
         )?;
         Ok(inspection)
@@ -533,6 +552,7 @@ fn build_restored(
     inspection: &Inspection,
     old: &Replaced,
     cloud: bool,
+    live_keys: Option<&[String]>,
 ) -> Result<Built, AppError> {
     let mut store = Store::open(work, now_ms)?;
     if !store.holds_writer_lock() {
@@ -570,6 +590,31 @@ fn build_restored(
                 crate::erase_player(tx, player_id, *erased_at)?;
                 crate::delete_player_key(tx, player_id)?;
                 reapplied += 1;
+            }
+        }
+
+        // The cloud key backup is newer than the file: a player the file holds a key for and the
+        // backup does not was erased after the export was made (Story 9.27).
+        if let Some(live) = live_keys {
+            let held: Vec<String> = {
+                let mut stmt = tx
+                    .prepare(
+                        "SELECT p.player_id FROM players p
+                           JOIN player_keys k ON k.player_id = p.player_id
+                          WHERE p.erased_at IS NULL ORDER BY p.player_id",
+                    )
+                    .map_err(db_error)?;
+                stmt.query_map([], |r| r.get(0))
+                    .map_err(db_error)?
+                    .collect::<Result<_, _>>()
+                    .map_err(db_error)?
+            };
+            for player_id in held {
+                if !live.contains(&player_id) {
+                    crate::erase_player(tx, &player_id, now_ms)?;
+                    crate::delete_player_key(tx, &player_id)?;
+                    reapplied += 1;
+                }
             }
         }
 
@@ -794,7 +839,14 @@ fn restore_from(
 
     remove_scratch(work);
     unpack(&staged, work)?;
-    let built = build_restored(work, now_ms, &inspection, &old, marker.cloud.is_some())?;
+    let built = build_restored(
+        work,
+        now_ms,
+        &inspection,
+        &old,
+        marker.cloud.is_some(),
+        marker.live_keys.as_deref(),
+    )?;
     checkpoint(work)?;
     for suffix in ["-wal", "-shm", ".lock"] {
         let _ = fs::remove_file(with_suffix(work, suffix));
@@ -1341,6 +1393,94 @@ mod tests {
             2,
             "the other keys stand"
         );
+    }
+
+    fn keys_of(ids: &[&str]) -> Option<Vec<String>> {
+        Some(ids.iter().map(|s| (*s).to_owned()).collect())
+    }
+
+    #[test]
+    fn a_player_the_key_backup_no_longer_holds_is_erased_before_the_writer_opens() {
+        let b = branch();
+        // P2 was erased after the export: the file holds the key, the cloud key backup does not.
+        // P4 was created after the export, so the file does not hold them at all.
+        stage_export_checked(&b.db, &b.file, "owner-1", keys_of(&["P1", "P3", "P4"])).unwrap();
+        let out = apply_pending(&b.db, T + 1000).unwrap().unwrap();
+        assert_eq!(out.restore.erasures_reapplied, 1);
+
+        let p2: (String, String, Option<i64>) = Connection::open(&b.db)
+            .unwrap()
+            .query_row(
+                "SELECT name_enc, username, erased_at FROM players WHERE player_id = 'P2'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(p2, (String::new(), "erased".to_owned(), Some(T + 1000)));
+        assert_eq!(
+            count(
+                &b.db,
+                "SELECT COUNT(*) FROM player_keys WHERE player_id = 'P2'"
+            ),
+            0
+        );
+        assert_eq!(count(&b.db, "SELECT COUNT(*) FROM player_keys"), 2);
+        assert_eq!(
+            count(&b.db, "SELECT COUNT(*) FROM players WHERE player_id = 'P4'"),
+            0,
+            "a player created after the export is not in the restored database"
+        );
+    }
+
+    #[test]
+    fn without_a_key_backup_nothing_more_is_erased() {
+        // Free tier, offline or unreadable: the lookup says nothing.
+        let b = branch();
+        stage_export_checked(&b.db, &b.file, "owner-1", None).unwrap();
+        let out = apply_pending(&b.db, T + 1000).unwrap().unwrap();
+        assert_eq!(out.restore.erasures_reapplied, 0);
+        assert_eq!(count(&b.db, "SELECT COUNT(*) FROM player_keys"), 3);
+        assert_eq!(
+            count(
+                &b.db,
+                "SELECT COUNT(*) FROM players WHERE erased_at IS NOT NULL"
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn a_player_already_erased_in_the_file_and_one_without_a_key_row_are_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let out_dir = tempfile::tempdir().unwrap();
+        let db = live(dir.path(), 2, "HUB");
+        {
+            let conn = Connection::open(&db).unwrap();
+            // P1 was erased before the export; P3 never had a key row.
+            crate::erase_player(&conn, "P1", T - 500).unwrap();
+            crate::delete_player_key(&conn, "P1").unwrap();
+            crate::delete_player_key(&conn, "P3").unwrap();
+        }
+        add_changes(&db, "2:HUB", 1, 2);
+        let file = export(&db, out_dir.path(), "x.a360");
+        // The backup holds nobody.
+        stage_export_checked(&db, &file, "o", keys_of(&[])).unwrap();
+        let out = apply_pending(&db, T + 1000).unwrap().unwrap();
+        // Only P2, who has a key and is not in the backup, is erased; P1's time is its own.
+        assert_eq!(out.restore.erasures_reapplied, 1);
+        let erased_at = |id: &str| -> Option<i64> {
+            Connection::open(&db)
+                .unwrap()
+                .query_row(
+                    "SELECT erased_at FROM players WHERE player_id = ?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(erased_at("P1"), Some(T - 500));
+        assert_eq!(erased_at("P2"), Some(T + 1000));
+        assert_eq!(erased_at("P3"), None);
     }
 
     #[test]

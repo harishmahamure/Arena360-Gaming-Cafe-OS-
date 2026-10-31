@@ -82,7 +82,9 @@ pub use devices::{DeviceDirectory, LoginCandidate, VerifiedDevice};
 pub use game_plays::MostPlayedCache;
 pub use pairing::{HubPairer, PairFuture, PairGate};
 pub use pricing::{Resolved, conflicts as rule_conflicts, resolve as resolve_rate};
-pub use restore_fetch::{RestoreFetchControl, RestoreRebuildControl};
+pub use restore_fetch::{
+    KeyBackupLookup, KeyLookupFuture, RestoreFetchControl, RestoreRebuildControl,
+};
 pub use session_screen::{session_screens, session_sync};
 pub use session_timer::{TimedSession, TimerAction, TimerEngine, TimerEvent};
 pub use settings_defaults::{

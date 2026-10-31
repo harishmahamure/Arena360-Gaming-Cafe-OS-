@@ -234,7 +234,8 @@ pub use reports::{
 pub use restore::{
     Inspection, ORPHANED_DIR, OrphanFile, PAIR_AGAIN_TABLE, PENDING_DIR, RESULT_FILE,
     RestoreOutcome, apply_pending, clear_outcome, delete_orphans, has_pending, inspect_export,
-    list_orphan_files, read_outcome, stage_export, stage_rebuilt, sweep_orphaned,
+    list_orphan_files, read_outcome, stage_export, stage_export_checked, stage_rebuilt,
+    sweep_orphaned,
 };
 pub use rollup::{
     ChangedRow, ROLLUP_LEDGER_TABLES, RollupDebtorRow, RollupFacts, RollupLotRow, RollupPaymentRow,

@@ -700,11 +700,21 @@ mod tests {
         let started = std::time::Instant::now();
         let done = write_export(&db, out.path(), "bench.a360", 1).unwrap();
         let took = started.elapsed();
-        println!(
-            "export of {} MiB database: {:?}, file {} MiB",
-            crate::database_bytes(&db) / (1 << 20),
-            took,
-            done.bytes / (1 << 20)
-        );
+        let database_mib = crate::database_bytes(&db) / (1 << 20);
+        let file_mib = done.bytes / (1 << 20);
+        println!("export of {database_mib} MiB database: {took:?}, file {file_mib} MiB");
+        // The release report (`scripts/restore-drill-report.mjs`) reads this file (Story 9.27).
+        if let Some(out) = std::env::var_os("ARENA_RESTORE_DRILL_OUT") {
+            let out = PathBuf::from(out);
+            fs::create_dir_all(&out).unwrap();
+            fs::write(
+                out.join("export-bench.json"),
+                format!(
+                    "{{\n  \"database_mib\": {database_mib},\n  \"took_ms\": {},\n  \"file_mib\": {file_mib}\n}}\n",
+                    took.as_millis()
+                ),
+            )
+            .unwrap();
+        }
     }
 }

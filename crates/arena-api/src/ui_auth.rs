@@ -426,6 +426,9 @@ pub struct UiAuth {
     /// Stops the Hub so it restarts onto a staged restore (Story 9.7); without it a confirmed
     /// restore stays staged until the Hub is next started.
     restart: Option<RestartHook>,
+    /// Asked on a paid Hub before an export is restored: whose key the cloud key backup still
+    /// holds (Story 9.27).
+    key_backup: Option<Arc<dyn arena_core::KeyBackupLookup>>,
     /// Promotes this standby to main (Story 9.21); set once by the Hub when it runs as a standby.
     promote: std::sync::OnceLock<PromoteHook>,
 }
@@ -505,6 +508,7 @@ impl UiAuth {
             player_index: Arc::default(),
             media: None,
             restart: None,
+            key_backup: None,
             promote: std::sync::OnceLock::new(),
             streams: Mutex::new(HashMap::new()),
         }
@@ -518,6 +522,17 @@ impl UiAuth {
 
     pub(crate) fn restart_hook(&self) -> Option<RestartHook> {
         self.restart.clone()
+    }
+
+    /// Lets a restore from an export ask the cloud key backup whom it still holds a key for
+    /// (Story 9.27), so a player erased after the export is erased again.
+    pub fn with_key_backup(mut self, lookup: Arc<dyn arena_core::KeyBackupLookup>) -> Self {
+        self.key_backup = Some(lookup);
+        self
+    }
+
+    pub(crate) fn key_backup(&self) -> Option<Arc<dyn arena_core::KeyBackupLookup>> {
+        self.key_backup.clone()
     }
 
     /// Sets what "Promote to main" runs (Story 9.21). Set once; a second call changes nothing.
@@ -3929,6 +3944,24 @@ pub(crate) mod tests {
         pub(crate) media: Arc<arena_core::media_cache::MediaCache>,
         /// How many times the restart hook was called (Story 9.7).
         pub(crate) restarts: Arc<std::sync::atomic::AtomicUsize>,
+        /// What the cloud key backup answers a restore (Story 9.27).
+        pub(crate) key_lookup: Arc<StubKeyLookup>,
+    }
+
+    /// The cloud key backup, as a test sets it (Story 9.27): what it answers and how often it
+    /// was asked.
+    #[derive(Default)]
+    pub(crate) struct StubKeyLookup {
+        pub(crate) answer: Mutex<Option<Vec<String>>>,
+        pub(crate) calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl arena_core::KeyBackupLookup for StubKeyLookup {
+        fn live_keys(&self) -> arena_core::KeyLookupFuture<'_> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let answer = self.answer.lock().unwrap().clone();
+            Box::pin(async move { answer })
+        }
     }
 
     pub(crate) const TEST_KEK: [u8; 32] = [4; 32];
@@ -4094,6 +4127,7 @@ pub(crate) mod tests {
         );
         let restarts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let hook_count = Arc::clone(&restarts);
+        let key_lookup = Arc::new(StubKeyLookup::default());
         let kds_pairing = Arc::new(crate::pairing::Pairing::new(clock.clone()).unwrap());
         let auth = UiAuth::new(
             Arc::new(StaffDirectory::open(&path).unwrap()),
@@ -4107,6 +4141,7 @@ pub(crate) mod tests {
         .with_media_cache(Arc::clone(&media))
         .with_pairing(Arc::clone(&pairing))
         .with_kds_pairing(Arc::clone(&kds_pairing))
+        .with_key_backup(key_lookup.clone())
         .with_restart(Arc::new(move || {
             hook_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }));
@@ -4116,6 +4151,7 @@ pub(crate) mod tests {
             auth
         });
         Hub {
+            key_lookup,
             restarts,
             lan,
             pairing,

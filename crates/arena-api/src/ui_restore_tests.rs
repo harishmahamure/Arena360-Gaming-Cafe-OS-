@@ -425,3 +425,51 @@ async fn the_direct_intent_route_does_not_take_ops_restore() {
     .await;
     assert_eq!(code(&r).1, "UNSUPPORTED", "{}", r.1);
 }
+
+// Story 9.27: a paid Hub asks the cloud key backup whom it still holds a key for.
+
+#[tokio::test]
+async fn a_paid_hub_hands_the_key_backups_players_to_the_staged_restore() {
+    let f = fixture().await;
+    f.hub._status.send_modify(|s| s.tier = Some(Tier::Basic));
+    *f.hub.key_lookup.answer.lock().unwrap() = Some(vec!["P1".into(), "P3".into()]);
+    let owner = f.token("owner", "o-pass").await;
+    let file = f.file("x.a360");
+    let (status, reply) = f
+        .post(RESTORE, &owner, confirm(&file, "1111", "DEV01"))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert_eq!(f.hub.key_lookup.calls.load(Ordering::SeqCst), 1);
+    let marker: Value =
+        serde_json::from_slice(&std::fs::read(f.pending().join("restore.json")).unwrap()).unwrap();
+    assert_eq!(marker["live_keys"], json!(["P1", "P3"]));
+}
+
+#[tokio::test]
+async fn an_unreadable_key_backup_and_a_free_hub_change_nothing_about_who_is_erased() {
+    let f = fixture().await;
+    let owner = f.token("owner", "o-pass").await;
+    let file = f.file("x.a360");
+
+    // Free: the backup is not asked, even if it could answer.
+    *f.hub.key_lookup.answer.lock().unwrap() = Some(vec!["P1".into()]);
+    let r = f
+        .post(RESTORE, &owner, confirm(&file, "1111", "DEV01"))
+        .await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+    assert_eq!(f.hub.key_lookup.calls.load(Ordering::SeqCst), 0);
+    let marker = || -> Value {
+        serde_json::from_slice(&std::fs::read(f.pending().join("restore.json")).unwrap()).unwrap()
+    };
+    assert!(marker()["live_keys"].is_null());
+
+    // Paid, but offline or unreadable: asked, and the answer is nothing.
+    f.hub._status.send_modify(|s| s.tier = Some(Tier::Premium));
+    *f.hub.key_lookup.answer.lock().unwrap() = None;
+    let r = f
+        .post(RESTORE, &owner, confirm(&file, "1111", "DEV01"))
+        .await;
+    assert_eq!(r.0, StatusCode::OK, "{}", r.1);
+    assert_eq!(f.hub.key_lookup.calls.load(Ordering::SeqCst), 1);
+    assert!(marker()["live_keys"].is_null());
+}

@@ -25,6 +25,11 @@ name: Release benchmark
 # month's first audit results (arena-cloud), and Today's first render on the reference phone
 # (apps/owner). `remote-report` merges them (scripts/remote-report.mjs) and fails the release on a
 # missed budget or a missing result. See docs/runbooks/remote-bench.md.
+# `restore-drill` (Story 9.27) restores one seeded branch (30 days, a fork, two erased players) from
+# a local export and from the cloud backup, checks the late erasure and the promote, scans every
+# artefact and the logs for the seeded names, phones and emails, times the export of a 1 GB
+# database and merges the results (scripts/restore-drill-report.mjs); any failure or missing result
+# fails the job and so the release. See docs/runbooks/restore-drill.md.
 # The `soak` input adds the 8-hour WAN-down soak (Story 1.22) and spreads the kitchen soak over 8 h.
 
 on:
@@ -619,6 +624,43 @@ jobs:
         with:
           name: remote-report
           path: target/remote/report.md
+          if-no-files-found: ignore
+
+  restore-drill:
+    name: restore drill and privacy proof (reference i3)
+    # Story 9.27: the seeded branch restored from an export and from the cloud backup, the late
+    # erasure, the promote after an erasure, the privacy scan of every artefact and the 1 GB export,
+    # then the report. Any failed test, missed budget or missing result fails the job, which is the
+    # release gate. See docs/runbooks/restore-drill.md.
+    runs-on: [self-hosted, windows, reference-i3]
+    timeout-minutes: 60
+    env:
+      ARENA_RESTORE_DRILL_OUT: ${{ github.workspace }}/target/restore-drill
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - name: Clear earlier results
+        shell: pwsh
+        run: Remove-Item -Recurse -Force "$env:ARENA_RESTORE_DRILL_OUT" -ErrorAction SilentlyContinue
+      - name: The drill, the late erasure, the promote and the privacy scan
+        run: cargo test --locked --release -p arena-replay --lib drill -- --nocapture
+      - name: A player erased after the export, the key backup's re-apply
+        run: cargo test --locked --release -p arena-store --lib restore
+      - name: Export of the 1 GB reference database under 10 s
+        run: cargo test --locked --release -p arena-store --lib export_one_gigabyte -- --ignored --nocapture
+      - name: Check every result; a missing one fails
+        if: ${{ always() }}
+        run: node scripts/restore-drill-report.mjs --dir target/restore-drill
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: restore-drill-report
+          path: |
+            target/restore-drill/*.json
+            target/restore-drill/report.md
           if-no-files-found: ignore
 
   soak:

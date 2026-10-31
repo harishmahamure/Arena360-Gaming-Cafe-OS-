@@ -1872,13 +1872,16 @@ impl SnapshotReader {
 
     /// Checks the export file at `path` again and stages it for the restore at the next start,
     /// confirmed by the Owner `confirmed_by` (Story 9.7). A refused file stages nothing. Blocking
-    /// (disk).
+    /// (disk). `live_keys` is what the cloud key backup says (Story 9.27): the players whose key
+    /// it holds, `None` when it could not be read; a player the file holds a key for and it does
+    /// not is erased at the swap.
     pub fn stage_restore(
         &self,
         path: &Path,
         confirmed_by: &str,
+        live_keys: Option<Vec<String>>,
     ) -> Result<arena_store::Inspection, AppError> {
-        arena_store::stage_export(&self.db_path()?, path, confirmed_by)
+        arena_store::stage_export_checked(&self.db_path()?, path, confirmed_by, live_keys)
     }
 
     /// The daily auto export (Story 9.5): as [`Self::export_to_folder`], under the auto file name

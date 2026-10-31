@@ -386,9 +386,12 @@ dependencies = [
  "arena-store",
  "rmp-serde",
  "rusqlite",
+ "serde_json",
  "sha2 0.10.9",
  "tempfile",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "ulid",
  "zstd",
 ]

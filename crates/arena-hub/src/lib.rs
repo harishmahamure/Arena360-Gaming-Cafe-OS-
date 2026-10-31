@@ -495,6 +495,29 @@ async fn run(
     let printer_jobs = Arc::new(arena_core::printer::PrinterJobs::default());
     let receipt_printer = Arc::clone(&printer);
     let backup_folder = options.backup_folder.take();
+    let cloud = CloudClient::new(&CloudEndpoint {
+        host: cfg.cloud_host.clone(),
+        plain_http: cfg.cloud_plain_http,
+    })
+    .map_err(|e| internal(format!("cloud client: {e}")))?;
+    let keystore: Arc<dyn Keystore> = match &secrets {
+        Some(s) => Arc::clone(&s.token),
+        None => Arc::from(platform_keystore(&cfg.data_dir)),
+    };
+    // An export restored on a paid Hub asks the cloud key backup whom it still holds a key for,
+    // so a player erased after the export is erased again (Story 9.27). The same fetcher serves
+    // "Restore from cloud backup" below.
+    let restore_fetcher = arena_tasks::RestoreFetcher::new(
+        cloud.clone(),
+        Arc::clone(&keystore),
+        instance_id.clone(),
+        &cfg.data_dir,
+        status_rx.clone(),
+    );
+    let key_backup = Arc::new(restore_rebuild::BackupKeys::new(
+        restore_fetcher.clone(),
+        Arc::clone(&kek_store),
+    ));
     let mut ui_auth = arena_api::UiAuth::new(
         Arc::clone(&staff),
         Arc::clone(&snapshots),
@@ -509,6 +532,7 @@ async fn run(
     .with_kds_pairing(kds_pairing)
     .with_pair_gate(pair_gate.clone())
     .with_player_kek(Arc::clone(&player_kek))
+    .with_key_backup(key_backup)
     .with_restart(Arc::new(restore::request_restart));
     if let Some(folder) = &backup_folder {
         ui_auth = ui_auth.with_backup_folder(Arc::clone(folder));
@@ -517,15 +541,6 @@ async fn run(
         ui_auth = ui_auth.with_media_cache(Arc::clone(cache));
     }
     let ui_auth = Arc::new(ui_auth);
-    let cloud = CloudClient::new(&CloudEndpoint {
-        host: cfg.cloud_host.clone(),
-        plain_http: cfg.cloud_plain_http,
-    })
-    .map_err(|e| internal(format!("cloud client: {e}")))?;
-    let keystore: Arc<dyn Keystore> = match &secrets {
-        Some(s) => Arc::clone(&s.token),
-        None => Arc::from(platform_keystore(&cfg.data_dir)),
-    };
     let command_poke = Arc::new(Notify::new());
     let setup_templates = arena_tasks::SetupTemplateInbox::new();
     let resend = arena_tasks::ResendInbox::new();
@@ -635,14 +650,7 @@ async fn run(
     );
     // "Restore from cloud backup" downloads the paid branch's backup into a staging folder while
     // the Hub waits (Story 9.12).
-    let restore_fetch: Arc<dyn arena_core::RestoreFetchControl> =
-        Arc::new(arena_tasks::RestoreFetcher::new(
-            cloud.clone(),
-            Arc::clone(&keystore),
-            instance_id.clone(),
-            &cfg.data_dir,
-            status_rx.clone(),
-        ));
+    let restore_fetch: Arc<dyn arena_core::RestoreFetchControl> = Arc::new(restore_fetcher);
     // "Rebuild this branch" replays the downloaded backup into a new database and restarts the
     // Hub onto it (Story 9.13).
     let restore_rebuild: Arc<dyn arena_core::RestoreRebuildControl> =

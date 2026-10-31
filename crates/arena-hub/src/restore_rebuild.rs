@@ -16,8 +16,8 @@ use std::sync::{Arc, Mutex};
 
 use arena_core::players::KEK_LEN;
 use arena_core::{
-    Clock, HubStatus, PairingState, RestoreFetchControl, RestoreRebuildControl,
-    key_backup::open_key_table,
+    Clock, HubStatus, KeyBackupLookup, KeyLookupFuture, PairingState, RestoreFetchControl,
+    RestoreRebuildControl, key_backup::open_key_table,
 };
 use arena_proto::{
     CloudRestoreFacts, ErrorCode, HubPlatform, RestoreFetchPhase, RestorePosition,
@@ -25,7 +25,7 @@ use arena_proto::{
 };
 use arena_replay::{RebuildSource, RebuildStage, RebuildStop, Rebuilt, rebuild};
 use arena_store::PlayerKeyRow;
-use arena_tasks::{Keystore, RESTORE_STAGING_DIR, StagedManifest};
+use arena_tasks::{Keystore, RESTORE_STAGING_DIR, RestoreFetcher, StagedManifest};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
@@ -384,6 +384,49 @@ impl RestoreRebuildControl for Rebuilder {
             state.view = None;
             let _ = std::fs::remove_file(self.inner.data_dir.join(REBUILD_FILE));
         }
+    }
+}
+
+/// Whom the cloud key backup holds a key for (Story 9.27): the sealed backup is fetched by the
+/// [`RestoreFetcher`] and opened with the branch key, on this Hub's own keystore. Anything that
+/// fails (Free, offline, no backup, no key, a backup the key does not open) answers `None`, and a
+/// restore then erases nobody extra.
+pub struct BackupKeys {
+    fetcher: RestoreFetcher,
+    kek: Arc<dyn Keystore>,
+}
+
+impl BackupKeys {
+    pub fn new(fetcher: RestoreFetcher, kek: Arc<dyn Keystore>) -> Self {
+        Self { fetcher, kek }
+    }
+
+    fn open(&self, sealed: &[u8]) -> Option<Vec<String>> {
+        let bytes = self.kek.get().ok()??;
+        let kek: [u8; KEK_LEN] = bytes.try_into().ok()?;
+        match open_key_table(&kek, sealed) {
+            Ok(rows) => Some(rows.into_iter().map(|r| r.player_id).collect()),
+            Err(e) => {
+                tracing::warn!(
+                    code = e.code.as_str(),
+                    "key backup lookup: the backup does not open with the branch key"
+                );
+                None
+            }
+        }
+    }
+}
+
+impl KeyBackupLookup for BackupKeys {
+    fn live_keys(&self) -> KeyLookupFuture<'_> {
+        Box::pin(async move {
+            let sealed = self.fetcher.key_backup_bytes().await?;
+            let ids = self.open(&sealed);
+            if let Some(ids) = &ids {
+                tracing::info!(keys = ids.len(), "key backup lookup: the backup was read");
+            }
+            ids
+        })
     }
 }
 

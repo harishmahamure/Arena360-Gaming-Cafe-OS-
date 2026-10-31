@@ -258,6 +258,51 @@ impl RestoreFetcher {
         Ok(())
     }
 
+    /// The sealed key backup (`keys/player-keys.bin`), fetched once for a restore from an export
+    /// file (Story 9.27): one plan call and one download, no retries and no staging folder. `None`
+    /// when the Hub is not paid or was replaced, the cloud cannot be reached or refuses, there is
+    /// no backup, or it is empty. Nothing is left on disk.
+    pub async fn key_backup_bytes(&self) -> Option<Vec<u8>> {
+        {
+            let s = self.cfg.status.borrow();
+            if s.pairing == PairingState::Revoked || !s.tier.is_some_and(|t| t != Tier::Free) {
+                return None;
+            }
+        }
+        let keystore = Arc::clone(&self.cfg.token);
+        let token = tokio::task::spawn_blocking(move || keystore.get())
+            .await
+            .ok()?
+            .ok()??;
+        let token = String::from_utf8_lossy(&token).into_owned();
+        let req = RestorePlanRequest {
+            hub_instance_id: self.cfg.hub_instance_id.clone(),
+            after: None,
+        };
+        let plan = match self.cfg.cloud.restore_plan(&token, &req).await {
+            Ok(plan) => plan,
+            Err(e) => {
+                tracing::info!(
+                    reason = match e {
+                        CloudFailure::Refused { ref error, .. } => error.code.as_str(),
+                        CloudFailure::Unreachable(_) => ErrorCode::CloudUnreachable.as_str(),
+                    },
+                    "key backup lookup: the cloud gave no plan"
+                );
+                return None;
+            }
+        };
+        let url = plan.keys_url?;
+        let scratch = self.cfg.staging.with_file_name("key-backup-lookup.tmp");
+        let got = self.cfg.cloud.download_object(&url, &scratch).await;
+        let bytes = match got {
+            Ok(_) => tokio::fs::read(&scratch).await.ok(),
+            Err(_) => None,
+        };
+        let _ = tokio::fs::remove_file(&scratch).await;
+        bytes.filter(|b| !b.is_empty())
+    }
+
     fn publish(&self, f: impl FnOnce(&mut RestoreFetchView)) {
         if let Some(v) = lock(&self.shared.view).as_mut() {
             f(v);

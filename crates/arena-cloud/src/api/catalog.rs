@@ -18,7 +18,7 @@ use axum::routing::get;
 use serde::Deserialize;
 
 use super::error::ApiError;
-use super::heartbeat::authenticate;
+use super::heartbeat::authenticate_any;
 use super::signup::ceil_s;
 use crate::auth::AuthState;
 
@@ -40,7 +40,7 @@ async fn manifest(
     query: Result<Query<ManifestQuery>, QueryRejection>,
 ) -> Result<Response, ApiError> {
     let now = st.now();
-    let hub = match authenticate(&st, &headers, now).await {
+    let hub = match authenticate_any(&st, &headers, now).await {
         Ok(hub) => hub,
         // A revoked device token is 403 here; no token or an unknown one stays 401.
         Err(e) if e.body().code == ErrorCode::TokenRevoked => {

@@ -41,6 +41,9 @@ const CHUNK: usize = 64 * 1024;
 #[derive(Debug, Clone)]
 pub struct ReplicationSource {
     pub db_path: PathBuf,
+    /// What the stream sees of the standby, for the System -> Standby panel and `/healthz`
+    /// (Story 9.20).
+    pub observer: crate::StandbyObserver,
 }
 
 fn refusal(code: ErrorCode, message: &str) -> ReplicateFrame {
@@ -74,7 +77,7 @@ fn wire(c: &ChangeRecord) -> ReplicatedChange {
 }
 
 /// Checks `token` for replication: a primary Hub, a verified `paired` device, linked as standby.
-async fn authorise(hub: &LanHub, peer: SocketAddr, token: &str) -> Result<(), ReplicateFrame> {
+async fn authorise(hub: &LanHub, peer: SocketAddr, token: &str) -> Result<String, ReplicateFrame> {
     if !hub.is_primary() {
         return Err(refusal(
             ErrorCode::NotPrimary,
@@ -103,12 +106,13 @@ async fn authorise(hub: &LanHub, peer: SocketAddr, token: &str) -> Result<(), Re
         }
         _ => return Err(refusal(ErrorCode::Internal, "the token check failed")),
     };
+    let device_id = device.device_id.clone();
     let linked = tokio::task::spawn_blocking(move || {
         Store::open_reader(&source.db_path)?.replication_linked(&device.device_id)
     })
     .await;
     match linked {
-        Ok(Ok(true)) => Ok(()),
+        Ok(Ok(true)) => Ok(device_id),
         Ok(Ok(false)) => Err(refusal(
             ErrorCode::Forbidden,
             "this device is not linked as the standby",
@@ -286,10 +290,13 @@ where
         let _ = send(&mut sink, &refusal(ErrorCode::BadFrame, "expected open")).await;
         return;
     };
-    if let Err(refused) = authorise(&hub, peer, &token).await {
-        let _ = send(&mut sink, &refused).await;
-        return;
-    }
+    let device_id = match authorise(&hub, peer, &token).await {
+        Ok(id) => id,
+        Err(refused) => {
+            let _ = send(&mut sink, &refused).await;
+            return;
+        }
+    };
     let ours = hub.status.borrow().schema_version;
     if schema_version < ours {
         let _ = send(
@@ -346,6 +353,12 @@ where
     if !send(&mut sink, &ready).await {
         return;
     }
+    let observer = source.observer.clone();
+    observer.connected(&device_id, schema_version, hub.clock.now_ms());
+    let _contact = Contact {
+        observer: observer.clone(),
+        device_id: device_id.clone(),
+    };
 
     let mut cursor: Option<(String, i64)> = from.map(|p| (p.epoch, p.seq));
     let mut last_sent = Instant::now();
@@ -397,6 +410,11 @@ where
                 () = tokio::time::sleep(LIVE_POLL) => {}
                 incoming = stream.next() => match incoming {
                     None | Some(Err(_) | Ok(Message::Close(_))) => return,
+                    Some(Ok(Message::Text(text))) => {
+                        if let Ok(ReplicateFrame::Report { report }) = serde_json::from_str(&text) {
+                            observer.reported(&device_id, report, hub.clock.now_ms());
+                        }
+                    }
                     Some(Ok(_)) => {}
                 },
             }
@@ -415,5 +433,17 @@ where
             return;
         }
         last_sent = Instant::now();
+    }
+}
+
+/// Tells the observer the stream ended, however it ended.
+struct Contact {
+    observer: crate::StandbyObserver,
+    device_id: String,
+}
+
+impl Drop for Contact {
+    fn drop(&mut self) {
+        self.observer.closed(&self.device_id);
     }
 }

@@ -88,6 +88,9 @@ pub enum ReplicateFrame {
     },
     /// Main to standby: nothing to send now; keeps the line alive.
     Ping,
+    /// Standby to main: how far the standby has got, after each batch and each `ping`
+    /// (Story 9.20).
+    Report { report: crate::StandbyReport },
     /// Main to standby: the stream is refused and closed.
     Refused { code: ErrorCode, message: String },
 }
@@ -170,6 +173,17 @@ mod tests {
                 live: true,
             },
             ReplicateFrame::Ping,
+            ReplicateFrame::Report {
+                report: crate::StandbyReport {
+                    applied_epoch: Some("1:hub".into()),
+                    applied_seq: Some(6),
+                    lag_rows: 2,
+                    lag_seconds: 4,
+                    last_row_at: Some(1_800_000_000_000),
+                    schema_version: 89,
+                    behind: Some(crate::StandbyBehindCause::Lagging),
+                },
+            },
             ReplicateFrame::Refused {
                 code: ErrorCode::SchemaBehind,
                 message: "update".into(),

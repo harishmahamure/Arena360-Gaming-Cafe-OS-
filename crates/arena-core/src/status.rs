@@ -115,6 +115,10 @@ pub struct HubStatus {
     pub upload: UploadStatus,
     /// The Cloudflare Tunnel connector (Story 8.39), as the tunnel task last saw it.
     pub tunnel: arena_proto::TunnelLine,
+    /// Set while this Hub runs as a standby following the main Hub (Story 9.20): how far it has
+    /// got. The catalogue task also keys on it, because a standby is not the primary writer but
+    /// keeps its own reference cache.
+    pub following: Option<arena_proto::StandbyReport>,
 }
 
 /// How far the change-log upload has got. A Hub that does not upload (Free, follower) keeps the
@@ -177,6 +181,7 @@ impl HubStatus {
             platform: arena_proto::HubPlatform::Windows,
             upload: UploadStatus::default(),
             tunnel: arena_proto::TunnelLine::default(),
+            following: None,
         }
     }
 }

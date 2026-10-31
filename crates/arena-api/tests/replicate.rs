@@ -57,6 +57,7 @@ struct Main {
     standby_token: String,
     kiosk_token: String,
     writer: Option<WriterHandle>,
+    observer: arena_api::StandbyObserver,
     _status: watch::Sender<HubStatus>,
     _stop: oneshot::Sender<()>,
 }
@@ -148,6 +149,11 @@ async fn start(primary: bool) -> Main {
         )
         .with_replication(path.clone()),
     );
+    let observer = hub
+        .replication
+        .as_ref()
+        .map(|r| r.observer.clone())
+        .unwrap();
     let listeners = bind_lan(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, 0)
         .await
         .unwrap();
@@ -165,6 +171,7 @@ async fn start(primary: bool) -> Main {
         standby_token,
         kiosk_token,
         writer,
+        observer,
         _status: status_tx,
         _stop: stop_tx,
     }
@@ -307,6 +314,15 @@ impl ReplicationLink for WsLink {
                 Some(Ok(_)) => {}
                 Some(Err(e)) => return Err(io(e)),
             }
+        }
+    }
+
+    async fn report(&mut self, report: arena_proto::StandbyReport) {
+        if let Some(ws) = self.stream.as_mut() {
+            let frame = ReplicateFrame::Report { report };
+            let _ = ws
+                .send(Message::text(serde_json::to_string(&frame).unwrap()))
+                .await;
         }
     }
 }
@@ -588,4 +604,75 @@ async fn a_position_gap_takes_a_fresh_snapshot() {
     assert_eq!(snapshots.load(SeqCst), 2, "the gap forced a new snapshot");
     assert_eq!(opens.load(SeqCst), 2);
     job.abort();
+}
+
+#[tokio::test]
+async fn the_main_hub_sees_the_standbys_report_and_its_lag_on_both_hubs() {
+    let main = start(true).await;
+    main.set("thanks", 1).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut follower, mut status) = Follower::new(
+        standby_store(dir.path()),
+        main.link(&main.standby_token),
+        dir.path().join("snapshot.part"),
+        fast(),
+    );
+    let progress = follower.progress();
+    let schema = follower.store().lock().unwrap().schema_version().unwrap();
+    let (stop_tx, stop_rx) = watch::channel(false);
+    let job = tokio::spawn(async move { follower.run(stop_rx).await });
+    caught_up(&mut status, tip(&main.changes())).await;
+    // A row that arrives over the live stream, not in the snapshot.
+    main.set("welcome", 2).await;
+    caught_up(&mut status, tip(&main.changes())).await;
+
+    // The standby's own view: caught up, no warning.
+    let own = progress.lock().unwrap().report(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64,
+    );
+    assert_eq!((own.lag_rows, own.lag_seconds, own.behind), (0, 0, None));
+    assert_eq!(own.applied_seq, Some(tip(&main.changes()).1));
+    assert_eq!(own.schema_version, schema);
+
+    // The main Hub's view arrives with the report over the stream.
+    let linked = Store::open_reader(&main.path)
+        .unwrap()
+        .linked_standby()
+        .unwrap()
+        .unwrap();
+    assert_eq!(linked.label, "Standby PC");
+    let wait = async {
+        loop {
+            let panel = main.observer.panel(&linked, T0 + 1_000);
+            if panel.connected
+                && panel.schema_version == Some(schema)
+                && panel.last_row_at.is_some()
+            {
+                return panel;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    };
+    let panel = tokio::time::timeout(Duration::from_secs(10), wait)
+        .await
+        .expect("the main hub heard the standby");
+    assert_eq!(panel.name, "Standby PC");
+    assert_eq!((panel.lag_rows, panel.behind), (0, None));
+    assert_eq!(panel.last_contact_at, Some(T0));
+    assert_eq!(main.observer.line(T0 + 1_000).unwrap().lag_rows, 0);
+
+    // The standby goes away; the main Hub no longer shows it connected.
+    stop_tx.send(true).unwrap();
+    job.await.unwrap();
+    let wait = async {
+        while main.observer.panel(&linked, T0 + 1_000).connected {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), wait)
+        .await
+        .expect("the stream closed");
 }

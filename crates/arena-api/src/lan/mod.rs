@@ -362,7 +362,10 @@ impl LanHub {
     /// Serves the standby's snapshot and replication stream from the database at `db_path`
     /// (Story 9.19).
     pub fn with_replication(mut self, db_path: std::path::PathBuf) -> Self {
-        self.replication = Some(replicate::ReplicationSource { db_path });
+        self.replication = Some(replicate::ReplicationSource {
+            db_path,
+            observer: crate::StandbyObserver::default(),
+        });
         self
     }
 

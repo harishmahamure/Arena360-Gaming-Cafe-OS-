@@ -17,9 +17,14 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use arena_proto::{AppError, ErrorCode, ReplicateFrame, ReplicatedChange, replicate_backoff_ms};
+use arena_core::{Clock, SystemClock};
+use arena_proto::{
+    AppError, ErrorCode, ReplicateFrame, ReplicatedChange, StandbyReport, replicate_backoff_ms,
+};
 use arena_store::{ChangeOp, ChangeRecord, Store};
 use tokio::sync::watch;
+
+use crate::standby_progress::{SharedProgress, StandbyProgress};
 
 /// Why a link call failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +56,12 @@ pub trait ReplicationLink: Send {
 
     /// The next frame, or `None` when the stream closed.
     fn next(&mut self) -> impl Future<Output = Result<Option<ReplicateFrame>, LinkError>> + Send;
+
+    /// Tells the main Hub how far this standby has got (Story 9.20). Best effort: a failure is
+    /// the next frame's problem, so there is nothing to return. The default sends nothing.
+    fn report(&mut self, _report: StandbyReport) -> impl Future<Output = ()> + Send {
+        async {}
+    }
 }
 
 /// What the standby is doing, for its status screen (Story 9.20).
@@ -97,6 +108,8 @@ pub struct Follower<L: ReplicationLink> {
     scratch: PathBuf,
     config: FollowerConfig,
     status: watch::Sender<FollowStatus>,
+    progress: SharedProgress,
+    clock: Arc<dyn Clock>,
 }
 
 fn change_from_wire(c: ReplicatedChange) -> Result<ChangeRecord, AppError> {
@@ -148,6 +161,11 @@ impl<L: ReplicationLink> Follower<L> {
         config: FollowerConfig,
     ) -> (Self, watch::Receiver<FollowStatus>) {
         let (status, rx) = watch::channel(FollowStatus::Connecting);
+        let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+        let progress = Arc::new(Mutex::new(StandbyProgress::new(
+            clock.now_ms(),
+            store.schema_version().unwrap_or(0),
+        )));
         (
             Self {
                 store: Arc::new(Mutex::new(store)),
@@ -155,6 +173,8 @@ impl<L: ReplicationLink> Follower<L> {
                 scratch,
                 config,
                 status,
+                progress,
+                clock,
             },
             rx,
         )
@@ -163,6 +183,36 @@ impl<L: ReplicationLink> Follower<L> {
     /// The standby's database, for the status screen and promotion.
     pub fn store(&self) -> Arc<Mutex<Store>> {
         Arc::clone(&self.store)
+    }
+
+    /// Uses `clock` for the progress timestamps (tests; the default is the system clock).
+    #[must_use]
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// The standby's progress, for the status publisher and the standby screen (Story 9.20).
+    pub fn progress(&self) -> SharedProgress {
+        Arc::clone(&self.progress)
+    }
+
+    fn note(&self, f: impl FnOnce(&mut StandbyProgress, i64)) {
+        let now = self.clock.now_ms();
+        f(
+            &mut self
+                .progress
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+            now,
+        );
+    }
+
+    fn current_report(&self) -> StandbyReport {
+        self.progress
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .report(self.clock.now_ms())
     }
 
     async fn blocking<R: Send + 'static>(
@@ -234,8 +284,9 @@ impl<L: ReplicationLink> Follower<L> {
                 Err(ended) => return ended,
             }
         }
+        self.note(|p, now| p.start_at(position.clone(), now));
         match self.link.open(position.clone(), schema).await {
-            Ok(_) => {}
+            Ok(tip) => self.note(|p, now| p.ready(tip, now)),
             Err(LinkError::Refused(ErrorCode::SchemaBehind, _)) => return Ended::Behind,
             Err(LinkError::Refused(ErrorCode::ReplicateGap, _)) => return Ended::Resync,
             Err(_) => return Ended::Retry,
@@ -255,6 +306,7 @@ impl<L: ReplicationLink> Follower<L> {
                     keys,
                     live,
                 } => {
+                    let rows = changes.len();
                     let mut records = Vec::with_capacity(changes.len());
                     for c in changes {
                         match change_from_wire(c) {
@@ -274,14 +326,22 @@ impl<L: ReplicationLink> Follower<L> {
                     match applied {
                         Ok(applied) => {
                             *attempt = 0;
+                            self.note(|p, now| p.batch(applied.clone(), rows, live, now));
                             self.status
                                 .send_replace(FollowStatus::Following { applied, live });
+                            let report = self.current_report();
+                            self.link.report(report).await;
                         }
                         Err(e) if e.code == ErrorCode::ReplicateGap => return Ended::Resync,
                         Err(_) => return Ended::Retry,
                     }
                 }
-                ReplicateFrame::Ping | ReplicateFrame::Ready { .. } => {}
+                ReplicateFrame::Ping => {
+                    self.note(|p, now| p.heard(now));
+                    let report = self.current_report();
+                    self.link.report(report).await;
+                }
+                ReplicateFrame::Ready { .. } | ReplicateFrame::Report { .. } => {}
                 ReplicateFrame::Refused { code, .. } => {
                     return match code {
                         ErrorCode::SchemaBehind => Ended::Behind,

@@ -39,6 +39,10 @@ struct HealthBody {
     tier: Option<&'static str>,
     platform: &'static str,
     upload: UploadBody,
+    /// The standby's lag (Story 9.20): this Hub's own while it is the standby, the linked
+    /// standby's as the stream last reported it on the main Hub; absent with no standby.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    standby: Option<arena_proto::StandbyLine>,
     now: i64,
 }
 
@@ -73,6 +77,11 @@ impl HealthBody {
                 last_upload_at: s.upload.last_upload_at,
                 pending_rows: s.upload.pending_rows,
             },
+            standby: s.following.as_ref().map(|r| arena_proto::StandbyLine {
+                lag_rows: r.lag_rows,
+                lag_seconds: r.lag_seconds,
+                behind: r.behind,
+            }),
             now,
         }
     }
@@ -82,20 +91,38 @@ impl HealthBody {
 struct HealthState {
     status: watch::Receiver<HubStatus>,
     clock: Arc<dyn Clock>,
+    observer: Option<crate::StandbyObserver>,
 }
 
 async fn healthz(State(state): State<HealthState>) -> Json<HealthBody> {
     let now = state.clock.now_ms();
     let status = state.status.borrow();
-    let body = HealthBody::new(&status, now, status.setup);
+    let mut body = HealthBody::new(&status, now, status.setup);
+    if body.standby.is_none() {
+        body.standby = state.observer.as_ref().and_then(|o| o.line(now));
+    }
     Json(body)
 }
 
 /// The health router. `now` in the body comes from `clock`.
 pub fn router(status: watch::Receiver<HubStatus>, clock: Arc<dyn Clock>) -> Router {
+    router_with_standby(status, clock, None)
+}
+
+/// The health router of a Hub that serves a standby: `standby` in the body is the linked standby's
+/// lag as the replication stream last reported it (Story 9.20).
+pub fn router_with_standby(
+    status: watch::Receiver<HubStatus>,
+    clock: Arc<dyn Clock>,
+    observer: Option<crate::StandbyObserver>,
+) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
-        .with_state(HealthState { status, clock })
+        .with_state(HealthState {
+            status,
+            clock,
+            observer,
+        })
 }
 
 /// The origins allowed to read `/ui/*`: the Tauri Hub UI (`tauri://localhost` on macOS and
@@ -913,5 +940,68 @@ mod tests {
     async fn binds_loopback_only() {
         let listener = bind_health(0).await.unwrap();
         assert!(listener.local_addr().unwrap().ip().is_loopback());
+    }
+
+    fn report(lag_rows: i64, lag_seconds: i64) -> arena_proto::StandbyReport {
+        arena_proto::StandbyReport {
+            applied_epoch: Some("1:01JX".into()),
+            applied_seq: Some(7),
+            lag_rows,
+            lag_seconds,
+            last_row_at: None,
+            schema_version: 1,
+            behind: (lag_seconds > 30).then_some(arena_proto::StandbyBehindCause::Lagging),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_standby_reports_its_own_lag_with_its_role_and_epoch() {
+        let (tx, rx) = status_channel(HubStatus::opened(1, "01JSELF"));
+        tx.send_modify(|s| {
+            s.lease = Some(LeaseInfo {
+                counter: 1,
+                hub_instance_id: "01JX".into(),
+                provisional: false,
+                expires_at: 42,
+            });
+            s.following = Some(report(12, 44));
+        });
+        let body = get_json(rx).await;
+        assert_eq!(body["role"], "follower");
+        assert_eq!(body["epoch"], "1:01JX");
+        assert_eq!(
+            body["standby"],
+            json!({"lag_rows": 12, "lag_seconds": 44, "behind": "lagging"})
+        );
+    }
+
+    #[tokio::test]
+    async fn the_main_hub_reports_the_linked_standbys_lag_from_the_stream() {
+        let (tx, rx) = status_channel(HubStatus::opened(1, "01JSELF"));
+        tx.send_modify(|s| s.role = Role::Primary);
+        let observer = crate::StandbyObserver::default();
+        let app = router_with_standby(
+            rx.clone(),
+            Arc::new(ManualClock::new(1_000)),
+            Some(observer.clone()),
+        );
+        let ask = |app: Router| async move {
+            let res = app
+                .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            let bytes = to_bytes(res.into_body(), 64 * 1024).await.unwrap();
+            serde_json::from_slice::<Value>(&bytes).unwrap()
+        };
+        // No standby has connected: no `standby` key at all.
+        assert!(ask(app.clone()).await.get("standby").is_none());
+        observer.connected("dev-s", 1, 900);
+        observer.reported("dev-s", report(3, 5), 950);
+        let body = ask(app).await;
+        assert_eq!(body["role"], "primary");
+        assert_eq!(
+            body["standby"],
+            json!({"lag_rows": 3, "lag_seconds": 5, "behind": null})
+        );
     }
 }

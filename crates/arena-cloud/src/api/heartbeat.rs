@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use arena_proto::{
     AppError, ErrorCode, HEARTBEAT_MIN_GAP_MS, HUB_TOKEN_PREFIX, HeartbeatFence, HeartbeatRequest,
-    HeartbeatResponse, HubPlatform, HubRole, LicenceClaims, SeqRange, TUNNEL_FLAG, Tier,
-    TunnelAnswer, TunnelReport, tunnel_hostname,
+    HeartbeatResponse, HubPlatform, HubRole, LicenceClaims, STANDBY_LICENCE_PATH, SeqRange,
+    StandbyLicenceRequest, StandbyLicenceResponse, TUNNEL_FLAG, Tier, TunnelAnswer, TunnelReport,
+    tunnel_hostname,
 };
 use arena_store::control::{
     AdMetric, Beat, BranchTunnel, FenceMove, HubRow, HubUploadView, NewBranchTunnel, RateRule,
@@ -40,7 +41,8 @@ fn invalid() -> ApiError {
     refused(ErrorCode::TokenInvalid, "This Hub's token isn't valid.")
 }
 
-pub(super) async fn authenticate(
+/// The Hub (main or standby) a bearer token belongs to, if it is genuine and not revoked.
+pub(super) async fn authenticate_any(
     st: &AuthState,
     headers: &HeaderMap,
     now: i64,
@@ -86,8 +88,18 @@ pub(super) async fn authenticate(
             "This Hub is no longer paired.",
         ));
     }
-    // A standby follows the main Hub and calls none of the main Hub's cloud endpoints yet
-    // (Story 9.19 onwards); until then its token only proves the pairing.
+    Ok(hub)
+}
+
+/// The main Hub a bearer token belongs to. A standby follows the main Hub and calls only the
+/// catalogue manifest and its own licence refresh (Story 9.20), which use [`authenticate_any`];
+/// every other endpoint is the main Hub's.
+pub(super) async fn authenticate(
+    st: &AuthState,
+    headers: &HeaderMap,
+    now: i64,
+) -> Result<HubRow, ApiError> {
+    let hub = authenticate_any(st, headers, now).await?;
     if hub.role == HubRole::Standby {
         return Err(refused(
             ErrorCode::Forbidden,
@@ -584,8 +596,73 @@ async fn record_ads(
         .ok()
 }
 
+/// `POST /v1/standby/licence` (Story 9.20): a standby Hub refreshes its own licence. It answers
+/// the branch's signed licence like a heartbeat does, and touches no fence, epoch, upload record
+/// or command: a standby takes no part in any of them. A main Hub's token is `FORBIDDEN` here.
+async fn standby_licence(
+    State(st): State<Arc<AuthState>>,
+    headers: HeaderMap,
+    ApiJson(body): ApiJson<StandbyLicenceRequest>,
+) -> Result<Json<StandbyLicenceResponse>, ApiError> {
+    let now = st.now();
+    let hub = authenticate_any(&st, &headers, now).await?;
+    if hub.role != HubRole::Standby {
+        return Err(refused(
+            ErrorCode::Forbidden,
+            "Only a standby Hub refreshes its licence here.",
+        ));
+    }
+    check_field("version", &body.version)?;
+    let key = format!("{RATE_PREFIX}sb:{}", hub.id);
+    let rule = RateRule {
+        key: &key,
+        prune_prefix: RATE_PREFIX,
+        bucket_ms: 1,
+        window_ms: HEARTBEAT_MIN_GAP_MS - 1,
+        limit: 1,
+    };
+    if let Err(wait_ms) = st
+        .db
+        .rate_reserve(&[rule], now)
+        .await
+        .map_err(ApiError::internal)?
+    {
+        return Err(ApiError::rate_limited(ceil_s(wait_ms)));
+    }
+    let seen = st
+        .db
+        .touch_standby(&hub.id, &body.version, body.schema_version, now)
+        .await
+        .map_err(ApiError::internal)?;
+    if !seen {
+        return Err(refused(
+            ErrorCode::TokenRevoked,
+            "This Hub is no longer paired.",
+        ));
+    }
+    let branch = st
+        .db
+        .branch(&hub.branch_id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::internal("hub without its branch"))?;
+    let entitlement = st
+        .db
+        .entitlement(&branch.id)
+        .await
+        .map_err(ApiError::internal)?;
+    let claims =
+        crate::licence::claims_for(&branch.tenant_id, &branch.id, entitlement.as_ref(), now);
+    let licence = st.licence.sign(&claims).map_err(ApiError::internal)?;
+    Ok(Json(StandbyLicenceResponse {
+        licence,
+        cloud_time: now,
+    }))
+}
+
 pub(super) fn router(st: Arc<AuthState>) -> Router {
     Router::new()
         .route("/heartbeat", post(heartbeat))
+        .route(STANDBY_LICENCE_PATH, post(standby_licence))
         .with_state(st)
 }

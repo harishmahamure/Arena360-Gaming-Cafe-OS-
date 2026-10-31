@@ -5,6 +5,7 @@
 pub mod health;
 pub mod lan;
 pub mod pairing;
+pub mod standby;
 mod ui_ads;
 pub mod ui_audit;
 pub mod ui_auth;
@@ -30,12 +31,15 @@ mod ui_restore_tests;
 #[cfg(test)]
 mod ui_setup_tests;
 mod ui_shift;
+pub mod ui_standby;
 mod ui_tunnel;
 
 pub use health::{
-    DEFAULT_HEALTH_PORT, UI_ALLOWED_ORIGINS, bind_health, router, serve_health, serve_router,
-    ui_router,
+    DEFAULT_HEALTH_PORT, UI_ALLOWED_ORIGINS, bind_health, router, router_with_standby,
+    serve_health, serve_router, ui_router,
 };
+pub use standby::StandbyObserver;
 pub use ui_auth::{UiAuth, ui_auth_router};
 pub use ui_pair::ui_pair_router;
 pub use ui_restore_fetch::ui_restore_fetch_router;
+pub use ui_standby::ui_standby_router;

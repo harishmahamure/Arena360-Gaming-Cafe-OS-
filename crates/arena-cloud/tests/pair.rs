@@ -3065,3 +3065,99 @@ async fn the_go_live_standby_item_follows_the_real_standby_and_never_blocks() {
     let view = h.call("GET", "/v1/wizard/go-live", None, &a).await;
     assert_eq!(standby_done(&view.body), json!(false));
 }
+
+impl Harness {
+    async fn standby_licence(&self, token: &str) -> Reply {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/standby/licence")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::from(
+                json!({"version": "0.2.0", "schema_version": 90}).to_string(),
+            ))
+            .unwrap();
+        reply(self.app.clone().oneshot(req).await.unwrap()).await
+    }
+}
+
+#[tokio::test]
+async fn a_standby_refreshes_its_licence_without_touching_the_fence_or_the_main_hub() {
+    let h = Harness::new().await;
+    let (a, branch, main) = h.premium_with_main().await;
+    let code = code_of(&h.standby_code(&a, &branch).await);
+    let paired = h.pair_as(&code, "windows", "SECOND", Some("standby")).await;
+    let standby = paired.body["token"].as_str().unwrap().to_owned();
+    let main_token = main.body["token"].as_str().unwrap().to_owned();
+    assert_eq!(h.beat(&main_token, "1:MAIN").await.status, 200);
+    let fence_before = h.db.branch_fence_epoch(&branch).await.unwrap();
+
+    h.advance(10_000);
+    let r = h.standby_licence(&standby).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let claims = verify(
+        r.body["licence"].as_str().unwrap(),
+        DEV_LICENCE_VERIFY_KEYS,
+        h.now.load(Ordering::SeqCst),
+    )
+    .unwrap();
+    assert!(claims.flags.iter().any(|f| f == "standby"));
+    assert_eq!(
+        r.body["cloud_time"].as_i64().unwrap(),
+        h.now.load(Ordering::SeqCst)
+    );
+
+    // It is recorded as seen, and the branch's fence is where the main Hub left it.
+    let row = h.db.standby_hub(&branch).await.unwrap().unwrap();
+    assert_eq!(row.last_seen_at, Some(h.now.load(Ordering::SeqCst)));
+    assert_eq!(
+        h.db.branch_fence_epoch(&branch).await.unwrap(),
+        fence_before
+    );
+
+    // Beats closer than five seconds are rate limited, like the main Hub's.
+    h.advance(1_000);
+    let again = h.standby_licence(&standby).await;
+    assert_eq!((again.status, again.code()), (429, "RATE_LIMITED"));
+
+    // A main Hub's token is not a standby's; the standby still reaches nothing else.
+    let wrong = h.standby_licence(&main_token).await;
+    assert_eq!((wrong.status, wrong.code()), (403, "FORBIDDEN"));
+    h.advance(10_000);
+    assert_eq!(h.beat(&standby, "1:SECOND").await.status, 403);
+}
+
+#[tokio::test]
+async fn an_unknown_standby_token_gets_no_licence_and_a_real_one_does() {
+    let h = Harness::new().await;
+    let (a, branch, _main) = h.premium_with_main().await;
+    let code = code_of(&h.standby_code(&a, &branch).await);
+    let paired = h.pair_as(&code, "windows", "SECOND", Some("standby")).await;
+    let standby = paired.body["token"].as_str().unwrap().to_owned();
+    let bad = h.standby_licence("hub_nope.nope").await;
+    assert_eq!((bad.status, bad.code()), (401, "TOKEN_INVALID"));
+    assert_eq!(h.standby_licence(&standby).await.status, 200);
+}
+
+#[tokio::test]
+async fn a_standby_may_ask_for_the_catalogue_manifest_but_not_the_main_hubs_other_endpoints() {
+    let h = Harness::new().await;
+    let (a, branch, _main) = h.premium_with_main().await;
+    let code = code_of(&h.standby_code(&a, &branch).await);
+    let paired = h.pair_as(&code, "windows", "SECOND", Some("standby")).await;
+    let standby = paired.body["token"].as_str().unwrap();
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/catalog/manifest?since=0")
+        .header("authorization", format!("Bearer {standby}"))
+        .body(Body::empty())
+        .unwrap();
+    let r = reply(h.app.clone().oneshot(req).await.unwrap()).await;
+    // The harness has no CDN base URL (503); the point is that the token is accepted.
+    assert!(
+        !matches!(r.status, 401 | 403),
+        "the manifest refused a standby: {} {}",
+        r.status,
+        r.body
+    );
+}

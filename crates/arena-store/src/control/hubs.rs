@@ -222,6 +222,28 @@ impl ControlDb {
             .transpose()
     }
 
+    /// A standby Hub asked for its licence (Story 9.20): records when it was last seen and what it
+    /// runs. `false` when the Hub is revoked or unknown. It touches no fence and no epoch.
+    pub async fn touch_standby(
+        &self,
+        hub_id: &str,
+        version: &str,
+        schema_version: u32,
+        now: i64,
+    ) -> Result<bool, ControlError> {
+        self.transact(vec![Stmt::new(
+            "UPDATE hubs SET last_seen_at = ?, version = ?, schema_version = ? \n             WHERE id = ? AND role = 'standby' AND revoked_at IS NULL",
+            vec![
+                SqlValue::Integer(now),
+                text(version),
+                SqlValue::Integer(i64::from(schema_version)),
+                text(hub_id),
+            ],
+        )
+        .expect(1)])
+        .await
+    }
+
     /// The branch's fence epoch, or `None` before any heartbeat.
     pub async fn branch_fence_epoch(
         &self,

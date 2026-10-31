@@ -218,8 +218,8 @@ pub use refunds::{
     load_refund_invoice, pack_ever_used, paid_by_method, plan_refusal, sum_refunded,
 };
 pub use replicate::{
-    append_replicated, build_standby_snapshot, is_standby_linked, link_standby, log_holds, log_tip,
-    player_key_states, read_changes_after, set_player_key,
+    LinkedStandby, append_replicated, build_standby_snapshot, is_standby_linked, link_standby,
+    linked_standby, log_holds, log_tip, player_key_states, read_changes_after, set_player_key,
 };
 /// The transaction a write job runs in (always `BEGIN IMMEDIATE`), and the connection it derefs to.
 pub use reports::{

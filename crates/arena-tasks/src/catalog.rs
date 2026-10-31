@@ -6,10 +6,18 @@
 //! manifest names: every cover first, then videos, each streamed to a `.part` file, checked for
 //! size and SHA-256 and renamed. Nothing goes through the writer, `apply()` or the change log.
 //!
+//! A standby Hub (Story 9.20) runs the same pull for its own reference cache: it asks the cloud for
+//! the manifest itself and fetches each file from the main Hub over the LAN first ([`LanMedia`]),
+//! from the CDN when the main Hub cannot supply it. Nothing in the cache comes through
+//! replication.
+//!
 //! A failed pull (the WAN is down, the cloud errs, a file does not verify) is retried with the
 //! heartbeat's back-off up to 30 minutes; what is already cached keeps being served meanwhile and
 //! the next good pull resumes the pending downloads.
 
+use std::future::Future;
+use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,6 +37,18 @@ pub const RETRY_CEILING: Duration = Duration::from_secs(30 * 60);
 /// How often a Hub that is not the primary writer (yet) looks again.
 pub const ROLE_RECHECK: Duration = Duration::from_secs(10);
 
+/// The main Hub's media route as a standby sees it: `GET /media/<sha256>` on the LAN, with the
+/// standby's device token and the pinned certificate (wired in with the standby runtime).
+pub trait LanMedia: Send + Sync {
+    /// Streams the file with this hash into `part`, checked for `bytes` and the hash.
+    fn fetch<'a>(
+        &'a self,
+        sha256: &'a str,
+        part: &'a Path,
+        bytes: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<(), MediaFailure>> + Send + 'a>>;
+}
+
 pub struct CatalogPullTask {
     cloud: CloudClient,
     keystore: Arc<dyn Keystore>,
@@ -36,6 +56,7 @@ pub struct CatalogPullTask {
     status: watch::Sender<HubStatus>,
     cache: Arc<MediaCache>,
     clock: Arc<dyn Clock>,
+    lan: Option<Arc<dyn LanMedia>>,
     fails: u32,
 }
 
@@ -55,8 +76,16 @@ impl CatalogPullTask {
             status,
             cache,
             clock,
+            lan: None,
             fails: 0,
         }
+    }
+
+    /// Fetches media from the main Hub first (a standby); the CDN stays the fallback.
+    #[must_use]
+    pub fn with_lan_media(mut self, lan: Arc<dyn LanMedia>) -> Self {
+        self.lan = Some(lan);
+        self
     }
 
     pub async fn run(mut self) {
@@ -73,11 +102,11 @@ impl CatalogPullTask {
     /// One pull: the manifest, then the pending downloads. Answers how long to wait before the
     /// next.
     pub async fn pull(&mut self) -> Duration {
-        let (role, pairing) = {
+        let (role, pairing, standby) = {
             let s = self.status.borrow();
-            (s.role, s.pairing)
+            (s.role, s.pairing, s.following.is_some())
         };
-        if role != Role::Primary {
+        if role != Role::Primary && !standby {
             return ROLE_RECHECK;
         }
         if pairing == PairingState::Revoked {
@@ -162,11 +191,7 @@ impl CatalogPullTask {
                 }
             }
             let part = self.cache.part_path(&file.sha256);
-            match self
-                .cloud
-                .fetch_media(&file.url, &part, file.bytes, &file.sha256)
-                .await
-            {
+            match self.fetch_file(&file, &part).await {
                 Ok(()) => {
                     let cache = Arc::clone(&self.cache);
                     let stored = file.clone();
@@ -200,6 +225,27 @@ impl CatalogPullTask {
             }
         }
         all
+    }
+
+    /// One file: from the main Hub over the LAN when this is a standby, else (or when that fails)
+    /// from the CDN.
+    async fn fetch_file(
+        &self,
+        file: &arena_store::RefFile,
+        part: &Path,
+    ) -> Result<(), MediaFailure> {
+        if let Some(lan) = &self.lan {
+            match lan.fetch(&file.sha256, part, file.bytes).await {
+                Ok(()) => return Ok(()),
+                Err(failure) => {
+                    tracing::info!(failure = ?failure, "catalogue: the main hub could not supply a file; using the cloud");
+                    let _ = tokio::fs::remove_file(part).await;
+                }
+            }
+        }
+        self.cloud
+            .fetch_media(&file.url, part, file.bytes, &file.sha256)
+            .await
     }
 
     fn failed(&mut self) -> Duration {
@@ -813,5 +859,97 @@ mod tests {
             .collect();
         assert_eq!(names, vec!["reference".to_owned()]);
         assert!(f.dir.path().join("reference").join("reference.db").exists());
+    }
+
+    /// A main Hub as the standby sees it: serves what it has by hash, counts the asks.
+    struct FakeMain {
+        files: HashMap<String, Vec<u8>>,
+        asked: Mutex<Vec<String>>,
+    }
+
+    impl LanMedia for FakeMain {
+        fn fetch<'a>(
+            &'a self,
+            sha256: &'a str,
+            part: &'a Path,
+            bytes: u64,
+        ) -> Pin<Box<dyn Future<Output = Result<(), MediaFailure>> + Send + 'a>> {
+            Box::pin(async move {
+                self.asked.lock().unwrap().push(sha256.to_owned());
+                match self.files.get(sha256) {
+                    Some(body) if body.len() as u64 == bytes => {
+                        tokio::fs::write(part, body).await.unwrap();
+                        Ok(())
+                    }
+                    Some(_) => Err(MediaFailure::Mismatch("the size differs")),
+                    None => Err(MediaFailure::Refused(404)),
+                }
+            })
+        }
+    }
+
+    fn become_standby(f: &Fx) {
+        f.status.send_modify(|s| {
+            s.role = Role::Follower;
+            s.following = Some(arena_proto::StandbyReport {
+                applied_epoch: None,
+                applied_seq: None,
+                lag_rows: 0,
+                lag_seconds: 0,
+                last_row_at: None,
+                schema_version: 12,
+                behind: None,
+            });
+        });
+    }
+
+    #[tokio::test]
+    async fn a_standby_pulls_its_own_manifest_and_takes_media_from_the_main_hub_first() {
+        let mut f = fx(1 << 30).await;
+        become_standby(&f);
+        let m = CatalogManifest {
+            catalog_version: 3,
+            games: vec![game(
+                "A",
+                vec![
+                    media(f.port, "cover", COVER_A),
+                    media(f.port, "video", VIDEO_A),
+                ],
+            )],
+        };
+        // The CDN has the video only; the main Hub has the cover only.
+        publish(&f, &m, &[VIDEO_A]);
+        let main = Arc::new(FakeMain {
+            files: HashMap::from([(hex(COVER_A), COVER_A.to_vec())]),
+            asked: Mutex::default(),
+        });
+        f.task = f.task.with_lan_media(main.clone());
+        assert_eq!(f.task.pull().await, CATALOG_INTERVAL);
+
+        assert_eq!(f.cache.status().unwrap().catalog_version, 3);
+        assert_eq!(state(&f, COVER_A), Some(FileState::Stored));
+        assert_eq!(state(&f, VIDEO_A), Some(FileState::Stored));
+        assert!(
+            requests(&f.seen, &format!("/catalog/{}.png", hex(COVER_A))).is_empty(),
+            "the cover came from the main hub"
+        );
+        assert_eq!(
+            requests(&f.seen, &format!("/catalog/{}.png", hex(VIDEO_A))).len(),
+            1,
+            "the cloud filled in what the main hub did not hold"
+        );
+        assert_eq!(main.asked.lock().unwrap().len(), 2);
+        assert_eq!(parts(&f), 0);
+    }
+
+    #[tokio::test]
+    async fn a_follower_that_is_not_a_standby_does_not_pull() {
+        let mut f = fx(1 << 30).await;
+        f.status.send_modify(|s| {
+            s.role = Role::Follower;
+            s.following = None;
+        });
+        assert_eq!(f.task.pull().await, ROLE_RECHECK);
+        assert!(f.seen.lock().unwrap().is_empty());
     }
 }

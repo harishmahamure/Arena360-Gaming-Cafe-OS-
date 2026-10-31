@@ -23,6 +23,8 @@ pub mod receipts;
 pub mod restore_fetch;
 pub mod restore_wait;
 pub mod session_timer;
+pub mod standby_licence;
+pub mod standby_progress;
 pub mod template;
 pub mod template_apply;
 pub mod test_session;
@@ -67,6 +69,8 @@ pub use restore_fetch::{
 };
 pub use restore_wait::{KeyRequestTask, restore_public_key};
 pub use session_timer::{SessionTimerTask, TIMER_EVENTS_DEPTH, TIMER_TICK};
+pub use standby_licence::StandbyLicenceTask;
+pub use standby_progress::{SharedProgress, StandbyProgress, publish_following};
 pub use template::{NOT_ENTITLED_RETRY, SetupTemplateTask, TIER_RECHECK, UPLOAD_DEBOUNCE};
 pub use template_apply::{SetupApplyTask, SetupTemplateInbox};
 pub use test_session::TestSessionTask;

@@ -69,6 +69,12 @@ pub use replicate::{
     REPLICATE_SNAPSHOT_PATH, ReplicateFrame, ReplicatePosition, ReplicatedChange, ReplicatedKey,
     SNAPSHOT_EPOCH_HEADER, SNAPSHOT_SEQ_HEADER, replicate_backoff_ms,
 };
+pub mod standby;
+pub use standby::{
+    STANDBY_LAG_WARN_AFTER_S, STANDBY_LICENCE_PATH, STANDBY_SILENT_WARN_AFTER_S,
+    StandbyBehindCause, StandbyLicenceRequest, StandbyLicenceResponse, StandbyLine, StandbyPanel,
+    StandbyReport, StandbyScreen, StandbyView, standby_behind,
+};
 mod refund;
 mod report;
 mod report_export;

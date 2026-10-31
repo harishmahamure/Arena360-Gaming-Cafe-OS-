@@ -64,6 +64,38 @@ pub fn is_standby_linked(conn: &Connection, device_id: &str) -> Result<bool, App
     .map_err(db_error)
 }
 
+/// The device linked as this branch's standby, with what the Hub knows of it (Story 9.20).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkedStandby {
+    pub device_id: String,
+    /// The device's name as the owner gave it; empty when the device row is gone.
+    pub label: String,
+    pub linked_at: i64,
+    /// The app version the device last reported.
+    pub reported_version: Option<String>,
+}
+
+/// The linked standby: the newest link whose device is not revoked, if any.
+pub fn linked_standby(conn: &Connection) -> Result<Option<LinkedStandby>, AppError> {
+    conn.query_row(
+        "SELECT l.device_id, COALESCE(d.label, ''), l.linked_at, d.reported_version \
+         FROM standby_links l LEFT JOIN devices d ON d.device_id = l.device_id \
+         WHERE d.revoked_at IS NULL \
+         ORDER BY l.linked_at DESC, l.device_id DESC LIMIT 1",
+        [],
+        |r| {
+            Ok(LinkedStandby {
+                device_id: r.get(0)?,
+                label: r.get(1)?,
+                linked_at: r.get(2)?,
+                reported_version: r.get(3)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(db_error)
+}
+
 /// The last change in log order (`epoch_counter`, `epoch`, `seq`), if the log has any.
 pub fn log_tip(conn: &Connection) -> Result<Option<(String, i64)>, AppError> {
     conn.query_row(
@@ -253,6 +285,26 @@ impl Store {
     pub fn replication_linked(&self, device_id: &str) -> Result<bool, AppError> {
         is_standby_linked(&self.conn, device_id)
     }
+
+    /// The branch's name, as replicated (Story 9.20): what a standby calls the Hub it follows.
+    pub fn branch_name(&self) -> Result<Option<String>, AppError> {
+        if self.schema_version()? == 0 {
+            return Ok(None);
+        }
+        self.conn
+            .query_row(
+                "SELECT name FROM branch ORDER BY branch_id LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(db_error)
+    }
+
+    /// The device linked as the standby, if any (Story 9.20).
+    pub fn linked_standby(&self) -> Result<Option<LinkedStandby>, AppError> {
+        linked_standby(&self.conn)
+    }
 }
 
 impl Store {
@@ -420,6 +472,37 @@ mod tests {
     }
 
     #[test]
+    fn the_linked_standby_is_the_newest_link_that_is_not_revoked() {
+        let (_d, mut s) = store();
+        assert_eq!(s.linked_standby().unwrap(), None);
+        s.write_tx(|tx| link_standby(tx, "dev-a", 10)).unwrap();
+        let only = s.linked_standby().unwrap().unwrap();
+        assert_eq!(
+            (only.device_id.as_str(), only.label.as_str()),
+            ("dev-a", "")
+        );
+        assert_eq!(only.linked_at, 10);
+
+        s.conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        s.conn
+            .execute_batch(
+                "INSERT INTO devices (device_id, branch_id, class, label, token_hash, \
+                 reported_version, revoked_at, rev, created_at, updated_at) VALUES \
+                 ('dev-a', 'b', 'paired', 'Back office PC', 'h', '0.9.1', NULL, 1, 1, 1), \
+                 ('dev-b', 'b', 'paired', 'Old PC', 'h', NULL, 5, 1, 1, 1);",
+            )
+            .unwrap();
+        s.write_tx(|tx| link_standby(tx, "dev-b", 20)).unwrap();
+        let shown = s.linked_standby().unwrap().unwrap();
+        assert_eq!(
+            shown.device_id, "dev-a",
+            "a revoked device is not the standby"
+        );
+        assert_eq!(shown.label, "Back office PC");
+        assert_eq!(shown.reported_version.as_deref(), Some("0.9.1"));
+    }
+
+    #[test]
     fn changes_are_read_in_log_order_across_epochs() {
         let (_d, mut s) = store();
         append(
@@ -499,5 +582,37 @@ mod tests {
             vec![("ghost".to_owned(), None)]
         );
         set_player_key(&s.conn, "ghost", None).unwrap();
+    }
+
+    #[test]
+    fn the_standby_keeps_its_own_licence_through_a_snapshot_and_a_resync() {
+        let (dir, mut main) = store();
+        main.write_tx(|tx| crate::store_licence(tx, "main-licence", 5))
+            .unwrap();
+        append(&mut main, &[change("1:m", 1)]);
+        let snap = dir.path().join("snap.db");
+        build_standby_snapshot(main.path(), &snap).unwrap();
+        // The licence is the main Hub's own: it is not in what the standby is given.
+        let copy = Connection::open(&snap).unwrap();
+        let held: i64 = copy
+            .query_row("SELECT COUNT(*) FROM licence_cache", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(held, 0);
+
+        let other = tempfile::tempdir().unwrap();
+        let mut standby = Store::open(other.path().join("standby.db"), 1).unwrap();
+        standby
+            .write_tx(|tx| crate::store_licence(tx, "standby-licence", 9))
+            .unwrap();
+        standby.load_standby_snapshot(&snap).unwrap();
+        assert_eq!(
+            standby.cached_licence().unwrap().unwrap().jwt,
+            "standby-licence"
+        );
+        standby.clear_replicated_state().unwrap();
+        assert_eq!(
+            standby.cached_licence().unwrap().unwrap().jwt,
+            "standby-licence"
+        );
     }
 }

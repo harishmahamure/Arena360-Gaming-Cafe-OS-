@@ -180,6 +180,16 @@ impl CloudClient {
         self.post("/v1/heartbeat", Some(token), req).await
     }
 
+    /// A standby Hub refreshes its own licence (Story 9.20).
+    pub async fn standby_licence(
+        &self,
+        token: &str,
+        req: &arena_proto::StandbyLicenceRequest,
+    ) -> Result<arena_proto::StandbyLicenceResponse, CloudFailure> {
+        let path = format!("/v1{}", arena_proto::STANDBY_LICENCE_PATH);
+        self.post(&path, Some(token), req).await
+    }
+
     pub async fn commands(
         &self,
         token: &str,

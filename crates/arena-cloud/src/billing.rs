@@ -166,6 +166,9 @@ impl PaymentOrigin {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PaymentInfo {
     pub method: Option<MandateMethod>,
+    /// What names the method to its owner: the last four digits of a card or the bank of a
+    /// mandate. A UPI handle is personal data and is never read.
+    pub detail: Option<String>,
     pub origin: PaymentOrigin,
 }
 
@@ -212,6 +215,20 @@ pub fn payment_info_from(payment: &Value) -> PaymentInfo {
             None => PaymentOrigin::Unknown,
         },
     };
+    let detail = match method {
+        Some("card") => card
+            .and_then(|c| c.get("last4"))
+            .and_then(Value::as_str)
+            .filter(|l| l.len() == 4 && l.bytes().all(|b| b.is_ascii_digit()))
+            .map(str::to_owned),
+        Some("emandate" | "netbanking") => payment
+            .get("bank")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|b| !b.is_empty() && b.len() <= 40)
+            .map(str::to_owned),
+        _ => None,
+    };
     PaymentInfo {
         method: match method {
             Some("upi") => Some(MandateMethod::Upi),
@@ -220,6 +237,7 @@ pub fn payment_info_from(payment: &Value) -> PaymentInfo {
             _ => None,
         },
         origin,
+        detail,
     }
 }
 
@@ -891,6 +909,32 @@ mod tests {
             PaymentOrigin::Unknown
         );
         assert_eq!(of(json!({})).method, None);
+    }
+
+    #[test]
+    fn a_payment_names_its_method_by_card_digits_or_bank_and_never_a_upi_handle() {
+        let detail = |v: Value| payment_info_from(&v).detail;
+        assert_eq!(
+            detail(json!({"method": "card", "card": {"last4": "4242"}})).as_deref(),
+            Some("4242")
+        );
+        for bad in ["424", "42424", "42a2", ""] {
+            assert_eq!(
+                detail(json!({"method": "card", "card": {"last4": bad}})),
+                None,
+                "{bad:?}"
+            );
+        }
+        assert_eq!(
+            detail(json!({"method": "emandate", "bank": " HDFC "})).as_deref(),
+            Some("HDFC")
+        );
+        assert_eq!(detail(json!({"method": "emandate", "bank": ""})), None);
+        assert_eq!(
+            detail(json!({"method": "upi", "vpa": "someone@okbank", "bank": "HDFC"})),
+            None
+        );
+        assert_eq!(detail(json!({"method": "card"})), None);
     }
 
     #[test]

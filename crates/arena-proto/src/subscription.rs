@@ -204,6 +204,155 @@ pub struct SubscriptionStatus {
     pub message: Option<String>,
 }
 
+/// How a branch's plan reads on Account -> Subscription (Story 10.8). A branch that never
+/// subscribed, or whose subscription ended, is `Free`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum PlanState {
+    Free,
+    /// Checkout was opened and no payment has arrived.
+    Pending,
+    /// The first payment is held for an operator to look at.
+    PendingReview,
+    Active,
+    /// A renewal waits for the owner's bank to approve it.
+    NeedsApproval,
+    Grace,
+    /// Active until the end of the paid period, then Free.
+    Cancels,
+    Lapsed,
+}
+
+/// What one billing cycle of the plan costs, from the branch's own locked price book. Amounts
+/// are minor units of the plan's currency; `tax_minor` is GST on band IN only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PlanPrice {
+    pub cycle: BillingCycle,
+    #[ts(type = "number")]
+    pub amount_minor: i64,
+    #[ts(type = "number")]
+    pub tax_minor: i64,
+    #[ts(type = "number")]
+    pub total_minor: i64,
+}
+
+/// How a subscription is paid, as the owner recognises it: the method and the last four digits
+/// of the card or the bank of the mandate (UPI has no detail).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PaymentMethodView {
+    pub method: MandateMethod,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub detail: Option<String>,
+}
+
+/// One branch's card on Account -> Subscription.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct BranchPlan {
+    pub branch_id: String,
+    pub branch_name: String,
+    pub state: PlanState,
+    pub tier: Tier,
+    /// The subscription's billing cycle; absent on a Free branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cycle: Option<BillingCycle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub band: Option<Band>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub currency: Option<String>,
+    pub add_ons: AddOns,
+    /// The end of the paid period: the next renewal, or the day a cancelled plan ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub current_period_end: Option<i64>,
+    /// The GST rate in percent; 0 when the band has none.
+    pub gst_percent: u32,
+    /// Both cycles of the plan, so the Monthly | Yearly switch needs no second call; empty on a
+    /// Free branch.
+    pub prices: Vec<PlanPrice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub payment_method: Option<PaymentMethodView>,
+    /// A sentence for states that need explaining.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub message: Option<String>,
+}
+
+/// `GET /v1/account/subscription`: every branch of the owner's café with its plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct AccountSubscription {
+    pub branches: Vec<BranchPlan>,
+}
+
+/// Whether a billing document charges or reverses a charge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum InvoiceKind {
+    Invoice,
+    CreditNote,
+}
+
+impl InvoiceKind {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "invoice" => Some(Self::Invoice),
+            "credit_note" => Some(Self::CreditNote),
+            _ => None,
+        }
+    }
+}
+
+/// One line of the invoice list. A credit note's `total_minor` is negative.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct InvoiceRow {
+    pub id: String,
+    pub number: String,
+    pub kind: InvoiceKind,
+    /// The financial year, `2026-27`.
+    pub fy: String,
+    pub branch_id: String,
+    pub branch_name: String,
+    #[ts(type = "number")]
+    pub issued_at: i64,
+    pub currency: String,
+    #[ts(type = "number")]
+    pub total_minor: i64,
+    /// The invoice a credit note reverses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub original_number: Option<String>,
+    /// Whether the PDF has been rendered and can be downloaded.
+    pub pdf_ready: bool,
+}
+
+/// `GET /v1/account/invoices`: invoices and credit notes across the café's branches, newest
+/// first, with the financial years the café has any in (for the filter).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct InvoiceList {
+    pub invoices: Vec<InvoiceRow>,
+    pub years: Vec<String>,
+}
+
+/// `GET /v1/account/invoices/:id/pdf`: a link that works for `expires_in_s` seconds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct InvoiceDownload {
+    pub url: String,
+    pub expires_in_s: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -269,6 +269,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
         version: 37,
         sql: include_str!("../control-migrations/0037_billing_invoices.sql"),
     },
+    ControlMigration {
+        version: 38,
+        sql: include_str!("../control-migrations/0038_subscription_payment_detail.sql"),
+    },
 ];
 
 /// The `gz_control` schema version this binary writes.

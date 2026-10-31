@@ -745,6 +745,7 @@ mod tests {
             addon_tunnel: 0,
             addon_owner_login: 0,
             mandate_method: None,
+            mandate_detail: None,
             razorpay_subscription_id: Some("sub_1".to_owned()),
             rev: 1,
             current_period_end: None,
@@ -1000,6 +1001,7 @@ mod tests {
             pdf_key: None,
             pdf_at: None,
             notified_at: None,
+            original_number: None,
         }
     }
 

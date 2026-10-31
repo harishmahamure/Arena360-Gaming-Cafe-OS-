@@ -21,7 +21,7 @@ test("offline: the shell opens from the cache with cached data, its age and an o
 }) => {
   await stubCloud(page);
   await page.goto("/account/subscription");
-  await expect(page.getByText(PAID[0].name)).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: PAID[0].name })).toBeVisible();
   await expect(page.getByText(t("owner.offline"))).toHaveCount(0);
   await page.evaluate(() => navigator.serviceWorker.ready);
   await page.reload();
@@ -30,7 +30,7 @@ test("offline: the shell opens from the cache with cached data, its age and an o
   await context.setOffline(true);
   await page.route("**/v1/**", (route) => route.abort());
   await page.reload();
-  await expect(page.getByText(PAID[0].name)).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: PAID[0].name })).toBeVisible();
   await expect(page.getByText(t("owner.offline"), { exact: true })).toBeVisible();
   await expect(page.getByText(/Updated /)).toBeVisible();
   await expect(page.getByRole("navigation")).toBeVisible();

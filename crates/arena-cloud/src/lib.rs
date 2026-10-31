@@ -13,6 +13,7 @@
 //! authenticator app ([`totp`], its secret sealed by [`crypto`]) and backup codes
 //! ([`api::mfa`]), with [`api::gate::RequireSetupComplete`] for routes that need all three.
 
+pub mod account_plan;
 pub mod admin;
 pub mod alert;
 pub mod api;

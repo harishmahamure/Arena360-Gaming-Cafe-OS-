@@ -13,6 +13,7 @@
 //! [`gate::RequireSetupComplete`].
 
 pub mod account;
+mod account_billing;
 mod admin_audit;
 pub mod alerts;
 mod audit;
@@ -81,6 +82,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>, commands_only: bool) -> Router {
             .merge(session::router(Arc::clone(st)))
             .merge(stepup::router(Arc::clone(st)))
             .merge(account::router(Arc::clone(st)))
+            .merge(account_billing::router(Arc::clone(st)))
             .merge(mfa::router(Arc::clone(st)))
             .merge(signin::router(Arc::clone(st)))
             .merge(security::router(Arc::clone(st)))

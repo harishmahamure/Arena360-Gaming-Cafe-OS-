@@ -236,6 +236,8 @@ pub struct Decision {
     pub first_paid_at: Option<i64>,
     pub payment_country: Option<String>,
     pub mandate: Option<MandateMethod>,
+    /// Names the method: the card's last four or the mandate's bank.
+    pub mandate_detail: Option<String>,
     /// The branch becomes entitled to the subscription's tier and add-ons.
     pub issue_entitlement: bool,
     /// The first payment does not match the band: hold it for an operator.
@@ -256,6 +258,7 @@ pub fn decide(sub: &Subscription, ev: &ParsedEvent, now: i64) -> Option<Decision
     }
     let paid_at = charged.then(|| ev.created_at_ms.unwrap_or(now));
     let mandate = ev.payment.as_ref().and_then(|p| p.method);
+    let mandate_detail = ev.payment.as_ref().and_then(|p| p.detail.clone());
     match sub.state {
         SubscriptionState::Pending => {
             let origin = ev
@@ -276,6 +279,7 @@ pub fn decide(sub: &Subscription, ev: &ParsedEvent, now: i64) -> Option<Decision
                 first_paid_at: paid_at,
                 payment_country: origin.as_text(),
                 mandate,
+                mandate_detail,
                 issue_entitlement: !review,
                 review,
                 charged,
@@ -298,6 +302,7 @@ pub fn decide(sub: &Subscription, ev: &ParsedEvent, now: i64) -> Option<Decision
                     first_paid_at: paid_at,
                     payment_country: None,
                     mandate,
+                    mandate_detail,
                     issue_entitlement: false,
                     review: false,
                     charged: true,
@@ -310,6 +315,7 @@ pub fn decide(sub: &Subscription, ev: &ParsedEvent, now: i64) -> Option<Decision
                     first_paid_at: paid_at,
                     payment_country: None,
                     mandate,
+                    mandate_detail,
                     issue_entitlement: false,
                     review: false,
                     charged: true,
@@ -433,6 +439,7 @@ pub async fn handle(
                 first_paid_at: d.first_paid_at,
                 payment_country: d.payment_country.as_deref(),
                 mandate_method: d.mandate,
+                mandate_detail: d.mandate_detail.as_deref(),
                 entitlement: d.issue_entitlement.then_some(EntitlementWrite {
                     tier: s.tier,
                     addons_json: &addons,
@@ -557,6 +564,7 @@ pub async fn approve_review(
             first_paid_at: None,
             payment_country: None,
             mandate_method: None,
+            mandate_detail: None,
             entitlement: Some(EntitlementWrite {
                 tier: sub.tier,
                 addons_json: &addons,
@@ -608,6 +616,7 @@ mod tests {
             addon_tunnel: 0,
             addon_owner_login: 0,
             mandate_method: None,
+            mandate_detail: None,
             razorpay_subscription_id: Some("sub_1".to_owned()),
             rev: 1,
             current_period_end: None,
@@ -629,6 +638,7 @@ mod tests {
             payment: Some(PaymentInfo {
                 method: Some(MandateMethod::Card),
                 origin,
+                detail: None,
             }),
         }
     }

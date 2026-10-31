@@ -2156,4 +2156,23 @@ built by `upgradeUrl` in `@arena/ui`; each app says where the picker lives with 
   raises one `invoice_ready` owner alert ("Invoice ready: <number> for <amount>.") through the owner-alert
   path (push and WhatsApp). The alert id is the invoice's, so a re-run sends nothing; a failed write or
   alert (or a branch not entitled yet) leaves the invoice for the next run.
-- Not here: credit notes (10.15), proration (10.9), and the Owner app's invoice list and download (10.8).
+- Not here: credit notes (10.15) and proration (10.9).
+
+## Account -> Subscription (Story 10.8)
+
+- **Three owner routes** (`RequireSetupComplete`, read through the owner's own tenant): `GET /v1/account/subscription[?branch=]`
+  (one card per branch: state, tier, cycle, add-ons, period end, GST rate, both cycles' prices, payment method),
+  `GET /v1/account/invoices[?branch=&fy=]` (invoices and credit notes newest first, a credit note's total negative with
+  its `original_number`, plus the financial years on offer) and `GET /v1/account/invoices/{id}/pdf` (a signed GET link
+  valid `PRESIGN_TTL_S` = 600 s, `404` until the PDF is rendered). A branch or invoice of another tenant answers
+  `FORBIDDEN` exactly as one that does not exist. Responses are `no-store`.
+- **Prices are the subscription's own.** Both cycles are priced from the price book locked onto the subscription (never
+  the live one); GST is shown beside the amount on band IN only. A subscription that is cancelled, ended, refunded or
+  abandoned leaves the branch on Free; a lapsed one shows Lapsed.
+- **Payment method.** The webhook transition that sets `subscriptions.mandate_method` also sets `mandate_detail`
+  (migration `0038`): the last four digits of a card or the bank of an eNACH mandate. A UPI handle is never read or kept.
+  A renewal paid another way replaces the detail; a payment with no method leaves both alone.
+- **Owner app.** `/account/subscription` shows the cards (one column under 768 px, two above), the Monthly | Yearly
+  `tab-control` (`?cycle=`), an Upgrade button on a Free branch (the Story 10.4 checkout for that branch) and the invoice
+  list with branch and financial-year filters and Download PDF. A state change is announced once in a polite live region;
+  the screen re-reads when the window regains focus (back from Checkout).

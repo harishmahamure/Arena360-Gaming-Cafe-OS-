@@ -1,6 +1,8 @@
 import type { Page } from "@playwright/test";
 import type {
+  BranchPlan,
   BranchSummary,
+  InvoiceRow,
   OwnerBackup,
   OwnerBranch,
   OwnerCommandPreview,
@@ -180,6 +182,12 @@ export type StubOptions = {
   };
   /** Answers `GET /v1/live/{branch}` (Story 8.40); unset: 404. Each call is recorded in `calls.bodies["live"]`. */
   liveView?: (branch: string) => { status: number; body: unknown };
+  /** The Account -> Subscription cards; default: one per branch from its tier (`planOf`). */
+  plans?: BranchPlan[] | (() => BranchPlan[]);
+  /** The invoices the cloud holds, newest first. Each `GET` is recorded in `calls.bodies["invoices"]`. */
+  invoices?: InvoiceRow[];
+  /** Answers `GET /v1/account/invoices/{id}/pdf`; unset: a signed link. */
+  pdf?: (id: string) => { status: number; body: unknown };
   /** Answers a command post instead of the default (queue one row per branch that can take it). */
   post?: (body: Record<string, unknown>) => { status: number; body: unknown } | undefined;
 };
@@ -217,6 +225,56 @@ export function alertOf(over: Partial<OwnerAlertView> = {}, ageMs = 120_000): Ow
     text: "Cola is running low: 3 left.",
     url: "/reports?tab=stock&branch=b1",
     created_at: Date.now() - ageMs,
+    ...over,
+  };
+}
+
+/** The Account -> Subscription card of a branch: Free when its tier is, else Basic monthly with GST. */
+export function planOf(b: Branch, over: Partial<BranchPlan> = {}): BranchPlan {
+  if (b.tier === "free")
+    return {
+      branch_id: b.id,
+      branch_name: b.name,
+      state: "free",
+      tier: "free",
+      add_ons: { devices_20: 0, tunnel: 0, owner_login: 0 },
+      gst_percent: 0,
+      prices: [],
+      ...over,
+    };
+  return {
+    branch_id: b.id,
+    branch_name: b.name,
+    state: "active",
+    tier: b.tier,
+    cycle: "monthly",
+    band: "IN",
+    currency: "INR",
+    add_ons: { devices_20: 2, tunnel: 1, owner_login: 0 },
+    current_period_end: Date.UTC(2026, 10, 30, 12),
+    gst_percent: 18,
+    prices: [
+      { cycle: "monthly", amount_minor: 149_900, tax_minor: 26_982, total_minor: 176_882 },
+      { cycle: "yearly", amount_minor: 1_499_000, tax_minor: 269_820, total_minor: 1_768_820 },
+    ],
+    payment_method: { method: "card", detail: "4242" },
+    ...over,
+  };
+}
+
+/** An invoice list line, issued on 30 Oct 2026. */
+export function invoiceRowOf(over: Partial<InvoiceRow> = {}): InvoiceRow {
+  return {
+    id: "inv1",
+    number: "A360/2026-27/000001",
+    kind: "invoice",
+    fy: "2026-27",
+    branch_id: "b1",
+    branch_name: "Pixel Arena MG Road",
+    issued_at: Date.UTC(2026, 9, 30, 8),
+    currency: "INR",
+    total_minor: 176_882,
+    pdf_ready: true,
     ...over,
   };
 }
@@ -264,6 +322,32 @@ export async function stubCloud(
         },
       });
     if (path === "/v1/branches" && req.method() === "GET") return json(list());
+    if (path === "/v1/account/subscription" && req.method() === "GET") {
+      const given = typeof opts.plans === "function" ? opts.plans() : opts.plans;
+      const all = given ?? list().map((b) => planOf(b));
+      const only = new URL(req.url()).searchParams.get("branch");
+      return json({ branches: all.filter((p) => !only || p.branch_id === only) });
+    }
+    if (path === "/v1/account/invoices" && req.method() === "GET") {
+      const q = new URL(req.url()).searchParams;
+      (bodies["invoices"] ??= []).push(q.toString());
+      const all = opts.invoices ?? [];
+      const rows = all.filter(
+        (i) =>
+          (!q.get("branch") || i.branch_id === q.get("branch")) &&
+          (!q.get("fy") || i.fy === q.get("fy")),
+      );
+      return json({ invoices: rows, years: [...new Set(all.map((i) => i.fy))].sort().reverse() });
+    }
+    const pdf = path.match(/^\/v1\/account\/invoices\/([^/]+)\/pdf$/);
+    if (pdf && req.method() === "GET") {
+      (bodies["pdf"] ??= []).push(pdf[1]);
+      const answer = opts.pdf?.(pdf[1]) ?? {
+        status: 200,
+        body: { url: "https://files.example.test/billing/invoices/x.pdf?sig=1", expires_in_s: 600 },
+      };
+      return json(answer.body, answer.status);
+    }
     if (path === "/v1/branches" && req.method() === "POST")
       return json({ ...list()[0], id: "b9", name: req.postDataJSON().name });
     if (path.startsWith("/v1/branches/") && req.method() === "PATCH")

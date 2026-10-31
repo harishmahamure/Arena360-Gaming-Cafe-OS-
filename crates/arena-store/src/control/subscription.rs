@@ -36,6 +36,8 @@ pub struct Subscription {
     pub updated_at: i64,
     /// Where the first payment came from (a country code, or `INTL`), once there is one.
     pub payment_country: Option<String>,
+    /// The last four digits of the card, or the bank of the mandate, for the owner to recognise it.
+    pub mandate_detail: Option<String>,
 }
 
 /// A subscription to create (always `pending`, with no Razorpay id yet).
@@ -65,7 +67,7 @@ pub enum ReserveOutcome {
 pub(super) const COLUMNS: &str = "id, tenant_id, branch_id, state, tier, cycle, band, currency, \
      price_book_id, addon_devices_20, addon_tunnel, addon_owner_login, mandate_method, \
      razorpay_subscription_id, rev, current_period_end, grace_until, first_paid_at, \
-     cancel_at_period_end, created_at, updated_at, payment_country";
+     cancel_at_period_end, created_at, updated_at, payment_country, mandate_detail";
 
 fn count(r: &[SqlValue], i: usize) -> Result<u32, ControlError> {
     u32::try_from(col_int(r, i)?)
@@ -104,6 +106,7 @@ pub(super) fn subscription_from(r: &[SqlValue]) -> Result<Subscription, ControlE
         created_at: col_int(r, 19)?,
         updated_at: col_int(r, 20)?,
         payment_country: col_opt_text(r, 21)?,
+        mandate_detail: col_opt_text(r, 22)?,
     })
 }
 

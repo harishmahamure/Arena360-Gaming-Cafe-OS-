@@ -60,20 +60,6 @@ test("Account holds MFA, Subscription, Branches, Support and Theme", async ({ pa
   await expect(page.getByRole("tab", { name: t("ui.theme.dark") })).toBeVisible();
 });
 
-test("Subscription is read-only with each branch's tier and flags", async ({ page }) => {
-  await stubCloud(page);
-  await page.goto("/account/subscription");
-  await expect(page.getByText(t("owner.subscription.soon"))).toBeVisible();
-  const first = page.getByRole("listitem").filter({ hasText: PAID[0].name });
-  await expect(first).toContainText(t("owner.tier.basic"));
-  await expect(first).toContainText("tunnel");
-  await expect(page.getByRole("listitem").filter({ hasText: PAID[1].name })).toContainText(
-    t("owner.tier.free"),
-  );
-  await expect(page.getByRole("button")).toHaveCount(0);
-  await expect(page.getByRole("link", { name: /upgrade/i })).toHaveCount(0);
-});
-
 test("Support shows a mailto link and calls no API", async ({ page }) => {
   const calls = await stubCloud(page);
   await page.goto("/account/support");
@@ -110,9 +96,17 @@ test("on Free the four data sections show only the tier-lock, with an Upgrade li
     );
     await expect(page.getByText(t("owner.section.soon"))).toHaveCount(0);
   }
-  await page.goto("/account/subscription");
-  await expect(page.getByText(FREE[0].name)).toBeVisible();
+  // The data sections called nothing; Account -> Subscription reads only the account routes.
   expect([...new Set(calls)].sort()).toEqual(["GET /v1/branches", "GET /v1/session"]);
+  await page.goto("/account/subscription");
+  await expect(page.getByRole("heading", { level: 2, name: FREE[0].name })).toBeVisible();
+  await expect(page.getByText(t("owner.invoices.empty"))).toBeVisible();
+  expect([...new Set(calls)].sort()).toEqual([
+    "GET /v1/account/invoices",
+    "GET /v1/account/subscription",
+    "GET /v1/branches",
+    "GET /v1/session",
+  ]);
 });
 
 test("with only paid branches the sections are not locked", async ({ page }) => {
@@ -203,7 +197,7 @@ test("a Free branch that upgrades unlocks on the next open without signing out",
 test("a refused session goes to sign-in and clears the cache", async ({ page }) => {
   await stubCloud(page);
   await page.goto("/account/subscription");
-  await expect(page.getByText(PAID[0].name)).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: PAID[0].name })).toBeVisible();
   expect(await cacheCount(page)).toBeGreaterThan(0);
   await page.route("**/v1/**", (route) =>
     route.fulfill({ status: 401, contentType: "application/json", body: "{}" }),
@@ -229,7 +223,7 @@ test("a 401 refreshes the session once and carries on", async ({ page }) => {
     return route.fallback();
   });
   await page.goto("/account/subscription");
-  await expect(page.getByText(PAID[0].name)).toBeVisible();
+  await expect(page.getByRole("heading", { level: 2, name: PAID[0].name })).toBeVisible();
   expect(rotated).toBe(1);
 });
 

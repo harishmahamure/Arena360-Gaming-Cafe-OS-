@@ -70,6 +70,8 @@ pub struct SubscriptionChange<'a> {
     /// Set when the row has no payment country yet.
     pub payment_country: Option<&'a str>,
     pub mandate_method: Option<MandateMethod>,
+    /// Names the payment method (card last four or bank); set with `mandate_method`.
+    pub mandate_detail: Option<&'a str>,
     pub entitlement: Option<EntitlementWrite<'a>>,
     pub history_id: &'a str,
     /// The event id or job that caused it.
@@ -137,6 +139,7 @@ fn change_stmts(c: &SubscriptionChange<'_>, now: i64) -> Vec<Stmt> {
                  first_paid_at = COALESCE(first_paid_at, ?), \
                  payment_country = COALESCE(payment_country, ?), \
                  mandate_method = COALESCE(?, mandate_method), \
+                 mandate_detail = CASE WHEN ? IS NULL THEN mandate_detail ELSE ? END, \
                  grace_until = CASE WHEN ? = 'grace' THEN grace_until ELSE NULL END \
                  WHERE id = ? AND rev = ?",
             vec![
@@ -146,6 +149,8 @@ fn change_stmts(c: &SubscriptionChange<'_>, now: i64) -> Vec<Stmt> {
                 opt_int(c.first_paid_at),
                 opt_text(c.payment_country),
                 opt_text(c.mandate_method.map(MandateMethod::as_str)),
+                opt_text(c.mandate_method.map(MandateMethod::as_str)),
+                opt_text(c.mandate_detail),
                 text(c.new_state.as_str()),
                 text(c.subscription_id),
                 SqlValue::Integer(c.expect_rev),

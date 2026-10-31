@@ -938,6 +938,7 @@ fn remote(status: &str, paid: u32, origin: PaymentOrigin) -> RemoteSubscription 
         payment: (paid > 0).then_some(PaymentInfo {
             method: Some(arena_proto::MandateMethod::Card),
             origin,
+            detail: None,
         }),
     }
 }
@@ -1562,6 +1563,7 @@ async fn the_sequence_restarts_each_financial_year_and_a_failed_issue_leaves_no_
             first_paid_at: None,
             payment_country: None,
             mandate_method: None,
+            mandate_detail: None,
             entitlement: None,
             history_id,
             cause: "test",
@@ -1705,4 +1707,350 @@ async fn a_store_that_fails_leaves_the_invoice_for_the_next_run() {
     assert_eq!(h.alerts(), 0);
     let out = render_once(&h.st, &MemoryStore::new()).await.unwrap();
     assert_eq!((out.rendered, out.notified, out.failed), (1, 1, 0));
+}
+
+// ---- Account -> Subscription (Story 10.8) ----
+
+const PHONE_B: &str = "+919812345678";
+
+/// A charge paid by `payment` (a Razorpay payment entity).
+fn paid_event(rid: &str, end_s: i64, payment: Value) -> Value {
+    json!({
+        "event": "subscription.charged",
+        "created_at": 1_800_000_100,
+        "payload": {
+            "subscription": {"entity": {"id": rid, "status": "active", "current_end": end_s}},
+            "payment": {"entity": payment},
+        },
+    })
+}
+
+fn card(last4: &str) -> Value {
+    json!({"id": "pay_1", "method": "card", "card": {"international": false, "last4": last4}})
+}
+
+impl Harness {
+    async fn plans(&self, access: &str, query: &str) -> Reply {
+        self.call(
+            "GET",
+            &format!("/v1/account/subscription{query}"),
+            None,
+            access,
+        )
+        .await
+    }
+
+    async fn invoice_list(&self, access: &str, query: &str) -> Reply {
+        self.call("GET", &format!("/v1/account/invoices{query}"), None, access)
+            .await
+    }
+
+    fn with_presigner(&self) {
+        use arena_cloud::presign::Presigner;
+        use arena_cloud::store::S3Config;
+        let p = Presigner::new(&S3Config {
+            endpoint: "http://127.0.0.1:9000".into(),
+            bucket: "arena-data".into(),
+            access_key_id: "AKID-SECRET".into(),
+            secret_access_key: "SAK-SECRET".into(),
+        });
+        assert!(self.st.presigner.set(p).is_ok());
+    }
+}
+
+#[tokio::test]
+async fn a_free_branch_reads_as_free_with_nothing_to_pay() {
+    let h = Harness::with_billing(true).await;
+    let a = h.owner(PHONE_A, "Pixel Arena Gaming").await;
+    let branch = h.cafe_done(&a).await;
+    h.choose_free(&a).await;
+    let r = h.plans(&a, "").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let b = &r.body["branches"];
+    assert_eq!(b.as_array().unwrap().len(), 1);
+    assert_eq!(b[0]["branch_id"], branch.as_str());
+    assert_eq!(b[0]["branch_name"], "Pixel Arena Gaming");
+    assert_eq!(
+        (b[0]["state"].as_str(), b[0]["tier"].as_str()),
+        (Some("free"), Some("free"))
+    );
+    assert_eq!(b[0]["prices"], json!([]));
+    assert!(b[0].get("payment_method").is_none() && b[0].get("cycle").is_none());
+}
+
+#[tokio::test]
+async fn a_paid_branch_shows_its_plan_add_ons_renewal_prices_and_payment_method() {
+    let (h, a, branch, _id) = Harness::pending_with(json!({
+        "tier": "basic", "cycle": "monthly", "billing_country": "IN",
+        "add_ons": {"devices_20": 2, "tunnel": 1},
+    }))
+    .await;
+    // Before the payment lands it is waiting for it.
+    let r = h.plans(&a, "").await;
+    assert_eq!(r.body["branches"][0]["state"], "pending");
+
+    let r = h
+        .send(
+            "evt_c",
+            &paid_event("sub_fake_001", PERIOD_END, card("4242")),
+        )
+        .await;
+    assert_eq!(r.body["status"], "applied", "{}", r.body);
+    let sub = h.only(&branch).await;
+    assert_eq!(sub.mandate_detail.as_deref(), Some("4242"));
+
+    let r = h.plans(&a, &format!("?branch={branch}")).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let p = &r.body["branches"][0];
+    assert_eq!(
+        (p["state"].as_str(), p["tier"].as_str()),
+        (Some("active"), Some("basic"))
+    );
+    assert_eq!(
+        (
+            p["cycle"].as_str(),
+            p["band"].as_str(),
+            p["currency"].as_str()
+        ),
+        (Some("monthly"), Some("IN"), Some("INR"))
+    );
+    assert_eq!(
+        p["add_ons"],
+        json!({"devices_20": 2, "tunnel": 1, "owner_login": 0})
+    );
+    assert_eq!(p["current_period_end"], PERIOD_END * 1000);
+    assert_eq!(p["gst_percent"], 18);
+    assert_eq!(
+        p["payment_method"],
+        json!({"method": "card", "detail": "4242"})
+    );
+    // Both cycles come from the subscription's own book; the current one equals what it renews at.
+    let quote = arena_cloud::subscription::quote_for(&h.db, &sub)
+        .await
+        .unwrap();
+    let prices = p["prices"].as_array().unwrap();
+    assert_eq!(prices.len(), 2);
+    assert_eq!(prices[0]["cycle"], "monthly");
+    assert_eq!(prices[0]["amount_minor"], quote.amount_minor);
+    assert_eq!(prices[0]["tax_minor"], quote.tax_minor);
+    assert_eq!(prices[0]["total_minor"], quote.total_minor);
+    assert_eq!(prices[1]["cycle"], "yearly");
+    assert_eq!(
+        prices[1]["tax_minor"].as_i64().unwrap() * 100 / 18 / 100,
+        prices[1]["amount_minor"].as_i64().unwrap() / 100,
+        "GST is 18% of the yearly amount"
+    );
+}
+
+#[tokio::test]
+async fn a_bank_mandate_names_its_bank_and_a_upi_one_names_nothing() {
+    let (h, a, branch, _id) = Harness::pending().await;
+    let mandate = json!({"id": "pay_2", "method": "emandate", "bank": "HDFC"});
+    h.send("evt_1", &paid_event("sub_fake_001", PERIOD_END, mandate))
+        .await;
+    let r = h.plans(&a, "").await;
+    assert_eq!(
+        r.body["branches"][0]["payment_method"],
+        json!({"method": "emandate", "detail": "HDFC"})
+    );
+    // The renewal is paid by UPI: the earlier bank's name must not stay on the new method.
+    let upi = json!({"id": "pay_3", "method": "upi", "vpa": "someone@okbank"});
+    h.send(
+        "evt_2",
+        &paid_event("sub_fake_001", PERIOD_END + 30 * 86_400, upi),
+    )
+    .await;
+    let r = h.plans(&a, "").await;
+    assert_eq!(
+        r.body["branches"][0]["payment_method"],
+        json!({"method": "upi"})
+    );
+    assert_eq!(h.only(&branch).await.mandate_detail, None);
+    assert!(!r.body.to_string().contains("someone@okbank"));
+}
+
+#[tokio::test]
+async fn every_state_of_the_subscription_reads_in_the_owners_words() {
+    let (h, a, _branch, _id) = Harness::pending().await;
+    h.charge("evt_1", PERIOD_END).await;
+    let set = |h: &Harness, sql: &str| h.sql(&format!("UPDATE subscriptions SET {sql}"));
+    let read = |r: Reply| r.body["branches"][0]["state"].as_str().unwrap().to_owned();
+    assert_eq!(read(h.plans(&a, "").await), "active");
+    set(&h, "cancel_at_period_end = 1");
+    assert_eq!(read(h.plans(&a, "").await), "cancels");
+    set(
+        &h,
+        "cancel_at_period_end = 0, state = 'renewal_needs_approval'",
+    );
+    assert_eq!(read(h.plans(&a, "").await), "needs_approval");
+    set(&h, "state = 'grace'");
+    assert_eq!(read(h.plans(&a, "").await), "grace");
+    set(&h, "state = 'lapsed'");
+    assert_eq!(read(h.plans(&a, "").await), "lapsed");
+    set(&h, "state = 'pending_review'");
+    let r = h.plans(&a, "").await;
+    assert_eq!(r.body["branches"][0]["state"], "pending_review");
+    assert!(
+        r.body["branches"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("checking your payment")
+    );
+    // A subscription that is over leaves the branch on Free.
+    set(&h, "state = 'cancelled'");
+    assert_eq!(read(h.plans(&a, "").await), "free");
+}
+
+#[tokio::test]
+async fn invoices_list_newest_first_filter_by_branch_and_year_and_credit_notes_are_negative() {
+    let (h, a, branch, _id) = Harness::pending().await;
+    h.charge("evt_1", PERIOD_END).await;
+    h.charge("evt_2", PERIOD_END + 30 * 86_400).await;
+    h.sql(
+        "INSERT INTO billing_events (id, razorpay_event_id, type, payload_hash, source, received_at) \n         VALUES ('ev_cn', 'evt_cn', 'refund.processed', 'h', 'webhook', 1);",
+    );
+    h.sql(
+        "INSERT INTO billing_invoices (id, number, fy, kind, seq, tenant_id, branch_id, \
+         subscription_id, billing_event_id, issued_at, period_start, period_end, band, currency, \
+         lines_json, subtotal_minor, cgst_minor, sgst_minor, igst_minor, total_minor, sac, \
+         buyer_name, seller_name, seller_address, seller_gstin, original_number) \
+         SELECT 'cn1', 'A360/2026-27/CN000001', fy, 'credit_note', 1, tenant_id, branch_id, \
+         subscription_id, 'ev_cn', issued_at + 5, period_start, period_end, band, currency, \
+         lines_json, subtotal_minor, cgst_minor, sgst_minor, igst_minor, total_minor, sac, \
+         buyer_name, seller_name, seller_address, seller_gstin, number \
+         FROM billing_invoices WHERE seq = 1",
+    );
+    let r = h.invoice_list(&a, "").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let rows = r.body["invoices"].as_array().unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|i| i["number"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "A360/2026-27/CN000001",
+            "A360/2026-27/000002",
+            "A360/2026-27/000001"
+        ]
+    );
+    assert_eq!(r.body["years"], json!(["2026-27"]));
+    let cn = &rows[0];
+    assert_eq!(
+        (cn["kind"].as_str(), cn["original_number"].as_str()),
+        (Some("credit_note"), Some("A360/2026-27/000001"))
+    );
+    assert_eq!(
+        cn["total_minor"].as_i64().unwrap(),
+        -rows[2]["total_minor"].as_i64().unwrap()
+    );
+    assert!(rows[1]["total_minor"].as_i64().unwrap() > 0);
+    assert_eq!(rows[1]["branch_name"], "Pixel Arena Gaming");
+    assert_eq!(rows[1]["branch_id"], branch.as_str());
+    assert_eq!(rows[1]["pdf_ready"], false);
+
+    let r = h
+        .invoice_list(&a, &format!("?branch={branch}&fy=2026-27"))
+        .await;
+    assert_eq!(r.body["invoices"].as_array().unwrap().len(), 3);
+    let r = h.invoice_list(&a, "?fy=2025-26").await;
+    assert_eq!(r.body["invoices"], json!([]));
+    assert_eq!(
+        r.body["years"],
+        json!(["2026-27"]),
+        "the filter list does not shrink with the filter"
+    );
+    for bad in ["?fy=26-27", "?fy=2026-27%27OR1"] {
+        let r = h.invoice_list(&a, bad).await;
+        assert_eq!((r.status, r.code()), (400, "BAD_REQUEST"), "{bad}");
+    }
+}
+
+#[tokio::test]
+async fn a_pdf_link_is_signed_and_short_lived_and_only_exists_once_rendered() {
+    let (h, a, _branch, _id) = Harness::pending().await;
+    h.charge("evt_1", PERIOD_END).await;
+    let id =
+        h.db.invoice("A360/2026-27/000001")
+            .await
+            .unwrap()
+            .unwrap()
+            .id;
+    let path = format!("/v1/account/invoices/{id}/pdf");
+    // Not signed in.
+    assert_eq!(h.call("GET", &path, None, "").await.status, 401);
+    h.with_presigner();
+    // Not rendered yet.
+    let r = h.call("GET", &path, None, &a).await;
+    assert_eq!((r.status, r.code()), (404, "NOT_FOUND"));
+
+    render_once(&h.st, &MemoryStore::new()).await.unwrap();
+    let r = h.call("GET", &path, None, &a).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let url = r.body["url"].as_str().unwrap();
+    assert!(
+        url.contains("billing/invoices/2026-27/A360-2026-27-000001.pdf"),
+        "{url}"
+    );
+    assert!(
+        url.contains("X-Amz-Signature") && url.contains("X-Amz-Expires=600"),
+        "{url}"
+    );
+    assert_eq!(r.body["expires_in_s"], 600);
+    assert!(!url.contains("SAK-SECRET"));
+    let list = h.invoice_list(&a, "").await;
+    assert_eq!(list.body["invoices"][0]["pdf_ready"], true);
+}
+
+#[tokio::test]
+async fn another_tenants_branch_invoice_or_plan_answers_forbidden_and_reads_nothing() {
+    let (h, a, branch, _id) = Harness::pending().await;
+    h.charge("evt_1", PERIOD_END).await;
+    h.with_presigner();
+    render_once(&h.st, &MemoryStore::new()).await.unwrap();
+    let id =
+        h.db.invoice("A360/2026-27/000001")
+            .await
+            .unwrap()
+            .unwrap()
+            .id;
+
+    let b = h.owner(PHONE_B, "Other Cafe").await;
+    let other = h.cafe_done(&b).await;
+    assert_ne!(other, branch);
+    for path in [
+        format!("/v1/account/subscription?branch={branch}"),
+        format!("/v1/account/invoices?branch={branch}"),
+        format!("/v1/account/invoices/{id}/pdf"),
+        "/v1/account/invoices/no-such-invoice/pdf".to_owned(),
+    ] {
+        let r = h.call("GET", &path, None, &b).await;
+        assert_eq!(
+            (r.status, r.code()),
+            (403, "FORBIDDEN"),
+            "{path}: {}",
+            r.body
+        );
+    }
+    // Their own lists hold only their own branch and no invoice of the first café.
+    let r = h.plans(&b, "").await;
+    let ids: Vec<_> = r.body["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x["branch_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, [other.as_str()]);
+    let r = h.invoice_list(&b, "").await;
+    assert_eq!(
+        (r.body["invoices"].clone(), r.body["years"].clone()),
+        (json!([]), json!([]))
+    );
+    // And the first owner still sees theirs.
+    assert_eq!(
+        h.invoice_list(&a, "").await.body["invoices"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 }

@@ -76,13 +76,16 @@ pub struct Invoice {
     pub pdf_key: Option<String>,
     pub pdf_at: Option<i64>,
     pub notified_at: Option<i64>,
+    /// The number of the invoice a credit note reverses.
+    pub original_number: Option<String>,
 }
 
 const COLUMNS: &str = "i.id, i.number, i.fy, i.kind, i.seq, i.tenant_id, i.branch_id, \
      i.subscription_id, i.billing_event_id, i.issued_at, i.period_start, i.period_end, i.band, \
      i.currency, i.lines_json, i.subtotal_minor, i.cgst_minor, i.sgst_minor, i.igst_minor, \
      i.total_minor, i.sac, i.buyer_name, i.buyer_gstin, i.buyer_state_code, i.seller_name, \
-     i.seller_address, i.seller_gstin, i.note, i.pdf_key, i.pdf_at, i.notified_at";
+     i.seller_address, i.seller_gstin, i.note, i.pdf_key, i.pdf_at, i.notified_at, \
+     i.original_number";
 
 fn invoice_from(r: &[SqlValue]) -> Result<Invoice, ControlError> {
     Ok(Invoice {
@@ -117,6 +120,7 @@ fn invoice_from(r: &[SqlValue]) -> Result<Invoice, ControlError> {
         pdf_key: col_opt_text(r, 28)?,
         pdf_at: col_opt_int(r, 29)?,
         notified_at: col_opt_int(r, 30)?,
+        original_number: col_opt_text(r, 31)?,
     })
 }
 
@@ -233,5 +237,58 @@ impl ControlDb {
             .expect(1),
         ])
         .await
+    }
+}
+
+impl ControlDb {
+    /// The invoice with this id.
+    pub async fn invoice_by_id(&self, id: &str) -> Result<Option<Invoice>, ControlError> {
+        let sql = format!("SELECT {COLUMNS} FROM billing_invoices i WHERE i.id = ?");
+        let rows = self.query(&sql, vec![text(id)]).await?;
+        rows.first().map(|r| invoice_from(r)).transpose()
+    }
+
+    /// The invoices and credit notes of a tenant, newest first, for one branch and one financial
+    /// year when given (Story 10.8). `limit` caps the list.
+    pub async fn invoices_of_tenant(
+        &self,
+        tenant_id: &str,
+        branch_id: Option<&str>,
+        fy: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<Invoice>, ControlError> {
+        let sql = format!(
+            "SELECT {COLUMNS} FROM billing_invoices i WHERE i.tenant_id = ? \
+             AND (? IS NULL OR i.branch_id = ?) AND (? IS NULL OR i.fy = ?) \
+             ORDER BY i.issued_at DESC, i.id DESC LIMIT ?"
+        );
+        let rows = self
+            .query(
+                &sql,
+                vec![
+                    text(tenant_id),
+                    opt_text(branch_id),
+                    opt_text(branch_id),
+                    opt_text(fy),
+                    opt_text(fy),
+                    SqlValue::Integer(i64::from(limit)),
+                ],
+            )
+            .await?;
+        rows.iter().map(|r| invoice_from(r)).collect()
+    }
+
+    /// The financial years a tenant has invoices in, newest first.
+    pub async fn invoice_years_of_tenant(
+        &self,
+        tenant_id: &str,
+    ) -> Result<Vec<String>, ControlError> {
+        let rows = self
+            .query(
+                "SELECT DISTINCT fy FROM billing_invoices WHERE tenant_id = ? ORDER BY fy DESC",
+                vec![text(tenant_id)],
+            )
+            .await?;
+        rows.iter().map(|r| col_text(r, 0)).collect()
     }
 }

@@ -2,7 +2,7 @@
 title: 'Story 10.6: A paid licence reaches the Hub within one heartbeat and staff see the plan'
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: '3f614bad93eb1820589714abe09b7da5536a1111'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -70,3 +70,7 @@ deferred: []
 Status: review. Baseline-failing tests (they fail on Windows or are stale before this story): cloud `backup::a_hung_run_times_out_with_its_own_code`, `binary::unreachable_at_start…`, `price_book::a_draft_is_copied_edited…` (ordering), tasks `heartbeat::trusted_time_is_cloud_time_plus_monotonic_elapsed` (`Instant` underflow on a recently booted Windows PC) and `printer::lan::a_printer_that_stops_reading_times_out`, replay `replaying_the_seeded_log…` (no library rows seeded), api `ui_auth::lock_and_unlock…` (log capture race; passes alone), `arena-e2e` and kiosk-svc `discovery` tests (Unix-only); `check:generated` is stale only until the regenerated types are committed.
 
 Behaviour changes to know: Basic now carries `standby` and `kiosk_orders` (a standby code is `TIER_LOCKED` only on Free), and Basic uploads every 900 s instead of 300 s (presign hourly limit 16). Residual risks: `licence.user_cap` for an uncapped tier is `u32::MAX`; a cycle change alone does not refresh the System line until the next snapshot load; the "within 70 s" claim is covered by the 60 s live interval and a test of the swap at the next heartbeat, not a wall-clock measurement on Android hardware.
+
+## Code Review Result
+
+Reviewed 2026-10-31 against the intent contract: no blocking findings. fmt and clippy clean; proto/core/cloud/tasks tests pass except the documented baseline failure (`trusted_time_is_cloud_time_plus_monotonic_elapsed`). The hub `playwright.kitchen.config.ts` `process` type error predates this story. Non-blocking: a cycle change alone does not refresh the System line until the next snapshot load.

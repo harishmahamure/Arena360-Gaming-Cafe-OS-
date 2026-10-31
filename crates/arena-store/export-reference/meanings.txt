@@ -487,6 +487,9 @@ stock_moves.order_id: The bill the movement belongs to, if any.
 stock_moves.note: Free text note added by staff.
 stock_moves.elevated_by: Id of the manager who approved the movement, when approval was needed.
 stock_moves.placement_id: The id of the order placement that caused the movement, if any.
+standby_links: The paired device the owner linked as this branch's standby Hub; only that device may take the replication snapshot or follow the Hub live. It stays on this Hub and is not copied to the standby.
+standby_links.device_id: Id of the paired device linked as the standby.
+standby_links.linked_at: When the device was linked as the standby.
 trusted_clock: A single row used to tell the true time from the cloud, even if the PC's clock is changed.
 trusted_clock.id: Always 1; the table has only one row.
 upload_cursor: A single row that remembers how much of the audit log has been uploaded to the cloud.

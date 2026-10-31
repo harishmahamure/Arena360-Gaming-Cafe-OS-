@@ -2,7 +2,7 @@
 title: 'Story 9.20: The standby keeps its own catalogue, media and licence and shows its status'
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: '61219ba6'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -87,7 +87,7 @@ deferred:
 
 ## Review Triage Log
 
-- Implementation pass only; the independent code review is the next step (story status `review`).
+- Code review (2026-10-31): no blocking findings in the story's code. Fixed a failing `arena-store` export_reference test left by Story 9.19 (`standby_links` had no data-dictionary entry); added the meanings and regenerated `docs/export-format/reference.md`. Clippy, fmt and the unit tests for the touched crates are green.
 - Verified: `cargo clippy --workspace --all-targets -- -D warnings` clean except `arena-e2e` and `arena-kiosk-svc` (do not build on Windows on the baseline); `cargo fmt --check`; tests for arena-proto, arena-store, arena-tasks (progress, catalogue-on-standby, licence task), arena-api (observer, `ui_standby`, `/healthz`, `tests/replicate.rs` incl. the report reaching the main Hub), arena-cloud (`tests/pair.rs` standby licence and catalogue access).
 - Known, not from this story: `arena-replay` `replaying_the_seeded_log_reproduces_branch_and_settings` and `arena-cloud` `binary::unreachable_at_start_retries_then_exits_1...` fail on the baseline (see Story 9.19).
 - Scope: lag in rows only knows the main Hub's log end at `ready` and from each live batch, so rows committed on the main Hub during a long catch-up show on the next frame, not before.

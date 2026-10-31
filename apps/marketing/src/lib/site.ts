@@ -42,3 +42,13 @@ export function routeOf(file: string): string | null {
  * with no audio track is cleared for use; the still cover and then solid `bg` show meanwhile.
  */
 export const HERO_VIDEO: readonly { src: string; type: string }[] = [];
+
+/**
+ * Where the marketing media (demo videos, posters, captions, transcripts) is served from: the
+ * shared `marketing/` prefix of the R2 bucket, in front of Cloudflare. One origin for production
+ * and staging, so a staging build previews the same media.
+ */
+export const MEDIA_ORIGIN = "https://media.arena360.cloud";
+
+/** The URL of a file under the shared `marketing/` prefix. */
+export const mediaUrl = (path: string) => `${MEDIA_ORIGIN}/marketing/${path}`; // i18n-ignore

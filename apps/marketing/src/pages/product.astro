@@ -1,0 +1,82 @@
+---
+import { LinkButton, t } from "@arena/ui";
+import ProductVideo from "../components/ProductVideo.svelte";
+import StepArt from "../components/StepArt.astro";
+import Layout from "../layouts/Layout.astro";
+import { PRODUCTS, demoMedia } from "../lib/product";
+import { startUrl } from "../lib/site";
+import "../styles/product.css";
+---
+
+<Layout title={t("site.product.title")} description={t("site.product.description")}>
+  <div class="product">
+    <header class="product-intro">
+      <h1>{t("site.product.heading")}</h1>
+      <p class="product-lede">{t("site.product.lede")}</p>
+      <nav aria-label={t("site.product.jump")}>
+        <ul class="product-jump">
+          {PRODUCTS.map((product) => (
+            <li>
+              <a href={`#${product.id}`}>{t(product.jump)}</a>
+            </li>
+          ))}
+        </ul>
+      </nav>
+    </header>
+
+    {PRODUCTS.map((product) => {
+      const name = t(product.title);
+      return (
+        <section class="product-section" id={product.id} aria-labelledby={`${product.id}-title`}>
+          <h2 id={`${product.id}-title`}>{name}</h2>
+          <p class="product-lede">{t(product.lede)}</p>
+          <ProductVideo
+            client:load
+            product={product.id}
+            name={name}
+            media={demoMedia(product.id)}
+          />
+          <h3 class="product-steps-title">{t("site.product.steps")}</h3>
+          <ol class="product-steps">
+            {product.steps.map((step, i) => (
+              <li class="product-step">
+                <StepArt art={step.art} />
+                <p class="step-number">{t("site.product.step", { n: i + 1 })}</p>
+                <h4>{t(step.title)}</h4>
+                <p>{t(step.body)}</p>
+              </li>
+            ))}
+          </ol>
+          {product.note && <p class="product-note">{t(product.note)}</p>}
+        </section>
+      );
+    })}
+
+    <section class="product-band" aria-labelledby="product-start">
+      <div>
+        <h2 id="product-start">{t("site.product.cta.title")}</h2>
+        <p>{t("site.product.cta.body")}</p>
+      </div>
+      <LinkButton href={startUrl()} label="site.cta.get_started" size="lg" />
+    </section>
+  </div>
+  <script is:inline>
+    // The demo videos are media: they stay dark in light mode (like the Home hero), and only
+    // High contrast swaps them for its own tokens.
+    (function () {
+      var html = document.documentElement;
+      var sync = function () {
+        var theme = html.getAttribute("data-theme") === "hc" ? "hc" : "dark";
+        document.querySelectorAll(".product-media").forEach(function (el) {
+          el.setAttribute("data-theme", theme);
+        });
+      };
+      sync();
+      new MutationObserver(sync).observe(html, {
+        attributes: true,
+        attributeFilter: ["data-theme"],
+      });
+      document.addEventListener("DOMContentLoaded", sync);
+    })();
+  </script>
+</Layout>

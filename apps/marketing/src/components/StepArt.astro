@@ -1,0 +1,128 @@
+---
+import type { Art } from "../lib/product";
+
+// A small illustration above a walkthrough step. Decorative: the step's title and text carry the
+// meaning, so it is hidden from assistive tech. Drawn on theme tokens only.
+interface Props {
+  art: Art;
+}
+const { art } = Astro.props;
+---
+
+<svg class="step-art" viewBox="0 0 160 96" aria-hidden="true" focusable="false">
+  <rect x="1" y="1" width="158" height="94" rx="12" class="art-bg"></rect>
+  {art === "install" && (
+    <>
+      <rect x="36" y="18" width="88" height="48" rx="6" class="art-panel"></rect>
+      <rect x="68" y="66" width="24" height="8" class="art-panel"></rect>
+      <path d="M80 28v22m-9-9 9 9 9-9" class="art-stroke"></path>
+      <rect x="52" y="80" width="56" height="4" rx="2" class="art-panel"></rect>
+    </>
+  )}
+  {art === "pair" && (
+    <>
+      <rect x="18" y="26" width="52" height="38" rx="5" class="art-panel"></rect>
+      <rect x="90" y="26" width="52" height="38" rx="5" class="art-panel"></rect>
+      <path d="M72 45h16" class="art-stroke art-dash"></path>
+      <rect x="28" y="40" width="6" height="10" rx="2" class="art-accent"></rect>
+      <rect x="38" y="40" width="6" height="10" rx="2" class="art-accent"></rect>
+      <rect x="48" y="40" width="6" height="10" rx="2" class="art-accent"></rect>
+      <circle cx="116" cy="45" r="8" class="art-ok"></circle>
+    </>
+  )}
+  {art === "floor" && (
+    <>
+      <rect x="16" y="16" width="40" height="28" rx="5" class="art-ok"></rect>
+      <rect x="60" y="16" width="40" height="28" rx="5" class="art-panel"></rect>
+      <rect x="104" y="16" width="40" height="28" rx="5" class="art-warn"></rect>
+      <rect x="16" y="50" width="40" height="28" rx="5" class="art-panel"></rect>
+      <rect x="60" y="50" width="40" height="28" rx="5" class="art-ok"></rect>
+      <rect x="104" y="50" width="40" height="28" rx="5" class="art-line"></rect>
+    </>
+  )}
+  {art === "bill" && (
+    <>
+      <rect x="44" y="12" width="72" height="72" rx="6" class="art-panel"></rect>
+      <path d="M56 28h48M56 40h48M56 52h30" class="art-stroke"></path>
+      <rect x="56" y="62" width="48" height="12" rx="6" class="art-accent"></rect>
+    </>
+  )}
+  {art === "offline" && (
+    <>
+      <path d="M40 64a56 56 0 0 1 80 0M54 74a36 36 0 0 1 52 0" class="art-stroke"></path>
+      <circle cx="80" cy="82" r="4" class="art-accent"></circle>
+      <path d="M44 20l72 56" class="art-stroke art-alert"></path>
+    </>
+  )}
+  {art === "screen" && (
+    <>
+      <rect x="22" y="14" width="116" height="68" rx="6" class="art-panel"></rect>
+      <rect x="62" y="30" width="36" height="8" rx="4" class="art-accent"></rect>
+      <path d="M52 50h56M62 60h36" class="art-stroke"></path>
+      <path d="M74 20h12" class="art-stroke"></path>
+    </>
+  )}
+  {art === "login" && (
+    <>
+      <rect x="40" y="16" width="80" height="64" rx="8" class="art-panel"></rect>
+      <rect x="52" y="30" width="56" height="10" rx="5" class="art-line"></rect>
+      <rect x="52" y="46" width="56" height="10" rx="5" class="art-line"></rect>
+      <rect x="64" y="62" width="32" height="10" rx="5" class="art-accent"></rect>
+    </>
+  )}
+  {art === "plan" && (
+    <>
+      <rect x="14" y="20" width="40" height="56" rx="6" class="art-panel"></rect>
+      <rect x="60" y="20" width="40" height="56" rx="6" class="art-accent"></rect>
+      <rect x="106" y="20" width="40" height="56" rx="6" class="art-panel"></rect>
+      <path d="M22 34h24M68 34h24M114 34h24" class="art-stroke"></path>
+    </>
+  )}
+  {art === "hud" && (
+    <>
+      <rect x="14" y="12" width="132" height="72" rx="6" class="art-line"></rect>
+      <rect x="82" y="16" width="60" height="18" rx="9" class="art-panel"></rect>
+      <circle cx="94" cy="25" r="4" class="art-ok"></circle>
+      <path d="M104 25h28" class="art-stroke"></path>
+    </>
+  )}
+  {art === "console" && (
+    <>
+      <rect x="30" y="34" width="100" height="26" rx="6" class="art-panel"></rect>
+      <circle cx="46" cy="47" r="4" class="art-ok"></circle>
+      <path d="M62 47h52" class="art-stroke"></path>
+      <rect x="52" y="64" width="56" height="6" rx="3" class="art-line"></rect>
+    </>
+  )}
+  {art === "timer" && (
+    <>
+      <circle cx="80" cy="48" r="30" class="art-panel"></circle>
+      <path d="M80 28v20l14 8" class="art-stroke"></path>
+      <path d="M118 22l8-8m-4 20 12-2" class="art-stroke art-alert"></path>
+    </>
+  )}
+  {art === "phone" && (
+    <>
+      <rect x="58" y="8" width="44" height="80" rx="8" class="art-panel"></rect>
+      <rect x="66" y="22" width="28" height="18" rx="4" class="art-accent"></rect>
+      <rect x="66" y="46" width="28" height="10" rx="4" class="art-line"></rect>
+      <rect x="66" y="62" width="28" height="10" rx="4" class="art-line"></rect>
+    </>
+  )}
+  {art === "chart" && (
+    <>
+      <path d="M24 78h112" class="art-stroke"></path>
+      <rect x="34" y="52" width="18" height="26" class="art-panel"></rect>
+      <rect x="62" y="36" width="18" height="42" class="art-accent"></rect>
+      <rect x="90" y="46" width="18" height="32" class="art-panel"></rect>
+      <rect x="118" y="24" width="18" height="54" class="art-ok"></rect>
+    </>
+  )}
+  {art === "sync" && (
+    <>
+      <rect x="18" y="30" width="36" height="36" rx="6" class="art-panel"></rect>
+      <rect x="106" y="30" width="36" height="36" rx="6" class="art-panel"></rect>
+      <path d="M62 42h36m-8-8 8 8-8 8M98 56H62m8-8-8 8 8 8" class="art-stroke"></path>
+    </>
+  )}
+</svg>

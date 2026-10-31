@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { routeOf } from "../apps/marketing/src/lib/site.ts";
+import { MEDIA_ORIGIN, mediaUrl, routeOf } from "../apps/marketing/src/lib/site.ts";
 import { PRICING_SNAPSHOT } from "../packages/ui/src/pricing.snapshot.ts";
 import { TIERS_SNAPSHOT } from "../packages/ui/src/tiers.snapshot.ts";
 import { messages } from "../packages/ui/src/messages/index.js";
@@ -138,4 +138,12 @@ test("every amount on Pricing is a price-book amount and none is typed into the 
   } finally {
     rmSync(out, { recursive: true, force: true });
   }
+});
+
+test("marketing media is served from the shared marketing/ prefix of the media origin", () => {
+  assert.equal(
+    mediaUrl("product/hub/poster.jpg"),
+    "https://media.arena360.cloud/marketing/product/hub/poster.jpg",
+  );
+  assert.ok(mediaUrl("x").startsWith(MEDIA_ORIGIN + "/marketing/"));
 });

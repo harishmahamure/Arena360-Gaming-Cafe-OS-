@@ -3,7 +3,7 @@ import { PHONE, THEMES, open } from "./helpers";
 
 // The pseudo-locale build (every string accented and 30% longer): nothing scrolls sideways at 390 px.
 
-for (const path of ["/", "/pricing", "/no-such-page"]) {
+for (const path of ["/", "/pricing", "/product", "/no-such-page"]) {
   for (const theme of THEMES) {
     test(`${path} in ${theme} has no horizontal scroll with strings 30% longer`, async ({
       page,

@@ -1,0 +1,275 @@
+/* Product: an overview with an in-page link list, then one section each for Hub, Kiosk, Console
+   and Owner (demo video, then a 3-5 step illustrated walkthrough). The video frame is media: it
+   keeps the dark tokens in every colour mode. Steps stack on phones. */
+
+.product {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-9);
+  min-width: 0;
+}
+
+.product h1,
+.product h2,
+.product h3,
+.product h4,
+.product p {
+  margin: 0;
+}
+
+.product-intro {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-5);
+}
+
+.product-lede {
+  max-width: 64ch;
+}
+
+.product-jump {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.product-jump a {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  min-height: var(--space-touch-min);
+  padding: var(--space-2) var(--space-5);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.product-section {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-5);
+  min-width: 0;
+  scroll-margin-block-start: calc(var(--space-web-header-height-phone) + var(--space-4));
+}
+
+.product-section h2 {
+  font-size: var(--type-kiosk-title-size);
+  font-weight: var(--type-kiosk-title-weight);
+  line-height: var(--type-kiosk-title-line-height);
+}
+
+/* ── The demo video ──────────────────────────────────────────────────────────────────── */
+.product-media {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 960px;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background-color: var(--bg);
+  color: var(--text);
+}
+
+.product-media video,
+.product-still {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background-color: var(--bg);
+  object-fit: cover;
+}
+
+.product-still {
+  position: relative;
+  display: grid;
+  place-items: end start;
+}
+
+.product-still img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.product-unavailable {
+  position: relative;
+  box-sizing: border-box;
+  margin: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background-color: var(--surface);
+  color: var(--text);
+}
+
+.product-media figcaption {
+  padding: var(--space-3) var(--space-4);
+  border-block-start: 1px solid var(--line);
+}
+
+/* Beats the light-mode link colour in site.css: the frame is dark in every mode. */
+main .product-media figcaption a:not(.link-button) {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--space-touch-min);
+  color: var(--text);
+}
+
+/* ── The walkthrough ─────────────────────────────────────────────────────────────────── */
+.product-steps-title {
+  font-size: var(--type-kiosk-label-size);
+  font-weight: var(--type-kiosk-label-weight);
+  letter-spacing: var(--type-kiosk-label-letter-spacing);
+  text-transform: uppercase;
+}
+
+.product-steps {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.product-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  box-sizing: border-box;
+  min-width: 0;
+  padding: var(--space-web-card-padding-phone);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background-color: var(--card-background);
+}
+
+.product-step h4 {
+  font-size: var(--type-kiosk-body-size);
+  font-weight: var(--type-kiosk-title-weight);
+  line-height: var(--type-kiosk-body-line-height);
+}
+
+.product-step .step-number {
+  color: var(--text-muted);
+  font-size: var(--type-kiosk-label-size);
+  font-weight: var(--type-kiosk-label-weight);
+  letter-spacing: var(--type-kiosk-label-letter-spacing);
+  text-transform: uppercase;
+}
+
+[data-theme="hc"] .product-step .step-number {
+  color: var(--text);
+}
+
+.product-note {
+  max-width: 64ch;
+  padding: var(--space-4) var(--space-5);
+  border-inline-start: 4px solid var(--accent);
+  background-color: var(--surface);
+}
+
+.step-art {
+  width: 100%;
+  max-width: 160px;
+  height: auto;
+}
+
+.step-art .art-bg {
+  fill: var(--surface);
+  stroke: var(--line);
+}
+
+.step-art .art-panel {
+  fill: var(--surface-2);
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+}
+
+.step-art .art-line {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+}
+
+.step-art .art-accent {
+  fill: var(--accent);
+}
+
+.step-art .art-ok {
+  fill: var(--ok);
+}
+
+.step-art .art-warn {
+  fill: var(--warning);
+}
+
+.step-art .art-stroke {
+  fill: none;
+  stroke: var(--text);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.step-art .art-dash {
+  stroke-dasharray: 3 5;
+}
+
+.step-art .art-alert {
+  stroke: var(--danger);
+}
+
+/* ── The closing band ────────────────────────────────────────────────────────────────── */
+.product-band {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-5);
+  padding: var(--space-web-card-padding-phone);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background-color: var(--surface);
+}
+
+.product-band h2 {
+  font-size: var(--type-kiosk-title-size);
+  font-weight: var(--type-kiosk-title-weight);
+  line-height: var(--type-kiosk-title-line-height);
+}
+
+@media (min-width: 768px) {
+  .product-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .product-step {
+    padding: var(--space-web-card-padding);
+  }
+
+  .product-section {
+    scroll-margin-block-start: calc(var(--space-web-header-height) + var(--space-4));
+  }
+
+  .product-band {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--space-web-card-padding);
+  }
+}
+
+@media (min-width: 1024px) {
+  .product-steps {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}

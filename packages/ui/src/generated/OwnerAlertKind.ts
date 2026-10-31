@@ -14,4 +14,6 @@ export type OwnerAlertKind =
   | "branch_not_uploading"
   | "branch_online"
   | "standby_forced"
-  | "invoice_ready";
+  | "invoice_ready"
+  | "renewal_needs_approval"
+  | "renewal_grace";

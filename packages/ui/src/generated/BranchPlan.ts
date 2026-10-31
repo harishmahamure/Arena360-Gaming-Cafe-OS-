@@ -54,4 +54,9 @@ export type BranchPlan = {
    * A change of plan that has not taken effect yet.
    */
   pending_change?: PendingPlanChange;
+  /**
+   * When the grace period of an unpaid renewal ends, in epoch milliseconds (Story 10.11);
+   * present only in `grace`.
+   */
+  grace_until?: number;
 };

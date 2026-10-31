@@ -34,6 +34,8 @@ struct Harness {
     app: axum::Router,
     db: Arc<ControlDb>,
     st: Arc<AuthState>,
+    /// The cloud's clock, in epoch milliseconds.
+    clock: Arc<AtomicI64>,
     _dir: tempfile::TempDir,
 }
 
@@ -68,7 +70,8 @@ impl Harness {
         db.migrate(T0).await.unwrap();
         let db = Arc::new(db);
         let now = Arc::new(AtomicI64::new(T0));
-        let clock: Clock = Arc::new(move || now.load(Ordering::SeqCst));
+        let ticking = Arc::clone(&now);
+        let clock: Clock = Arc::new(move || ticking.load(Ordering::SeqCst));
         let cfg = AuthConfig {
             pepper: PEPPER.as_bytes().to_vec(),
             web_origins: vec![ORIGIN.to_owned()],
@@ -95,6 +98,7 @@ impl Harness {
             app,
             db,
             st,
+            clock: now,
             _dir: dir,
         }
     }
@@ -1571,6 +1575,7 @@ async fn the_sequence_restarts_each_financial_year_and_a_failed_issue_leaves_no_
             audit: None,
             close_task_kind: None,
             plan_change: None,
+            lifecycle: Default::default(),
         };
         let event_id = format!("evt_fy_{n}");
         let record = |id: &'static str| EventRecord {
@@ -3056,4 +3061,523 @@ async fn an_abandoned_method_change_keeps_the_previous_method_and_a_big_renewal_
     let r = h.method(&branch, &a, json!({"rev": rev - 5})).await;
     assert_eq!((r.status, r.code()), (409, "STALE"), "{}", r.body);
     assert_eq!(h.fake().mandates().len(), 1);
+}
+
+// ---- Story 10.11: renewals that need approval go to grace, then lapse, on cloud time ----
+
+use arena_cloud::lifecycle::{GRACE_DAYS, sweep_once};
+
+const DAY_MS: i64 = 86_400_000;
+/// The end of the first paid period, in epoch milliseconds.
+const END_MS: i64 = PERIOD_END * 1000;
+
+fn sub_event(kind: &str, rid: &str) -> Value {
+    json!({
+        "event": kind,
+        "created_at": 1_800_000_100,
+        "payload": {"subscription": {"entity": {"id": rid, "status": "pending"}}},
+    })
+}
+
+impl Harness {
+    fn set_now(&self, ms: i64) {
+        self.clock.store(ms, Ordering::SeqCst);
+        // Heartbeats are limited to one per 5 s per Hub and these steps jump days.
+        self.sql("DELETE FROM rate_limits");
+    }
+
+    fn alerts_of(&self, kind: &str) -> i64 {
+        self.count(&format!(
+            "SELECT COUNT(*) FROM owner_alerts WHERE kind = '{kind}'"
+        ))
+    }
+
+    async fn state_of(&self, branch: &str) -> SubscriptionState {
+        self.only(branch).await.state
+    }
+
+    /// The tier the branch's next heartbeat licence carries.
+    async fn licence_tier(&self, token: &str) -> arena_proto::Tier {
+        self.sql("DELETE FROM rate_limits");
+        let r = self.heartbeat(token).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        verify(
+            r.body["licence"].as_str().unwrap(),
+            DEV_LICENCE_VERIFY_KEYS,
+            self.clock.load(Ordering::SeqCst),
+        )
+        .unwrap()
+        .tier
+    }
+
+    /// An owner on an `active` Basic plan whose hub is paired, with its paid licence delivered.
+    async fn paid_with_hub() -> (Self, String, String, String, String) {
+        let (h, a, branch, id) = Harness::pending().await;
+        h.choose_free(&a).await;
+        let token = h.hub_token(&a).await;
+        let r = h
+            .send(
+                "evt_first",
+                &paid_event("sub_fake_001", PERIOD_END, card("4242")),
+            )
+            .await;
+        assert_eq!(r.body["status"], "applied", "{}", r.body);
+        assert_eq!(h.licence_tier(&token).await, arena_proto::Tier::Basic);
+        (h, a, branch, id, token)
+    }
+}
+
+#[tokio::test]
+async fn a_renewal_that_needs_approval_keeps_the_entitlement_and_the_owner_hears_once() {
+    let (h, _a, branch, id, token) = Harness::paid_with_hub().await;
+    let r = h
+        .send(
+            "evt_approval",
+            &sub_event("subscription.renewal_needs_approval", "sub_fake_001"),
+        )
+        .await;
+    assert_eq!(r.body["status"], "applied", "{}", r.body);
+    assert_eq!(
+        h.state_of(&branch).await,
+        SubscriptionState::RenewalNeedsApproval
+    );
+    // The entitlement and the period are untouched, and the hub keeps its paid licence.
+    let e = h.db.entitlement(&branch).await.unwrap().unwrap();
+    assert_eq!(
+        (e.tier, e.source),
+        (
+            arena_proto::Tier::Basic,
+            arena_proto::EntitlementSource::Paid
+        )
+    );
+    assert_eq!(h.only(&branch).await.current_period_end, Some(END_MS));
+    assert_eq!(h.licence_tier(&token).await, arena_proto::Tier::Basic);
+
+    // The sweep raises the alert (the webhook may have raised it first: one alert either way),
+    // and a repeat run raises nothing more.
+    for _ in 0..3 {
+        let out = sweep_once(&h.st).await.unwrap();
+        assert_eq!((out.graced, out.lapsed, out.failed), (0, 0, 0));
+    }
+    assert_eq!(h.alerts_of("renewal_needs_approval"), 1);
+    let tenant = h.only(&branch).await.tenant_id;
+    let row =
+        h.db.owner_alerts(&tenant, 0, None, 10)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.kind == "renewal_needs_approval")
+            .unwrap();
+    assert!(row.params.contains("Pixel Arena Gaming"), "{}", row.params);
+    let history = h.db.subscription_history(&id).await.unwrap();
+    assert_eq!(
+        history
+            .iter()
+            .map(|r| (r.old_state.as_str(), r.new_state.as_str()))
+            .collect::<Vec<_>>(),
+        [("pending", "active"), ("active", "renewal_needs_approval")]
+    );
+    // A repeated event is a no-op.
+    let r = h
+        .send(
+            "evt_approval",
+            &sub_event("subscription.renewal_needs_approval", "sub_fake_001"),
+        )
+        .await;
+    assert_eq!(r.body["status"], "duplicate");
+}
+
+#[tokio::test]
+async fn a_renewal_not_approved_by_the_period_end_goes_to_grace_for_seven_days_on_cloud_time() {
+    let (h, _a, branch, id, token) = Harness::paid_with_hub().await;
+    h.send(
+        "evt_approval",
+        &sub_event("subscription.renewal_needs_approval", "sub_fake_001"),
+    )
+    .await;
+    // One millisecond before the period ends nothing moves.
+    h.set_now(END_MS - 1);
+    let out = sweep_once(&h.st).await.unwrap();
+    assert_eq!((out.graced, out.lapsed), (0, 0));
+    assert_eq!(
+        h.state_of(&branch).await,
+        SubscriptionState::RenewalNeedsApproval
+    );
+
+    h.set_now(END_MS);
+    let out = sweep_once(&h.st).await.unwrap();
+    assert_eq!((out.graced, out.lapsed, out.failed), (1, 0, 0));
+    let s = h.only(&branch).await;
+    assert_eq!(s.state, SubscriptionState::Grace);
+    assert_eq!(s.grace_until, Some(END_MS + GRACE_DAYS * DAY_MS));
+    // The cloud keeps signing the paid licence through grace.
+    assert_eq!(h.licence_tier(&token).await, arena_proto::Tier::Basic);
+    assert_eq!(
+        h.db.entitlement(&branch).await.unwrap().unwrap().source,
+        arena_proto::EntitlementSource::Paid
+    );
+    let history = h.db.subscription_history(&id).await.unwrap();
+    let last = history.last().unwrap();
+    assert_eq!(
+        (
+            last.old_state.as_str(),
+            last.new_state.as_str(),
+            last.cause.as_str()
+        ),
+        ("renewal_needs_approval", "grace", "job:renewal-unpaid")
+    );
+    // A second run changes nothing.
+    let out = sweep_once(&h.st).await.unwrap();
+    assert_eq!((out.graced, out.lapsed), (0, 0));
+}
+
+#[tokio::test]
+async fn a_failed_renewal_charge_goes_to_grace_when_the_period_ends() {
+    // The failure is reported after the period ended: grace starts at once.
+    let (h, _a, branch, _id, _token) = Harness::paid_with_hub().await;
+    h.set_now(END_MS + 60_000);
+    let r = h
+        .send(
+            "evt_pending",
+            &sub_event("subscription.pending", "sub_fake_001"),
+        )
+        .await;
+    assert_eq!(r.body["status"], "applied", "{}", r.body);
+    let s = h.only(&branch).await;
+    assert_eq!(s.state, SubscriptionState::Grace);
+    assert_eq!(s.grace_until, Some(END_MS + GRACE_DAYS * DAY_MS));
+
+    // The failure is reported before the period ended: it is marked, and the sweep waits.
+    let (h, _a, branch, _id, _token) = Harness::paid_with_hub().await;
+    h.set_now(END_MS - DAY_MS);
+    let r = h
+        .send(
+            "evt_pending",
+            &sub_event("subscription.pending", "sub_fake_001"),
+        )
+        .await;
+    assert_eq!(r.body["status"], "applied", "{}", r.body);
+    assert_eq!(h.state_of(&branch).await, SubscriptionState::Active);
+    let out = sweep_once(&h.st).await.unwrap();
+    assert_eq!(out.graced, 0);
+    h.set_now(END_MS);
+    let out = sweep_once(&h.st).await.unwrap();
+    assert_eq!(out.graced, 1);
+    assert_eq!(h.state_of(&branch).await, SubscriptionState::Grace);
+
+    // Without a failure an unrenewed active subscription is not touched (another story ends it).
+    let (h, _a, branch, _id, _token) = Harness::paid_with_hub().await;
+    h.set_now(END_MS + 30 * DAY_MS);
+    let out = sweep_once(&h.st).await.unwrap();
+    assert_eq!((out.graced, out.lapsed), (0, 0));
+    assert_eq!(h.state_of(&branch).await, SubscriptionState::Active);
+
+    // A renewal that goes through clears the mark: a later period end does not move it.
+    let (h, _a, branch, _id, _token) = Harness::paid_with_hub().await;
+    h.set_now(END_MS - DAY_MS);
+    h.send(
+        "evt_pending",
+        &sub_event("subscription.pending", "sub_fake_001"),
+    )
+    .await;
+    let r = h
+        .send(
+            "evt_renewed",
+            &paid_event("sub_fake_001", PERIOD_END + 30 * 86_400, card("4242")),
+        )
+        .await;
+    assert_eq!(r.body["status"], "applied", "{}", r.body);
+    h.set_now(END_MS + DAY_MS);
+    assert_eq!(sweep_once(&h.st).await.unwrap().graced, 0);
+    assert_eq!(h.state_of(&branch).await, SubscriptionState::Active);
+}
+
+#[tokio::test]
+async fn the_owner_is_warned_on_days_one_five_and_seven_of_grace_and_never_twice() {
+    let (h, _a, branch, _id, _token) = Harness::paid_with_hub().await;
+    h.set_now(END_MS + 1);
+    h.send(
+        "evt_pending",
+        &sub_event("subscription.pending", "sub_fake_001"),
+    )
+    .await;
+    assert_eq!(h.state_of(&branch).await, SubscriptionState::Grace);
+
+    for (offset_ms, want) in [
+        (0, 1),
+        (DAY_MS, 1),
+        (3 * DAY_MS, 1),
+        (4 * DAY_MS, 2),
+        (5 * DAY_MS, 2),
+        (6 * DAY_MS, 3),
+        (6 * DAY_MS + 3_600_000, 3),
+    ] {
+        h.set_now(END_MS + 1 + offset_ms);
+        for _ in 0..2 {
+            sweep_once(&h.st).await.unwrap();
+        }
+        assert_eq!(
+            h.alerts_of("renewal_grace"),
+            want,
+            "at +{offset_ms} ms into grace"
+        );
+    }
+    // The grace alerts name the day.
+    let tenant = h.only(&branch).await.tenant_id;
+    let rows = h.db.owner_alerts(&tenant, 0, None, 20).await.unwrap();
+    let mut days: Vec<String> = rows
+        .iter()
+        .filter(|r| r.kind == "renewal_grace")
+        .map(|r| {
+            serde_json::from_str::<Value>(&r.params).unwrap()["day"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    days.sort();
+    assert_eq!(days, ["1", "5", "7"]);
+}
+
+#[tokio::test]
+async fn grace_ending_lapses_the_branch_to_free_and_the_next_heartbeat_says_so() {
+    let (h, _a, branch, id, token) = Harness::paid_with_hub().await;
+    h.set_now(END_MS + 1);
+    h.send(
+        "evt_pending",
+        &sub_event("subscription.pending", "sub_fake_001"),
+    )
+    .await;
+    let until = END_MS + GRACE_DAYS * DAY_MS;
+    h.set_now(until - 1);
+    assert_eq!(sweep_once(&h.st).await.unwrap().lapsed, 0);
+    assert_eq!(h.licence_tier(&token).await, arena_proto::Tier::Basic);
+
+    h.set_now(until);
+    let out = sweep_once(&h.st).await.unwrap();
+    assert_eq!((out.graced, out.lapsed, out.failed), (0, 1, 0));
+    let s = h.only(&branch).await;
+    assert_eq!((s.state, s.grace_until), (SubscriptionState::Lapsed, None));
+    let e = h.db.entitlement(&branch).await.unwrap().unwrap();
+    assert_eq!(
+        (e.tier, e.source, e.addons),
+        (
+            arena_proto::Tier::Free,
+            arena_proto::EntitlementSource::Free,
+            Vec::<String>::new()
+        )
+    );
+    assert_eq!(h.licence_tier(&token).await, arena_proto::Tier::Free);
+    let history = h.db.subscription_history(&id).await.unwrap();
+    let last = history.last().unwrap();
+    assert_eq!(
+        (
+            last.old_state.as_str(),
+            last.new_state.as_str(),
+            last.cause.as_str()
+        ),
+        ("grace", "lapsed", "job:grace-ended")
+    );
+    // A lapsed subscription is left alone by later runs and later charges.
+    assert_eq!(sweep_once(&h.st).await.unwrap().lapsed, 0);
+    let r = h
+        .send(
+            "evt_late",
+            &paid_event("sub_fake_001", PERIOD_END + 60 * 86_400, card("4242")),
+        )
+        .await;
+    assert_eq!(r.body["status"], "recorded");
+    assert_eq!(h.state_of(&branch).await, SubscriptionState::Lapsed);
+}
+
+#[tokio::test]
+async fn a_period_that_ended_long_ago_passes_through_grace_and_lapses_in_one_run() {
+    let (h, _a, branch, id, _token) = Harness::paid_with_hub().await;
+    h.send(
+        "evt_approval",
+        &sub_event("subscription.renewal_needs_approval", "sub_fake_001"),
+    )
+    .await;
+    h.set_now(END_MS + 30 * DAY_MS);
+    let out = sweep_once(&h.st).await.unwrap();
+    assert_eq!((out.graced, out.lapsed), (1, 1));
+    assert_eq!(h.state_of(&branch).await, SubscriptionState::Lapsed);
+    let states: Vec<_> =
+        h.db.subscription_history(&id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.new_state)
+            .collect();
+    assert_eq!(
+        states,
+        ["active", "renewal_needs_approval", "grace", "lapsed"]
+    );
+}
+
+#[tokio::test]
+async fn paying_in_grace_returns_to_active_from_the_original_renewal_date() {
+    let (h, _a, branch, _id, token) = Harness::paid_with_hub().await;
+    h.set_now(END_MS + 1);
+    h.send(
+        "evt_pending",
+        &sub_event("subscription.pending", "sub_fake_001"),
+    )
+    .await;
+    h.set_now(END_MS + 3 * DAY_MS);
+    // Razorpay's retry succeeds: its next period runs from the original renewal date.
+    let r = h
+        .send(
+            "evt_retry",
+            &paid_event("sub_fake_001", PERIOD_END + 30 * 86_400, card("4242")),
+        )
+        .await;
+    assert_eq!(r.body["status"], "applied", "{}", r.body);
+    let s = h.only(&branch).await;
+    assert_eq!(s.state, SubscriptionState::Active);
+    assert_eq!(s.grace_until, None);
+    assert_eq!(s.current_period_end, Some(END_MS + 30 * DAY_MS));
+    // No lapse ever happened.
+    let out = sweep_once(&h.st).await.unwrap();
+    assert_eq!((out.graced, out.lapsed), (0, 0));
+    assert_eq!(h.licence_tier(&token).await, arena_proto::Tier::Basic);
+    assert_eq!(
+        h.db.entitlement(&branch).await.unwrap().unwrap().source,
+        arena_proto::EntitlementSource::Paid
+    );
+}
+
+#[tokio::test]
+async fn a_halted_subscription_lapses_at_once_and_a_comp_grant_is_left_alone() {
+    let (h, _a, branch, _id, token) = Harness::paid_with_hub().await;
+    let r = h
+        .send(
+            "evt_halted",
+            &sub_event("subscription.halted", "sub_fake_001"),
+        )
+        .await;
+    assert_eq!(r.body["status"], "applied", "{}", r.body);
+    assert_eq!(h.state_of(&branch).await, SubscriptionState::Lapsed);
+    assert_eq!(
+        h.db.entitlement(&branch).await.unwrap().unwrap().source,
+        arena_proto::EntitlementSource::Free
+    );
+    assert_eq!(h.licence_tier(&token).await, arena_proto::Tier::Free);
+
+    // A halt reported while the branch holds a staff-granted comp entitlement leaves it.
+    let (h, _a, branch, _id, _token) = Harness::paid_with_hub().await;
+    h.sql(&format!(
+        "UPDATE entitlements SET source = 'comp', tier = 'premium', until = {} \
+         WHERE branch_id = '{branch}'",
+        END_MS * 2
+    ));
+    h.send(
+        "evt_halted",
+        &sub_event("subscription.halted", "sub_fake_001"),
+    )
+    .await;
+    assert_eq!(h.state_of(&branch).await, SubscriptionState::Lapsed);
+    let e = h.db.entitlement(&branch).await.unwrap().unwrap();
+    assert_eq!(
+        (e.tier, e.source),
+        (
+            arena_proto::Tier::Premium,
+            arena_proto::EntitlementSource::Comp
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_new_mandate_authorised_in_grace_and_its_charge_settle_the_renewal() {
+    let (h, a, branch, id, _token) = Harness::paid_with_hub().await;
+    // The owner's session is short-lived, so the clock stays and grace is put in place directly.
+    h.sql(&format!(
+        "UPDATE subscriptions SET state = 'grace', grace_until = {} WHERE id = '{id}'",
+        END_MS + GRACE_DAYS * DAY_MS
+    ));
+    let rev = h.rev(&branch).await;
+    // Change plan stays shut; the payment method does not.
+    let r = h
+        .change(
+            &branch,
+            &a,
+            "/preview",
+            json!({"tier": "premium", "rev": rev}),
+        )
+        .await;
+    assert_eq!(r.status, 422, "{}", r.body);
+    let r = h.method(&branch, &a, json!({"rev": rev})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(
+        r.body["checkout"]["razorpay_subscription_id"],
+        "sub_fake_m001"
+    );
+
+    let r = h
+        .send(
+            "evt_mandate",
+            &authenticated("sub_fake_m001", PERIOD_END + 30 * 86_400, card("5678")),
+        )
+        .await;
+    assert_eq!(r.body["status"], "applied", "{}", r.body);
+    let s = h.only(&branch).await;
+    assert_eq!(
+        s.state,
+        SubscriptionState::Grace,
+        "authorising is not paying"
+    );
+    assert_eq!(s.mandate_detail.as_deref(), Some("5678"));
+    assert_eq!(s.razorpay_subscription_id.as_deref(), Some("sub_fake_m001"));
+
+    let r = h
+        .send(
+            "evt_mandate_charge",
+            &paid_event("sub_fake_m001", PERIOD_END + 30 * 86_400, card("5678")),
+        )
+        .await;
+    assert_eq!(r.body["status"], "applied", "{}", r.body);
+    let s = h.only(&branch).await;
+    assert_eq!((s.state, s.grace_until), (SubscriptionState::Active, None));
+}
+
+#[tokio::test]
+async fn a_new_mandate_whose_first_event_is_its_charge_settles_a_renewal_waiting_for_approval() {
+    let (h, a, branch, _id, _token) = Harness::paid_with_hub().await;
+    h.send(
+        "evt_approval",
+        &sub_event("subscription.renewal_needs_approval", "sub_fake_001"),
+    )
+    .await;
+    let rev = h.rev(&branch).await;
+    let r = h.method(&branch, &a, json!({"rev": rev})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = h
+        .send(
+            "evt_mandate_charge",
+            &paid_event("sub_fake_m001", PERIOD_END + 30 * 86_400, card("5678")),
+        )
+        .await;
+    assert_eq!(r.body["status"], "applied", "{}", r.body);
+    let s = h.only(&branch).await;
+    assert_eq!(s.state, SubscriptionState::Active);
+    assert_eq!(s.current_period_end, Some(END_MS + 30 * DAY_MS));
+    assert_eq!(s.razorpay_subscription_id.as_deref(), Some("sub_fake_m001"));
+}
+
+#[tokio::test]
+async fn subscriptions_are_counted_per_state_and_the_card_reads_grace() {
+    let (h, a, branch, id, _token) = Harness::paid_with_hub().await;
+    h.sql(&format!(
+        "UPDATE subscriptions SET state = 'grace', grace_until = {} WHERE id = '{id}'",
+        END_MS + GRACE_DAYS * DAY_MS
+    ));
+    let plans = h.plans(&a, "").await;
+    let card = &plans.body["branches"][0];
+    assert_eq!(card["state"], "grace", "{}", plans.body);
+    assert_eq!(card["grace_until"], END_MS + GRACE_DAYS * DAY_MS);
+    assert_eq!(
+        h.db.subscription_state_counts().await.unwrap(),
+        [("grace".to_owned(), 1)]
+    );
+    assert_eq!(h.only(&branch).await.state, SubscriptionState::Grace);
 }

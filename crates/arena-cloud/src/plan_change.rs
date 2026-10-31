@@ -189,6 +189,15 @@ pub(crate) fn gate_state(sub: &Subscription) -> Result<(), ChangeError> {
     }
 }
 
+/// Whether the payment method of `sub` can be replaced: on an `active` subscription, and while a
+/// renewal waits for approval or payment (Story 10.11), which a new mandate can settle.
+pub(crate) fn gate_method(sub: &Subscription) -> Result<(), ChangeError> {
+    match sub.state {
+        SubscriptionState::RenewalNeedsApproval | SubscriptionState::Grace => Ok(()),
+        _ => gate_state(sub),
+    }
+}
+
 /// Works out the change of `sub` to `req`. Only an `active` subscription that is not set to cancel
 /// can change; the paid period must be known.
 pub async fn plan(

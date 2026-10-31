@@ -141,6 +141,18 @@ export function changeOffer(plan: BranchPlan): "open" | "blocked" | "none" {
   return "none";
 }
 
+/** Whether "Change payment method" is offered: on an active plan, and while a renewal waits for
+ * approval or payment, where a new method can settle it (Story 10.11). */
+export function methodOffer(plan: BranchPlan): boolean {
+  if (plan.pending_change) return false;
+  return plan.state === "active" || plan.state === "needs_approval" || plan.state === "grace";
+}
+
+/** The date an unpaid renewal is about: the renewal due for one that needs approval, the end of
+ * grace for one in grace. */
+export const unpaidDate = (plan: BranchPlan): number | undefined =>
+  plan.state === "grace" ? plan.grace_until : plan.current_period_end;
+
 /** The change the owner picked, as the cloud takes it. */
 export type Picked = { tier: Tier; add_ons: AddOns };
 

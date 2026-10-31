@@ -1,4 +1,9 @@
-import type { OwnerBranch, SessionInfo } from "@arena/ui/generated";
+import type {
+  AccountSubscription,
+  BranchPlan,
+  OwnerBranch,
+  SessionInfo,
+} from "@arena/ui/generated";
 import { dropCache, load, signInUrl } from "./api";
 
 export const shell = $state({
@@ -9,7 +14,13 @@ export const shell = $state({
   ready: false,
   /** The owner allowed text-message codes (offered beside the authenticator code in a step-up). */
   smsFallback: false,
+  /** Every branch's plan card; the renewal banner reads the unpaid ones (Story 10.11). */
+  plans: [] as BranchPlan[],
 });
+
+/** The branches whose renewal waits for approval or is unpaid, in grace. */
+export const unpaidPlans = () =>
+  shell.plans.filter((p) => p.state === "needs_approval" || p.state === "grace");
 
 export const isFree = () =>
   !!shell.branches?.length && shell.branches.every((b) => b.tier === "free");
@@ -31,9 +42,10 @@ let pending: Promise<void> | null = null;
 export const refresh = () => (pending ??= run().finally(() => (pending = null)));
 
 async function run() {
-  const [session, branches] = await Promise.all([
+  const [session, branches, plans] = await Promise.all([
     load<SessionInfo>("/session"),
     load<OwnerBranch[]>("/branches"),
+    load<AccountSubscription>("/account/subscription"),
   ]);
   if (session === "signed-out" || branches === "signed-out") {
     await dropCache();
@@ -43,6 +55,7 @@ async function run() {
   shell.cafe = session?.data.owner.cafe_name ?? shell.cafe;
   shell.smsFallback = session?.data.owner.sms_fallback ?? shell.smsFallback;
   shell.branches = branches?.data ?? shell.branches;
+  if (plans && plans !== "signed-out") shell.plans = plans.data.branches;
   shell.asOf = [session?.asOf, branches?.asOf].filter(Boolean).sort()[0] ?? "";
   shell.offline = !session?.live || !branches?.live;
   shell.ready = true;

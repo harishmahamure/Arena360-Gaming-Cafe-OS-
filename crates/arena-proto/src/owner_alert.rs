@@ -55,6 +55,12 @@ pub enum OwnerAlertKind {
     /// A subscription charge's GST tax invoice is ready (Story 10.7). Raised by the cloud's jobs
     /// role, never by a Hub.
     InvoiceReady,
+    /// A renewal waits for the owner to approve it with their bank (Story 10.11). Raised by the
+    /// cloud, never by a Hub.
+    RenewalNeedsApproval,
+    /// A renewal is unpaid and the branch is in its grace period (Story 10.11). Raised by the
+    /// cloud on days 1, 5 and 7 of grace.
+    RenewalGrace,
 }
 
 /// Why a set of parameters does not fit its kind: the offending name.
@@ -66,7 +72,7 @@ pub struct OwnerAlertParamError {
 
 impl OwnerAlertKind {
     /// Every kind.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 13] = [
         Self::Test,
         Self::CashVariance,
         Self::LowStock,
@@ -78,6 +84,8 @@ impl OwnerAlertKind {
         Self::BranchOnline,
         Self::StandbyForced,
         Self::InvoiceReady,
+        Self::RenewalNeedsApproval,
+        Self::RenewalGrace,
     ];
 
     /// The kinds a Hub raises through `POST /v1/notify` (Story 8.34).
@@ -109,6 +117,8 @@ impl OwnerAlertKind {
             Self::BranchOnline => "branch_online",
             Self::StandbyForced => "standby_forced",
             Self::InvoiceReady => "invoice_ready",
+            Self::RenewalNeedsApproval => "renewal_needs_approval",
+            Self::RenewalGrace => "renewal_grace",
         }
     }
 
@@ -127,6 +137,8 @@ impl OwnerAlertKind {
             Self::BranchOffline | Self::BranchNotUploading | Self::BranchOnline => &["minutes"],
             Self::StandbyForced => &["manager"],
             Self::InvoiceReady => &["number", "amount"],
+            Self::RenewalNeedsApproval => &["branch"],
+            Self::RenewalGrace => &["branch", "day", "date"],
         }
     }
 
@@ -222,6 +234,15 @@ impl OwnerAlertKind {
             Self::InvoiceReady => {
                 format!("Invoice ready: {} for {}.", p("number"), p("amount"))
             }
+            Self::RenewalNeedsApproval => {
+                format!("Your {} renewal needs approval.", p("branch"))
+            }
+            Self::RenewalGrace => format!(
+                "Your {} renewal is unpaid: grace day {} of 7. Pay by {} to keep your plan.",
+                p("branch"),
+                p("day"),
+                p("date")
+            ),
         }
     }
 
@@ -229,6 +250,9 @@ impl OwnerAlertKind {
     pub fn url(self, branch_id: &str) -> String {
         match self {
             Self::Test | Self::InvoiceReady => "/alerts".to_owned(),
+            Self::RenewalNeedsApproval | Self::RenewalGrace => {
+                format!("/account/subscription?branch={branch_id}")
+            }
             Self::BranchOffline
             | Self::BranchNotUploading
             | Self::BranchOnline
@@ -434,6 +458,9 @@ mod tests {
             ("minutes", "20"),
             ("manager", "Asha"),
             ("number", "A360/2026-27/000001"),
+            ("branch", "Koramangala"),
+            ("day", "5"),
+            ("date", "12 Nov 2026"),
         ];
         params(
             &values
@@ -585,6 +612,38 @@ mod tests {
                 .unwrap_err()
                 .field,
             "number"
+        );
+    }
+
+    #[test]
+    fn the_renewal_lines_name_the_branch_and_the_grace_day() {
+        let approval = OwnerAlertKind::RenewalNeedsApproval;
+        let p = sample(approval);
+        assert_eq!(approval.check_params(&p), Ok(()));
+        assert_eq!(
+            approval.text(&p),
+            "Your Koramangala renewal needs approval."
+        );
+        assert_eq!(approval.as_str(), "renewal_needs_approval");
+        assert_eq!(
+            approval.url("B1"),
+            "/account/subscription?branch=B1".to_owned()
+        );
+        let grace = OwnerAlertKind::RenewalGrace;
+        let p = sample(grace);
+        assert_eq!(grace.check_params(&p), Ok(()));
+        assert_eq!(
+            grace.text(&p),
+            "Your Koramangala renewal is unpaid: grace day 5 of 7. Pay by 12 Nov 2026 to keep your plan."
+        );
+        assert!(!approval.hub_sourced() && !grace.hub_sourced());
+        assert_eq!(OwnerAlertKind::parse("renewal_grace"), Some(grace));
+        assert_eq!(
+            grace
+                .check_params(&params(&[("branch", "K")]))
+                .unwrap_err()
+                .field,
+            "day"
         );
     }
 

@@ -66,9 +66,9 @@ test("Support shows a mailto link and calls no API", async ({ page }) => {
   await expect(page.getByRole("link", { name: /@/ })).toHaveAttribute("href", /^mailto:.+@.+/);
   await expect(page.getByText(t("owner.support.help"))).toBeVisible();
   await page.waitForLoadState("networkidle");
-  expect(calls.filter((c) => !c.endsWith("/v1/session") && !c.endsWith("/v1/branches"))).toEqual(
-    [],
-  );
+  // The shell reads the session, the branches and the plans (for the renewal banner) on every screen.
+  const shellReads = ["/v1/session", "/v1/branches", "/v1/account/subscription"];
+  expect(calls.filter((c) => !shellReads.some((r) => c.endsWith(r)))).toEqual([]);
 });
 
 test("Account -> Subscription opens on the branch an Upgrade link named", async ({ page }) => {
@@ -96,8 +96,13 @@ test("on Free the four data sections show only the tier-lock, with an Upgrade li
     );
     await expect(page.getByText(t("owner.section.soon"))).toHaveCount(0);
   }
-  // The data sections called nothing; Account -> Subscription reads only the account routes.
-  expect([...new Set(calls)].sort()).toEqual(["GET /v1/branches", "GET /v1/session"]);
+  // The data sections called nothing beyond the shell's own reads (the plans feed the renewal
+  // banner); Account -> Subscription reads only the account routes.
+  expect([...new Set(calls)].sort()).toEqual([
+    "GET /v1/account/subscription",
+    "GET /v1/branches",
+    "GET /v1/session",
+  ]);
   await page.goto("/account/subscription");
   await expect(page.getByRole("heading", { level: 2, name: FREE[0].name })).toBeVisible();
   await expect(page.getByText(t("owner.invoices.empty"))).toBeVisible();
@@ -160,6 +165,7 @@ test("a mixed tenant locks the Free branch and leaves the paid branch working", 
   await expect.poll(() => calls.some((c) => c.endsWith("/b1/data-age"))).toBe(true);
   await expect.poll(() => calls.some((c) => c.endsWith("/b1/summary"))).toBe(true);
   expect([...new Set(calls)].sort()).toEqual([
+    "GET /v1/account/subscription",
     "GET /v1/alerts",
     "GET /v1/alerts/settings",
     "GET /v1/branches",

@@ -76,6 +76,7 @@ fn free(branch: &Branch, tier: Tier, platform: Option<HubPlatform>) -> BranchPla
         rev: 0,
         hub_platform: platform,
         pending_change: None,
+        grace_until: None,
     }
 }
 
@@ -143,6 +144,7 @@ pub async fn plan_of(
         rev: sub.rev,
         hub_platform: platform,
         pending_change,
+        grace_until: sub.grace_until.filter(|_| state == PlanState::Grace),
     })
 }
 

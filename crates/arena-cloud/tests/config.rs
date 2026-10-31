@@ -399,6 +399,24 @@ fn billing_reconcile_is_a_jobs_task() {
 }
 
 #[test]
+fn subscription_lifecycle_is_a_jobs_task() {
+    assert_eq!(
+        parse(
+            args(&["--role", "jobs", "--task", "subscription-lifecycle"]),
+            env_of(&[])
+        ),
+        Ok(Command::Job(JobConfig {
+            task: Task::SubscriptionLifecycle,
+            dev_data_dir: None,
+        }))
+    );
+    assert_eq!(
+        Task::SubscriptionLifecycle.as_str(),
+        "subscription-lifecycle"
+    );
+}
+
+#[test]
 fn ops_subscription_review_needs_an_id_a_reason_and_an_explicit_approve() {
     let ops = |a: &[&str]| {
         parse(

@@ -14,6 +14,8 @@
     changeOffer,
     keepPlan,
     keepable,
+    methodOffer,
+    unpaidDate,
     otherCycle,
     methodText,
     money,
@@ -60,6 +62,8 @@
   let keeping = $state(false);
   let keepFailed = $state(false);
   const offer = $derived(changeOffer(plan));
+  const unpaid = $derived(plan.state === "needs_approval" || plan.state === "grace");
+  const unpaidAt = $derived(unpaidDate(plan));
   const pending = $derived(plan.pending_change);
 
   const pendingText = $derived.by(() => {
@@ -159,6 +163,16 @@
         <Button label="owner.subscription.upgrade" onclick={upgrade} />
       {:else}
         {#if plan.message}<p>{plan.message}</p>{/if}
+        {#if unpaid}
+          <p data-testid="unpaid-note">
+            {t(
+              plan.state === "grace"
+                ? "owner.subscription.unpaid.grace"
+                : "owner.subscription.unpaid.needs_approval",
+              { date: unpaidAt === undefined ? "" : day(unpaidAt) },
+            )}
+          </p>
+        {/if}
         <dl class="facts">
           <div>
             <dt>{t("owner.subscription.tier")}</dt>
@@ -269,12 +283,24 @@
           </div>
           {#if methodFailed}<p role="alert">{t(methodFailed)}</p>{/if}
         {:else if offer === "blocked"}
-          <Button
-            label="owner.subscription.change.open"
-            variant="secondary"
-            disabled
-            disabledReason="owner.subscription.change.blocked"
-          />
+          <div class="actions">
+            <Button
+              label="owner.subscription.change.open"
+              variant="secondary"
+              disabled
+              disabledReason="owner.subscription.change.blocked"
+            />
+            {#if methodOffer(plan)}
+              <Button
+                label="owner.subscription.method.open"
+                variant="secondary"
+                onclick={changePaymentMethod}
+                disabled={methodBusy}
+                disabledReason="owner.subscription.change.working"
+              />
+            {/if}
+          </div>
+          {#if methodFailed}<p role="alert">{t(methodFailed)}</p>{/if}
         {/if}
       {/if}
     </section>

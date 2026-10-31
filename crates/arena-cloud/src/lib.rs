@@ -36,6 +36,7 @@ pub mod health;
 pub mod invoice;
 pub mod key_release;
 pub mod licence;
+pub mod lifecycle;
 pub mod messaging;
 pub mod offline_watch;
 pub mod ops;

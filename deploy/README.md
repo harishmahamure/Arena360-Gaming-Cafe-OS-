@@ -385,6 +385,15 @@ Schedule `arena-cloud --role jobs --task invoice-render` every 5 minutes (same e
 `offline-watch`, plus `ARENA_DATA_S3_*`): it writes each invoice's PDF under `billing/invoices/` in the
 data bucket and raises the owner's "Invoice ready" alert once.
 
+Grace and lapse (Story 10.11): schedule `arena-cloud --role jobs --task subscription-lifecycle` every 5
+minutes (same environment as `invoice-render`, without the data bucket). It moves a
+`renewal_needs_approval` subscription, or an `active` one whose renewal charge failed, to `grace` when its paid
+period ends (`grace_until` = period end + 7 days, cloud time), lapses a `grace` subscription whose
+`grace_until` has passed (the entitlement becomes the Free tier; a staff-granted comp entitlement is left alone),
+and raises the owner's "renewal needs approval" alert and the day 1, 5 and 7 grace alerts once each (alert ids
+are deterministic, so a repeated run sends nothing twice). It logs `subscriptions_per_state` for every state.
+`subscription.halted` lapses a branch at once, from the webhook or the reconcile.
+
 `GET /v1/pricing?band=IN` (public, cached 5 minutes) serves the live book's lines for a band. The
 web apps read `packages/ui/src/pricing.snapshot.ts`, generated from the seed book; regenerate it
 with `UPDATE_PRICING_SNAPSHOT=1 cargo test -p arena-cloud --test pricing_snapshot` (CI fails when

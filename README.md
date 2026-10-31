@@ -2204,6 +2204,32 @@ built by `upgradeUrl` in `@arena/ui`; each app says where the picker lives with 
   the tier/add-ons form with the cloud's summary, and a pending-change block with "Keep current plan".
 - Prices come from the subscription's locked book; re-pricing only the changed items against the live book is not done here.
 
+## Renewals that need approval, grace and lapse (Story 10.11)
+
+- **States** (AD-20): `active -> renewal_needs_approval -> grace -> lapsed`, every move in `subscription_history`. The
+  entitlement is untouched until `lapsed`; the cloud keeps signing the paid licence through grace, and on lapse the
+  entitlement row becomes `free` (a staff `comp` grant is not overwritten), so the next heartbeat carries a Free licence.
+  A Hub offline with a paid licence keeps its claims until the cached licence's `exp` on `trusted_now` (Story 2.12): nothing
+  new is needed on the Hub, and it shows staff nothing until the lapse applies.
+- **Events** (`webhook::decide_lifecycle`, the webhook and the reconcile share it): `subscription.renewal_needs_approval` on an
+  `active` subscription -> `renewal_needs_approval`; `subscription.pending` (the renewal charge failed) -> `grace` at once
+  when the paid period has ended, else it is marked (`subscriptions.renewal_failed_at`, migration 0041) and the sweep moves it
+  when the period ends; `subscription.halted` -> `lapsed` at once; a `subscription.charged` for a later period returns
+  `renewal_needs_approval` or `grace` to `active` with the period Razorpay reports, i.e. counted from the original renewal
+  date. `grace_until` has been on `subscriptions` since migration 0035.
+- **Job** `--task subscription-lifecycle` (every 5 minutes, `lifecycle::sweep_once`): the moves above on cloud time, then the
+  owner alerts: `renewal_needs_approval` ("Your <branch> renewal needs approval", also raised by the webhook) and
+  `renewal_grace` on days 1, 5 and 7 of grace. Alert ids (`ra-<sub>-<period end>`, `gr-<sub>-<day>-<grace end>`) make every
+  alert once-only. A period that ended long ago passes through grace and lapse in one run.
+- **Paying.** The original subscription's charge (a bank approval, a Razorpay retry) returns the subscription to `active`.
+  "Update payment method" is open in `renewal_needs_approval` and `grace` (Change plan stays disabled, "Settle the pending
+  renewal first"): the new mandate's authorisation replaces the old one and its first charge settles the renewal.
+- **Owner app.** A persistent warning banner on every screen names the branch, the state and the date, with "Approve"
+  (renewal needs approval) or "Update payment method" (grace), both linking to that branch's card on Account -> Subscription.
+  The card shows the state's sentence. There is no Razorpay-hosted "approve" call to make: the bank's approval happens
+  with the bank, so "Approve" takes the owner to the card that explains it and offers the new-method route.
+- Not done here: what the Hub does when the licence drops (Stories 10.12 and 10.13), cancel (10.14).
+
 ## Switch billing cycle and payment method (Story 10.10)
 
 - **Routes** (owner of the branch, billing on, same `rev` and `STALE` rules as Story 10.9):

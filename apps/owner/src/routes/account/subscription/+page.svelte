@@ -6,7 +6,7 @@
   import { page } from "$app/state";
   import { signInUrl } from "../../../lib/api";
   import InvoicesPanel from "../../../lib/InvoicesPanel.svelte";
-  import { refresh } from "../../../lib/shell.svelte";
+  import { refresh, shell } from "../../../lib/shell.svelte";
   import SubscriptionCard from "../../../lib/SubscriptionCard.svelte";
   import {
     CYCLES,
@@ -55,6 +55,8 @@
           });
       }
       plans = res.data;
+      // The renewal banner reads the same plans.
+      shell.plans = res.data.branches;
     }
     loaded = true;
   }

@@ -6,6 +6,7 @@
   import { page } from "$app/state";
   import { onMount, type Snippet } from "svelte";
   import { drainQueue, startQueue } from "../lib/commands.svelte";
+  import RenewalBanner from "../lib/RenewalBanner.svelte";
   import StepUpDialog from "../lib/StepUpDialog.svelte";
   import { age, refresh, shell } from "../lib/shell.svelte";
 
@@ -89,7 +90,10 @@
       </a>
     {/each}
   </nav>
-  <main class="main">{@render children()}</main>
+  <main class="main">
+    <RenewalBanner />
+    {@render children()}
+  </main>
 </div>
 <StepUpDialog />
 

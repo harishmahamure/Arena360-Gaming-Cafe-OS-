@@ -296,6 +296,11 @@ pub struct BranchPlan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub pending_change: Option<PendingPlanChange>,
+    /// When the grace period of an unpaid renewal ends, in epoch milliseconds (Story 10.11);
+    /// present only in `grace`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub grace_until: Option<i64>,
 }
 
 /// When a change of plan takes effect.

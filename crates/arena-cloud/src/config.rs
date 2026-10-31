@@ -9,7 +9,7 @@ use std::time::Duration;
 pub const USAGE: &str =
     "usage: arena-cloud --role control|command|builder|all [--listen <addr:port>] [--help] [--version]
        arena-cloud --role control|command|builder|all --dev [--data-dir <dir>] [--listen <loopback addr:port>]
-       arena-cloud --role jobs --task control-backup|command-sweep|offline-watch|retention-sweep|subscription-sweep|billing-reconcile|invoice-render [--dev [--data-dir <dir>]]
+       arena-cloud --role jobs --task control-backup|command-sweep|offline-watch|retention-sweep|subscription-sweep|billing-reconcile|invoice-render|subscription-lifecycle [--dev [--data-dir <dir>]]
        arena-cloud ops restore-control (--from-key <key> | --from-file <path|->)
                                        (--identity <file> | --plaintext) [--dev [--data-dir <dir>]]
        arena-cloud ops grant-comp --branch <id> --tier basic|premium --until <YYYY-MM-DD>
@@ -47,6 +47,9 @@ pub const USAGE: &str =
                Razorpay and apply what the webhooks missed (run every 10 minutes; needs the billing keys)
                invoice-render: write the PDF of each new subscription tax invoice under billing/invoices/
                in the data bucket and tell the owner the invoice is ready (run every 5 minutes)
+               subscription-lifecycle: move renewals that need approval or failed to grace when the paid
+               period ends, lapse a branch when its grace ends, and warn the owner on days 1, 5 and 7 of
+               grace (run every 5 minutes)
   --dev        local dev mode: gz_control is <data-dir>/gz_control.db (SQLite), no env or
                token needed, loopback only (default 127.0.0.1:8080), dev routes under /v1/dev
   --data-dir   dev data directory, created if missing (default ./.arena-cloud-dev)
@@ -200,6 +203,8 @@ pub enum Task {
     BillingReconcile,
     /// Renders the PDF of each new subscription tax invoice and tells the owner (Story 10.7).
     InvoiceRender,
+    /// Grace and lapse of unpaid renewals, and the owner's warnings (Story 10.11).
+    SubscriptionLifecycle,
 }
 
 impl Task {
@@ -212,6 +217,7 @@ impl Task {
             Self::SubscriptionSweep => "subscription-sweep",
             Self::BillingReconcile => "billing-reconcile",
             Self::InvoiceRender => "invoice-render",
+            Self::SubscriptionLifecycle => "subscription-lifecycle",
         }
     }
 }
@@ -764,7 +770,7 @@ pub fn parse(
         let task = match task.as_deref() {
             None => {
                 return Err(
-                    "--role jobs needs --task (control-backup, command-sweep, offline-watch, retention-sweep, subscription-sweep, billing-reconcile or invoice-render)"
+                    "--role jobs needs --task (control-backup, command-sweep, offline-watch, retention-sweep, subscription-sweep, billing-reconcile, invoice-render or subscription-lifecycle)"
                         .to_owned(),
                 );
             }
@@ -775,6 +781,7 @@ pub fn parse(
             Some("subscription-sweep") => Task::SubscriptionSweep,
             Some("billing-reconcile") => Task::BillingReconcile,
             Some("invoice-render") => Task::InvoiceRender,
+            Some("subscription-lifecycle") => Task::SubscriptionLifecycle,
             Some(other) => return Err(format!("unknown --task {other}")),
         };
         if listen.is_some() {

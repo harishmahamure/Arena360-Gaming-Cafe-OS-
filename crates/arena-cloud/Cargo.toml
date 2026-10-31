@@ -33,6 +33,7 @@ ulid.workspace = true
 rustls.workspace = true
 webpki-roots.workspace = true
 chrono.workspace = true
+chrono-tz.workspace = true
 argon2.workspace = true
 ring.workspace = true
 qrcode.workspace = true

@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use arena_proto::{MandateMethod, SubscriptionState};
 use arena_store::control::{
     AppliedPlanChange, ChangeKind, ChangeStatus, ChangeSubject, ControlDb, ControlError,
-    EntitlementWrite, EventOutcome, EventRecord, NewOpsAudit, NewOpsTask, Subscription,
+    EntitlementWrite, EventOutcome, EventRecord, Lifecycle, NewOpsAudit, NewOpsTask, Subscription,
     SubscriptionChange,
 };
 use hmac::{Hmac, Mac};
@@ -254,6 +254,8 @@ pub struct Decision {
     pub review: bool,
     /// The event is a charge: it is invoiced (Story 10.7).
     pub charged: bool,
+    /// Grace, a failed renewal and a lapse (Story 10.11).
+    pub lifecycle: Lifecycle,
 }
 
 /// The transition `ev` causes on `sub`, or `None` when it changes nothing. `authenticated` alone
@@ -262,6 +264,9 @@ pub struct Decision {
 /// moves the period forward and returns the subscription to `active`, but an event for a period
 /// no later than the one held changes nothing.
 pub fn decide(sub: &Subscription, ev: &ParsedEvent, now: i64) -> Option<Decision> {
+    if let Some(d) = decide_lifecycle(sub, ev, now) {
+        return Some(d);
+    }
     let charged = ev.kind == "subscription.charged";
     if !charged && ev.kind != "subscription.activated" {
         return None;
@@ -293,6 +298,7 @@ pub fn decide(sub: &Subscription, ev: &ParsedEvent, now: i64) -> Option<Decision
                 issue_entitlement: !review,
                 review,
                 charged,
+                lifecycle: Lifecycle::default(),
             })
         }
         SubscriptionState::Active
@@ -316,6 +322,7 @@ pub fn decide(sub: &Subscription, ev: &ParsedEvent, now: i64) -> Option<Decision
                     issue_entitlement: false,
                     review: false,
                     charged: true,
+                    lifecycle: Lifecycle::default(),
                 })
             } else if sub.first_paid_at.is_none() {
                 // `activated` came first: the first charge still has to be dated.
@@ -329,11 +336,89 @@ pub fn decide(sub: &Subscription, ev: &ParsedEvent, now: i64) -> Option<Decision
                     issue_entitlement: false,
                     review: false,
                     charged: true,
+                    lifecycle: Lifecycle::default(),
                 })
             } else {
                 None
             }
         }
+        _ => None,
+    }
+}
+
+/// A renewal that waits for the owner: the bank's approval, or payment within the grace period.
+fn awaiting_payment(state: SubscriptionState) -> bool {
+    matches!(
+        state,
+        SubscriptionState::RenewalNeedsApproval | SubscriptionState::Grace
+    )
+}
+
+/// A decision that changes the state and nothing else.
+fn move_to(new_state: SubscriptionState, lifecycle: Lifecycle) -> Decision {
+    Decision {
+        new_state,
+        period_end: None,
+        first_paid_at: None,
+        payment_country: None,
+        mandate: None,
+        mandate_detail: None,
+        issue_entitlement: false,
+        review: false,
+        charged: false,
+        lifecycle,
+    }
+}
+
+/// The renewal life of a paid subscription (Story 10.11, AD-20): `active -> renewal_needs_approval
+/// -> grace -> lapsed`.
+///
+/// - `subscription.renewal_needs_approval`: the bank must approve the next debit. The entitlement
+///   is unchanged.
+/// - `subscription.pending`: the renewal charge failed. Once the paid period has ended the
+///   subscription is in grace, ending 7 days after the period; before that the failure is marked
+///   and the lifecycle sweep moves it when the period ends.
+/// - `subscription.halted`: Razorpay gave up; the branch lapses at once.
+///
+/// A renewal charge that succeeds is `decide`'s ordinary `charged` arm, which returns the
+/// subscription to `active` at the period Razorpay reports.
+fn decide_lifecycle(sub: &Subscription, ev: &ParsedEvent, now: i64) -> Option<Decision> {
+    use SubscriptionState as S;
+    let live = matches!(sub.state, S::Active | S::RenewalNeedsApproval | S::Grace);
+    match ev.kind.as_str() {
+        "subscription.renewal_needs_approval" if sub.state == S::Active => {
+            sub.current_period_end?;
+            Some(move_to(S::RenewalNeedsApproval, Lifecycle::default()))
+        }
+        "subscription.pending" if matches!(sub.state, S::Active | S::RenewalNeedsApproval) => {
+            let period_end = sub.current_period_end?;
+            if period_end <= now {
+                Some(move_to(
+                    S::Grace,
+                    Lifecycle {
+                        grace_until: Some(crate::lifecycle::grace_until(period_end)),
+                        ..Lifecycle::default()
+                    },
+                ))
+            } else if sub.state == S::Active {
+                Some(move_to(
+                    S::Active,
+                    Lifecycle {
+                        renewal_failed_at: Some(now),
+                        ..Lifecycle::default()
+                    },
+                ))
+            } else {
+                None
+            }
+        }
+        "subscription.halted" if live => Some(move_to(
+            S::Lapsed,
+            Lifecycle {
+                lapse: true,
+                ..Lifecycle::default()
+            },
+        )),
         _ => None,
     }
 }
@@ -442,7 +527,12 @@ pub async fn handle(
             .as_ref()
             .is_some_and(|d| d.charged && d.period_end.is_some());
         let completes = match (&sub, &open_change) {
-            (Some(s), Some(change)) if s.state == SubscriptionState::Active || newer => {
+            (Some(s), Some(change))
+                if s.state == SubscriptionState::Active
+                    || newer
+                    // A new mandate authorised while a renewal waits for payment (Story 10.11).
+                    || (held.is_some() && awaiting_payment(s.state)) =>
+            {
                 plan_change::completion(change, &ev.kind, held.is_some(), newer)
             }
             _ => None,
@@ -489,8 +579,16 @@ pub async fn handle(
                     };
                     // The old mandate keeps showing until the switch to monthly applies.
                     let authorised_only = completes == Some(plan_change::Completion::Authorised);
+                    // The new mandate's own charge pays an overdue renewal.
+                    let renewed = period_end.is_some()
+                        && ev.kind == "subscription.charged"
+                        && awaiting_payment(s.state);
                     decision = Some(Decision {
-                        new_state: s.state,
+                        new_state: if renewed {
+                            SubscriptionState::Active
+                        } else {
+                            s.state
+                        },
                         period_end,
                         first_paid_at: None,
                         payment_country: None,
@@ -508,6 +606,7 @@ pub async fn handle(
                         review: false,
                         // Authorising a mandate is not a charge to invoice.
                         charged: ev.kind == "subscription.charged" && !authorised_only,
+                        lifecycle: Lifecycle::default(),
                     });
                 }
             }
@@ -639,6 +738,7 @@ pub async fn handle(
                 },
                 audit: None,
                 close_task_kind: None,
+                lifecycle: d.lifecycle,
                 plan_change: open_change
                     .as_ref()
                     .filter(|_| completes.is_some())
@@ -807,6 +907,7 @@ pub async fn approve_review(
             }),
             close_task_kind: Some(TASK_REVIEW),
             plan_change: None,
+            lifecycle: Lifecycle::default(),
         };
         if db
             .apply_subscription_change(&change, now)

@@ -53,7 +53,7 @@ mod tunnels;
 pub use admin_audit::{AdminAuditRow, NewAdminAudit};
 pub use ads::{AdFillRow, AdMetric};
 pub use billing::{
-    BillingEvent, EntitlementWrite, EventOutcome, EventRecord, HistoryRow, NewOpsAudit,
+    BillingEvent, EntitlementWrite, EventOutcome, EventRecord, HistoryRow, Lifecycle, NewOpsAudit,
     SubscriptionChange,
 };
 pub use branch_watch::{WatchRow, WatchState};
@@ -285,6 +285,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 40,
         sql: include_str!("../control-migrations/0040_subscription_change_subject.sql"),
+    },
+    ControlMigration {
+        version: 41,
+        sql: include_str!("../control-migrations/0041_subscription_lifecycle.sql"),
     },
 ];
 

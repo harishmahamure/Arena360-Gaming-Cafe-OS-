@@ -22,8 +22,8 @@ use arena_store::control::{
 
 use crate::billing::{BillingProvider, MandateSpec, PlanChangeSpec, SubscriptionResult};
 use crate::plan_change::{
-    ChangeError, days_left, db_err, gate_state, gst_on, gst_percent, item_of, kind_of, new_id,
-    period_of, priced, prorate,
+    ChangeError, days_left, db_err, gate_method, gate_state, gst_on, gst_percent, item_of, kind_of,
+    new_id, period_of, priced, prorate,
 };
 use crate::subscription::{Invalid, Quote, allowed_methods, quote, quote_for};
 
@@ -354,7 +354,7 @@ pub async fn confirm_method(
     if sub.rev != rev {
         return Err(ChangeError::Stale);
     }
-    gate_state(sub)?;
+    gate_method(sub)?;
     if db
         .open_plan_change(&sub.id)
         .await

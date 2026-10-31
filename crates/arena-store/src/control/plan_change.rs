@@ -291,7 +291,8 @@ impl ControlDb {
         rows.iter().map(|r| change_from(r)).collect()
     }
 
-    /// Proposes `new` for an `active` subscription that is still at `expect_rev`: the subscription's
+    /// Proposes `new` for an `active` subscription (or, for a new payment method, one whose
+    /// renewal waits for approval or payment) that is still at `expect_rev`: the subscription's
     /// `rev` moves on (so a change from another device that read the same `rev` is stale), an open
     /// change is superseded and `new` is stored.
     pub async fn propose_plan_change(
@@ -305,11 +306,13 @@ impl ControlDb {
             .transact(vec![
                 Stmt::new(
                     "UPDATE subscriptions SET rev = rev + 1, updated_at = ? \
-                     WHERE id = ? AND rev = ? AND state = 'active'",
+                     WHERE id = ? AND rev = ? AND (state = 'active' \
+                     OR (? = 'method' AND state IN ('renewal_needs_approval', 'grace')))",
                     vec![
                         SqlValue::Integer(now),
                         text(&new.subscription_id),
                         SqlValue::Integer(expect_rev),
+                        text(new.subject.as_str()),
                     ],
                 )
                 .expect(1),

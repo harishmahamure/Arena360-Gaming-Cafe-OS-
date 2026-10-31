@@ -7,6 +7,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use arena_proto::SubscriptionState;
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -16,6 +17,7 @@ use serde_json::{Value, json};
 
 use super::error::ApiError;
 use crate::auth::AuthState;
+use crate::lifecycle;
 use crate::webhook::{self, Handled, Source};
 
 const SIGNATURE_HEADER: &str = "x-razorpay-signature";
@@ -87,6 +89,7 @@ async fn razorpay(
                 Handled::Applied {
                     subscription_id,
                     branch_id,
+                    state,
                     review,
                     replaced_razorpay_id,
                     retire_at_cycle_end,
@@ -97,6 +100,15 @@ async fn razorpay(
                     }
                     // Wakes the owner's wizard stream: the activation marked the plan step done.
                     let _ = st.wizard_tx.send(branch_id.clone());
+                    // A renewal that needs approval, or the first day of grace: the owner is told
+                    // now (the lifecycle sweep raises the same alert if this one fails).
+                    if matches!(
+                        state,
+                        SubscriptionState::RenewalNeedsApproval | SubscriptionState::Grace
+                    ) {
+                        let (st, id) = (st.clone(), subscription_id.clone());
+                        tokio::spawn(async move { lifecycle::notify_subscription(&st, &id).await });
+                    }
                     if *review {
                         let id = subscription_id.clone();
                         tracing::warn!(subscription_id = %id, "a first payment is held for review");

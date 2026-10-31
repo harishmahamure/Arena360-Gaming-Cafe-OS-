@@ -55,6 +55,8 @@ pub mod code {
     pub const INVOICE_RENDER_TIMEOUT: &str = "INVOICE_RENDER_TIMEOUT";
     pub const SUBSCRIPTION_SWEEP_FAILED: &str = "SUBSCRIPTION_SWEEP_FAILED";
     pub const SUBSCRIPTION_SWEEP_TIMEOUT: &str = "SUBSCRIPTION_SWEEP_TIMEOUT";
+    pub const SUBSCRIPTION_LIFECYCLE_FAILED: &str = "SUBSCRIPTION_LIFECYCLE_FAILED";
+    pub const SUBSCRIPTION_LIFECYCLE_TIMEOUT: &str = "SUBSCRIPTION_LIFECYCLE_TIMEOUT";
     pub const RESTORE_CONFIG_INVALID: &str = "RESTORE_CONFIG_INVALID";
     pub const SOURCE_FAILED: &str = "RESTORE_SOURCE_FAILED";
     pub const DECRYPT_FAILED: &str = "RESTORE_DECRYPT_FAILED";
@@ -437,6 +439,7 @@ pub async fn run_job(job: &JobConfig, env: impl Fn(&str) -> Option<OsString>) ->
         Task::SubscriptionSweep => crate::subscription::run_job(job, &env, &target).await,
         Task::BillingReconcile => crate::reconcile::run_job(job, &env, &target).await,
         Task::InvoiceRender => crate::invoice::run_job(job, &env, &target).await,
+        Task::SubscriptionLifecycle => crate::lifecycle::run_job(job, &env, &target).await,
     }
 }
 

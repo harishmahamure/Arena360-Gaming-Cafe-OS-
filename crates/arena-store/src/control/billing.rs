@@ -57,6 +57,20 @@ pub struct NewOpsAudit<'a> {
     pub details_json: &'a str,
 }
 
+/// What a change does to the renewal life of a subscription (Story 10.11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Lifecycle {
+    /// The end of the grace period, on cloud time; read only when the new state is `grace`.
+    pub grace_until: Option<i64>,
+    /// A renewal charge failed before the paid period ended: the sweep moves the subscription to
+    /// `grace` when the period does. Any other change that does not renew the period keeps the
+    /// mark; a renewal, a grace or a lapse clears it.
+    pub renewal_failed_at: Option<i64>,
+    /// The branch's paid entitlement ends: it becomes the Free tier with Free claims. A comp
+    /// entitlement is left alone.
+    pub lapse: bool,
+}
+
 /// What an event does to a subscription. It applies only if the row is still at `expect_rev`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubscriptionChange<'a> {
@@ -83,6 +97,8 @@ pub struct SubscriptionChange<'a> {
     pub close_task_kind: Option<&'a str>,
     /// A tier or add-on change this event completes (Story 10.9).
     pub plan_change: Option<AppliedPlanChange<'a>>,
+    /// Grace, a failed renewal and a lapse (Story 10.11).
+    pub lifecycle: Lifecycle,
 }
 
 /// What recording an event did.
@@ -143,7 +159,9 @@ fn change_stmts(c: &SubscriptionChange<'_>, now: i64) -> Vec<Stmt> {
                  payment_country = COALESCE(payment_country, ?), \
                  mandate_method = COALESCE(?, mandate_method), \
                  mandate_detail = CASE WHEN ? IS NULL THEN mandate_detail ELSE ? END, \
-                 grace_until = CASE WHEN ? = 'grace' THEN grace_until ELSE NULL END \
+                 grace_until = CASE WHEN ? = 'grace' THEN COALESCE(?, grace_until) ELSE NULL END, \
+                 renewal_failed_at = CASE WHEN ? IS NOT NULL THEN ? \
+                 WHEN ? = 'active' AND ? IS NULL THEN renewal_failed_at ELSE NULL END \
                  WHERE id = ? AND rev = ?",
             vec![
                 text(c.new_state.as_str()),
@@ -155,6 +173,11 @@ fn change_stmts(c: &SubscriptionChange<'_>, now: i64) -> Vec<Stmt> {
                 opt_text(c.mandate_method.map(MandateMethod::as_str)),
                 opt_text(c.mandate_detail),
                 text(c.new_state.as_str()),
+                opt_int(c.lifecycle.grace_until),
+                opt_int(c.lifecycle.renewal_failed_at),
+                opt_int(c.lifecycle.renewal_failed_at),
+                text(c.new_state.as_str()),
+                opt_int(c.period_end),
                 text(c.subscription_id),
                 SqlValue::Integer(c.expect_rev),
             ],
@@ -197,6 +220,17 @@ fn change_stmts(c: &SubscriptionChange<'_>, now: i64) -> Vec<Stmt> {
     }
     if let Some(p) = &c.plan_change {
         stmts.extend(apply_stmts(p, c.subscription_id, now));
+    }
+    if c.lifecycle.lapse {
+        // The paid entitlement ends; a comp grant the staff gave the branch is not ours to end.
+        stmts.push(Stmt::new(
+            "UPDATE entitlements SET tier = 'free', source = 'free', addons_json = '[]',              issued_at = ?, until = NULL, updated_at = ? WHERE source = 'paid'              AND branch_id = (SELECT branch_id FROM subscriptions WHERE id = ?)",
+            vec![
+                SqlValue::Integer(now),
+                SqlValue::Integer(now),
+                text(c.subscription_id),
+            ],
+        ));
     }
     stmts.push(
         Stmt::new(
@@ -284,6 +318,62 @@ impl ControlDb {
             .query(&sql, vec![SqlValue::Integer(i64::from(limit))])
             .await?;
         rows.iter().map(|r| subscription_from(r)).collect()
+    }
+
+    /// Subscriptions whose renewal life moves on at `now`: a renewal waiting for approval or a
+    /// failed renewal charge whose paid period has ended (to `grace`), and a grace period that has
+    /// run out (to `lapsed`). Oldest first.
+    pub async fn lifecycle_due(
+        &self,
+        now: i64,
+        limit: u32,
+    ) -> Result<Vec<Subscription>, ControlError> {
+        let sql = format!(
+            "SELECT {COLUMNS} FROM subscriptions WHERE              (state = 'renewal_needs_approval' AND current_period_end <= ?1)              OR (state = 'active' AND renewal_failed_at IS NOT NULL AND current_period_end <= ?1)              OR (state = 'grace' AND grace_until <= ?1)              ORDER BY COALESCE(grace_until, current_period_end), id LIMIT ?2"
+        );
+        let rows = self
+            .query(
+                &sql,
+                vec![SqlValue::Integer(now), SqlValue::Integer(i64::from(limit))],
+            )
+            .await?;
+        rows.iter().map(|r| subscription_from(r)).collect()
+    }
+
+    /// Subscriptions in `renewal_needs_approval` or `grace`: the ones the owner is warned about.
+    pub async fn subscriptions_awaiting_payment(&self) -> Result<Vec<Subscription>, ControlError> {
+        let sql = format!(
+            "SELECT {COLUMNS} FROM subscriptions              WHERE state IN ('renewal_needs_approval', 'grace') ORDER BY updated_at, id"
+        );
+        let rows = self.query(&sql, Vec::new()).await?;
+        rows.iter().map(|r| subscription_from(r)).collect()
+    }
+
+    /// How many subscriptions are in each state (the `subscriptions_per_state` metric).
+    pub async fn subscription_state_counts(&self) -> Result<Vec<(String, i64)>, ControlError> {
+        let rows = self
+            .query(
+                "SELECT state, COUNT(*) FROM subscriptions GROUP BY state ORDER BY state",
+                Vec::new(),
+            )
+            .await?;
+        rows.iter()
+            .map(|r| Ok((col_text(r, 0)?, col_int(r, 1)?)))
+            .collect()
+    }
+
+    /// Whether a renewal charge failed on this subscription before its period ended.
+    pub async fn renewal_failed_at(
+        &self,
+        subscription_id: &str,
+    ) -> Result<Option<i64>, ControlError> {
+        let rows = self
+            .query(
+                "SELECT renewal_failed_at FROM subscriptions WHERE id = ?",
+                vec![text(subscription_id)],
+            )
+            .await?;
+        rows.first().map_or(Ok(None), |r| col_opt_int(r, 0))
     }
 
     /// The recorded event with this Razorpay event id.

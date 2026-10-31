@@ -25,7 +25,8 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const num = (v, fallback) => (v !== undefined && Number.isFinite(Number(v)) ? Number(v) : fallback);
+const num = (v, fallback) =>
+  v !== undefined && v !== "" && Number.isFinite(Number(v)) ? Number(v) : fallback;
 const isNum = (v) => typeof v === "number" && Number.isFinite(v);
 
 /** The artefacts the privacy scan must have covered. */
@@ -85,7 +86,7 @@ export function evaluate(results, b = budgets()) {
     ["export", "Restore from a local export on a new PC"],
     ["cloud", "Restore from the cloud backup on a new PC"],
   ]) {
-    const x = Array.isArray(r?.restores) ? r.restores.find((e) => e.from === from) : undefined;
+    const x = Array.isArray(r?.restores) ? r.restores.find((e) => e?.from === from) : undefined;
     if (!x) {
       missing(label, "restore.json");
       continue;
@@ -94,7 +95,9 @@ export function evaluate(results, b = budgets()) {
       isNum(x.erased_players) &&
       x.erased_players >= b.erased &&
       x.erased_without_key === x.erased_players &&
-      x.erased_pii_empty === x.erased_players;
+      x.erased_pii_empty === x.erased_players &&
+      isNum(x.living_readable) &&
+      x.living_readable > 0;
     row(
       label,
       `${yes(x.epoch_above_source) ? "new epoch" : "no new epoch"}, rows ${yes(x.rows_equal) ? "equal" : "DIFFER"}, ${x.erased_without_key}/${x.erased_players} erased without key`,
@@ -109,7 +112,7 @@ export function evaluate(results, b = budgets()) {
       `>= ${b.days} days and a fork`,
       isNum(r.days) && r.days >= b.days && isNum(r.changes) && r.changes > 0 && yes(r.fork),
     );
-    const c = r.restores?.find((e) => e.from === "cloud");
+    const c = r.restores?.find((e) => e?.from === "cloud");
     if (c)
       row(
         "Cloud restore: orphaned rows kept out of state",

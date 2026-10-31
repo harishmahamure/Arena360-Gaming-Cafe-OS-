@@ -609,8 +609,9 @@ fn build_restored(
                     .collect::<Result<_, _>>()
                     .map_err(db_error)?
             };
+            let live: std::collections::HashSet<&str> = live.iter().map(String::as_str).collect();
             for player_id in held {
-                if !live.contains(&player_id) {
+                if !live.contains(player_id.as_str()) {
                     crate::erase_player(tx, &player_id, now_ms)?;
                     crate::delete_player_key(tx, &player_id)?;
                     reapplied += 1;

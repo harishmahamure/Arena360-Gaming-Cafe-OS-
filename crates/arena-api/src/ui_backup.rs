@@ -434,9 +434,15 @@ pub(crate) async fn restore(
         .and_then(|s| s.borrow().tier)
         .is_some_and(|t| t != arena_proto::Tier::Free);
     let live_keys = match auth.key_backup() {
-        Some(lookup) if paid => tokio::time::timeout(KEY_LOOKUP_WAIT, lookup.live_keys())
-            .await
-            .unwrap_or(None),
+        Some(lookup) if paid => {
+            match tokio::time::timeout(KEY_LOOKUP_WAIT, lookup.live_keys()).await {
+                Ok(keys) => keys,
+                Err(_) => {
+                    tracing::warn!("key backup lookup: no answer in time, restoring without it");
+                    None
+                }
+            }
+        }
         _ => None,
     };
 

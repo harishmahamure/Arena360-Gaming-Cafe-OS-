@@ -293,13 +293,25 @@ impl RestoreFetcher {
             }
         };
         let url = plan.keys_url?;
-        let scratch = self.cfg.staging.with_file_name("key-backup-lookup.tmp");
-        let got = self.cfg.cloud.download_object(&url, &scratch).await;
+        // One file per call (lookups can overlap), removed even when the caller stops waiting.
+        static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        struct Scratch(std::path::PathBuf);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let scratch = Scratch(
+            self.cfg
+                .staging
+                .with_file_name(format!("key-backup-lookup-{}-{n}.tmp", std::process::id())),
+        );
+        let got = self.cfg.cloud.download_object(&url, &scratch.0).await;
         let bytes = match got {
-            Ok(_) => tokio::fs::read(&scratch).await.ok(),
+            Ok(_) => tokio::fs::read(&scratch.0).await.ok(),
             Err(_) => None,
         };
-        let _ = tokio::fs::remove_file(&scratch).await;
         bytes.filter(|b| !b.is_empty())
     }
 

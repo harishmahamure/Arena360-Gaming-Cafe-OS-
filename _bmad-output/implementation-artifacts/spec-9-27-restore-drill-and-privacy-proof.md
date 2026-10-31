@@ -2,7 +2,7 @@
 title: 'Story 9.27: Restore drill and privacy proof'
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: 'e48e0f93220ddc2690a173fe49b1ef66e4fa8725'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -80,6 +80,9 @@ deferred:
 ## Spec Change Log
 
 ## Review Triage Log
+
+- Patched: a key backup that opens but holds no key is not used to erase (BackupKeys::open); key-backup scratch file is unique per call and removed on cancel; lookup timeout is logged; HashSet lookup in the re-apply; empty env vars ignored; report requires living_readable and tolerates null entries.
+- Deferred (low): the drill log scan is partly self-written; result JSON values are literals written after assertions held; Hub wiring (run()) has no test; the 1 GB benchmark is unverified until the reference-i3 job runs.
 
 ## Verification
 

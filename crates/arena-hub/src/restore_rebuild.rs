@@ -405,6 +405,12 @@ impl BackupKeys {
         let bytes = self.kek.get().ok()??;
         let kek: [u8; KEK_LEN] = bytes.try_into().ok()?;
         match open_key_table(&kek, sealed) {
+            // A backup that opens but holds no key at all is a backup not yet filled, not proof that
+            // every player was erased: erasing them all cannot be undone, so it answers nothing.
+            Ok(rows) if rows.is_empty() => {
+                tracing::warn!("key backup lookup: the backup holds no key, so it is not used");
+                None
+            }
             Ok(rows) => Some(rows.into_iter().map(|r| r.player_id).collect()),
             Err(e) => {
                 tracing::warn!(

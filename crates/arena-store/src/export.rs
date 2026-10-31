@@ -704,7 +704,7 @@ mod tests {
         let file_mib = done.bytes / (1 << 20);
         println!("export of {database_mib} MiB database: {took:?}, file {file_mib} MiB");
         // The release report (`scripts/restore-drill-report.mjs`) reads this file (Story 9.27).
-        if let Some(out) = std::env::var_os("ARENA_RESTORE_DRILL_OUT") {
+        if let Some(out) = std::env::var_os("ARENA_RESTORE_DRILL_OUT").filter(|v| !v.is_empty()) {
             let out = PathBuf::from(out);
             fs::create_dir_all(&out).unwrap();
             fs::write(

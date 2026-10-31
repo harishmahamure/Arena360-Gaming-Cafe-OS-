@@ -291,6 +291,12 @@ fn the_key_backup_names_its_players_only_for_the_branch_key() {
     assert_eq!(backup_keys(Some(vec![7; KEK_LEN])).open(b"junk"), None);
 }
 
+#[test]
+fn a_key_backup_holding_no_key_is_not_used_to_erase_everybody() {
+    let sealed = arena_core::key_backup::seal_key_table(&[7; KEK_LEN], &[]).unwrap();
+    assert_eq!(backup_keys(Some(vec![7; KEK_LEN])).open(&sealed), None);
+}
+
 #[tokio::test]
 async fn a_hub_that_cannot_reach_the_cloud_answers_nothing() {
     // The fetcher sees a Hub with no tier yet, so it asks nothing and nobody is erased.

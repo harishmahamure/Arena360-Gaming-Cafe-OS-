@@ -978,7 +978,7 @@ async fn no_seeded_name_phone_or_email_is_in_plaintext_in_any_artefact_or_the_lo
 /// sets it); `scripts/restore-drill-report.mjs` reads the files and fails the release without
 /// one. Only called after the test's assertions held.
 fn record(file: &str, value: &serde_json::Value) {
-    let Some(dir) = std::env::var_os("ARENA_RESTORE_DRILL_OUT") else {
+    let Some(dir) = std::env::var_os("ARENA_RESTORE_DRILL_OUT").filter(|v| !v.is_empty()) else {
         return;
     };
     let dir = PathBuf::from(dir);

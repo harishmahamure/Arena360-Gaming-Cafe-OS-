@@ -2,7 +2,7 @@
 title: "Story 10.19: Kiosks follow the new Windows Hub without pairing again"
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: 'feadeede'
 review_loop_iteration: 0
 context:

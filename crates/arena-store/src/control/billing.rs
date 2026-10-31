@@ -160,7 +160,7 @@ fn change_stmts(c: &SubscriptionChange<'_>, now: i64) -> Vec<Stmt> {
                  mandate_method = COALESCE(?, mandate_method), \
                  mandate_detail = CASE WHEN ? IS NULL THEN mandate_detail ELSE ? END, \
                  grace_until = CASE WHEN ? = 'grace' THEN COALESCE(?, grace_until) ELSE NULL END, \
-                 renewal_failed_at = CASE WHEN ? IS NOT NULL THEN ? \
+                 renewal_failed_at = CASE WHEN ? IS NOT NULL THEN COALESCE(renewal_failed_at, ?) \
                  WHEN ? = 'active' AND ? IS NULL THEN renewal_failed_at ELSE NULL END \
                  WHERE id = ? AND rev = ?",
             vec![

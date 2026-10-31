@@ -259,12 +259,14 @@ pub async fn sweep_once(st: &AuthState) -> Result<LifecycleOutcome, JobError> {
         let mut sub = due;
         // A period that ended long ago can pass through grace and lapse in one run.
         for _ in 0..2 {
-            let marked = st
-                .db
-                .renewal_failed_at(&sub.id)
-                .await
-                .map_err(failed)?
-                .is_some();
+            let marked = match st.db.renewal_failed_at(&sub.id).await {
+                Ok(mark) => mark.is_some(),
+                Err(e) => {
+                    tracing::error!(subscription_id = %sub.id, error = %e, "could not read the renewal mark");
+                    out.failed += 1;
+                    break;
+                }
+            };
             let Some(step) = next_step(&sub, marked, now) else {
                 break;
             };
@@ -301,8 +303,14 @@ pub async fn sweep_once(st: &AuthState) -> Result<LifecycleOutcome, JobError> {
         .await
         .map_err(failed)?
     {
-        let Some(branch) = st.db.branch(&sub.branch_id).await.map_err(failed)? else {
-            continue;
+        let branch = match st.db.branch(&sub.branch_id).await {
+            Ok(Some(branch)) => branch,
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::error!(subscription_id = %sub.id, error = %e, "could not read the branch");
+                out.failed += 1;
+                continue;
+            }
         };
         match notify(st, &sub, &branch, now).await {
             Ok(true) => out.alerted += 1,
@@ -318,10 +326,16 @@ pub async fn sweep_once(st: &AuthState) -> Result<LifecycleOutcome, JobError> {
         }
     }
 
-    for (state, count) in st.db.subscription_state_counts().await.map_err(failed)? {
+    // Every state is logged: one that has emptied reads 0, so a gauge can fall.
+    let counts = st.db.subscription_state_counts().await.map_err(failed)?;
+    for state in SubscriptionState::ALL {
+        let count = counts
+            .iter()
+            .find(|(name, _)| name == state.as_str())
+            .map_or(0, |(_, n)| *n);
         tracing::info!(
             task = Task::SubscriptionLifecycle.as_str(),
-            state = %state,
+            state = state.as_str(),
             subscriptions_per_state = count,
             "subscriptions in a state"
         );

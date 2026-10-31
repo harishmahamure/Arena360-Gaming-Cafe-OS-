@@ -2,7 +2,7 @@
 title: "Story 10.11: Renewals that need approval go to grace, then lapse, on cloud time"
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: '329f8e8c'
 review_loop_iteration: 0
 context:
@@ -72,3 +72,7 @@ warnings: []
 Status: review. fmt and clippy clean; `cargo test` passes except the baseline `binary::unreachable_at_start_retries_then_exits_1_without_logging_the_token` and the timing-sensitive `backup::a_hung_run_times_out_with_its_own_code` (passes alone). `svelte-check` clean; the whole owner Playwright suite passes (new `renewal.spec.ts`; `shell.spec.ts` now expects the shell's extra `/account/subscription` read).
 
 Risks to know: Razorpay has no hosted "approve" call, so the banner's "Approve" leads to the branch's card, which explains that the bank approves the debit and offers the new-method route; the real event names for a bank-approval renewal (`subscription.renewal_needs_approval`) and a failed charge (`subscription.pending`) are exercised against the fake only; an `active` subscription whose period passes with no `pending` event is not moved (the webhook or reconcile must report the failure); the reconcile does not raise alerts (the lifecycle sweep does, within 5 minutes); `check:generated` passes only once the regenerated files are committed.
+
+## Code Review Result
+
+Status: done. Four reviewers (blind, edge-case, verification-gap, acceptance). Fixed: the sweep no longer aborts on one unreadable branch or renewal mark; `subscriptions_per_state` is logged for every state (0 when empty); a repeated `subscription.pending` keeps the first failure time. Deferred (known, in Risks or out of scope): stale/out-of-order `pending` events, reconcile of `active` subscriptions, payment after lapse (ops follow-up), Approve button wording, banner staleness.

@@ -2,7 +2,7 @@
 title: "Story 10.15: Full refund within 7 days of the first payment, issued through the ops path"
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: 'ca70215614db83807271597b1eb74b2a202f09a4'
 review_loop_iteration: 0
 context:
@@ -71,3 +71,9 @@ warnings: []
 ## Auto Run Result
 
 Status: in-review. Risks to know: the real Razorpay refund call (`POST /payments/{id}/refund` with the whole amount) is exercised against the fake only; a refund request needs every invoice of the subscription to name its payment (set from the charge event from this story on), so an older invoice without a payment id makes the plan ineligible for the owner's offer and `ops refund approve` refuses it (`NO_PAYMENT`) for a manual refund; a `subscription.cancelled` webhook is still not acted on; `RefundProcessed` is raised for a Free branch on purpose (the refund itself leaves it Free); the disk filled during verification, so `target/debug/incremental` was deleted and tests ran with `CARGO_INCREMENTAL=0`.
+
+### Review Findings
+
+Code review (2026-10-31): no blocking findings. fmt, clippy `-D warnings`, cargo tests (only the baseline `binary::unreachable_at_start_retries_then_exits_1_without_logging_the_token` fails), owner svelte-check, string/hex/generated checks and the refund/cancel Playwright specs all pass.
+
+- [x] [Review][Defer] If `refund.processed` for the last payment arrives after the subscription is already `refunded`, the request is not moved to `processed` (the completion statements are skipped) [crates/arena-cloud/src/refund.rs:~540] — deferred: unreachable today (only this handler sets `refunded`); settle if another path ever does.

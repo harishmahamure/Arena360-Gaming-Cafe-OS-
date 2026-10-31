@@ -618,3 +618,7 @@
 - Cloud claim won but `promote_to_main` fails (follower stopped, roles swapped), and a cloud role-swap failure reported as `FENCED` with an unchanged fence: pin with tests when the wiring lands.
 - Follower schema-ahead notes on the mid-stream/snapshot paths lack tests, and `EpochFloor::admit(None)` lets a Hub with no stated epoch through: cover when the kiosk service wiring lands.
 - The cloud does not check the main Hub's staleness for a promote claim and a standby claim shares the branch's fence rate key: revisit with Story 9.22.
+
+## Deferred from: code review of spec-10-15 (2026-10-31)
+
+- A `refund.processed` for the last payment arriving after the subscription is already `refunded` leaves the request `issued` (completion statements skipped). Unreachable today; revisit if another path sets `refunded`.

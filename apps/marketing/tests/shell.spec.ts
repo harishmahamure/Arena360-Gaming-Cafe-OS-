@@ -44,7 +44,7 @@ test("the skip link is first in the tab order and moves focus to main", async ({
 
 test("at 1440 px the header is 80 px with the five links and one Get started", async ({ page }) => {
   await page.setViewportSize(DESKTOP);
-  await open(page, "/");
+  await open(page, "/no-such-page"); // a padded page: Home is full-bleed
   const bar = page.locator(".site-header .bar");
   expect((await bar.boundingBox())?.height).toBe(80);
   const nav = page.getByRole("banner").getByRole("navigation", { name: t("site.nav.main") });
@@ -73,7 +73,7 @@ test("at 390 px the header is 64 px, sticky, with the hamburger and Get started"
   page,
 }) => {
   await page.setViewportSize(PHONE);
-  await open(page, "/");
+  await open(page, "/no-such-page"); // a padded page: Home is full-bleed
   const header = page.locator(".site-header");
   expect((await page.locator(".site-header .bar").boundingBox())?.height).toBe(64);
   await expect(page.getByRole("button", { name: t("site.nav.menu_open") })).toBeVisible();

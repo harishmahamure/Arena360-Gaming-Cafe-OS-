@@ -10,9 +10,11 @@ interface Props {
   description: string;
   /** Pages that are not content (the 404): no canonical URL, and search engines stay away. */
   noindex?: boolean;
+  /** Full-bleed page: `main` has no padding or width cap, and each section sets its own. */
+  bleed?: boolean;
 }
 
-const { title, description, noindex = false } = Astro.props;
+const { title, description, noindex = false, bleed = false } = Astro.props;
 const canonical = canonicalUrl(Astro.url.pathname);
 const current = Astro.url.pathname;
 ---
@@ -64,7 +66,7 @@ const current = Astro.url.pathname;
     <header class="site-header">
       <SiteNav client:load startHref={startUrl()} current={current} />
     </header>
-    <main id="main" tabindex="-1">
+    <main id="main" tabindex="-1" class:list={{ "main--bleed": bleed }}>
       <slot />
     </main>
     <SiteFooter />

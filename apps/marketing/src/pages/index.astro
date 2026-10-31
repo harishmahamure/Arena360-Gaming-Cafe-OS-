@@ -1,9 +1,88 @@
 ---
-import { t } from "@arena/ui";
+import { HeroMedia, LinkButton, t } from "@arena/ui";
+import HubShot from "../components/HubShot.astro";
 import Layout from "../layouts/Layout.astro";
+import { homePrices } from "../lib/price";
+import { HERO_VIDEO, startUrl } from "../lib/site";
+import "../styles/home.css";
+
+const steps = ["install", "pair", "play"] as const;
+const prices = homePrices();
 ---
 
-<Layout title={t("site.home.title")} description={t("site.home.description")}>
-  <h1>{t("site.home.heading")}</h1>
-  <p>{t("site.home.lede")}</p>
+<Layout title={t("site.home.title")} description={t("site.home.description")} bleed>
+  <!-- The hero is a media section: it keeps the dark tokens and the scrim in every mode, and
+       only high contrast (synced below, before first paint) swaps it for solid `bg`. -->
+  <section class="hero" data-theme="dark" aria-labelledby="home-title">
+    <HeroMedia client:load sources={HERO_VIDEO} />
+    <div class="hero-inner">
+      <div class="hero-copy">
+        <p class="eyebrow">{t("site.home.eyebrow")}</p>
+        <h1 id="home-title">{t("site.home.heading")}</h1>
+        <p class="lede">{t("site.home.lede")}</p>
+        <div class="hero-cta">
+          <LinkButton href={startUrl()} label="site.cta.get_started" size="lg" />
+          <LinkButton href="/pricing" label="site.home.see_pricing" variant="secondary" />
+        </div>
+        <p class="fine">{t("site.home.fine")}</p>
+      </div>
+      <HubShot />
+    </div>
+  </section>
+  <script is:inline>
+    (function () {
+      var hero = document.currentScript.previousElementSibling;
+      var html = document.documentElement;
+      var sync = function () {
+        hero.setAttribute("data-theme", html.getAttribute("data-theme") === "hc" ? "hc" : "dark");
+      };
+      sync();
+      new MutationObserver(sync).observe(html, {
+        attributes: true,
+        attributeFilter: ["data-theme"],
+      });
+    })();
+  </script>
+  <section class="home-section" aria-labelledby="home-steps">
+    <h2 id="home-steps">{t("site.home.steps.title")}</h2>
+    <ol class="home-grid">
+      {steps.map((step, i) => (
+        <li class="home-card">
+          <p class="step-number">{t("site.home.steps.step", { n: i + 1 })}</p>
+          <h3>{t(`site.home.steps.${step}.title`)}</h3>
+          <p>{t(`site.home.steps.${step}.body`)}</p>
+        </li>
+      ))}
+    </ol>
+  </section>
+
+  <section class="home-section" aria-labelledby="home-gets">
+    <h2 id="home-gets">{t("site.home.gets.title")}</h2>
+    <div class="home-grid">
+      <div class="home-card">
+        <h3>{t("site.home.gets.offline.title")}</h3>
+        <p>{t("site.home.gets.offline.body")}</p>
+      </div>
+      <div class="home-card">
+        <h3>{t("site.home.gets.owner.title")}</h3>
+        <p>{t("site.home.gets.owner.body")}</p>
+        <a href="/product">{t("site.home.gets.owner.link")}</a>
+      </div>
+      <div class="home-card">
+        <h3>{t("site.home.gets.price.title")}</h3>
+        <p class="tabular">{t("site.home.gets.price.body", prices)}</p>
+        <a href="/pricing">{t("site.home.gets.price.link")}</a>
+      </div>
+    </div>
+  </section>
+
+  <section class="home-section" aria-labelledby="home-start">
+    <div class="home-band">
+      <div>
+        <h2 id="home-start">{t("site.home.band.title")}</h2>
+        <p>{t("site.home.band.body")}</p>
+      </div>
+      <LinkButton href={startUrl()} label="site.cta.get_started" size="lg" />
+    </div>
+  </section>
 </Layout>

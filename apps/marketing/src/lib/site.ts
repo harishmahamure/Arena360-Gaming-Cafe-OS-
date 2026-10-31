@@ -36,3 +36,9 @@ export function routeOf(file: string): string | null {
   const path = route.replace(/(^|\/)index$/, "");
   return "/" + path;
 }
+
+/**
+ * The hero's background video, in the order the browser should try them. Empty until a muted clip
+ * with no audio track is cleared for use; the still cover and then solid `bg` show meanwhile.
+ */
+export const HERO_VIDEO: readonly { src: string; type: string }[] = [];

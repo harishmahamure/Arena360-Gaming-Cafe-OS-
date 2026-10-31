@@ -1,0 +1,102 @@
+---
+import { t } from "@arena/ui";
+
+// A still of the Hub floor view. It is always dark (the Hub is dark-only), so it reads from the
+// Hub tokens, and it is described once for assistive tech rather than tile by tile.
+const s = (key: string) => t(`site.home.shot.${key}` as never);
+
+type Tile = {
+  name: string;
+  status: string;
+  state: string;
+  big: string;
+  small?: boolean;
+  who: string;
+  order?: boolean;
+  dashed?: boolean;
+};
+
+const pcs: Tile[] = [
+  { name: "pc1", status: "free", state: "free", big: "rate_pro", who: "who_pro" },
+  { name: "pc2", status: "in_session", state: "in-session", big: "time_pc2", who: "who_pc2" },
+  { name: "pc3", status: "paused", state: "paused", big: "time_pc3", who: "who_pc3" },
+  {
+    name: "pc4",
+    status: "in_session",
+    state: "in-session",
+    big: "time_pc4",
+    who: "who_pc4",
+    order: true,
+  },
+  {
+    name: "pc5",
+    status: "reserved",
+    state: "reserved",
+    big: "at_seven",
+    small: true,
+    who: "who_pc5",
+  },
+  {
+    name: "pc6",
+    status: "unassigned",
+    state: "unassigned",
+    big: "new_pc",
+    small: true,
+    who: "who_pc6",
+    dashed: true,
+  },
+];
+const consoles: Tile[] = [
+  { name: "ps5_3", status: "in_session", state: "in-session", big: "time_tv3", who: "who_tv3" },
+  { name: "ps5_4", status: "free", state: "free", big: "rate_console", who: "who_console" },
+  {
+    name: "xbox_5",
+    status: "offline",
+    state: "offline",
+    big: "none",
+    small: true,
+    who: "who_xbox",
+  },
+];
+const zones = [
+  { title: "zone_pcs", tiles: pcs },
+  { title: "zone_consoles", tiles: consoles },
+];
+---
+
+<figure class="hub-shot" aria-label={s("label")}>
+  <div aria-hidden="true">
+    <div class="hub-shot-head">
+      <b>{s("title")}</b>
+      <span class="hub-shot-rule">{s("rule")}</span>
+      <span class="hub-shot-spacer"></span>
+      <span class="hub-shot-muted">{s("backup")}</span>
+      <span class="hub-shot-clock">{s("clock")}</span>
+    </div>
+    {zones.map((zone) => (
+      <>
+        <p class="hub-shot-zone">{s(zone.title)}</p>
+        <div class="hub-shot-grid">
+          {zone.tiles.map((tile) => (
+            <div
+              class:list={["hub-tile", { "hub-tile--dashed": tile.dashed }]}
+              data-state={tile.state}
+            >
+              <div class="hub-tile-top">
+                <span>{s(tile.name)}</span>
+                <span class="hub-tile-badge">{s(tile.status)}</span>
+              </div>
+              <div class:list={["hub-tile-big", { "hub-tile-big--small": tile.small }]}>
+                {s(tile.big)}
+              </div>
+              <div class="hub-tile-bottom">
+                <span class="hub-tile-who">{s(tile.who)}</span>
+                {tile.order && <span class="hub-tile-order">{s("order")}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </>
+    ))}
+  </div>
+</figure>

@@ -6,7 +6,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { routeOf } from "../apps/marketing/src/lib/site.ts";
+import { shouldPlay } from "../packages/ui/src/hero-video.js";
 import { resolveSiteTheme } from "../packages/ui/src/theme.js";
+import { failures, median } from "../apps/marketing/scripts/lighthouse.mjs";
 
 test("High contrast is its own switch, on top of System · Light · Dark", () => {
   assert.equal(resolveSiteTheme("system", false, null, false), "light");
@@ -68,4 +70,26 @@ test("a staging build points at the staging origin, asks crawlers to stay away a
   } finally {
     rmSync(out, { recursive: true, force: true });
   }
+});
+
+test("the hero video plays only when it is visible, allowed, not paused and not failed", () => {
+  const ok = { reducedMotion: false, visible: true, paused: false, failed: false };
+  assert.equal(shouldPlay(ok), true);
+  assert.equal(shouldPlay({ ...ok, reducedMotion: true }), false);
+  assert.equal(shouldPlay({ ...ok, visible: false }), false);
+  assert.equal(shouldPlay({ ...ok, paused: true }), false);
+  assert.equal(shouldPlay({ ...ok, failed: true }), false);
+});
+
+test("the Lighthouse gate fails on LCP of 2.5 s or more and on scores under 90", () => {
+  const pass = { lcp: 2499, performance: 90, accessibility: 90 };
+  assert.deepEqual(failures(pass), []);
+  assert.equal(failures({ ...pass, lcp: 2500 }).length, 1);
+  assert.equal(failures({ ...pass, performance: 89 }).length, 1);
+  assert.equal(failures({ ...pass, accessibility: 89 }).length, 1);
+  assert.equal(
+    failures({ lcp: Number.NaN, performance: Number.NaN, accessibility: 100 }).length,
+    2,
+  );
+  assert.equal(median([3000, 1000, 2000]), 2000);
 });

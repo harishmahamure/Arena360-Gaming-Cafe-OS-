@@ -6,11 +6,20 @@
     href,
     label,
     variant = "primary",
-  }: { href: string; label: MessageKey; variant?: "primary" | "secondary" } = $props();
+    size = "md",
+  }: {
+    href: string;
+    label: MessageKey;
+    variant?: "primary" | "secondary";
+    /** `lg` is the hero and closing-band call to action: taller with more side padding. */
+    size?: "md" | "lg";
+  } = $props();
 </script>
 
-<a class="ui-interactive link-button link-button--{variant}" {href} data-component="link-button"
-  >{t(label)}</a
+<a
+  class="ui-interactive link-button link-button--{variant} link-button--{size}"
+  {href}
+  data-component="link-button">{t(label)}</a
 >
 
 <style>
@@ -38,6 +47,11 @@
   .link-button--primary {
     --ui-bg: var(--button-primary-background);
     color: var(--button-primary-foreground);
+  }
+
+  .link-button--lg {
+    min-height: 56px;
+    padding-inline: var(--space-6);
   }
 
   .link-button--secondary {

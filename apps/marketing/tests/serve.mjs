@@ -1,27 +1,12 @@
 // Builds the site twice (normal, and the pseudo-locale with every string 30% longer) and serves
 // both static outputs: `dist` on 5180 and `dist-pseudo` on 5181. Used by playwright.config.ts.
-// Like Workers static assets with `not_found_handling: "404-page"`: an unknown path gets 404.html.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { createServer } from "node:http";
-import { extname, join, normalize, resolve, sep } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { serve } from "./static-server.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const TYPES = {
-  ".html": "text/html; charset=utf-8",
-  ".css": "text/css",
-  ".js": "text/javascript",
-  ".xml": "application/xml",
-  ".txt": "text/plain",
-  ".woff2": "font/woff2",
-  ".svg": "image/svg+xml",
-  ".ico": "image/x-icon",
-  ".png": "image/png",
-  ".json": "application/json",
-};
-
 const astro = (args, env = {}) =>
   execFileSync("pnpm", ["exec", "astro", "build", ...args], {
     cwd: root,
@@ -33,29 +18,5 @@ const astro = (args, env = {}) =>
 astro([]);
 astro(["--outDir", "dist-pseudo"], { PUBLIC_PSEUDO: "1" });
 
-function serve(dir, port) {
-  const base = join(root, dir);
-  createServer((request, response) => {
-    let path;
-    try {
-      path = decodeURIComponent(new URL(request.url ?? "/", "http://x").pathname);
-    } catch {
-      response.writeHead(400).end();
-      return;
-    }
-    const candidates = [path, join(path, "index.html"), path + ".html"].map((p) =>
-      normalize(join(base, p)),
-    );
-    const file = candidates.find(
-      (p) => p.startsWith(base + sep) && existsSync(p) && statSync(p).isFile(),
-    );
-    const found = file ?? join(base, "404.html");
-    response.writeHead(file ? 200 : 404, {
-      "Content-Type": TYPES[extname(found)] ?? "application/octet-stream",
-    });
-    response.end(readFileSync(found));
-  }).listen(port, "127.0.0.1");
-}
-
-serve("dist", 5180);
-serve("dist-pseudo", 5181);
+await serve(join(root, "dist"), 5180);
+await serve(join(root, "dist-pseudo"), 5181);

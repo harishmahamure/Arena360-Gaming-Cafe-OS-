@@ -47,6 +47,8 @@ export {
 } from "./theme.js";
 export { default as SiteThemeToggle } from "./components/SiteThemeToggle.svelte";
 export { default as SiteNav } from "./components/SiteNav.svelte";
+export { default as HeroMedia } from "./components/HeroMedia.svelte";
+export { shouldPlay } from "./hero-video.js";
 export { default as PasswordField } from "./components/PasswordField.svelte";
 export { default as WizardProgress } from "./components/WizardProgress.svelte";
 export { default as PairingCode } from "./components/PairingCode.svelte";

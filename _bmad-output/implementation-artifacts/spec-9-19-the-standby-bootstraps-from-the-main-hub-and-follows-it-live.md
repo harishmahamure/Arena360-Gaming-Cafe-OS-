@@ -2,7 +2,7 @@
 title: 'Story 9.19: The standby bootstraps from the main Hub and follows it live'
 type: 'feature'
 created: '2026-10-31'
-status: 'in-review'
+status: 'done'
 baseline_revision: '4ca5f42f'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -95,3 +95,9 @@ deferred:
 **Commands:**
 - `cargo test -p arena-proto -p arena-store -p arena-replay -p arena-api -p arena-tasks`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --check`
 - `pnpm run gen:types`, `pnpm run check:strings`
+
+## Code Review (2026-10-31)
+
+- Reviewed the full diff of `52bcd87a` against the spec (main-Hub route and stream, verbatim apply, snapshot build/load, follower engine). No blocking findings; no code changes.
+- Re-verified: clippy `-D warnings` clean and `cargo fmt --check` clean on the touched crates; tests pass for arena-proto, arena-store, arena-tasks, arena-api (incl. `tests/replicate.rs`, 7/7). The one failure, `arena-replay` `replaying_the_seeded_log_reproduces_branch_and_settings`, fails identically on the baseline (`HEAD~1`).
+- Noted, not blocking: keys are read at send time, so a key erased between the row read and the key read reaches the standby slightly ahead of its `players` row (converges on the next batch).

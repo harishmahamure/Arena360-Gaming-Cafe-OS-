@@ -191,9 +191,11 @@ impl<C: EpochClaimer> Promoter<C> {
     /// The claim: `Some(epoch)` when the cloud issued one, `None` when it did not answer in time
     /// (a provisional epoch), an error when it answered no.
     async fn claim(&self, mut req: FenceClaimRequest) -> Result<Option<String>, AppError> {
-        // Once more with the fence the cloud named; a second `FENCED` means a newer Hub won.
+        // One wait for both tries: the cloud has 3 s in all. Once more with the fence the cloud
+        // named; a second `FENCED` means a newer Hub won.
+        let deadline = tokio::time::Instant::now() + self.claim_wait;
         for attempt in 0..2 {
-            let answer = tokio::time::timeout(self.claim_wait, self.claimer.claim(&req)).await;
+            let answer = tokio::time::timeout_at(deadline, self.claimer.claim(&req)).await;
             match answer {
                 Err(_) | Ok(Err(CloudFailure::Unreachable(_))) => return Ok(None),
                 Ok(Err(CloudFailure::Refused { status, .. })) if status >= 500 => {
@@ -248,8 +250,14 @@ impl<C: EpochClaimer> Promoter<C> {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .report(now);
 
-        // From here the log of the old epoch must not move.
+        // From here the log of the old epoch must not move. The basis is read again once the stop
+        // is sent (it waits for a batch the follower is applying), so the fork the cloud is given
+        // is the one the database records.
         self.stop_follower.send_replace(true);
+        let basis = self
+            .blocking(|s| s.promote_basis())
+            .await
+            .map_err(PromoteError::after_stop)?;
         let claimed = if basis.old_epoch.is_empty() {
             // Nothing was ever replicated, so there is no fence to move from.
             None

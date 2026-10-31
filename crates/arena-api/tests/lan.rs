@@ -509,6 +509,8 @@ async fn paired_hello_records_the_version_and_pushes_applies() {
     assert_eq!(ok.device_id.as_deref(), Some(hub.paired_id.as_str()));
     assert_eq!((ok.class, ok.primary), (ClientClass::Paired, true));
     assert_eq!(ok.versions.app, "0.1.0");
+    // The Hub states the epoch of its lease, which a device keeps as its floor (Story 9.21).
+    assert_eq!(ok.epoch.as_deref(), Some(format!("1:{HUB_ID}").as_str()));
     let mut events = client.events().unwrap();
 
     // The version is recorded through `device.version_reported`, itself pushed as an event

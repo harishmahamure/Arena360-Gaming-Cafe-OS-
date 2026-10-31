@@ -609,3 +609,12 @@
 - Nothing reads `gz_control.kek_escrow` yet; Story 9.10 adds the one reader (key release to a replacement Hub) and must write its `admin_audit` row in the same transaction like `put_kek_escrow` does.
 - The retention sweep (Story 9.15) must never touch `keys/`; the standby (9.19) must replicate `player_keys` and its `backup_state` triggers fire on the standby too.
 - Key backup status (`keys_backed_up_at`, `keys_error`) is stored but not shown: the Hub header and System screen are Stories 9.16 and 9.17.
+
+## Deferred from: code review of spec-9-21-promote-the-standby-to-main-with-a-manager-pin (2026-10-31)
+
+- A standby that replicated nothing promotes locally without a cloud claim (the cloud never swaps roles); decide a refusal or confirmation with Story 9.22 (force promote).
+- A provisional promote is never settled in the cloud (heartbeat refuses a standby-role token; nothing re-sends the claim): settle it in the running-Hub wiring.
+- No once-only guard on repeated or concurrent `POST /ui/standby/promote`: add it in the promote hook (`UiAuth::set_promote`) when the Hub wires it.
+- Cloud claim won but `promote_to_main` fails (follower stopped, roles swapped), and a cloud role-swap failure reported as `FENCED` with an unchanged fence: pin with tests when the wiring lands.
+- Follower schema-ahead notes on the mid-stream/snapshot paths lack tests, and `EpochFloor::admit(None)` lets a Hub with no stated epoch through: cover when the kiosk service wiring lands.
+- The cloud does not check the main Hub's staleness for a promote claim and a standby claim shares the branch's fence rate key: revisit with Story 9.22.

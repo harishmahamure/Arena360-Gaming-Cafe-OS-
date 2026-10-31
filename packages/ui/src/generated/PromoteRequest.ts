@@ -5,7 +5,8 @@
  */
 export type PromoteRequest = {
   /**
-   * The Manager's (or Owner's) PIN, when the signed-in member is not one.
+   * The PIN that confirms the promote: the signed-in Manager's (or Owner's) own, or another
+   * holder's when a Counter is signed in. The route refuses a request without one.
    */
   pin?: string;
 };

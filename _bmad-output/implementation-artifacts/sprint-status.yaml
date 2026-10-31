@@ -287,7 +287,7 @@ development_status:
   9-18-owner-issues-a-standby-code-and-a-second-pc-pairs-as-standby: done
   9-19-the-standby-bootstraps-from-the-main-hub-and-follows-it-live: done
   9-20-the-standby-keeps-its-own-catalogue-media-and-licence-and-sh: done
-  9-21-promote-the-standby-to-main-with-a-manager-pin: review
+  9-21-promote-the-standby-to-main-with-a-manager-pin: done
   9-22-force-promote-after-a-data-loss-warning: backlog
   9-23-the-new-main-hub-lists-what-was-set-aside-after-a-promote-or: backlog
   9-24-a-returning-old-main-hub-locks-itself: backlog

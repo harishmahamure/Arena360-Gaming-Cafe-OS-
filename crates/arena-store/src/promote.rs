@@ -71,12 +71,12 @@ fn epoch_counter(epoch: &str) -> i64 {
 fn erasures(conn: &Connection) -> Result<Vec<(String, i64)>, AppError> {
     let mut stmt = conn
         .prepare(
-            "SELECT player_id, erased_at FROM players WHERE erased_at IS NOT NULL
-             UNION
-             SELECT row_id, at FROM changes
+            "SELECT player_id, erased_at, 0 FROM players WHERE erased_at IS NOT NULL
+             UNION ALL
+             SELECT row_id, at, 1 FROM changes
               WHERE tbl = 'players' AND intent_kind = 'player.erased'
                 AND row_id IN (SELECT player_id FROM players)
-             ORDER BY 1",
+             ORDER BY 1, 3",
         )
         .map_err(db_error)?;
     let rows = stmt

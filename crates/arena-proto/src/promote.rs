@@ -15,7 +15,7 @@ pub const KEY_OPS_LAST_PROMOTE: &str = "ops.last_promote";
 /// Before any promote.
 pub const DEFAULT_OPS_LAST_PROMOTE: &str = "";
 /// How long the main Hub may go without a renewal before "Promote to main" is allowed, in ms. The
-/// standby reads it from the line: the main Hub pings at least every few seconds while it holds
+/// standby reads it from the line: the main Hub pings every 10 s while it holds
 /// its lease.
 pub const MAIN_LEASE_STALE_MS: i64 = 15_000;
 /// How long the epoch claim waits for the cloud before the standby promotes on a provisional
@@ -39,7 +39,8 @@ pub fn main_lease_fresh(silent_ms: Option<i64>) -> bool {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct PromoteRequest {
-    /// The Manager's (or Owner's) PIN, when the signed-in member is not one.
+    /// The PIN that confirms the promote: the signed-in Manager's (or Owner's) own, or another
+    /// holder's when a Counter is signed in. The route refuses a request without one.
     #[serde(default)]
     #[ts(optional)]
     pub pin: Option<String>,

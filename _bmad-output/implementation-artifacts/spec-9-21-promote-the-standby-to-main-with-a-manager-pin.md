@@ -2,7 +2,7 @@
 title: 'Story 9.21: Promote the standby to main with a manager PIN'
 type: 'feature'
 created: '2026-10-31'
-status: 'in-review'
+status: 'done'
 baseline_revision: '7201346b'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -104,3 +104,28 @@ The kitchen displays are marked directly in the database, as a restore does, not
 **Commands:**
 - `cargo test -p arena-proto -p arena-store -p arena-core -p arena-tasks -p arena-api -p arena-kiosk-core -p arena-cloud`, `cargo clippy --workspace --all-targets -- -D warnings` (minus `arena-e2e`, `arena-kiosk-svc`), `cargo fmt --check`
 - `pnpm run gen:types`, `pnpm run check:strings`
+
+### Review Findings
+
+Code review (2026-10-31): 4 layers (Blind Hunter, Edge Case Hunter, Verification Gap, Acceptance Auditor).
+
+- [x] [Review][Patch] Fork read before the follower stopped; the claim could carry a different fork than the database records [crates/arena-tasks/src/promote.rs] — the basis is read again after the stop (it waits on the store lock a batch in flight holds)
+- [x] [Review][Patch] The 3 s wait applied per claim attempt, so a `FENCED` retry could take 6 s before the provisional fallback [crates/arena-tasks/src/promote.rs] — one deadline for both tries
+- [x] [Review][Patch] Erasure re-apply order was undefined for a player in both sources, so the "row's own time" claim did not hold [crates/arena-store/src/promote.rs] — `UNION ALL` with a source rank, ordered by it
+- [x] [Review][Patch] No test that `hello.ok` carries the epoch of a real session [crates/arena-api/tests/lan.rs] — asserted in `paired_hello_records_the_version_and_pushes_applies`
+- [x] [Review][Patch] `PromoteRequest.pin` and `MAIN_LEASE_STALE_MS` doc comments contradicted the route and the 10 s ping [crates/arena-proto/src/promote.rs] (generated TS refreshed)
+- [x] [Review][Defer] A standby that replicated nothing promotes locally without a claim, so the cloud never swaps roles [crates/arena-tasks/src/promote.rs:253] — deferred: spec is silent on the empty case; a refusal or confirmation belongs with Story 9.22 (force promote)
+- [x] [Review][Defer] A provisional promote is not settled in the cloud: heartbeat refuses a standby-role token and nothing re-sends the claim [crates/arena-tasks/src/promote.rs] — deferred: needs the running-Hub wiring (heartbeat after promote), listed in the spec's deferred work
+- [x] [Review][Defer] Two concurrent or repeated `POST /ui/standby/promote` calls have no once-only guard [crates/arena-api/src/ui_promote.rs] — deferred: belongs to the promote hook the Hub wiring builds (`UiAuth::set_promote`)
+- [x] [Review][Defer] Cloud claim succeeded but `promote_to_main` then fails, leaving a stopped follower with the cloud roles already swapped; also the cloud role-swap failure surfaces as `FENCED` naming an unchanged fence [crates/arena-tasks/src/promote.rs, crates/arena-store/src/control/hubs.rs] — deferred: rare partial failures, pin with tests when the wiring lands
+- [x] [Review][Defer] Follower schema-ahead notes on the mid-stream and snapshot paths, and `EpochFloor::admit(None)`, have no integration coverage / let a Hub with no stated epoch through [crates/arena-tasks/src/follow.rs, crates/arena-kiosk-core/src/epoch.rs] — deferred: kiosk and runtime wiring are not built yet; add scripted-link tests then
+- [x] [Review][Defer] Cloud does not check the main Hub's staleness itself and a standby claim shares the branch's rate key [crates/arena-cloud/src/api/fence.rs] — deferred: manual promote by design (the compare-and-set prevents two winners); revisit with Story 9.22
+
+#### Rejected
+
+- A 429 from the cloud aborts the promote — false: the spec says "any other refusal is reported"; only 5xx, unreachable and no answer are provisional.
+- `lease.promote` audit record can be forged by any `ops.promote` holder — low: the holder is a Manager/Owner who can already write settings; a guard would add state checks for no named harm.
+- Log wording changes in `pin_holder`, `set_promote` ignoring a second call, duplicated schema check in store and promoter, `debug_assert!` on `repaired`, `ReplicationLink::main_schema` default — low or cosmetic, not worth added complexity.
+- `PROMOTE_BUDGET_MS` unused — false: it is a documented budget constant, not a runtime limit the spec asks to enforce.
+
+Verification after fixes: clippy clean (arena-proto, arena-store, arena-tasks, arena-api, all targets, `-D warnings`), `cargo fmt --check`, promote tests in arena-proto/store/tasks/api and the lan hello tests pass, `check:strings` ok, `gen:types` refreshed.

@@ -416,6 +416,16 @@ pub struct ChangeMethod {
     pub rev: i64,
 }
 
+/// `POST /v1/branches/:id/subscription/cancel` and `.../cancel/withdraw` (Story 10.14): the `rev`
+/// the owner saw. Cancelling keeps the plan to the end of the paid period; withdrawing it is
+/// "Keep my plan".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct CancelPlan {
+    #[ts(type = "number")]
+    pub rev: i64,
+}
+
 /// What switching the billing cycle comes to, made by the cloud from the subscription's own locked
 /// price book. To yearly: the yearly price (10x monthly, GST on band IN on top) less the unused
 /// days of the paid month, charged today, with the next renewal a year out. To monthly: nothing

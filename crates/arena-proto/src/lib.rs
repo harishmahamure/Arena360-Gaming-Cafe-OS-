@@ -576,7 +576,7 @@ pub use stock_report::{
     WASTE_REASONS, WasteProductRow, WasteReasonRow, WasteReport,
 };
 pub use subscription::{
-    AccountSubscription, AddOns, BranchPlan, ChangeConfirmed, ChangeMethod, ChangePlan,
+    AccountSubscription, AddOns, BranchPlan, CancelPlan, ChangeConfirmed, ChangeMethod, ChangePlan,
     CreateSubscription, CycleSwitchPreview, InvoiceDownload, InvoiceKind, InvoiceList, InvoiceRow,
     MandateMethod, PaymentMethodView, PendingPlanChange, PlanChangeKind, PlanChangePreview,
     PlanChangeSubject, PlanPrice, PlanState, QuoteSubscription, SubscriptionCheckout,

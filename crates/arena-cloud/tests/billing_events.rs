@@ -3581,3 +3581,187 @@ async fn subscriptions_are_counted_per_state_and_the_card_reads_grace() {
     );
     assert_eq!(h.only(&branch).await.state, SubscriptionState::Grace);
 }
+
+// ---- Story 10.14: cancel keeps the plan to the end of the period, then the branch drops to Free ----
+
+impl Harness {
+    async fn cancel_call(&self, branch: &str, access: &str, step: &str, rev: i64) -> Reply {
+        self.call(
+            "POST",
+            &format!("/v1/branches/{branch}/subscription/cancel{step}"),
+            Some(json!({ "rev": rev })),
+            access,
+        )
+        .await
+    }
+
+    /// A step-up proof on the owner's session, as a passed second factor leaves it.
+    fn stepped_up(&self) {
+        let now = self.clock.load(Ordering::SeqCst);
+        self.sql(&format!("UPDATE owner_sessions SET stepup_at = {now}"));
+    }
+}
+
+#[tokio::test]
+async fn cancelling_needs_a_fresh_step_up_and_changes_nothing_without_one() {
+    let (h, a, branch, _id, _token) = Harness::paid_with_hub().await;
+    let rev = h.only(&branch).await.rev;
+    let r = h.cancel_call(&branch, &a, "", rev).await;
+    assert_eq!((r.status, r.code()), (403, "MFA_REQUIRED"), "{}", r.body);
+    assert!(h.fake().cancelled_at_cycle_end().is_empty());
+    let s = h.only(&branch).await;
+    assert!(!s.cancel_at_period_end);
+    assert_eq!(s.rev, rev);
+}
+
+#[tokio::test]
+async fn a_cancel_tells_razorpay_marks_the_card_and_leaves_the_entitlement_and_licence() {
+    let (h, a, branch, id, token) = Harness::paid_with_hub().await;
+    h.stepped_up();
+    let before = h.only(&branch).await;
+    let r = h.cancel_call(&branch, &a, "", before.rev).await;
+    assert_eq!(r.status, 204, "{}", r.body);
+    assert_eq!(h.fake().cancelled_at_cycle_end(), ["sub_fake_001"]);
+    assert!(h.fake().cancelled().is_empty());
+    let s = h.only(&branch).await;
+    assert!(s.cancel_at_period_end);
+    assert_eq!(s.state, SubscriptionState::Active);
+    assert_eq!(s.current_period_end, Some(END_MS));
+    let e = h.db.entitlement(&branch).await.unwrap().unwrap();
+    assert_eq!(
+        (e.tier, e.source),
+        (
+            arena_proto::Tier::Basic,
+            arena_proto::EntitlementSource::Paid
+        )
+    );
+    assert_eq!(h.licence_tier(&token).await, arena_proto::Tier::Basic);
+    let plans = h.plans(&a, "").await;
+    assert_eq!(
+        plans.body["branches"][0]["state"], "cancels",
+        "{}",
+        plans.body
+    );
+    let history = h.db.subscription_history(&id).await.unwrap();
+    assert_eq!(history.last().unwrap().cause, "owner:cancel");
+
+    // A repeat of the same request is harmless; a stale one is refused.
+    let again = h.cancel_call(&branch, &a, "", s.rev).await;
+    assert_eq!(again.status, 204);
+    assert_eq!(h.fake().cancelled_at_cycle_end(), ["sub_fake_001"]);
+    let stale = h.cancel_call(&branch, &a, "", before.rev).await;
+    assert_eq!(
+        (stale.status, stale.code()),
+        (409, "STALE"),
+        "{}",
+        stale.body
+    );
+}
+
+#[tokio::test]
+async fn keep_my_plan_withdraws_the_cancellation_with_the_same_renewal_date() {
+    let (h, a, branch, _id, _token) = Harness::paid_with_hub().await;
+    h.stepped_up();
+    let rev = h.only(&branch).await.rev;
+    assert_eq!(h.cancel_call(&branch, &a, "", rev).await.status, 204);
+    let cancelled = h.only(&branch).await;
+    let r = h.cancel_call(&branch, &a, "/withdraw", cancelled.rev).await;
+    assert_eq!(r.status, 204, "{}", r.body);
+    assert_eq!(h.fake().kept(), ["sub_fake_001"]);
+    assert!(h.fake().cancelled_at_cycle_end().is_empty());
+    let s = h.only(&branch).await;
+    assert!(!s.cancel_at_period_end);
+    assert_eq!(s.state, SubscriptionState::Active);
+    assert_eq!(s.current_period_end, Some(END_MS));
+    let plans = h.plans(&a, "").await;
+    assert_eq!(
+        plans.body["branches"][0]["state"], "active",
+        "{}",
+        plans.body
+    );
+    // Nothing ends at the period end.
+    h.set_now(END_MS + 1);
+    let out = sweep_once(&h.st).await.unwrap();
+    assert_eq!(out.ended, 0);
+}
+
+#[tokio::test]
+async fn a_cancelled_plan_ends_with_no_grace_at_the_period_end_and_the_branch_drops_to_free() {
+    let (h, a, branch, id, token) = Harness::paid_with_hub().await;
+    h.stepped_up();
+    let rev = h.only(&branch).await.rev;
+    assert_eq!(h.cancel_call(&branch, &a, "", rev).await.status, 204);
+
+    h.set_now(END_MS - 1);
+    let out = sweep_once(&h.st).await.unwrap();
+    assert_eq!(
+        (out.graced, out.lapsed, out.ended, out.failed),
+        (0, 0, 0, 0)
+    );
+    assert_eq!(h.state_of(&branch).await, SubscriptionState::Active);
+    assert_eq!(h.licence_tier(&token).await, arena_proto::Tier::Basic);
+
+    h.set_now(END_MS);
+    let out = sweep_once(&h.st).await.unwrap();
+    assert_eq!(
+        (out.graced, out.lapsed, out.ended, out.failed),
+        (0, 0, 1, 0)
+    );
+    let s = h.only(&branch).await;
+    assert_eq!(s.state, SubscriptionState::Ended);
+    assert_eq!(s.grace_until, None);
+    let e = h.db.entitlement(&branch).await.unwrap().unwrap();
+    assert_eq!(
+        (e.tier, e.source),
+        (
+            arena_proto::Tier::Free,
+            arena_proto::EntitlementSource::Free
+        )
+    );
+    // The next heartbeat delivers a Free licence.
+    assert_eq!(h.licence_tier(&token).await, arena_proto::Tier::Free);
+    let last = h.db.subscription_history(&id).await.unwrap();
+    let last = last.last().unwrap();
+    assert_eq!(
+        (
+            last.old_state.as_str(),
+            last.new_state.as_str(),
+            last.cause.as_str()
+        ),
+        ("active", "ended", "job:cancelled-period-ended")
+    );
+    // The card reads Lapsed; the branch may subscribe again; a second run does nothing.
+    // (The access token has expired by now, so the card is read through its own function.)
+    assert_eq!(
+        arena_cloud::account_plan::plan_state(&s),
+        arena_proto::PlanState::Lapsed
+    );
+    assert!(
+        h.db.subscription_of_branch(&branch)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let out = sweep_once(&h.st).await.unwrap();
+    assert_eq!(out.ended, 0);
+}
+
+#[tokio::test]
+async fn a_cancel_is_refused_while_a_renewal_waits_and_after_the_plan_is_over() {
+    let (h, a, branch, id, _token) = Harness::paid_with_hub().await;
+    h.stepped_up();
+    h.send(
+        "evt_approval",
+        &sub_event("subscription.renewal_needs_approval", "sub_fake_001"),
+    )
+    .await;
+    let rev = h.only(&branch).await.rev;
+    let r = h.cancel_call(&branch, &a, "", rev).await;
+    assert_eq!(r.status, 422, "{}", r.body);
+    assert!(h.fake().cancelled_at_cycle_end().is_empty());
+    h.sql(&format!(
+        "UPDATE subscriptions SET state = 'lapsed' WHERE id = '{id}'"
+    ));
+    let r = h.cancel_call(&branch, &a, "", rev).await;
+    assert_eq!(r.status, 404, "{}", r.body);
+}

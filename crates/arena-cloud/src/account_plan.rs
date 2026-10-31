@@ -18,15 +18,14 @@ pub enum PlanError {
 }
 
 /// The subscription a branch's card is about: the newest one that still says something to the
-/// owner. An abandoned, cancelled, ended or refunded one leaves the branch on Free; a lapsed one
-/// is shown as Lapsed.
+/// owner. An abandoned, cancelled or refunded one leaves the branch on Free; a lapsed one, or one
+/// that ended at the end of its period after a cancel, is shown as Lapsed (Story 10.14).
 pub fn current(subs: &[Subscription]) -> Option<&Subscription> {
     subs.iter().find(|s| {
         !matches!(
             s.state,
             SubscriptionState::Abandoned
                 | SubscriptionState::Cancelled
-                | SubscriptionState::Ended
                 | SubscriptionState::Refunded
         )
     })
@@ -41,9 +40,8 @@ pub fn plan_state(sub: &Subscription) -> PlanState {
         SubscriptionState::Active => PlanState::Active,
         SubscriptionState::RenewalNeedsApproval => PlanState::NeedsApproval,
         SubscriptionState::Grace => PlanState::Grace,
-        SubscriptionState::Lapsed => PlanState::Lapsed,
+        SubscriptionState::Lapsed | SubscriptionState::Ended => PlanState::Lapsed,
         SubscriptionState::Cancelled
-        | SubscriptionState::Ended
         | SubscriptionState::Refunded
         | SubscriptionState::Abandoned => PlanState::Free,
     }
@@ -224,7 +222,8 @@ mod tests {
         assert_eq!(read(S::RenewalNeedsApproval, false), P::NeedsApproval);
         assert_eq!(read(S::Grace, false), P::Grace);
         assert_eq!(read(S::Lapsed, false), P::Lapsed);
-        for over in [S::Cancelled, S::Ended, S::Refunded, S::Abandoned] {
+        assert_eq!(read(S::Ended, false), P::Lapsed);
+        for over in [S::Cancelled, S::Refunded, S::Abandoned] {
             assert_eq!(read(over, false), P::Free);
         }
     }

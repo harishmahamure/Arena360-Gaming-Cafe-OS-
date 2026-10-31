@@ -3,6 +3,7 @@
   import type { BranchPlan } from "@arena/ui/generated";
   import { PUBLIC_ONBOARDING_URL } from "$app/env/public";
   import type { MessageKey } from "@arena/ui/messages";
+  import CancelPlan from "./CancelPlan.svelte";
   import ChangePlan from "./ChangePlan.svelte";
   import SwitchCycle from "./SwitchCycle.svelte";
   import { checkoutOptions, loadRazorpay } from "./razorpay";
@@ -10,9 +11,12 @@
   import {
     TIER_TEXT,
     addOnLines,
+    cancelOffer,
     changeMethod,
     changeOffer,
+    keepOffer,
     keepPlan,
+    keepSubscription,
     keepable,
     methodOffer,
     unpaidDate,
@@ -22,6 +26,7 @@
     planName,
     priceText,
     renewalPrice,
+    resubscribeOffer,
     stateText,
     toneOf,
     type Cycle,
@@ -57,6 +62,9 @@
 
   let changing = $state(false);
   let switching = $state(false);
+  let cancelling = $state(false);
+  let withdrawing = $state(false);
+  let withdrawFailed = $state(false);
   let methodBusy = $state(false);
   let methodFailed = $state<MessageKey | null>(null);
   let keeping = $state(false);
@@ -126,6 +134,22 @@
     } catch {
       await abandon();
     }
+  }
+
+  // "Keep my plan": the cancellation is withdrawn and the renewal date stays.
+  async function keepMyPlan() {
+    withdrawing = true;
+    withdrawFailed = false;
+    const res = await keepSubscription(plan);
+    withdrawing = false;
+    if (res.ok) {
+      onchanged(
+        t("owner.cancel.kept", {
+          date: plan.current_period_end ? day(plan.current_period_end) : "",
+        }),
+      );
+    } else if (res.code === "STALE") onchanged(t("owner.subscription.change.stale"));
+    else withdrawFailed = true;
   }
 
   async function keep() {
@@ -259,6 +283,19 @@
               onchanged(t("owner.subscription.change.stale"));
             }}
           />
+        {:else if cancelling}
+          <CancelPlan
+            {plan}
+            oncancel={() => (cancelling = false)}
+            ondone={(message) => {
+              cancelling = false;
+              onchanged(message);
+            }}
+            onstale={() => {
+              cancelling = false;
+              onchanged(t("owner.subscription.change.stale"));
+            }}
+          />
         {:else if offer === "open"}
           <div class="actions">
             <Button
@@ -280,6 +317,13 @@
               disabled={methodBusy}
               disabledReason="owner.subscription.change.working"
             />
+            {#if cancelOffer(plan)}
+              <Button
+                label="owner.cancel.open"
+                variant="secondary"
+                onclick={() => (cancelling = true)}
+              />
+            {/if}
           </div>
           {#if methodFailed}<p role="alert">{t(methodFailed)}</p>{/if}
         {:else if offer === "blocked"}
@@ -301,6 +345,22 @@
             {/if}
           </div>
           {#if methodFailed}<p role="alert">{t(methodFailed)}</p>{/if}
+        {/if}
+        {#if keepOffer(plan) && !changing && !switching && !cancelling}
+          <div class="actions">
+            <Button
+              label="owner.cancel.keep"
+              variant="secondary"
+              onclick={keepMyPlan}
+              disabled={withdrawing}
+              disabledReason="owner.cancel.keep_working"
+            />
+          </div>
+          {#if withdrawFailed}<p role="alert">{t("owner.cancel.keep_failed")}</p>{/if}
+        {/if}
+        {#if resubscribeOffer(plan)}
+          <p data-testid="lapsed-line">{t("owner.subscription.lapsed_line")}</p>
+          <Button label="owner.subscription.resubscribe" onclick={upgrade} />
         {/if}
       {/if}
     </section>

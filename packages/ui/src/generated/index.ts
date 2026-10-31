@@ -78,6 +78,7 @@ export type { BranchSummary } from "./BranchSummary";
 export type { BundleComponent } from "./BundleComponent";
 export type { BusinessBuyer } from "./BusinessBuyer";
 export type { CafeDetails } from "./CafeDetails";
+export type { CancelPlan } from "./CancelPlan";
 export type { CashDeposit } from "./CashDeposit";
 export type { CatalogEntry } from "./CatalogEntry";
 export type { CatalogGame } from "./CatalogGame";

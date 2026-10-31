@@ -198,6 +198,11 @@ export type StubOptions = {
   ) => { status: number; body: unknown };
   /** Answers `POST .../subscription/payment-method` (Story 10.10); recorded in `calls.bodies["method"]`; unset: 404. */
   method?: (body: Record<string, unknown>) => { status: number; body: unknown };
+  /** Answers the cancel routes (Story 10.14). Each body is recorded in `calls.bodies["cancel"]`; unset: 404. */
+  cancel?: (
+    step: "cancel" | "keep",
+    body: Record<string, unknown>,
+  ) => { status: number; body: unknown };
   /** Answers `GET /v1/account/invoices/{id}/pdf`; unset: a signed link. */
   pdf?: (id: string) => { status: number; body: unknown };
   /** Answers a command post instead of the default (queue one row per branch that can take it). */
@@ -380,6 +385,16 @@ export async function stubCloud(
       (bodies["method"] ??= []).push({ branch: method[1], ...body });
       const answer = opts.method?.(body) ?? { status: 404, body: { code: "NOT_FOUND" } };
       return json(answer.body, answer.status);
+    }
+    const cancel = path.match(/^\/v1\/branches\/([^/]+)\/subscription\/cancel(\/withdraw)?$/);
+    if (cancel && req.method() === "POST") {
+      const step = cancel[2] ? "keep" : "cancel";
+      const body = (req.postDataJSON() ?? {}) as Record<string, unknown>;
+      (bodies["cancel"] ??= []).push({ step, branch: cancel[1], ...body });
+      const answer = opts.cancel?.(step, body) ?? { status: 404, body: { code: "NOT_FOUND" } };
+      return answer.status === 204
+        ? route.fulfill({ status: 204 })
+        : json(answer.body, answer.status);
     }
     const pdf = path.match(/^\/v1\/account\/invoices\/([^/]+)\/pdf$/);
     if (pdf && req.method() === "GET") {

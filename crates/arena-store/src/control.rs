@@ -290,6 +290,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
         version: 41,
         sql: include_str!("../control-migrations/0041_subscription_lifecycle.sql"),
     },
+    ControlMigration {
+        version: 42,
+        sql: include_str!("../control-migrations/0042_subscription_cancel.sql"),
+    },
 ];
 
 /// The `gz_control` schema version this binary writes.

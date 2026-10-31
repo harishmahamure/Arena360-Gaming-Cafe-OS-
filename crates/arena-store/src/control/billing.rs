@@ -69,6 +69,8 @@ pub struct Lifecycle {
     /// The branch's paid entitlement ends: it becomes the Free tier with Free claims. A comp
     /// entitlement is left alone.
     pub lapse: bool,
+    /// Sets or clears `cancel_at_period_end` (Story 10.14); `None` leaves it as it is.
+    pub cancel_at_period_end: Option<bool>,
 }
 
 /// What an event does to a subscription. It applies only if the row is still at `expect_rev`.
@@ -221,6 +223,15 @@ fn change_stmts(c: &SubscriptionChange<'_>, now: i64) -> Vec<Stmt> {
     if let Some(p) = &c.plan_change {
         stmts.extend(apply_stmts(p, c.subscription_id, now));
     }
+    if let Some(cancel) = c.lifecycle.cancel_at_period_end {
+        stmts.push(Stmt::new(
+            "UPDATE subscriptions SET cancel_at_period_end = ? WHERE id = ?",
+            vec![
+                SqlValue::Integer(i64::from(cancel)),
+                text(c.subscription_id),
+            ],
+        ));
+    }
     if c.lifecycle.lapse {
         // The paid entitlement ends; a comp grant the staff gave the branch is not ours to end.
         stmts.push(Stmt::new(
@@ -321,15 +332,15 @@ impl ControlDb {
     }
 
     /// Subscriptions whose renewal life moves on at `now`: a renewal waiting for approval or a
-    /// failed renewal charge whose paid period has ended (to `grace`), and a grace period that has
-    /// run out (to `lapsed`). Oldest first.
+    /// failed renewal charge whose paid period has ended (to `grace`), a grace period that has
+    /// run out (to `lapsed`) and a cancelled plan whose paid period has ended (to `ended`). Oldest first.
     pub async fn lifecycle_due(
         &self,
         now: i64,
         limit: u32,
     ) -> Result<Vec<Subscription>, ControlError> {
         let sql = format!(
-            "SELECT {COLUMNS} FROM subscriptions WHERE              (state = 'renewal_needs_approval' AND current_period_end <= ?1)              OR (state = 'active' AND renewal_failed_at IS NOT NULL AND current_period_end <= ?1)              OR (state = 'grace' AND grace_until <= ?1)              ORDER BY COALESCE(grace_until, current_period_end), id LIMIT ?2"
+            "SELECT {COLUMNS} FROM subscriptions WHERE              (state = 'renewal_needs_approval' AND current_period_end <= ?1)              OR (state = 'active' AND renewal_failed_at IS NOT NULL AND current_period_end <= ?1)              OR (state = 'grace' AND grace_until <= ?1)              OR (state = 'active' AND cancel_at_period_end = 1 AND current_period_end <= ?1)              ORDER BY COALESCE(grace_until, current_period_end), id LIMIT ?2"
         );
         let rows = self
             .query(

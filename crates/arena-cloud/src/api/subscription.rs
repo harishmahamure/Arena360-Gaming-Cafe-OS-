@@ -7,9 +7,9 @@
 use std::sync::Arc;
 
 use arena_proto::{
-    AppError, ChangeConfirmed, ChangeMethod, ChangePlan, CreateSubscription, CycleSwitchPreview,
-    ErrorCode, HubPlatform, PlanChangePreview, QuoteSubscription, SubscriptionCheckout,
-    SubscriptionQuote, SubscriptionState, SubscriptionStatus, SwitchCycle,
+    AppError, CancelPlan, ChangeConfirmed, ChangeMethod, ChangePlan, CreateSubscription,
+    CycleSwitchPreview, ErrorCode, HubPlatform, PlanChangePreview, QuoteSubscription,
+    SubscriptionCheckout, SubscriptionQuote, SubscriptionState, SubscriptionStatus, SwitchCycle,
 };
 use arena_store::control::Subscription;
 use axum::extract::State;
@@ -21,6 +21,7 @@ use super::error::ApiError;
 use super::json::ApiJson;
 use super::owned::OwnedBranch;
 use crate::auth::AuthState;
+use crate::cancel;
 use crate::cycle_change;
 use crate::plan_change::{self, ChangeError};
 use crate::subscription::{self, SubscriptionError};
@@ -231,6 +232,56 @@ async fn change_method(
     Ok(Json(done))
 }
 
+/// Cancelling asks for a fresh second factor first (Story 10.14, UX-DR112); the same proof as a
+/// sensitive owner command, so the owner app reuses its step-up dialog.
+fn require_stepup(owned: &OwnedBranch, now: i64) -> Result<(), ApiError> {
+    if super::commands::stepup_fresh(owned.signed.session.stepup_at, now) {
+        return Ok(());
+    }
+    Err(AppError::new(
+        ErrorCode::MfaRequired,
+        "Confirm it's you with a code to cancel this plan.",
+    )
+    .into())
+}
+
+/// `POST /v1/branches/{id}/subscription/cancel` (Story 10.14): the plan stays until the period
+/// end, then the branch moves to Free. Needs a fresh step-up; answers 204.
+async fn cancel_plan(
+    State(st): State<Arc<AuthState>>,
+    owned: OwnedBranch,
+    ApiJson(body): ApiJson<CancelPlan>,
+) -> Result<StatusCode, ApiError> {
+    let (sub, _) = changing(&st, &owned).await?;
+    let now = st.now();
+    require_stepup(&owned, now)?;
+    let provider = st
+        .billing
+        .get()
+        .ok_or_else(|| ApiError::unavailable("no billing provider"))?;
+    cancel::cancel(&st.db, provider, &sub, body.rev, now)
+        .await
+        .map_err(change_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /v1/branches/{id}/subscription/cancel/withdraw` (Story 10.14): "Keep my plan".
+async fn keep_plan(
+    State(st): State<Arc<AuthState>>,
+    owned: OwnedBranch,
+    ApiJson(body): ApiJson<CancelPlan>,
+) -> Result<StatusCode, ApiError> {
+    let (sub, _) = changing(&st, &owned).await?;
+    let provider = st
+        .billing
+        .get()
+        .ok_or_else(|| ApiError::unavailable("no billing provider"))?;
+    cancel::keep(&st.db, provider, &sub, body.rev, st.now())
+        .await
+        .map_err(change_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct KeepPlan {
     rev: i64,
@@ -274,6 +325,11 @@ pub(super) fn router(st: Arc<AuthState>) -> Router {
         .route(
             "/branches/{id}/subscription/payment-method",
             post(change_method),
+        )
+        .route("/branches/{id}/subscription/cancel", post(cancel_plan))
+        .route(
+            "/branches/{id}/subscription/cancel/withdraw",
+            post(keep_plan),
         )
         .with_state(st)
 }

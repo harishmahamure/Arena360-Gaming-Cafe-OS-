@@ -21,7 +21,8 @@ import type {
   Tier,
 } from "@arena/ui/generated";
 import type { MessageKey } from "@arena/ui/messages";
-import { load, probe, send, type Loaded } from "./api";
+import { load, probe, send, type Loaded, type Sent } from "./api";
+import { requestStepUp } from "./commands.svelte";
 import { moneyLocale } from "./today.svelte";
 
 export type Cycle = "monthly" | "yearly";
@@ -222,3 +223,34 @@ export const keepable = (pending: PendingPlanChange): boolean =>
   pending.subject === "plan"
     ? pending.kind === "period_end" || pending.needs_mandate
     : pending.needs_mandate;
+
+const cancelPath = (branchId: string, step: string) =>
+  `/branches/${encodeURIComponent(branchId)}/subscription/cancel${step}`;
+
+/** Whether "Cancel plan" is offered: an active plan with no change waiting (Story 10.14). */
+export const cancelOffer = (plan: BranchPlan): boolean =>
+  plan.state === "active" && !plan.pending_change;
+
+/** Whether "Keep my plan" is offered: a plan set to cancel, before its period ends. */
+export const keepOffer = (plan: BranchPlan): boolean => plan.state === "cancels";
+
+/** Whether "Resubscribe" is offered: the branch runs at Free limits after a lapse or a cancel. */
+export const resubscribeOffer = (plan: BranchPlan): boolean => plan.state === "lapsed";
+
+/**
+ * Cancels at the end of the period. The cloud wants a second factor first (`MFA_REQUIRED`): the
+ * code prompt opens and the same request goes again once it passes; `"declined"` when the owner
+ * closes the prompt. The prompt is asked again if the proof lapsed while the owner typed.
+ */
+export async function cancelPlan(plan: BranchPlan): Promise<Sent<null> | "declined"> {
+  let res = await send<null>("POST", cancelPath(plan.branch_id, ""), { rev: plan.rev });
+  while (!res.ok && res.code === "MFA_REQUIRED") {
+    if (!(await requestStepUp())) return "declined";
+    res = await send<null>("POST", cancelPath(plan.branch_id, ""), { rev: plan.rev });
+  }
+  return res;
+}
+
+/** "Keep my plan": withdraws the cancellation; the renewal date stays. */
+export const keepSubscription = (plan: BranchPlan) =>
+  send<null>("POST", cancelPath(plan.branch_id, "/withdraw"), { rev: plan.rev });

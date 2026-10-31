@@ -110,7 +110,7 @@ pub(super) fn subscription_from(r: &[SqlValue]) -> Result<Subscription, ControlE
     })
 }
 
-const OPEN_STATES: &str = "state NOT IN ('abandoned', 'cancelled', 'lapsed')";
+const OPEN_STATES: &str = "state NOT IN ('abandoned', 'cancelled', 'lapsed', 'ended', 'refunded')";
 
 impl ControlDb {
     /// The subscription with `id`.

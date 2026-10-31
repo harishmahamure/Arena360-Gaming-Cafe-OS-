@@ -5,6 +5,9 @@
 //! whose renewal charge failed, moves to `grace` when its paid period ends: the branch keeps its
 //! paid licence for 7 more days. When the grace period ends, or Razorpay halts the subscription,
 //! it lapses: the entitlement becomes the Free tier and the next heartbeat delivers a Free licence.
+//! A cancelled plan (Story 10.14) ends, with no grace, when its paid period ends: the subscription
+//! becomes `ended` and the entitlement the Free tier.
+//!
 //! A renewal charge that succeeds at any point returns the subscription to `active` through the
 //! webhook, with the next period counted from the original renewal date (see [`crate::webhook`]).
 //!
@@ -61,6 +64,9 @@ pub enum Step {
     Grace(i64),
     /// The grace period has ended: the branch drops to Free.
     Lapse,
+    /// The owner cancelled and the paid period has ended: no grace, the branch drops to Free
+    /// (Story 10.14).
+    End,
 }
 
 /// The next step of `sub` at `now`, or `None` when it has nothing due. A renewal that waits for
@@ -68,6 +74,10 @@ pub enum Step {
 /// `grace_until`.
 pub fn next_step(sub: &Subscription, failed_renewal: bool, now: i64) -> Option<Step> {
     match sub.state {
+        SubscriptionState::Active if sub.cancel_at_period_end => sub
+            .current_period_end
+            .filter(|end| *end <= now)
+            .map(|_| Step::End),
         SubscriptionState::RenewalNeedsApproval => sub
             .current_period_end
             .filter(|end| *end <= now)
@@ -189,6 +199,8 @@ pub struct LifecycleOutcome {
     pub graced: u64,
     /// Subscriptions moved to `lapsed`.
     pub lapsed: u64,
+    /// Cancelled subscriptions whose paid period ended: moved to `ended`.
+    pub ended: u64,
     /// Owner alerts raised or confirmed (an alert already sent is not sent again).
     pub alerted: u64,
     /// Alerts or moves that failed; the next run tries again.
@@ -216,6 +228,14 @@ async fn apply(
         Step::Lapse => (
             SubscriptionState::Lapsed,
             "job:grace-ended",
+            Lifecycle {
+                lapse: true,
+                ..Lifecycle::default()
+            },
+        ),
+        Step::End => (
+            SubscriptionState::Ended,
+            "job:cancelled-period-ended",
             Lifecycle {
                 lapse: true,
                 ..Lifecycle::default()
@@ -275,6 +295,7 @@ pub async fn sweep_once(st: &AuthState) -> Result<LifecycleOutcome, JobError> {
                     match step {
                         Step::Grace(_) => out.graced += 1,
                         Step::Lapse => out.lapsed += 1,
+                        Step::End => out.ended += 1,
                     }
                     tracing::info!(
                         subscription_id = %sub.id,
@@ -344,6 +365,7 @@ pub async fn sweep_once(st: &AuthState) -> Result<LifecycleOutcome, JobError> {
         task = Task::SubscriptionLifecycle.as_str(),
         graced = out.graced,
         lapsed = out.lapsed,
+        ended = out.ended,
         alerted = out.alerted,
         failed = out.failed,
         "subscription lifecycle done"
@@ -493,6 +515,16 @@ mod tests {
         ] {
             assert_eq!(next_step(&sub(over), true, 99 * DAY_MS), None);
         }
+    }
+
+    #[test]
+    fn a_cancelled_plan_ends_at_its_period_end_with_no_grace() {
+        let mut cancelled = sub(SubscriptionState::Active);
+        cancelled.cancel_at_period_end = true;
+        assert_eq!(next_step(&cancelled, false, 10 * DAY_MS - 1), None);
+        assert_eq!(next_step(&cancelled, false, 10 * DAY_MS), Some(Step::End));
+        // A mark of a failed charge does not turn the end into a grace.
+        assert_eq!(next_step(&cancelled, true, 10 * DAY_MS), Some(Step::End));
     }
 
     #[test]

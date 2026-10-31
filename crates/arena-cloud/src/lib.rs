@@ -23,6 +23,7 @@ pub mod auth;
 pub mod backup;
 pub mod billing;
 pub mod branch_code;
+pub mod cancel;
 pub mod catalog;
 pub mod client_ip;
 pub mod command_sweep;

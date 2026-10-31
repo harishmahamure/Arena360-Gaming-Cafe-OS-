@@ -2233,8 +2233,8 @@ built by `upgradeUrl` in `@arena/ui`; each app says where the picker lives with 
   `FEATURE_NOT_IN_TIER`); the Shop menu comes back with ordering off, as before. Counter and owner orders are not gated.
 - **Staff sign-ins.** Nobody is signed out. `StaffDirectory::sign_in` (after the password matched) refuses with `USER_LIMIT`
   - "This branch's plan allows <n> users - ask the owner." - unless the person ranks within `licence.user_cap` among the
-  people Story 2.19 counts: Owner first, then the most recent change row the member authored, then staff id
-  (`arena_store::within_user_cap`). Raising the cap lets everyone in again with no restart.
+    people Story 2.19 counts: Owner first, then the most recent change row the member authored, then staff id
+    (`arena_store::within_user_cap`). Raising the cap lets everyone in again with no restart.
 - **Windows Hub on Free** keeps running at Free limits: the ads gate is Android-only and no screen locks on licence standing.
 - **Standby.** The standby's licence task sets `HubStatus.standby_needs_plan` when its trusted licence lacks `standby`.
   `Follower::with_plan_gate` then stops following (`FollowStatus::NeedsPlan`) and follows again, without a restart, when the
@@ -2242,6 +2242,23 @@ built by `upgradeUrl` in `@arena/ui`; each app says where the picker lives with 
   before anything changes; `GET /ui/standby` carries `needs_plan`. The main Hub is unaffected.
 - Not done here: the runtime that wires the follower, promoter and licence task into the Hub binary passes the gate
   receiver when it lands; the standby screen text lives in the app that renders `needs_plan`.
+
+## Cancel keeps the plan to the end of the period (Story 10.14)
+
+- **Cancel plan.** `POST /v1/branches/{id}/subscription/cancel {rev}` on an `active` subscription needs a fresh step-up
+  (`MFA_REQUIRED` otherwise, the same proof a sensitive owner command uses). Razorpay is told to cancel at cycle end
+  (`cancel_at_cycle_end = 1`), `cancel_at_period_end` is set and one `subscription_history` row (`owner:cancel`) is written.
+  The entitlement and the licence do not change. Refused while a renewal is unpaid, a plan change is waiting, or the row's
+  `rev` moved (`STALE`). A repeat is a no-op. No partial refunds; a full refund inside 7 days is Story 10.15.
+- **Keep my plan.** `POST .../subscription/cancel/withdraw {rev}` takes the cancellation back at Razorpay
+  (`POST /subscriptions/{id}/cancel_update`) and clears the flag. The period and renewal date are untouched.
+- **The end.** The `subscription-lifecycle` jobs task moves an `active` subscription with the flag to `ended` (no grace) when
+  `current_period_end` passes on cloud time and turns the paid entitlement into `free`; the next heartbeat delivers a Free
+  licence, which the Hub handles as in Stories 10.12 and 10.13. The card reads "Lapsed — Free limits" with "Resubscribe".
+  Migration 0042 lets an `ended` or `refunded` subscription release the branch's one-open-subscription slot, so a
+  resubscribe creates a new subscription at the then-live price book. The one-Free-branch rule is unchanged.
+- **Owner app.** Account -> Subscription: "Cancel plan" opens a panel with the policy text and what changes on Free, then asks
+  for the code; a cancelled card shows "Cancels on <date>" and "Keep my plan".
 
 ## Renewals that need approval, grace and lapse (Story 10.11)
 
@@ -2267,7 +2284,7 @@ built by `upgradeUrl` in `@arena/ui`; each app says where the picker lives with 
   (renewal needs approval) or "Update payment method" (grace), both linking to that branch's card on Account -> Subscription.
   The card shows the state's sentence. There is no Razorpay-hosted "approve" call to make: the bank's approval happens
   with the bank, so "Approve" takes the owner to the card that explains it and offers the new-method route.
-- Not done here: what the Hub does when the licence drops (Stories 10.12 and 10.13), cancel (10.14).
+- Not done here: what the Hub does when the licence drops (Stories 10.12 and 10.13), cancel (10.14, above).
 
 ## Switch billing cycle and payment method (Story 10.10)
 

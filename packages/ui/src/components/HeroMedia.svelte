@@ -43,7 +43,11 @@
 
   $effect(() => {
     if (!video) return;
-    if (playing) video.play().catch(() => (failed = true));
+    // A pause() that lands while play() is starting rejects with AbortError; that is not a failure.
+    if (playing)
+      video.play().catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === "AbortError")) failed = true;
+      });
     else video.pause();
   });
 </script>

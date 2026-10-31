@@ -2,7 +2,7 @@
 title: 'Story 11.2: Home tells the install, pair, play story'
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: 'ada1a7f9'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'

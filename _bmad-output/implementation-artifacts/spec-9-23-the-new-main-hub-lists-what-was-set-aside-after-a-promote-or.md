@@ -2,7 +2,7 @@
 title: 'Story 9.23: The new main Hub lists what was set aside after a promote or restore'
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: '6db281c7'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -87,6 +87,7 @@ deferred:
 ## Review Triage Log
 
 - Dev verification (2026-10-31): see the Verification section.
+- Code review (2026-10-31): no blocking findings. fmt, clippy (-D warnings) and tests green for arena-proto, store, core, api, hub. arena-tasks has two failures unrelated to this story (files untouched, environment-dependent): `heartbeat::trusted_time_is_cloud_time_plus_monotonic_elapsed` (Instant minus 8 days underflows on a recently booted Windows PC) and `printer::lan::a_printer_that_stops_reading_times_out` (local socket buffer absorbs the write). Noted, not changed: a sweep-due file that is unreadable is recorded with no invoices and then deleted.
 
 ## Design Notes
 

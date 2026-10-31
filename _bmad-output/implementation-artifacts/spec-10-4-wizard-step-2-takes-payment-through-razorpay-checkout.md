@@ -2,7 +2,7 @@
 title: 'Story 10.4: Wizard step 2 takes payment through Razorpay Checkout'
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: '731bca67228e469ba46b8c98b6dc2d616b533d7b'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -76,6 +76,10 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+Code review (4 layers). Patched: (1) `replace()` could cancel at the provider a subscription already paid in Checkout whose webhook had not landed (reload then pick another plan); it now reads the provider's state first and refuses with `SUBSCRIPTION_EXISTS` unless the subscription is still `created` with no charge (test added). (2) Paid plan cards showed made-up amounts (`₹0`, or IN prices when billing is on and the band is missing); they now show no price in those cases.
+
+Deferred / accepted: reload after paying still shows step 2 (spec residual risk; needs a persisted confirming state, a later story); allowed-methods `display.blocks` shape unverified against live checkout.js; test gaps (non-IN band on sale, poll with a live silent stream, checkout.js loader failure path); 422 vs 400 for the paid PUT (documented). Rejected: `renews_at` fallback (chrono cannot fail for realistic timestamps), loader timeout, unused `onboarding.summary.loading` key (cosmetic).
 
 ## Design Notes
 

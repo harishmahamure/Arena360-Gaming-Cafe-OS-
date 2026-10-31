@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use arena_cloud::auth::AuthState;
-use arena_cloud::billing::{BillingProvider, FakeRazorpay};
+use arena_cloud::billing::{BillingProvider, FakeRazorpay, RemoteSubscription};
 use arena_cloud::config::{AuthConfig, Role, SmsProviderConfig};
 use arena_cloud::crypto::MfaKey;
 use arena_cloud::health::Reachability;
@@ -797,6 +797,33 @@ async fn a_provider_failure_while_replacing_keeps_the_old_subscription() {
         .subscribe(&branch, &a, request("basic", "monthly", "IN"))
         .await;
     assert_eq!(again.body, first.body);
+}
+
+#[tokio::test]
+async fn a_subscription_the_provider_holds_as_paid_is_not_cancelled_by_another_choice() {
+    let (h, a, branch) = Harness::owner_with_branch().await;
+    let first = h
+        .subscribe(&branch, &a, request("basic", "monthly", "IN"))
+        .await;
+    assert_eq!(first.status, 201, "{}", first.body);
+    // Paid in Checkout; the webhook has not landed, so the row is still unpaid `pending`.
+    h.fake().set_remote(
+        "sub_fake_001",
+        RemoteSubscription {
+            status: "active".to_owned(),
+            current_end_ms: None,
+            paid_count: 1,
+            payment: None,
+        },
+    );
+    let r = h
+        .subscribe(&branch, &a, request("premium", "monthly", "IN"))
+        .await;
+    assert_eq!((r.status, r.code()), (409, "SUBSCRIPTION_EXISTS"));
+    assert!(h.fake().cancelled().is_empty());
+    let rows = h.rows(&branch).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].state.as_str(), "pending");
 }
 
 #[tokio::test]

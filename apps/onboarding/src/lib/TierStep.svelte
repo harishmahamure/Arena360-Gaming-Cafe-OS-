@@ -60,6 +60,7 @@
   const canContinue = $derived(selected !== null && optionOf(selected)?.available === true);
   const cycle: Cycle = $derived(period === "yearly" ? "yearly" : "monthly");
   const band: Band = $derived.by(() => choices?.band ?? "IN");
+  const buyable = $derived(choices?.billing_enabled === true);
   /** A paid plan is picked and can be bought: Continue goes to the summary, not to the API. */
   const buying = $derived.by(
     () =>
@@ -109,6 +110,9 @@
 
   function price(plan: Plan): string {
     const line = plan.key === "free" ? null : snapshotPrice(band, plan.key, cycle);
+    // A paid plan with no price line (or, with billing on, no band) shows no price rather than a
+    // made-up amount.
+    if (plan.key !== "free" && (!line || (buyable && !choices?.band))) return "";
     const currency = line?.currency ?? snapshotPrice(band, "basic", cycle)?.currency ?? "INR";
     const amount = money(line?.minor ?? 0, currency);
     const key: MessageKey =
@@ -124,7 +128,9 @@
 
   /** GST shows on band IN only, and only on a priced plan. */
   const taxed = (plan: Plan): boolean =>
-    plan.key !== "free" && snapshotPrice(band, plan.key, cycle)?.gst === true;
+    plan.key !== "free" &&
+    !(buyable && !choices?.band) &&
+    snapshotPrice(band, plan.key, cycle)?.gst === true;
 
   function pickPlan(key: Tier) {
     selected = key;

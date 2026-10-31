@@ -322,6 +322,15 @@ async fn replace(
     let Some(rid) = &old.razorpay_subscription_id else {
         return Err(SubscriptionError::Exists(old.state));
     };
+    // The owner may have paid (or authorised the mandate) while the webhook is still on its way:
+    // a subscription the provider no longer holds as just `created` is never cancelled here.
+    match provider.fetch_subscription(rid).await {
+        Ok(Some(remote)) if remote.status != "created" || remote.paid_count > 0 => {
+            return Err(SubscriptionError::Exists(old.state));
+        }
+        Ok(_) => {}
+        Err(e) => return Err(SubscriptionError::Provider(e.0)),
+    }
     match provider.cancel_subscription(rid).await {
         Ok(CancelResult::Cancelled) => {}
         Ok(CancelResult::Deferred) => {

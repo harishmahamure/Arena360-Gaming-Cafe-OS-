@@ -181,6 +181,10 @@ pub(super) fn mutate(
             Target::Setting(row) => super::ops_restore::mutate(tx, intent, p, row.as_ref()),
             _ => Err(mismatch()),
         },
+        IntentPayload::OpsOrphanSweep(p) => match target {
+            Target::Setting(row) => super::orphan_sweep::mutate(tx, p, row.as_ref()),
+            _ => Err(mismatch()),
+        },
         IntentPayload::DeviceRegister(d) => match target {
             Target::RegisterEdit(t) => devices::mutate_edit(tx, d, t),
             Target::NewDevice(t) => devices::mutate_register(tx, d, t),

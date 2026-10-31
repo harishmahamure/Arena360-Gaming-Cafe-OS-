@@ -69,6 +69,7 @@ mod order_line;
 mod order_place;
 mod order_ready;
 mod order_void;
+mod orphan_sweep;
 mod owner_alert;
 mod pc_command;
 mod pc_settings;
@@ -295,6 +296,7 @@ fn load(tx: &StoreTx<'_>, intent: &Intent, now: i64) -> Result<Target, AppError>
         P::BackupExport(_) => Target::Setting(backup_export::load(tx)?),
         P::OpsRestore(_) => Target::Setting(ops_restore::load(tx)?),
         P::LeasePromote(_) => Target::Setting(lease_promote::load(tx)?),
+        P::OpsOrphanSweep(_) => Target::Setting(orphan_sweep::load(tx)?),
         P::DeviceRegister(d) => devices::load_register(tx, d)?,
         P::DeviceRevoke(d) => devices::load_device(tx, &d.device_id)?,
         P::DeviceVersionReported(d) => devices::load_device(tx, &d.device_id)?,

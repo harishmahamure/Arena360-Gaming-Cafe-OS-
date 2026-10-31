@@ -854,45 +854,90 @@ pub fn clear_outcome(db_path: &Path) {
     let _ = fs::remove_file(data_dir(db_path).join(RESULT_FILE));
 }
 
-/// Deletes databases in `orphaned/` that are older than [`ORPHAN_KEEP_DAYS`] days at `now_ms`
-/// (the age is the stamp in the name, else the file's modified time). Returns how many files went.
-/// Nothing else in the data directory is touched. Blocking (disk).
-pub fn sweep_orphaned(db_path: &Path, now_ms: i64) -> usize {
+/// A database kept in `orphaned/`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrphanFile {
+    /// The file name, `<epoch>-<timestamp>.db`.
+    pub name: String,
+    pub path: PathBuf,
+    /// When it was set aside, UTC ms: the stamp in the name, else the file's modified time.
+    pub made_at: Option<i64>,
+}
+
+impl OrphanFile {
+    /// Whether it is older than [`ORPHAN_KEEP_DAYS`] days at `now_ms`.
+    pub fn is_due(&self, now_ms: i64) -> bool {
+        let limit = i64::try_from(ORPHAN_KEEP_DAYS).unwrap_or(90) * DAY_MS;
+        self.made_at.is_some_and(|at| now_ms - at > limit)
+    }
+}
+
+/// The databases in `orphaned/` (files ending `.db`), by name. Blocking (disk).
+pub fn list_orphan_files(db_path: &Path) -> Vec<OrphanFile> {
     let dir = data_dir(db_path).join(ORPHANED_DIR);
     let Ok(entries) = fs::read_dir(&dir) else {
-        return 0;
+        return Vec::new();
     };
-    let limit = i64::try_from(ORPHAN_KEEP_DAYS).unwrap_or(90) * DAY_MS;
+    let mut files: Vec<OrphanFile> = entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let base = name.strip_suffix(".db")?;
+            let made_at = base
+                .get(base.len().saturating_sub(15)..)
+                .and_then(unstamp)
+                .or_else(|| {
+                    entry
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .and_then(|d| i64::try_from(d.as_millis()).ok())
+                });
+            Some(OrphanFile {
+                name,
+                path: entry.path(),
+                made_at,
+            })
+        })
+        .collect();
+    files.sort_by(|a, b| a.name.cmp(&b.name));
+    files
+}
+
+/// Deletes the named databases in `orphaned/` with their `-wal` and `-shm` files. Only plain
+/// file names that end `.db` are touched. Returns how many files went. Blocking (disk).
+pub fn delete_orphans(db_path: &Path, names: &[String]) -> usize {
+    let dir = data_dir(db_path).join(ORPHANED_DIR);
     let mut removed = 0;
-    for entry in entries.flatten() {
-        if !entry.file_type().is_ok_and(|t| t.is_file()) {
+    for name in names {
+        if !name.ends_with(".db") || name.contains(['/', '\\']) {
             continue;
         }
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let Some(base) = ["-wal", "-shm"]
-            .iter()
-            .find_map(|s| name.strip_suffix(s))
-            .or(Some(name.as_str()))
-            .and_then(|n| n.strip_suffix(".db"))
-        else {
-            continue;
-        };
-        let made = base
-            .get(base.len().saturating_sub(15)..)
-            .and_then(unstamp)
-            .or_else(|| {
-                entry
-                    .metadata()
-                    .and_then(|m| m.modified())
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .and_then(|d| i64::try_from(d.as_millis()).ok())
-            });
-        if made.is_some_and(|at| now_ms - at > limit) && fs::remove_file(entry.path()).is_ok() {
+        for extra in ["-wal", "-shm"] {
+            if fs::remove_file(dir.join(format!("{name}{extra}"))).is_ok() {
+                removed += 1;
+            }
+        }
+        if fs::remove_file(dir.join(name)).is_ok() {
             removed += 1;
         }
     }
     removed
+}
+
+/// Deletes databases in `orphaned/` that are older than [`ORPHAN_KEEP_DAYS`] days at `now_ms`
+/// (the age is the stamp in the name, else the file's modified time). Returns how many files went.
+/// Nothing else in the data directory is touched. The Hub's daily housekeeping does not call this
+/// but lists them first and writes them into the audit (Story 9.23). Blocking (disk).
+pub fn sweep_orphaned(db_path: &Path, now_ms: i64) -> usize {
+    let due: Vec<String> = list_orphan_files(db_path)
+        .into_iter()
+        .filter(|f| f.is_due(now_ms))
+        .map(|f| f.name)
+        .collect();
+    delete_orphans(db_path, &due)
 }
 
 #[cfg(test)]

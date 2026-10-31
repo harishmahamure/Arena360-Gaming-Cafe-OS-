@@ -137,4 +137,5 @@ export type IntentKind =
   | "ad.request_recorded"
   | "backup.export"
   | "ops.restore"
-  | "lease.promote";
+  | "lease.promote"
+  | "ops.orphan_sweep";

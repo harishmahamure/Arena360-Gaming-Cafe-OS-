@@ -85,6 +85,7 @@ mod rollup;
 mod scan;
 mod scope;
 mod session;
+mod set_aside;
 mod setup_devices;
 mod setup_file;
 mod shift;
@@ -504,6 +505,12 @@ pub use session::{
     SnapshotGroupBill, SnapshotSession, UNDO_WINDOW_MS, UiSessionConvertRequest,
     WALLET_TOPUP_MAX_MINOR, WalletChangedEvent, WalletTopup, WalletTopupReverted, WalletTxnView,
     WalletView,
+};
+pub use set_aside::{
+    DEFAULT_OPS_LAST_ORPHAN_SWEEP, KEY_OPS_LAST_ORPHAN_SWEEP, ORPHAN_SWEEP_SYSTEM_ACTOR,
+    OrphanSweep, OrphanSweepFile, OrphanSweepInvoice, SET_ASIDE_LIST_INVOICES_CAP,
+    SetAsideDatabase, SetAsideExported, SetAsideFork, SetAsideInvoice, SetAsideKind, SetAsideList,
+    set_aside_csv, set_aside_file_name,
 };
 pub use setup_devices::{
     BranchSetup, SETUP_ITEMS_MAX, SetupCommandRequest, SetupCommandView, SetupDevice,

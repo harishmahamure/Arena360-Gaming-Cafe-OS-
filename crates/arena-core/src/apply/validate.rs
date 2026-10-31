@@ -72,6 +72,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Setting(row) => super::ops_restore::validate(intent, p, row.as_ref()),
             _ => Err(internal_target()),
         },
+        IntentPayload::OpsOrphanSweep(p) => match target {
+            Target::Setting(row) => super::orphan_sweep::validate(intent, p, row.as_ref()),
+            _ => Err(internal_target()),
+        },
         IntentPayload::DeviceRegister(d) => match target {
             Target::NewDevice(t) => devices::validate_register(intent, d, t),
             Target::RegisterEdit(t) => devices::validate_edit(intent, d, t),

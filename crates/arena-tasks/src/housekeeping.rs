@@ -16,6 +16,10 @@
 //! writes no change rows and is not audited. Intents expire after 7 days, so a pruned key can
 //! no longer be applied anyway.
 //!
+//! It also sweeps `orphaned/` (Story 9.23): a database there older than 90 days is listed first
+//! (invoice numbers and amounts, no personal data) into the audit as `ops.orphan_sweep`, and
+//! deleted only once that record is committed, so a failed record keeps the file for the next run.
+//!
 //! Each time this Hub becomes primary (and at start, if it already is), the task also runs
 //! [`WriterHandle::seed_defaults`] once: an upgraded branch gets the default settings and
 //! built-in roles it lacks through `apply()` (`branch.seed_defaults`); with nothing missing no
@@ -24,7 +28,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use arena_core::{Clock, HubStatus, Role, WriterHandle};
+use arena_core::{Clock, HubStatus, Role, SnapshotReader, WriterHandle};
 use arena_proto::{AppError, ErrorCode};
 use tokio::sync::watch;
 use tokio::time::{Instant, MissedTickBehavior};
@@ -60,6 +64,8 @@ pub struct HousekeepingTask {
     status: watch::Receiver<HubStatus>,
     writer: WriterHandle,
     interval: Duration,
+    /// The reader and database path the `orphaned/` sweep needs (Story 9.23).
+    orphans: Option<(Arc<SnapshotReader>, std::path::PathBuf)>,
 }
 
 impl HousekeepingTask {
@@ -73,7 +79,18 @@ impl HousekeepingTask {
             status,
             writer,
             interval: HOUSEKEEPING_INTERVAL,
+            orphans: None,
         }
+    }
+
+    /// Turns on the sweep of `orphaned/` beside `db_path` (Story 9.23).
+    pub fn with_orphans(
+        mut self,
+        reader: Arc<SnapshotReader>,
+        db_path: impl Into<std::path::PathBuf>,
+    ) -> Self {
+        self.orphans = Some((reader, db_path.into()));
+        self
     }
 
     fn is_primary(&self) -> bool {
@@ -136,6 +153,40 @@ impl HousekeepingTask {
         }
     }
 
+    /// Story 9.23: records the databases in `orphaned/` older than 90 days in the audit
+    /// (`ops.orphan_sweep`) and, once that is committed, deletes them. Returns how many files
+    /// went; while not primary, or when none is due, 0. A record that fails keeps the files.
+    pub async fn sweep_orphans(&self) -> Result<usize, AppError> {
+        let Some((reader, db_path)) = &self.orphans else {
+            return Ok(0);
+        };
+        if !self.is_primary() {
+            return Ok(0);
+        }
+        let now = self.clock.now_ms();
+        let due = {
+            let reader = Arc::clone(reader);
+            tokio::task::spawn_blocking(move || reader.orphans_due(now))
+                .await
+                .map_err(|_| {
+                    AppError::new(ErrorCode::Internal, "the orphan scan did not finish")
+                })??
+        };
+        let Some(sweep) = due else {
+            return Ok(0);
+        };
+        let names: Vec<String> = sweep.files.iter().map(|f| f.file.clone()).collect();
+        match self.writer.record_orphan_sweep(sweep).await {
+            Ok(_) => {}
+            Err(e) if e.code == ErrorCode::NotPrimary => return Ok(0),
+            Err(e) => return Err(e),
+        }
+        let db_path = db_path.clone();
+        tokio::task::spawn_blocking(move || arena_store::delete_orphans(&db_path, &names))
+            .await
+            .map_err(|_| AppError::new(ErrorCode::Internal, "the orphan delete did not finish"))
+    }
+
     async fn tick_and_log(&self) {
         match self.tick().await {
             Ok(Housekeeping::Pruned(n)) => {
@@ -143,6 +194,14 @@ impl HousekeepingTask {
             }
             Ok(Housekeeping::Idle) => {}
             Err(e) => tracing::warn!(code = e.code.as_str(), "housekeeping failed"),
+        }
+        match self.sweep_orphans().await {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(
+                files = n,
+                "housekeeping: orphaned databases older than 90 days listed in the audit and deleted"
+            ),
+            Err(e) => tracing::warn!(code = e.code.as_str(), "housekeeping: orphan sweep failed"),
         }
         match self.prune_changes().await {
             Ok(0) => {}
@@ -588,6 +647,130 @@ mod tests {
             "EUR",
             "the edit applied"
         );
+    }
+
+    /// A fixture with a branch row, its defaults seeded, and two databases in `orphaned/`: one
+    /// set aside 106 days before NOW holding two invoices the live database lacks, one 45 days.
+    async fn orphan_fixture(role: Role) -> (Fixture, Arc<SnapshotReader>) {
+        use arena_store::{NewBranch, insert_branch};
+        let f = fixture(role);
+        Store::open(&f.path, NOW)
+            .unwrap()
+            .write_tx(|tx| {
+                insert_branch(
+                    tx,
+                    &NewBranch {
+                        branch_id: "B",
+                        name: "Old Branch",
+                        branch_code: "OLD01",
+                        currency: "INR",
+                        tz: "Asia/Kolkata",
+                        day_start_min: 240,
+                        fy_start_month: 4,
+                    },
+                )
+            })
+            .unwrap();
+        let dir = f.path.parent().unwrap().join(arena_store::ORPHANED_DIR);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, invoices) in [
+            ("3-OLD-20261001T000000.db", true),
+            ("4-OLD-20261201T000000.db", false),
+        ] {
+            let target = dir.join(name);
+            arena_store::DbConn::open(&f.path)
+                .unwrap()
+                .execute("VACUUM INTO ?1", [target.to_str().unwrap()])
+                .unwrap();
+            if invoices {
+                let conn = arena_store::DbConn::open(&target).unwrap();
+                for (id, no, total) in [("O1", "INV/0001", 11_800), ("O2", "INV/0002", 500)] {
+                    conn.execute(
+                        "INSERT INTO orders (id, status, subtotal_minor, total_minor, business_day,
+                                             fy, rev, created_at, updated_at, settled_at, kind,
+                                             invoice_no, tax_minor, tax_breakup)
+                         VALUES (?1, 'settled', ?3, ?3, '2026-09-01', 'FY2026-27', 0, 5, 5, 77,
+                                 'pos_sale', ?2, 0, '[]')",
+                        (id, no, total),
+                    )
+                    .unwrap();
+                }
+            }
+        }
+        let reader = Arc::new(SnapshotReader::open(&f.path).unwrap());
+        (f, reader)
+    }
+
+    fn orphan_files(path: &Path) -> Vec<String> {
+        arena_store::list_orphan_files(path)
+            .into_iter()
+            .map(|f| f.name)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn an_old_orphaned_database_is_listed_into_the_audit_and_then_deleted() {
+        let (f, reader) = orphan_fixture(Role::Primary).await;
+        let path = f.path.clone();
+        let task = f.task.with_orphans(Arc::clone(&reader), &path);
+        task.seed_and_log().await;
+
+        assert_eq!(task.sweep_orphans().await.unwrap(), 1);
+        assert_eq!(orphan_files(&path), vec!["4-OLD-20261201T000000.db"]);
+        let store = Store::open(&path, NOW).unwrap();
+        let rows: Vec<_> = store
+            .changes()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.intent_kind == "ops.orphan_sweep")
+            .collect();
+        assert_eq!(rows.len(), 1, "one record");
+        assert_eq!(
+            (rows[0].actor_kind.as_str(), rows[0].actor_id.as_str()),
+            ("system", "hub-orphan-sweep")
+        );
+        let kept = arena_proto::OrphanSweep::parse(
+            &reader
+                .setting_value("ops.last_orphan_sweep")
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(kept.files.len(), 1);
+        assert_eq!(kept.files[0].file, "3-OLD-20261001T000000.db");
+        assert_eq!(kept.files[0].invoices.len(), 2);
+        assert_eq!(kept.swept_at, NOW);
+
+        // Nothing is due any more: no second record.
+        assert_eq!(task.sweep_orphans().await.unwrap(), 0);
+        let again = Store::open(&path, NOW).unwrap().changes().unwrap();
+        assert_eq!(
+            again
+                .iter()
+                .filter(|c| c.intent_kind == "ops.orphan_sweep")
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn a_follower_neither_records_nor_deletes_an_orphaned_database() {
+        let (f, reader) = orphan_fixture(Role::Follower).await;
+        let path = f.path.clone();
+        let task = f.task.with_orphans(reader, &path);
+        assert_eq!(task.sweep_orphans().await.unwrap(), 0);
+        assert_eq!(orphan_files(&path).len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_record_that_is_refused_keeps_the_database() {
+        // No branch settings are seeded, so `ops.last_orphan_sweep` does not exist and the intent
+        // is refused: the file must stay for the next run.
+        let (f, reader) = orphan_fixture(Role::Primary).await;
+        let path = f.path.clone();
+        let task = f.task.with_orphans(reader, &path);
+        assert!(task.sweep_orphans().await.is_err());
+        assert_eq!(orphan_files(&path).len(), 2);
     }
 
     #[tokio::test]

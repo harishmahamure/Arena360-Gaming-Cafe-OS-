@@ -367,7 +367,11 @@ async fn run(
     // Housekeeping (dedupe prune) runs at start and daily while primary; it ends once the
     // writer closes.
     let housekeeping = writer.clone().map(|w| {
-        tokio::spawn(HousekeepingTask::new(w, Arc::clone(&clock), status_tx.subscribe()).run())
+        tokio::spawn(
+            HousekeepingTask::new(w, Arc::clone(&clock), status_tx.subscribe())
+                .with_orphans(Arc::clone(&snapshots), cfg.db_path())
+                .run(),
+        )
     });
     let mut lease_job = Some(tokio::spawn(lease.run()));
     // The WAN probe: the branch's only outbound traffic. It runs on its own task, publishes

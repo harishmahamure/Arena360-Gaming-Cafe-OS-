@@ -548,6 +548,14 @@ enum Op {
         bad: bool,
         lag: i64,
     },
+    /// `ops.orphan_sweep` (Story 9.23) by the Hub, by a member of staff or by another system
+    /// actor, with sound facts or none: only the Hub's own record applies, and a good record sets
+    /// `ops.last_orphan_sweep` to those facts with one change row.
+    OrphanSweep {
+        who: u8,
+        bad: bool,
+        invoices: u8,
+    },
     /// A controller check of a session that may be running, on a PC, ended or already marked: it
     /// applies once for an ended console session and otherwise writes nothing.
     ControllerCheck {
@@ -1006,6 +1014,8 @@ fn op() -> impl Strategy<Value = Op> {
             .prop_map(|(by, other_branch, rows)| Op::OpsRestore { by, other_branch, rows }),
         1 => (0..3u8, prop::bool::weighted(0.3), 0..=100_000i64)
             .prop_map(|(by, bad, lag)| Op::LeasePromote { by, bad, lag }),
+        1 => (0..3u8, prop::bool::weighted(0.3), 0..=5u8)
+            .prop_map(|(who, bad, invoices)| Op::OrphanSweep { who, bad, invoices }),
         3 => (
             0..4u8,
             prop::bool::ANY,
@@ -6361,6 +6371,76 @@ b"
             } else {
                 prop_assert_eq!(hub.change_count(), before);
                 prop_assert_eq!(hub.setting("ops.last_promote"), was);
+            }
+        }
+        Op::OrphanSweep { who, bad, invoices } => {
+            if hub.setting("ops.last_orphan_sweep").is_none() {
+                return Ok(());
+            }
+            let facts = arena_proto::OrphanSweep {
+                files: if *bad {
+                    Vec::new()
+                } else {
+                    vec![arena_proto::OrphanSweepFile {
+                        file: "3-proptest-20270115T133000.db".into(),
+                        set_aside_changes: Some(4),
+                        invoices: (0..*invoices)
+                            .map(|n| arena_proto::OrphanSweepInvoice {
+                                invoice_no: format!("INV/{n}"),
+                                amount_minor: i64::from(n) * 100,
+                            })
+                            .collect(),
+                    }]
+                },
+                swept_at: hub.clock_now(),
+            };
+            let before = hub.change_count();
+            let was = hub.setting("ops.last_orphan_sweep");
+            let mut intent = hub.intent(IntentPayload::OpsOrphanSweep(facts.clone()), None);
+            intent.actor = match who {
+                0 => Actor {
+                    kind: ActorKind::System,
+                    id: arena_proto::ORPHAN_SWEEP_SYSTEM_ACTOR.into(),
+                },
+                1 => Actor {
+                    kind: ActorKind::System,
+                    id: "someone-else".into(),
+                },
+                _ => match hub.staff.first().cloned() {
+                    Some(id) => Actor {
+                        kind: ActorKind::Staff,
+                        id,
+                    },
+                    None => return Ok(()),
+                },
+            };
+            let out = hub.submit_new(intent);
+            if *who == 2 {
+                prop_assert_eq!(code(&out).map(|c| c.0), Some(ErrorCode::PermissionDenied));
+            } else if *who == 1 {
+                prop_assert_eq!(
+                    code(&out),
+                    Some((ErrorCode::ValidationFailed, Some("actor")))
+                );
+            } else if *bad {
+                prop_assert_eq!(
+                    code(&out),
+                    Some((ErrorCode::ValidationFailed, Some("sweep")))
+                );
+            } else {
+                prop_assert!(out.is_ok(), "{:?}", out);
+            }
+            if out.is_ok() {
+                prop_assert_eq!(hub.change_count(), before + 1);
+                let RowValue::Text(json) =
+                    hub.setting("ops.last_orphan_sweep").unwrap()["value"].clone()
+                else {
+                    return Err(TestCaseError::fail("ops.last_orphan_sweep is not text"));
+                };
+                prop_assert_eq!(arena_proto::OrphanSweep::parse(&json), Some(facts));
+            } else {
+                prop_assert_eq!(hub.change_count(), before);
+                prop_assert_eq!(hub.setting("ops.last_orphan_sweep"), was);
             }
         }
         Op::ControllerCheck { slot, missing } => {

@@ -2071,6 +2071,54 @@ impl SnapshotReader {
         crate::gst_archive::build_file(&store, fy, built_at)
     }
 
+    /// What promotes and restores set aside, for System -> Backup (Story 9.23): the forks, the
+    /// databases in `orphaned/` and the invoice numbers only they hold. Blocking (SQLite and disk).
+    pub fn set_aside(&self) -> Result<crate::set_aside::SetAside, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        crate::set_aside::build(&store)
+    }
+
+    /// Writes the set-aside list as CSV into `folder` (Story 9.23): the file's facts and path.
+    /// `VALIDATION_FAILED` on `folder` says why the location cannot take it. Blocking (SQLite and
+    /// disk).
+    pub fn export_set_aside(
+        &self,
+        folder: &str,
+        now_ms: i64,
+    ) -> Result<(arena_proto::SetAsideExported, std::path::PathBuf), AppError> {
+        let branch = self
+            .branch()?
+            .ok_or_else(|| AppError::new(ErrorCode::Internal, "the branch is not set up"))?;
+        let locale = self.locale(now_ms)?;
+        let set_aside = self.set_aside()?;
+        let (tz, currency, exponent) = locale.map_or_else(
+            || ("UTC".to_owned(), "INR".to_owned(), 2),
+            |l| (l.tz, l.currency, l.exponent),
+        );
+        crate::set_aside::export_csv(
+            &set_aside,
+            folder,
+            &branch.branch_code,
+            &tz,
+            &currency,
+            exponent,
+            now_ms,
+        )
+    }
+
+    /// The databases in `orphaned/` older than 90 days at `now_ms`, as the record to write into
+    /// the audit before they are deleted (Story 9.23); `None` when none is due. Blocking.
+    pub fn orphans_due(&self, now_ms: i64) -> Result<Option<arena_proto::OrphanSweep>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        crate::set_aside::sweep_due(&store, now_ms)
+    }
+
     /// The years archived, newest first (Story 9.14).
     pub fn gst_archives(&self) -> Result<arena_proto::GstArchiveList, AppError> {
         let store = self

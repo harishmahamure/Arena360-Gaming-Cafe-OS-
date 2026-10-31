@@ -1154,6 +1154,31 @@ impl WriterHandle {
         .await
     }
 
+    /// Story 9.23: records that the `orphaned/` databases named in `sweep` are about to be
+    /// deleted, by submitting `ops.orphan_sweep` (system actor) through `apply()`: it sets
+    /// `ops.last_orphan_sweep` and appears in the audit. `NOT_PRIMARY` on a follower.
+    pub async fn record_orphan_sweep(
+        &self,
+        sweep: arena_proto::OrphanSweep,
+    ) -> Result<Applied, AppError> {
+        let now = self.clock.now_ms();
+        self.submit_intent(Intent {
+            intent_id: ulid::Ulid::generate().to_string(),
+            kind: arena_proto::IntentKind::OpsOrphanSweep,
+            idempotency_key: ulid::Ulid::generate().to_string(),
+            issued_at: now,
+            base_rev: None,
+            actor: arena_proto::Actor {
+                kind: arena_proto::ActorKind::System,
+                id: arena_proto::ORPHAN_SWEEP_SYSTEM_ACTOR.into(),
+            },
+            elevated_by: None,
+            reason: None,
+            payload: arena_proto::IntentPayload::OpsOrphanSweep(sweep),
+        })
+        .await
+    }
+
     /// How many jobs this writer has been handed (for tests: a `BAD_FRAME` queues none).
     #[cfg(any(test, feature = "test-jobs"))]
     pub fn jobs_submitted(&self) -> u64 {

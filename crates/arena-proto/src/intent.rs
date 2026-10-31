@@ -430,11 +430,16 @@ pub enum IntentKind {
     /// once its writer is open, as the Manager who promoted (`ops.promote`).
     #[serde(rename = "lease.promote")]
     LeasePromote,
+    /// An `orphaned/` database older than 90 days is about to be deleted (Story 9.23): the Hub
+    /// writes what it set aside (invoice numbers and amounts only) into the audit first, as the
+    /// system (`ops.orphan_sweep`).
+    #[serde(rename = "ops.orphan_sweep")]
+    OpsOrphanSweep,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 134] = [
+    pub const ALL: [IntentKind; 135] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -569,6 +574,7 @@ impl IntentKind {
         Self::BackupExport,
         Self::OpsRestore,
         Self::LeasePromote,
+        Self::OpsOrphanSweep,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -708,6 +714,7 @@ impl IntentKind {
             Self::BackupExport => "backup.export",
             Self::OpsRestore => "ops.restore",
             Self::LeasePromote => "lease.promote",
+            Self::OpsOrphanSweep => "ops.orphan_sweep",
         }
     }
 
@@ -733,7 +740,8 @@ impl IntentKind {
             | Self::AdRequestRecorded
             | Self::BackupExport
             | Self::OpsRestore
-            | Self::LeasePromote => IntentCategory::Settings,
+            | Self::LeasePromote
+            | Self::OpsOrphanSweep => IntentCategory::Settings,
             Self::DeviceRegister
             | Self::DeviceRevoke
             | Self::DeviceVersionReported
@@ -945,7 +953,8 @@ impl IntentKind {
             Self::StockExpiryCheck
             | Self::SummaryPublish
             | Self::RollupPublish
-            | Self::GstArchivePublish => Requirement::System,
+            | Self::GstArchivePublish
+            | Self::OpsOrphanSweep => Requirement::System,
             Self::PlayerCreate
             | Self::ImportPlayers
             | Self::PlayerUpdate
@@ -1054,6 +1063,7 @@ impl IntentKind {
             | Self::BackupExport
             | Self::OpsRestore
             | Self::LeasePromote
+            | Self::OpsOrphanSweep
             | Self::ZoneUpsert
             | Self::ZoneDelete
             | Self::DevicePlace
@@ -1844,6 +1854,8 @@ pub enum IntentPayload {
     OpsRestore(crate::OpsRestore),
     #[serde(rename = "lease.promote")]
     LeasePromote(crate::LeasePromote),
+    #[serde(rename = "ops.orphan_sweep")]
+    OpsOrphanSweep(crate::OrphanSweep),
 }
 
 impl IntentPayload {
@@ -1983,6 +1995,7 @@ impl IntentPayload {
             Self::BackupExport(_) => IntentKind::BackupExport,
             Self::OpsRestore(_) => IntentKind::OpsRestore,
             Self::LeasePromote(_) => IntentKind::LeasePromote,
+            Self::OpsOrphanSweep(_) => IntentKind::OpsOrphanSweep,
         }
     }
 }
@@ -2310,7 +2323,8 @@ mod tests {
                 | "stock.expiry_check"
                 | "summary.publish"
                 | "rollup.publish"
-                | "gst_archive.publish" => Requirement::System,
+                | "gst_archive.publish"
+                | "ops.orphan_sweep" => Requirement::System,
                 "settings.set" | "ads.consent" | "printer.status" => {
                     Requirement::Perm(Permission::SettingsEdit)
                 }

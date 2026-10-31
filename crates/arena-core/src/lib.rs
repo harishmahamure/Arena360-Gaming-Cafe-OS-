@@ -49,6 +49,7 @@ pub mod rollup;
 pub mod rollup_plan;
 mod session_screen;
 mod session_timer;
+pub mod set_aside;
 mod settings_defaults;
 pub mod setup;
 pub mod setup_file;

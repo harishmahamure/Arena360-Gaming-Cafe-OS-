@@ -1,5 +1,5 @@
 generated: 10-23-2026 14:00
-last_updated: 10-31-2026 19:00
+last_updated: 10-31-2026 21:00
 project: arena-360-final
 project_key: NOKEY
 tracking_system: file-system
@@ -289,7 +289,7 @@ development_status:
   9-20-the-standby-keeps-its-own-catalogue-media-and-licence-and-sh: done
   9-21-promote-the-standby-to-main-with-a-manager-pin: done
   9-22-force-promote-after-a-data-loss-warning: done
-  9-23-the-new-main-hub-lists-what-was-set-aside-after-a-promote-or: backlog
+  9-23-the-new-main-hub-lists-what-was-set-aside-after-a-promote-or: review
   9-24-a-returning-old-main-hub-locks-itself: backlog
   9-25-make-the-old-main-hub-the-standby: backlog
   9-26-failover-and-split-brain-proven-on-the-test-lan: backlog

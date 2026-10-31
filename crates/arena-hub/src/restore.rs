@@ -61,7 +61,7 @@ pub fn relaunch(args: &[OsString]) {
     }
 }
 
-/// Applies a staged restore (if any) and sweeps `orphaned/`. Answers the outcome to record: the
+/// Applies a staged restore (if any). Answers the outcome to record: the
 /// one just made, or one an earlier start made and did not get to record.
 pub async fn apply_at_start(
     db_path: PathBuf,
@@ -98,13 +98,8 @@ pub async fn apply_at_start(
         } else {
             None
         };
-        let swept = arena_store::sweep_orphaned(&db_path, now_ms);
-        if swept > 0 {
-            tracing::info!(
-                files = swept,
-                "deleted orphaned databases older than 90 days"
-            );
-        }
+        // Databases in `orphaned/` older than 90 days are deleted by the daily housekeeping, which
+        // writes what they held into the audit first (Story 9.23).
         applied.or_else(|| arena_store::read_outcome(&db_path))
     })
     .await;

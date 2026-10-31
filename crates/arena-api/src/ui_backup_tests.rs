@@ -605,3 +605,101 @@ async fn the_newest_error_wins_and_a_paid_hub_with_no_snapshot_is_first_backup_p
     assert_eq!(body["error"]["source"], "first_snapshot");
     assert_eq!(body["error"]["code"], "DISK_FULL");
 }
+
+// Story 9.23: what a promote or restore set aside.
+
+const ASIDE_URL: &str = "/ui/backup/set-aside";
+const ASIDE_EXPORT: &str = "/ui/backup/set-aside/export";
+
+/// A copy of the Hub's database in `orphaned/` with one invoice the live one lacks.
+fn orphan(hub: &Hub) -> std::path::PathBuf {
+    let dir = hub.path.parent().unwrap().join("orphaned");
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("4-abc-20270115T133000.db");
+    arena_store::DbConn::open(&hub.path)
+        .unwrap()
+        .execute("VACUUM INTO ?1", [target.to_str().unwrap()])
+        .unwrap();
+    arena_store::DbConn::open(&target)
+        .unwrap()
+        .execute(
+            "INSERT INTO orders (id, status, subtotal_minor, total_minor, business_day, fy, rev,
+                                 created_at, updated_at, settled_at, kind, invoice_no, tax_minor,
+                                 tax_breakup)
+             VALUES ('O1', 'settled', 11800, 11800, '2027-01-10', 'FY2026-27', 0, 5, 5, ?1,
+                     'pos_sale', 'INV/26-27/0042', 0, '[]')",
+            [T0],
+        )
+        .unwrap();
+    target
+}
+
+#[tokio::test]
+async fn the_set_aside_list_shows_the_orphaned_invoices_and_needs_the_report_permission() {
+    let hub = hub().await;
+    let manager = token_for(&hub, "manager", "m-pass").await;
+    let (status, empty) = call(&hub, "GET", ASIDE_URL, Some(&manager), None).await;
+    assert_eq!(status, StatusCode::OK, "{empty}");
+    assert_eq!(empty["forks"], json!([]));
+    assert_eq!(empty["databases"], json!([]));
+    assert_eq!(empty["invoice_total"], 0);
+
+    orphan(&hub);
+    let (status, list) = call(&hub, "GET", ASIDE_URL, Some(&manager), None).await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    assert_eq!(list["databases"][0]["file"], "4-abc-20270115T133000.db");
+    assert_eq!(list["databases"][0]["invoices"], 1);
+    assert_eq!(list["databases"][0]["unreadable"], false);
+    assert_eq!(list["invoices"][0]["invoice_no"], "INV/26-27/0042");
+    assert_eq!(list["invoices"][0]["amount_minor"], 11_800);
+    assert_eq!(list["invoices_truncated"], false);
+
+    let (status, _) = call(&hub, "GET", ASIDE_URL, None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let counter = token_for(&hub, "counter", "c-pass").await;
+    let (status, body) = call(&hub, "GET", ASIDE_URL, Some(&counter), None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["code"], "PERMISSION_DENIED");
+}
+
+#[tokio::test]
+async fn export_list_writes_a_csv_to_the_backup_location() {
+    let hub = hub().await;
+    let out = tempfile::tempdir().unwrap();
+    locate(&hub, out.path().to_str().unwrap()).await;
+    orphan(&hub);
+    let manager = token_for(&hub, "manager", "m-pass").await;
+    let before = changes(&hub).len();
+
+    let (status, done) = call(&hub, "POST", ASIDE_EXPORT, Some(&manager), None).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let name = done["file_name"].as_str().unwrap();
+    assert!(
+        name.contains("-set-aside-") && name.ends_with(".csv"),
+        "{name}"
+    );
+    assert_eq!(names(out.path()), vec![name.to_owned()]);
+    let csv = std::fs::read_to_string(out.path().join(name)).unwrap();
+    assert!(csv.contains("INV/26-27/0042,118.00,"), "{csv}");
+    assert_eq!(
+        changes(&hub).len(),
+        before,
+        "a copy of what the Hub holds records nothing"
+    );
+
+    let counter = token_for(&hub, "counter", "c-pass").await;
+    let (status, body) = call(&hub, "POST", ASIDE_EXPORT, Some(&counter), None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, _) = call(&hub, "POST", ASIDE_EXPORT, None, None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn export_list_says_why_the_location_cannot_take_it() {
+    let hub = hub().await;
+    let manager = token_for(&hub, "manager", "m-pass").await;
+    let (status, body) = call(&hub, "POST", ASIDE_EXPORT, Some(&manager), None).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["field"], "folder");
+    assert_eq!(body["message"], "not_set");
+}

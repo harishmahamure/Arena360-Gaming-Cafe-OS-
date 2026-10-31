@@ -500,3 +500,82 @@ pub(crate) async fn gst_archives(State(auth): State<Arc<UiAuth>>, headers: Heade
         Err(_) => fail(internal()),
     }
 }
+
+// ---- what a promote or restore set aside (Story 9.23) ----
+
+/// `GET /ui/backup/set-aside` (`report.view`): the forks this Hub's epoch came from and, from every
+/// database in `orphaned/` on this PC, the changes set aside and the invoice numbers only those
+/// databases hold, for System -> Backup -> "Set aside after promote or restore". Answers a
+/// [`arena_proto::SetAsideList`]; reads only.
+pub(crate) async fn set_aside(State(auth): State<Arc<UiAuth>>, headers: HeaderMap) -> Response {
+    let Some(token) = bearer(&headers).map(str::to_owned) else {
+        return fail(auth_failed());
+    };
+    let me = match auth.acting_session(&token).await {
+        Ok(me) => me,
+        Err(e) => return fail(e),
+    };
+    if !me.permissions.contains(&Permission::ReportView) {
+        return fail(ui_error(AppError::new(
+            ErrorCode::PermissionDenied,
+            "you do not have permission to view what was set aside",
+        )));
+    }
+    let reader = Arc::clone(auth.reader());
+    match tokio::task::spawn_blocking(move || reader.set_aside()).await {
+        Ok(Ok(found)) => Json(found.list).into_response(),
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}
+
+/// `POST /ui/backup/set-aside/export` (`backup.export`): "Export list" writes the same list as CSV
+/// (every orphaned invoice, not only the ones the screen shows) to the backup location as
+/// `<branch_code>-set-aside-<yyyy-mm-dd-hhmm>.csv`. Answers a [`arena_proto::SetAsideExported`].
+/// `VALIDATION_FAILED` on `folder` says why the location cannot take it. The list is a copy of
+/// what the Hub already holds, so nothing is recorded.
+pub(crate) async fn set_aside_export(
+    State(auth): State<Arc<UiAuth>>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(token) = bearer(&headers).map(str::to_owned) else {
+        return fail(auth_failed());
+    };
+    let me = match auth.acting_session(&token).await {
+        Ok(me) => me,
+        Err(e) => return fail(e),
+    };
+    if !me.permissions.contains(&Permission::BackupExport) {
+        return fail(ui_error(AppError::new(
+            ErrorCode::PermissionDenied,
+            "exporting the list needs permission to export the database",
+        )));
+    }
+    let reader = Arc::clone(auth.reader());
+    let folder = {
+        let reader = Arc::clone(&reader);
+        match tokio::task::spawn_blocking(move || reader.setting_value(KEY_BACKUP_DIR)).await {
+            Ok(Ok(value)) => value.unwrap_or_default(),
+            Ok(Err(e)) => return fail(ui_error(e)),
+            Err(_) => return fail(internal()),
+        }
+    };
+    if let Err(e) = auth.probe_export_folder(&folder).await {
+        return fail(e);
+    }
+    let now = auth.clock().now_ms();
+    match tokio::task::spawn_blocking(move || reader.export_set_aside(&folder, now)).await {
+        Ok(Ok((done, path))) => {
+            tracing::info!(
+                staff_id = %me.staff_id,
+                file = %done.file_name,
+                bytes = done.bytes,
+                path = %path.display(),
+                "set-aside list exported"
+            );
+            Json(done).into_response()
+        }
+        Ok(Err(e)) => fail(ui_error(e)),
+        Err(_) => fail(internal()),
+    }
+}

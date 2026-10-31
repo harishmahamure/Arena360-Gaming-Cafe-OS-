@@ -76,6 +76,7 @@ import type { OrderPlace } from "./OrderPlace";
 import type { OrderPlaceReverted } from "./OrderPlaceReverted";
 import type { OrderReady } from "./OrderReady";
 import type { OrderVoid } from "./OrderVoid";
+import type { OrphanSweep } from "./OrphanSweep";
 import type { PlanSell } from "./PlanSell";
 import type { PlanSellReverted } from "./PlanSellReverted";
 import type { PlanUpsert } from "./PlanUpsert";
@@ -269,4 +270,5 @@ export type IntentPayload =
   | ({ kind: "ad.request_recorded" } & AdRequestRecorded)
   | ({ kind: "backup.export" } & BackupExport)
   | ({ kind: "ops.restore" } & OpsRestore)
-  | ({ kind: "lease.promote" } & LeasePromote);
+  | ({ kind: "lease.promote" } & LeasePromote)
+  | ({ kind: "ops.orphan_sweep" } & OrphanSweep);

@@ -26,8 +26,9 @@ use arena_proto::{
     DEFAULT_BOOSTER_PRIORITY, KEY_BOOSTER_CLOSE, KEY_BOOSTER_POWER_PLAN, KEY_BOOSTER_PRIORITY,
 };
 use arena_proto::{
-    DEFAULT_BACKUP_LAST_EXPORT, DEFAULT_BACKUP_LAST_RESTORE, DEFAULT_OPS_LAST_PROMOTE,
-    KEY_BACKUP_LAST_EXPORT, KEY_BACKUP_LAST_RESTORE, KEY_OPS_LAST_PROMOTE,
+    DEFAULT_BACKUP_LAST_EXPORT, DEFAULT_BACKUP_LAST_RESTORE, DEFAULT_OPS_LAST_ORPHAN_SWEEP,
+    DEFAULT_OPS_LAST_PROMOTE, KEY_BACKUP_LAST_EXPORT, KEY_BACKUP_LAST_RESTORE,
+    KEY_OPS_LAST_ORPHAN_SWEEP, KEY_OPS_LAST_PROMOTE,
 };
 use arena_proto::{DEFAULT_DISPLAY_MODES, KEY_DISPLAY_MODES};
 use arena_proto::{
@@ -146,6 +147,8 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     (KEY_BACKUP_LAST_RESTORE, DEFAULT_BACKUP_LAST_RESTORE),
     // Story 9.21: the last promote that finished, written only by `lease.promote`.
     (KEY_OPS_LAST_PROMOTE, DEFAULT_OPS_LAST_PROMOTE),
+    // Story 9.23: the last sweep of `orphaned/`, written only by `ops.orphan_sweep`.
+    (KEY_OPS_LAST_ORPHAN_SWEEP, DEFAULT_OPS_LAST_ORPHAN_SWEEP),
     (KEY_ADS_CONSENT, DEFAULT_ADS_CONSENT),
     (KEY_ADS_RATING, DEFAULT_ADS_RATING),
     (KEY_PRINTER_SELECTED, DEFAULT_PRINTER_SELECTED),
@@ -185,7 +188,7 @@ pub const DEFAULT_SETTINGS: &[(&str, &str)] = &[
     (KEY_DISPLAY_MODES, DEFAULT_DISPLAY_MODES),
 ];
 
-pub const SYSTEM_MANAGED_KEYS: [&str; 10] = [
+pub const SYSTEM_MANAGED_KEYS: [&str; 11] = [
     KEY_KIOSK_LIBRARY,
     KEY_BRANCH_CODE_LOCKED_AT,
     KEY_OPENING_HOURS_SET,
@@ -196,6 +199,7 @@ pub const SYSTEM_MANAGED_KEYS: [&str; 10] = [
     KEY_BACKUP_LAST_EXPORT,
     KEY_BACKUP_LAST_RESTORE,
     KEY_OPS_LAST_PROMOTE,
+    KEY_OPS_LAST_ORPHAN_SWEEP,
 ];
 
 pub const KEYED_FIELD_KEYS: [&str; 37] = [
@@ -288,6 +292,8 @@ pub enum SettingRule {
     BackupLastRestore,
     /// `ops.last_promote`: empty, or the JSON of a [`arena_proto::LeasePromote`].
     OpsLastPromote,
+    /// `ops.last_orphan_sweep`: empty, or the JSON of an [`arena_proto::OrphanSweep`].
+    OpsLastOrphanSweep,
     TestSession,
     Tax,
     BranchCode,
@@ -389,6 +395,7 @@ pub const SETTING_RULES: &[(&str, SettingRule)] = &[
     (KEY_BACKUP_LAST_EXPORT, SettingRule::BackupLastExport),
     (KEY_BACKUP_LAST_RESTORE, SettingRule::BackupLastRestore),
     (KEY_OPS_LAST_PROMOTE, SettingRule::OpsLastPromote),
+    (KEY_OPS_LAST_ORPHAN_SWEEP, SettingRule::OpsLastOrphanSweep),
     (KEY_LICENCE_FLAGS, SettingRule::Text),
     (KEY_KITCHEN_KOT_MODE, SettingRule::OneOf(KITCHEN_KOT_MODES)),
     (KEY_KITCHEN_KOT_PRINTER, SettingRule::PrinterSelected),
@@ -528,6 +535,9 @@ impl SettingRule {
             }
             Self::OpsLastPromote => {
                 value.is_empty() || arena_proto::LeasePromote::parse(value).is_some()
+            }
+            Self::OpsLastOrphanSweep => {
+                value.is_empty() || arena_proto::OrphanSweep::parse(value).is_some()
             }
             Self::TestSession => arena_proto::TestSessionStatus::parse(value).is_some(),
             Self::Tax => TaxSettings::parse(value).is_some_and(|t| t.check().is_ok()),

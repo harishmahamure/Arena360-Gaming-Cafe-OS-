@@ -48,6 +48,7 @@ mod reports;
 mod restore;
 mod rollup;
 mod sessions;
+mod set_aside;
 mod shifts;
 mod snapshot;
 mod staff;
@@ -231,9 +232,9 @@ pub use reports::{
     SalesOrderRow, SegmentSpan, SessionReportRow, StaffCountRow, StaffShiftRow,
 };
 pub use restore::{
-    Inspection, ORPHANED_DIR, PAIR_AGAIN_TABLE, PENDING_DIR, RESULT_FILE, RestoreOutcome,
-    apply_pending, clear_outcome, has_pending, inspect_export, read_outcome, stage_export,
-    stage_rebuilt, sweep_orphaned,
+    Inspection, ORPHANED_DIR, OrphanFile, PAIR_AGAIN_TABLE, PENDING_DIR, RESULT_FILE,
+    RestoreOutcome, apply_pending, clear_outcome, delete_orphans, has_pending, inspect_export,
+    list_orphan_files, read_outcome, stage_export, stage_rebuilt, sweep_orphaned,
 };
 pub use rollup::{
     ChangedRow, ROLLUP_LEDGER_TABLES, RollupDebtorRow, RollupFacts, RollupLotRow, RollupPaymentRow,
@@ -267,6 +268,7 @@ pub use sessions::{
     resume_session,
 };
 pub use sessions::{list_unchecked_consoles, set_controller_check, unchecked_console_session};
+pub use set_aside::{OrphanDb, OrphanInvoice, count_changes_above, scan_orphan_databases};
 pub use shifts::{
     NewCashEvent, NewCashMove, NewShift, OpenSale, ShiftClosing, ShiftDetail, ShiftRow,
     close_shift, count_cash_events, expected_cash, find_shift, insert_cash_event, insert_cash_move,

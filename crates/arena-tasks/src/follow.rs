@@ -6,7 +6,8 @@
 //! apply_replicated`). A dropped stream is retried with the jittered 2-30 s backoff and resumes
 //! from the log's own tip, so nothing is skipped or applied twice. A position the main Hub does
 //! not hold, or a log that stops continuing, empties the replicated state and takes a new
-//! snapshot. A standby whose schema is below the main Hub's stops with [`FollowStatus::Behind`]
+//! snapshot. A standby whose licence lacks `standby` stops following and waits ([`FollowStatus::NeedsPlan`], Story
+//! 10.13) until the plan has it again. A standby whose schema is below the main Hub's stops with [`FollowStatus::Behind`]
 //! ("Update this PC to follow the main Hub") and does not retry.
 //!
 //! The link is a trait so the engine is tested without a network; the WebSocket and HTTPS link
@@ -17,7 +18,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use arena_core::{Clock, SystemClock};
+use arena_core::{Clock, HubStatus, SystemClock};
 use arena_proto::{
     AppError, ErrorCode, ReplicateFrame, ReplicatedChange, StandbyReport, replicate_backoff_ms,
 };
@@ -81,6 +82,8 @@ pub enum FollowStatus {
         applied: Position,
         live: bool,
     },
+    /// The standby's own licence lacks `standby`: not following until the plan has it (Story 10.13).
+    NeedsPlan,
     /// Below the main Hub's schema: update this PC.
     Behind,
     Stopped,
@@ -116,6 +119,23 @@ pub struct Follower<L: ReplicationLink> {
     status: watch::Sender<FollowStatus>,
     progress: SharedProgress,
     clock: Arc<dyn Clock>,
+    /// The Hub status, for the `standby` flag of the standby's own licence (Story 10.13).
+    plan: Option<watch::Receiver<HubStatus>>,
+}
+
+fn plan_is(plan: &mut Option<watch::Receiver<HubStatus>>, needs: bool) -> bool {
+    plan.as_mut()
+        .is_some_and(|rx| rx.borrow().standby_needs_plan == needs)
+}
+
+/// Resolves when the status says `standby_needs_plan == needs`; never with no gate.
+async fn wait_for_plan(plan: &mut Option<watch::Receiver<HubStatus>>, needs: bool) {
+    if let Some(rx) = plan
+        && rx.wait_for(|s| s.standby_needs_plan == needs).await.is_ok()
+    {
+        return;
+    }
+    std::future::pending::<()>().await;
 }
 
 fn change_from_wire(c: ReplicatedChange) -> Result<ChangeRecord, AppError> {
@@ -181,6 +201,7 @@ impl<L: ReplicationLink> Follower<L> {
                 status,
                 progress,
                 clock,
+                plan: None,
             },
             rx,
         )
@@ -195,6 +216,14 @@ impl<L: ReplicationLink> Follower<L> {
     #[must_use]
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = clock;
+        self
+    }
+
+    /// Follows only while the Hub status says the standby's licence has the `standby` flag
+    /// (Story 10.13). Without it the follower always follows.
+    #[must_use]
+    pub fn with_plan_gate(mut self, status: watch::Receiver<HubStatus>) -> Self {
+        self.plan = Some(status);
         self
     }
 
@@ -254,12 +283,23 @@ impl<L: ReplicationLink> Follower<L> {
     /// run ends; any other end is a stop request.
     pub async fn run(&mut self, mut stop: watch::Receiver<bool>) {
         let mut attempt = 0u32;
+        let mut plan = self.plan.clone();
         loop {
             if *stop.borrow() {
                 break;
             }
+            if plan_is(&mut plan, true) {
+                self.status.send_replace(FollowStatus::NeedsPlan);
+                attempt = 0;
+                tokio::select! {
+                    _ = stop.changed() => break,
+                    () = wait_for_plan(&mut plan, false) => {}
+                }
+                continue;
+            }
             let ended = tokio::select! {
                 _ = stop.changed() => break,
+                () = wait_for_plan(&mut plan, true) => continue,
                 ended = self.connect_once(&mut attempt) => ended,
             };
             match ended {
@@ -412,5 +452,81 @@ impl<L: ReplicationLink> Follower<L> {
             }
             Err(_) => Err(Ended::Retry),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arena_core::status_channel;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A link that never reaches the main Hub and counts how often the follower tried.
+    struct Dead(Arc<AtomicUsize>);
+
+    impl ReplicationLink for Dead {
+        async fn snapshot(&mut self, _into: PathBuf) -> Result<Position, LinkError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(LinkError::Io("down".into()))
+        }
+
+        async fn open(&mut self, _from: Position, _schema: u32) -> Result<Position, LinkError> {
+            Err(LinkError::Io("down".into()))
+        }
+
+        async fn next(&mut self) -> Result<Option<ReplicateFrame>, LinkError> {
+            Ok(None)
+        }
+    }
+
+    fn quick() -> FollowerConfig {
+        FollowerConfig {
+            backoff: Arc::new(|_| Duration::from_millis(5)),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_standby_without_the_standby_flag_waits_and_follows_again_when_the_plan_returns() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("standby.db"), 1).unwrap();
+        let tries = Arc::new(AtomicUsize::new(0));
+        let (hub, hub_rx) = status_channel(HubStatus::opened(90, "01JSELF"));
+        hub.send_modify(|s| s.standby_needs_plan = true);
+        let (follower, mut status) = Follower::new(
+            store,
+            Dead(Arc::clone(&tries)),
+            dir.path().join("scratch"),
+            quick(),
+        );
+        let (stop, stopped) = watch::channel(false);
+        let run = tokio::spawn(async move {
+            let mut follower = follower.with_plan_gate(hub_rx);
+            follower.run(stopped).await;
+        });
+
+        status
+            .wait_for(|s| *s == FollowStatus::NeedsPlan)
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert_eq!(tries.load(Ordering::SeqCst), 0, "it never reached out");
+
+        hub.send_modify(|s| s.standby_needs_plan = false);
+        for _ in 0..200 {
+            if tries.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(tries.load(Ordering::SeqCst) > 0, "it follows again");
+
+        // And a drop in the middle of following stops it again.
+        hub.send_modify(|s| s.standby_needs_plan = true);
+        status
+            .wait_for(|s| *s == FollowStatus::NeedsPlan)
+            .await
+            .unwrap();
+        stop.send_replace(true);
+        run.await.unwrap();
     }
 }

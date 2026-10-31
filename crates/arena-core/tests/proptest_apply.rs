@@ -431,6 +431,12 @@ enum Op {
     DeviceCapLicence {
         cap: u8,
     },
+    /// The licence drops or regains the order and kitchen flags and the user cap (Story 10.13): no
+    /// order, ticket or staff row changes.
+    UserCapLicence {
+        orders: bool,
+        cap: u8,
+    },
     /// `kitchen.advance` of a ticket to a stage (the next one, or any when `skip`), or its undo:
     /// a ticket only moves one step at a time, and a refused move writes nothing.
     KitchenAdvance {
@@ -918,6 +924,7 @@ fn op() -> impl Strategy<Value = Op> {
         2 => (any::<u8>(), any::<bool>()).prop_map(|(pick, again)| Op::OrderReady { pick, again }),
         2 => prop::bool::weighted(0.7).prop_map(|on| Op::KitchenLicence { on }),
         2 => (0..=8u8).prop_map(|cap| Op::DeviceCapLicence { cap }),
+        2 => (any::<bool>(), 0..=4u8).prop_map(|(orders, cap)| Op::UserCapLicence { orders, cap }),
         2 => any::<u8>().prop_map(|pick| Op::KotReprint { pick }),
         2 => (any::<u8>(), 0..6u8).prop_map(|(pick, action)| Op::KdsDisplay { pick, action }),
         4 => (any::<u8>(), prop::bool::weighted(0.15), prop::bool::weighted(0.25))
@@ -3519,6 +3526,8 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             }
         }
         Op::KitchenLicence { on } => {
+            let orders_before = hub.reader.rows(Table::Orders).unwrap();
+            let tickets_before = hub.reader.rows(Table::KitchenTickets).unwrap();
             let limits = arena_proto::Tier::Basic.defaults().limits;
             let licence = arena_proto::LicenceApply {
                 standing: arena_proto::LicenceStanding::Verified,
@@ -3533,6 +3542,43 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
                 user_cap: limits.users,
             };
             let _ = hub.rt.block_on(hub.writer.apply_licence(licence));
+            // Story 10.13: a licence change never ends or changes an open order or ticket.
+            prop_assert_eq!(hub.reader.rows(Table::Orders).unwrap(), orders_before);
+            prop_assert_eq!(
+                hub.reader.rows(Table::KitchenTickets).unwrap(),
+                tickets_before
+            );
+        }
+        Op::UserCapLicence { orders, cap } => {
+            let orders_before = hub.reader.rows(Table::Orders).unwrap();
+            let tickets_before = hub.reader.rows(Table::KitchenTickets).unwrap();
+            let staff_before = hub.reader.rows(Table::Staff).unwrap();
+            let sessions_before = hub.reader.rows(Table::Sessions).unwrap();
+            let limits = arena_proto::Tier::Basic.defaults().limits;
+            let licence = arena_proto::LicenceApply {
+                standing: arena_proto::LicenceStanding::Verified,
+                clock_wrong: false,
+                tier: if *orders {
+                    arena_proto::Tier::Basic
+                } else {
+                    arena_proto::Tier::Free
+                },
+                flags: if *orders {
+                    "kitchen,kiosk_orders".into()
+                } else {
+                    String::new()
+                },
+                device_cap: limits.devices,
+                user_cap: u32::from(*cap),
+            };
+            let _ = hub.rt.block_on(hub.writer.apply_licence(licence));
+            prop_assert_eq!(hub.reader.rows(Table::Orders).unwrap(), orders_before);
+            prop_assert_eq!(
+                hub.reader.rows(Table::KitchenTickets).unwrap(),
+                tickets_before
+            );
+            prop_assert_eq!(hub.reader.rows(Table::Staff).unwrap(), staff_before);
+            prop_assert_eq!(hub.reader.rows(Table::Sessions).unwrap(), sessions_before);
         }
         Op::DeviceCapLicence { cap } => {
             let setting = |key: &str| {

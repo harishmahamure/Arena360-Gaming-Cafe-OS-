@@ -90,10 +90,10 @@ async fn a_device_order_on_a_branch_without_kiosk_orders_is_refused_before_the_p
     let f = bootstrapped().await;
     // The device is unknown, so the permission step alone would say PERMISSION_DENIED.
     let e = submit(&f, device(), place()).await.unwrap_err();
-    assert_eq!(e.code, ErrorCode::FeatureNotInTier);
+    assert_eq!(e.code, ErrorCode::FeatureNotEntitled);
     sql(&f, licence("uploads,kitchen")).await;
     let e = submit(&f, device(), place()).await.unwrap_err();
-    assert_eq!(e.code, ErrorCode::FeatureNotInTier);
+    assert_eq!(e.code, ErrorCode::FeatureNotEntitled);
 
     // With the flag the gate steps aside (the permission step then speaks).
     sql(&f, licence(&format!("kitchen,{FLAG_KIOSK_ORDERS}"))).await;
@@ -105,7 +105,7 @@ async fn a_device_order_on_a_branch_without_kiosk_orders_is_refused_before_the_p
 async fn counter_staff_are_not_held_to_the_kiosk_orders_gate() {
     let f = bootstrapped().await;
     let e = submit(&f, owner(), place()).await.unwrap_err();
-    assert_ne!(e.code, ErrorCode::FeatureNotInTier);
+    assert_ne!(e.code, ErrorCode::FeatureNotEntitled);
 }
 
 #[tokio::test]

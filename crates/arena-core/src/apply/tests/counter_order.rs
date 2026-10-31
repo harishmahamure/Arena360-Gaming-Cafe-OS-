@@ -188,7 +188,7 @@ async fn without_the_licence_flag_a_counter_order_is_not_in_tier() {
     let id = cola(&f, 5).await;
     let d = pc(&f, DeviceKind::Pc, "pc", Some(10_000)).await;
     let (code, _) = refusal(submit(&f, device(&d), counter(&d, None, &id, 1)).await);
-    assert_eq!(code, ErrorCode::FeatureNotInTier);
+    assert_eq!(code, ErrorCode::FeatureNotEntitled);
 }
 
 #[tokio::test]

@@ -2220,7 +2220,28 @@ built by `upgradeUrl` in `@arena/ui`; each app says where the picker lives with 
 - **Screens.** The floor tile stays and shows "Over plan limit" (a session line wins while a session runs); its sheet shows
   the `tier-lock` with Upgrade (`TierLock` takes an optional `label`) and no start form. The idle kiosk (`AttractState::OverCap`)
   shows "This PC is over the plan's device limit — ask staff." and offers no login.
-- Not done here: open orders, tickets, staff sign-ins and the standby (Story 10.13).
+- Open orders, tickets, staff sign-ins and the standby are Story 10.13 (below).
+
+## Open orders, signed-in staff and the standby after a lapse (Story 10.13)
+
+- **Open orders and tickets are never touched.** `licence.apply` writes settings and device standing only. A ticket opened
+  while `kitchen` was on still moves Preparing -> Ready -> Served after the flag drops (`kitchen.advance` looks the ticket up,
+  not the flag), and a paired Kitchen display keeps its feed: the flag gates only pairing a new display. New placements open
+  no ticket and queue no KOT while `kitchen` is off. The `proptest` licence ops assert that orders and tickets are
+  byte-identical across a licence change.
+- **Kiosk orders.** A device-sent order intent without `kiosk_orders` is refused `FEATURE_NOT_ENTITLED` (it was
+  `FEATURE_NOT_IN_TIER`); the Shop menu comes back with ordering off, as before. Counter and owner orders are not gated.
+- **Staff sign-ins.** Nobody is signed out. `StaffDirectory::sign_in` (after the password matched) refuses with `USER_LIMIT`
+  - "This branch's plan allows <n> users - ask the owner." - unless the person ranks within `licence.user_cap` among the
+  people Story 2.19 counts: Owner first, then the most recent change row the member authored, then staff id
+  (`arena_store::within_user_cap`). Raising the cap lets everyone in again with no restart.
+- **Windows Hub on Free** keeps running at Free limits: the ads gate is Android-only and no screen locks on licence standing.
+- **Standby.** The standby's licence task sets `HubStatus.standby_needs_plan` when its trusted licence lacks `standby`.
+  `Follower::with_plan_gate` then stops following (`FollowStatus::NeedsPlan`) and follows again, without a restart, when the
+  flag returns; `Promoter::with_plan_gate` refuses promote and force promote `FEATURE_NOT_ENTITLED` "Standby needs a paid plan"
+  before anything changes; `GET /ui/standby` carries `needs_plan`. The main Hub is unaffected.
+- Not done here: the runtime that wires the follower, promoter and licence task into the Hub binary passes the gate
+  receiver when it lands; the standby screen text lives in the app that renders `needs_plan`.
 
 ## Renewals that need approval, grace and lapse (Story 10.11)
 

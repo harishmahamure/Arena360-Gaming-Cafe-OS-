@@ -71,9 +71,9 @@ pub use replicate::{
 };
 pub mod standby;
 pub use standby::{
-    STANDBY_LAG_WARN_AFTER_S, STANDBY_LICENCE_PATH, STANDBY_SILENT_WARN_AFTER_S,
-    StandbyBehindCause, StandbyLicenceRequest, StandbyLicenceResponse, StandbyLine, StandbyPanel,
-    StandbyReport, StandbyScreen, StandbyView, standby_behind,
+    STANDBY_LAG_WARN_AFTER_S, STANDBY_LICENCE_PATH, STANDBY_NEEDS_PLAN,
+    STANDBY_SILENT_WARN_AFTER_S, StandbyBehindCause, StandbyLicenceRequest, StandbyLicenceResponse,
+    StandbyLine, StandbyPanel, StandbyReport, StandbyScreen, StandbyView, standby_behind,
 };
 mod price_book;
 mod promote;
@@ -205,7 +205,7 @@ pub use display::{
     HC_DEFAULT, HC_PREFIX, HcTarget, KEY_HC_HUB, hc_key, parse_hc_key, parse_hc_value,
 };
 pub use entitlement::{
-    CLOCK_SKEW_LIMIT_MS, Entitlement, LicenceApply, LicenceStanding, clock_wrong,
+    CLOCK_SKEW_LIMIT_MS, Entitlement, FLAG_STANDBY, LicenceApply, LicenceStanding, clock_wrong,
 };
 pub use error::{AppError, ErrorCode};
 pub use fence::{

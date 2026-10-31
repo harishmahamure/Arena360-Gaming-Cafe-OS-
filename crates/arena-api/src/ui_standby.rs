@@ -27,11 +27,12 @@ struct UiStandby {
 }
 
 async fn standby(State(s): State<UiStandby>) -> Response {
-    let (following, licence) = {
+    let (following, licence, needs_plan) = {
         let status = s.status.borrow();
         (
             status.following.clone(),
             status.licence.map(|l| l.as_str().to_owned()),
+            status.standby_needs_plan,
         )
     };
     let now = s.clock.now_ms();
@@ -46,6 +47,7 @@ async fn standby(State(s): State<UiStandby>) -> Response {
                         following: store.branch_name()?,
                         report,
                         licence,
+                        needs_plan,
                     }),
                     panel: None,
                 });

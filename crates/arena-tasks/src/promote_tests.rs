@@ -429,3 +429,35 @@ async fn force_is_never_offered_or_accepted_past_a_schema_behind_or_a_newer_hub(
     assert!(err.force_offer.is_none());
     assert!(!lease_held(&f));
 }
+
+#[tokio::test]
+async fn a_standby_without_the_standby_flag_is_refused_before_anything_changes() {
+    let f = fixture(15_000);
+    let cloud = Scripted::new(vec![won("4:STBY")]);
+    let (hub, hub_rx) = arena_core::status_channel(HubStatus::opened(90, "01JSELF"));
+    hub.send_modify(|s| s.standby_needs_plan = true);
+    for forced in [false, true] {
+        let p = promoter(&f, &cloud).with_plan_gate(hub_rx.clone());
+        let err = if forced {
+            p.promote_forced().await
+        } else {
+            p.promote().await
+        }
+        .unwrap_err();
+        assert_eq!(err.error.code, ErrorCode::FeatureNotEntitled);
+        assert_eq!(err.error.message, arena_proto::STANDBY_NEEDS_PLAN);
+        assert!(err.force_offer.is_none() && !err.follower_stopped);
+    }
+    assert!(cloud.asked().is_empty());
+    assert!(!lease_held(&f));
+    assert!(!*f.stopped.borrow());
+
+    // The plan returns: the same standby promotes.
+    hub.send_modify(|s| s.standby_needs_plan = false);
+    let got = promoter(&f, &cloud)
+        .with_plan_gate(hub_rx)
+        .promote()
+        .await
+        .unwrap();
+    assert_eq!(got.outcome.new_epoch, "4:STBY");
+}

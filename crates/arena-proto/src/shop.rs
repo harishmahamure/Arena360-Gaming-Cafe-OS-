@@ -25,7 +25,7 @@ pub const POPULAR_DAYS: i64 = 7;
 pub const MAX_SHOP_ID_LEN: usize = 64;
 
 /// Whether `p`, sent by a kiosk device, needs the `kiosk_orders` licence flag. An order-capable
-/// intent from a device on a branch without the flag is refused `FEATURE_NOT_IN_TIER` before the
+/// intent from a device on a branch without the flag is refused `FEATURE_NOT_ENTITLED` before the
 /// permission check.
 pub fn kiosk_order_gate(p: &IntentPayload) -> bool {
     matches!(
@@ -192,7 +192,7 @@ pub struct ShopPayOptions {
 pub enum ShopPlaceResult {
     /// The lines are on the session's bill.
     Ok,
-    /// `apply()` refused (`OUT_OF_STOCK`, `BUNDLE_SHORT`, `FEATURE_NOT_IN_TIER`, a session that
+    /// `apply()` refused (`OUT_OF_STOCK`, `BUNDLE_SHORT`, `FEATURE_NOT_ENTITLED`, a session that
     /// cannot take an order, ...). `product_id` names the short line when the refusal is about one.
     Refused {
         code: ErrorCode,

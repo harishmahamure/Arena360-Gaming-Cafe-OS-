@@ -13,6 +13,9 @@ pub const STANDBY_LAG_WARN_AFTER_S: i64 = 30;
 pub const STANDBY_SILENT_WARN_AFTER_S: i64 = 60;
 /// `POST`, with `Authorization: Bearer <hub token>`: a standby Hub refreshes its own licence.
 pub const STANDBY_LICENCE_PATH: &str = "/standby/licence";
+/// What the standby screen shows, and a promote is refused with (`FEATURE_NOT_ENTITLED`), while the
+/// standby's own licence lacks the `standby` flag (Story 10.13).
+pub const STANDBY_NEEDS_PLAN: &str = "Standby needs a paid plan";
 
 /// Why a standby shows "Standby behind".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,6 +98,10 @@ pub struct StandbyScreen {
     pub report: StandbyReport,
     /// The standby's own licence standing (`verified`, `expired`, `unverified`), once it has one.
     pub licence: Option<String>,
+    /// The licence lacks `standby` (Story 10.13): the screen says "Standby needs a paid plan" and
+    /// the standby is not following.
+    #[serde(default)]
+    pub needs_plan: bool,
 }
 
 /// `GET /ui/standby`: the standby screen on a standby Hub, the System -> Standby panel on the main

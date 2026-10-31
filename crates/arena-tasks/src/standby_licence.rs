@@ -96,12 +96,20 @@ impl StandbyLicenceTask {
         })
         .await;
         if let Ok(Ok(Some(e))) = read {
+            // Story 10.13: a licence we trust that lacks `standby` (a lapse, a downgrade or a
+            // cancelled add-on) stops the following; an untrusted one decides nothing.
+            let needs_plan =
+                e.standing != LicenceStanding::Unverified && !e.has_flag(arena_proto::FLAG_STANDBY);
             self.status.send_if_modified(|s| {
-                if s.licence == Some(e.standing) && s.tier == Some(e.tier) {
+                if s.licence == Some(e.standing)
+                    && s.tier == Some(e.tier)
+                    && s.standby_needs_plan == needs_plan
+                {
                     return false;
                 }
                 s.licence = Some(e.standing);
                 s.tier = Some(e.tier);
+                s.standby_needs_plan = needs_plan;
                 true
             });
         }
@@ -231,7 +239,11 @@ mod tests {
     }
 
     fn licence_reply(tenant: &str, branch: &str) -> (u16, String) {
-        let claims = LicenceClaims::for_tier(tenant, branch, Tier::Premium, T0 / 1000);
+        licence_reply_for(tenant, branch, Tier::Premium)
+    }
+
+    fn licence_reply_for(tenant: &str, branch: &str, tier: Tier) -> (u16, String) {
+        let claims = LicenceClaims::for_tier(tenant, branch, tier, T0 / 1000);
         let body = serde_json::json!({
             "licence": dev_sign(&claims).unwrap(),
             "cloud_time": T0 + 7,
@@ -324,11 +336,30 @@ mod tests {
         let s = f.status.borrow();
         assert_eq!(s.licence, Some(LicenceStanding::Verified));
         assert_eq!(s.tier, Some(Tier::Premium));
+        assert!(!s.standby_needs_plan);
         let sent = f.seen.lock().unwrap().clone();
         assert!(sent[0].starts_with("POST /v1/standby/licence"), "{sent:?}");
         assert!(sent[0].to_lowercase().contains("bearer hub_x.y"));
     }
 
+    #[tokio::test]
+    async fn a_licence_without_the_standby_flag_marks_the_standby_as_needing_a_plan() {
+        let mut f = fx(licence_reply_for("T", "B", Tier::Free), true).await;
+        f.task.beat().await;
+        assert!(f.status.borrow().standby_needs_plan);
+        // A licence we do not trust decides nothing.
+        let mut other = fx(licence_reply("T", "OTHER"), true).await;
+        other.task.beat().await;
+        assert!(!other.status.borrow().standby_needs_plan);
+        // The plan returns with the next refresh.
+        let port = serve(licence_reply("T", "B"), Arc::default()).await;
+        f.task.cloud = CloudClient::new(
+            &CloudEndpoint::parse(&format!("http://127.0.0.1:{port}"), true).unwrap(),
+        )
+        .unwrap();
+        f.task.beat().await;
+        assert!(!f.status.borrow().standby_needs_plan);
+    }
     #[tokio::test]
     async fn another_branchs_licence_is_not_kept() {
         let mut f = fx(licence_reply("T", "OTHER"), true).await;

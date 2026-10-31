@@ -354,6 +354,30 @@ pub fn count_active_staff(conn: &Connection) -> Result<i64, AppError> {
     .map_err(db_error)
 }
 
+/// Whether `staff_id` may open a new sign-in under a `users` limit of `cap` (Story 10.13).
+///
+/// The people counted by [`count_active_staff`] are ranked: the Owner first, then the most
+/// recently active (the newest change row they authored), then by id so that equals settle the
+/// same way every time. The first `cap` may sign in; the rest are refused. Anyone already signed
+/// in is never asked again, so a lower limit ends no sign-in.
+pub fn within_user_cap(conn: &Connection, staff_id: &str, cap: i64) -> Result<bool, AppError> {
+    conn.query_row(
+        "SELECT COUNT(*) FROM (
+             SELECT s.staff_id FROM staff s JOIN roles r ON r.role_id = s.role_id
+             WHERE s.active = 1 AND NOT (r.builtin = 1 AND r.name = 'Kiosk-device')
+             ORDER BY (r.builtin = 1 AND r.name = 'Owner') DESC,
+                      COALESCE((SELECT MAX(c.at) FROM changes c
+                                WHERE c.actor_kind = 'staff' AND c.actor_id = s.staff_id), 0) DESC,
+                      s.staff_id
+             LIMIT MAX(?2, 0)
+         ) WHERE staff_id = ?1",
+        params![staff_id, cap],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|n| n > 0)
+    .map_err(db_error)
+}
+
 /// Marks a staff member inactive (their Hub sign-in ends with the next request).
 pub fn deactivate_staff(conn: &Connection, staff_id: &str) -> Result<(), AppError> {
     let n = conn

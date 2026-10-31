@@ -6,6 +6,8 @@ use crate::price_book::BillingCycle;
 use crate::tier::{Tier, TierLimits};
 
 pub const CLOCK_SKEW_LIMIT_MS: i64 = 5 * 60 * 1000;
+/// The licence flag that lets a Hub run as a standby (Story 9.19) and be promoted (Story 10.13).
+pub const FLAG_STANDBY: &str = "standby";
 const MAX_FLAGS_CHARS: usize = 256;
 
 pub fn clock_wrong(wall_ms: i64, trusted_ms: i64) -> bool {

@@ -47,6 +47,7 @@ mod kiosk_scan;
 mod kitchen_notes;
 mod kitchen_ticket;
 mod kot;
+mod lapse_orders;
 mod lease_promote;
 mod library;
 mod login;

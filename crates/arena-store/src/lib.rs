@@ -287,7 +287,7 @@ pub use staff::{
     count_active_staff_with_role, deactivate_staff, find_role, find_role_by_name, find_staff,
     find_staff_by_login, insert_role, insert_role_perm, insert_staff, list_pin_candidates,
     list_role_perms, list_roles, list_staff, list_unlock_candidates, role_perm_effect,
-    set_staff_credentials, set_staff_setup_code, update_role_name, update_staff,
+    set_staff_credentials, set_staff_setup_code, update_role_name, update_staff, within_user_cap,
 };
 pub use stock::{
     HoldRow, LotRow, MoveRow, NewHold, StockRow, ThresholdRow, expired_qty, find_lot, find_move,
@@ -810,6 +810,21 @@ impl Store {
         self.read_consistent(|s| {
             let cap = find_setting(&s.conn, "licence.user_cap")?.map(|r| r.value);
             Ok((list_staff(&s.conn)?, count_active_staff(&s.conn)?, cap))
+        })
+    }
+
+    /// The branch's `users` limit and whether `staff_id` may open a new sign-in under it
+    /// (Story 10.13; [`within_user_cap`]), in one read snapshot. Before the staff table exists
+    /// everyone may.
+    pub fn user_cap_standing(&self, staff_id: &str) -> Result<(i64, bool), AppError> {
+        if !self.table_exists("staff")? {
+            return Ok((i64::MAX, true));
+        }
+        self.read_consistent(|s| {
+            let cap = find_setting(&s.conn, "licence.user_cap")?
+                .and_then(|r| r.value.parse().ok())
+                .unwrap_or_else(|| i64::from(arena_proto::Tier::Free.defaults().limits.users));
+            Ok((cap, within_user_cap(&s.conn, staff_id, cap)?))
         })
     }
 

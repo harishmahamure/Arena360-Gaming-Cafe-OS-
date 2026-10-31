@@ -29,7 +29,8 @@ use std::time::Duration;
 use arena_core::{Clock, HubStatus, LeaseInfo, Role};
 use arena_proto::{
     AppError, ErrorCode, FORCE_REASON_PLAIN, FenceClaimReason, FenceClaimRequest, FenceFork,
-    ForceOffer, LEASE_FRESH_MESSAGE, LeasePromote, PROMOTE_CLAIM_WAIT_MS, main_lease_fresh,
+    ForceOffer, LEASE_FRESH_MESSAGE, LeasePromote, PROMOTE_CLAIM_WAIT_MS, STANDBY_NEEDS_PLAN,
+    main_lease_fresh,
 };
 use arena_store::{PromoteInput, PromoteOutcome, Store};
 use tokio::sync::watch;
@@ -171,6 +172,8 @@ pub struct Promoter<C: EpochClaimer> {
     claimer: C,
     stop_follower: watch::Sender<bool>,
     claim_wait: Duration,
+    /// The Hub status, for the `standby` flag of the standby's own licence (Story 10.13).
+    plan: Option<watch::Receiver<HubStatus>>,
 }
 
 impl<C: EpochClaimer> Promoter<C> {
@@ -190,12 +193,21 @@ impl<C: EpochClaimer> Promoter<C> {
             claimer,
             stop_follower,
             claim_wait: Duration::from_millis(PROMOTE_CLAIM_WAIT_MS),
+            plan: None,
         }
     }
 
     /// Overrides the 3 s wait for the cloud (tests).
     pub fn with_claim_wait(mut self, wait: Duration) -> Self {
         self.claim_wait = wait;
+        self
+    }
+
+    /// Refuses a promote, forced or not, while the standby's own licence lacks `standby`
+    /// (Story 10.13). Without a gate nothing is refused.
+    #[must_use]
+    pub fn with_plan_gate(mut self, status: watch::Receiver<HubStatus>) -> Self {
+        self.plan = Some(status);
         self
     }
 
@@ -259,6 +271,16 @@ impl<C: EpochClaimer> Promoter<C> {
     }
 
     async fn run(&self, force: bool) -> Result<Promotion, PromoteError> {
+        if self
+            .plan
+            .as_ref()
+            .is_some_and(|rx| rx.borrow().standby_needs_plan)
+        {
+            return Err(PromoteError::before_stop(AppError::new(
+                ErrorCode::FeatureNotEntitled,
+                STANDBY_NEEDS_PLAN,
+            )));
+        }
         let now = self.clock.now_ms();
         let (silent, report) = {
             let progress = self

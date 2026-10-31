@@ -123,6 +123,9 @@ pub struct HubStatus {
     /// got. The catalogue task also keys on it, because a standby is not the primary writer but
     /// keeps its own reference cache.
     pub following: Option<arena_proto::StandbyReport>,
+    /// A standby whose own licence lacks `standby` (Story 10.13): it stops following and cannot be
+    /// promoted until the plan has the flag again. Never set on a main Hub.
+    pub standby_needs_plan: bool,
 }
 
 /// How far the change-log upload has got. A Hub that does not upload (Free, follower) keeps the
@@ -188,6 +191,7 @@ impl HubStatus {
             upload: UploadStatus::default(),
             tunnel: arena_proto::TunnelLine::default(),
             following: None,
+            standby_needs_plan: false,
         }
     }
 }

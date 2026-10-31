@@ -21,7 +21,7 @@ fn refused(message: &str) -> AppError {
 
 /// **kiosk orders** (Story 6.30). Runs before the permission step: an order-capable intent
 /// ([`arena_proto::kiosk_order_gate`]) sent by a kiosk device on a branch whose licence lacks
-/// `kiosk_orders` is refused `FEATURE_NOT_IN_TIER`, whoever the device is. Staff and owner orders
+/// `kiosk_orders` is refused `FEATURE_NOT_ENTITLED`, whoever the device is. Staff and owner orders
 /// at the counter are not gated.
 pub(super) fn kiosk_orders(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppError> {
     if intent.actor.kind != ActorKind::Device
@@ -31,7 +31,7 @@ pub(super) fn kiosk_orders(tx: &StoreTx<'_>, intent: &Intent) -> Result<(), AppE
         return Ok(());
     }
     Err(AppError::new(
-        ErrorCode::FeatureNotInTier,
+        ErrorCode::FeatureNotEntitled,
         "ordering from the kiosk is available on Basic and above",
     ))
 }

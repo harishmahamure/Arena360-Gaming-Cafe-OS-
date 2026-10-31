@@ -4747,7 +4747,7 @@ async fn a_kiosk_order_without_the_flag_or_a_session_is_refused_and_a_bad_cart_n
     assert!(matches!(
         place_frame(&client, &[(&cola, 1)]).await.unwrap(),
         R::Refused {
-            code: ErrorCode::FeatureNotInTier,
+            code: ErrorCode::FeatureNotEntitled,
             ..
         }
     ));

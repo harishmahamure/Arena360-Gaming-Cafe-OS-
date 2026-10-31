@@ -355,17 +355,20 @@ impl StaffDirectory {
     /// runs after it is released. Unknown logins, members without a password, wrong passwords
     /// and inactive members all do one argon2id verification and fail `AUTH_FAILED`. Blocking.
     pub fn sign_in(&self, login: &str, password: &str) -> Result<SessionStaff, AppError> {
-        let (found, perms) = {
+        let (found, perms, standing) = {
             let store = self
                 .reader
                 .lock()
                 .map_err(|_| AppError::new(ErrorCode::Internal, "staff directory lock poisoned"))?;
             let found = store.staff_with_role(login.trim())?;
-            let perms = match &found {
-                Some((_, role)) => store.role_perms(&role.role_id)?,
-                None => Vec::new(),
+            let (perms, standing) = match &found {
+                Some((staff, role)) => (
+                    store.role_perms(&role.role_id)?,
+                    store.user_cap_standing(&staff.staff_id)?,
+                ),
+                None => (Vec::new(), (i64::MAX, true)),
             };
-            (found, perms)
+            (found, perms, standing)
         };
         let Some((staff, role)) = found else {
             let _ = verify_secret(password, dummy_hash());
@@ -378,6 +381,18 @@ impl StaffDirectory {
         let matches = verify_secret(password, hash) && staff.password_hash.is_some();
         if !matches || !staff.active {
             return Err(auth_failed());
+        }
+        // Story 10.13: after a lapse or downgrade, only the Owner and the most recently active
+        // members up to the plan's `users` limit open new sign-ins. Said after the password
+        // matched, so it tells nobody which logins exist.
+        if !standing.1 {
+            return Err(AppError::new(
+                ErrorCode::UserLimit,
+                format!(
+                    "This branch's plan allows {} users — ask the owner.",
+                    standing.0
+                ),
+            ));
         }
         Ok(SessionStaff {
             staff_id: staff.staff_id,

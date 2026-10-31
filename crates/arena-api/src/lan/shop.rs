@@ -61,7 +61,7 @@ fn refused_product(field: Option<&str>, lines: &[PosSaleLine]) -> Option<String>
 ///
 /// The Hub builds the intent itself (device actor, never a stock override), so the Epic 5 rules
 /// apply as they do at the counter and a kiosk without the `kiosk_orders` flag is refused
-/// `FEATURE_NOT_IN_TIER`:
+/// `FEATURE_NOT_ENTITLED`:
 /// - `bill`: an `order.place` on the session running on `device`;
 /// - `wallet`: a `pos.sale` settled by one wallet payment of the whole total, for the profile
 ///   running on `device`, tied to the PC for delivery;

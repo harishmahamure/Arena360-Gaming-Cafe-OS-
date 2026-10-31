@@ -729,7 +729,7 @@ impl RazorpayClient {
             return Err(BillingError("RAZORPAY_BAD_ID".to_owned()));
         }
         self.post(
-            &format!("/subscriptions/{razorpay_subscription_id}/cancel_update"),
+            &format!("/subscriptions/{razorpay_subscription_id}/cancel_scheduled_changes"),
             &json!({}),
         )
         .await

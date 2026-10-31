@@ -2,7 +2,7 @@
 title: "Story 10.14: Cancel keeps the plan to the end of the period, then the branch drops to Free"
 type: 'feature'
 created: '2026-10-31'
-status: 'in-review'
+status: 'done'
 baseline_revision: '032a41d0c41534f04e7004f9ab1344c3eb994a5a'
 review_loop_iteration: 0
 context:
@@ -64,4 +64,8 @@ warnings: []
 
 ## Auto Run Result
 
-Status: in-review. Risks to know: Razorpay's withdrawal of a cycle-end cancel (`POST /subscriptions/{id}/cancel_update`) is exercised against the fake only; a cancel inside 7 days of the first payment is accepted here (Story 10.15 adds the refund route and panel); a `subscription.cancelled` webhook is not acted on (the sweep ends the plan on cloud time); the "Resubscribe" button reuses the Upgrade link to the wizard checkout.
+Status: in-review. Risks to know: Razorpay's withdrawal of a cycle-end cancel (`POST /subscriptions/{id}/cancel_scheduled_changes`) is exercised against the fake only; a cancel inside 7 days of the first payment is accepted here (Story 10.15 adds the refund route and panel); a `subscription.cancelled` webhook is not acted on (the sweep ends the plan on cloud time); the "Resubscribe" button reuses the Upgrade link to the wizard checkout.
+
+## Review Result
+
+Reviewed 2026-10-31. Fixed: the real Razorpay withdraw call used a non-existent path (`cancel_update`); it now uses the documented `cancel_scheduled_changes`. Still unverified against live Razorpay: whether that endpoint also withdraws a cycle-end subscription cancel (tested against the fake only). Clippy, fmt and arena-cloud tests green apart from known-flaky `backup` timing and baseline `binary` tests.

@@ -2251,7 +2251,7 @@ built by `upgradeUrl` in `@arena/ui`; each app says where the picker lives with 
   The entitlement and the licence do not change. Refused while a renewal is unpaid, a plan change is waiting, or the row's
   `rev` moved (`STALE`). A repeat is a no-op. No partial refunds; a full refund inside 7 days is Story 10.15.
 - **Keep my plan.** `POST .../subscription/cancel/withdraw {rev}` takes the cancellation back at Razorpay
-  (`POST /subscriptions/{id}/cancel_update`) and clears the flag. The period and renewal date are untouched.
+  (`POST /subscriptions/{id}/cancel_scheduled_changes`) and clears the flag. The period and renewal date are untouched.
 - **The end.** The `subscription-lifecycle` jobs task moves an `active` subscription with the flag to `ended` (no grace) when
   `current_period_end` passes on cloud time and turns the paid entitlement into `free`; the next heartbeat delivers a Free
   licence, which the Hub handles as in Stories 10.12 and 10.13. The card reads "Lapsed — Free limits" with "Resubscribe".

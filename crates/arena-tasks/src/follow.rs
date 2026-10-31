@@ -6,8 +6,9 @@
 //! apply_replicated`). A dropped stream is retried with the jittered 2-30 s backoff and resumes
 //! from the log's own tip, so nothing is skipped or applied twice. A position the main Hub does
 //! not hold, or a log that stops continuing, empties the replicated state and takes a new
-//! snapshot. A standby whose licence lacks `standby` stops following and waits ([`FollowStatus::NeedsPlan`], Story
-//! 10.13) until the plan has it again. A standby whose schema is below the main Hub's stops with [`FollowStatus::Behind`]
+//! snapshot. A standby whose licence lacks `standby` stops following and waits
+//! ([`FollowStatus::NeedsPlan`], Story 10.13) until the plan has it again. A standby whose schema
+//! is below the main Hub's stops with [`FollowStatus::Behind`]
 //! ("Update this PC to follow the main Hub") and does not retry.
 //!
 //! The link is a trait so the engine is tested without a network; the WebSocket and HTTPS link

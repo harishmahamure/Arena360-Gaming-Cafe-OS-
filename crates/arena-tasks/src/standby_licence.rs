@@ -360,6 +360,7 @@ mod tests {
         f.task.beat().await;
         assert!(!f.status.borrow().standby_needs_plan);
     }
+
     #[tokio::test]
     async fn another_branchs_licence_is_not_kept() {
         let mut f = fx(licence_reply("T", "OTHER"), true).await;

@@ -2,7 +2,7 @@
 title: "Story 10.13: A lapse or downgrade keeps open orders, signed-in staff and the main Hub working"
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: 'b9461798'
 review_loop_iteration: 0
 context:
@@ -55,4 +55,4 @@ warnings: []
 
 ## Auto Run Result
 
-Status: review. Risks to know: "most recently active" is the newest change row a member authored, so a member who only reads is ranked last; the follower, promoter and licence task are not yet wired into the Hub binary, so the gate receiver is passed where that runtime lands; no standby screen app renders `needs_plan` yet. The disk was full during verification, so `target/debug/incremental` (regenerable cache) was deleted.
+Status: done (code review: no blocking findings; comment tidy-ups only). Risks to know: "most recently active" is the newest change row a member authored, so a member who only reads is ranked last; the follower, promoter and licence task are not yet wired into the Hub binary, so the gate receiver is passed where that runtime lands; no standby screen app renders `needs_plan` yet. The disk was full during verification, so `target/debug/incremental` (regenerable cache) was deleted.

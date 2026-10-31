@@ -2,7 +2,7 @@
 title: 'Story 11.4: Product pages for Hub, Kiosk, Console and Owner with demo videos'
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: 'c30bff40'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'

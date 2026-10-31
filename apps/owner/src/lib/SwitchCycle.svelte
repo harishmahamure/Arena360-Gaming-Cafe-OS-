@@ -74,8 +74,9 @@
   // Closing Checkout (or a failed payment) takes the stored switch back, so the old cycle stays.
   // Storing the switch moved the subscription's `rev` on by one.
   async function abandon() {
-    await keepPlan({ ...plan, rev: plan.rev + 1 });
-    ondone(t("owner.subscription.cycle.dismissed"));
+    const res = await keepPlan({ ...plan, rev: plan.rev + 1 });
+    // A withdrawal that failed leaves the switch held: reload the card to show it as it is.
+    ondone(res.ok ? t("owner.subscription.cycle.dismissed") : "");
   }
 
   async function openCheckout(checkout: SubscriptionCheckout, shown: CycleSwitchPreview) {
@@ -92,9 +93,11 @@
           dismissed: () => void abandon(),
         }),
       );
-      box.on("payment.failed", () => void abandon());
+      // A failed attempt leaves Checkout open for a retry; closing it takes the switch back.
       box.open();
     } catch {
+      // Storing the switch is done: take it back so it does not block further changes.
+      await keepPlan({ ...plan, rev: plan.rev + 1 });
       busy = false;
       failure = "owner.subscription.change.no_script";
     }

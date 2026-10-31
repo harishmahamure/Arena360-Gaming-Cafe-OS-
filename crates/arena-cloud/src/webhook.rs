@@ -476,21 +476,38 @@ pub async fn handle(
                                     })
                             })
                         }
+                        // A new mandate whose first event is its charge (the authenticated event
+                        // was missed): that charge is the renewal it was set to start at.
+                        (Some(ch), Some(plan_change::Completion::Mandate))
+                            if ch.subject == ChangeSubject::Method
+                                && ev.kind == "subscription.charged" =>
+                        {
+                            ev.current_end_ms
+                                .filter(|e| s.current_period_end.is_none_or(|p| *e > p))
+                        }
                         _ => None,
                     };
+                    // The old mandate keeps showing until the switch to monthly applies.
+                    let authorised_only = completes == Some(plan_change::Completion::Authorised);
                     decision = Some(Decision {
                         new_state: s.state,
                         period_end,
                         first_paid_at: None,
                         payment_country: None,
-                        mandate: ev.payment.as_ref().and_then(|p| p.method),
-                        mandate_detail: ev.payment.as_ref().and_then(|p| p.detail.clone()),
+                        mandate: ev
+                            .payment
+                            .as_ref()
+                            .and_then(|p| p.method)
+                            .filter(|_| !authorised_only),
+                        mandate_detail: ev
+                            .payment
+                            .as_ref()
+                            .and_then(|p| p.detail.clone())
+                            .filter(|_| !authorised_only),
                         issue_entitlement: subject == Some(ChangeSubject::Plan),
                         review: false,
-                        // Authorising a mandate, or replacing one, is not a charge to invoice.
-                        charged: ev.kind == "subscription.charged"
-                            && subject != Some(ChangeSubject::Method)
-                            && completes != Some(plan_change::Completion::Authorised),
+                        // Authorising a mandate is not a charge to invoice.
+                        charged: ev.kind == "subscription.charged" && !authorised_only,
                     });
                 }
             }

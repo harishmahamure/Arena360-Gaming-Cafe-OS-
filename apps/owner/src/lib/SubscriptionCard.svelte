@@ -101,9 +101,10 @@
     }
     const abandon = async () => {
       // Storing the change moved the subscription's `rev` on by one.
-      await keepPlan({ ...plan, rev: plan.rev + 1 });
+      const res = await keepPlan({ ...plan, rev: plan.rev + 1 });
       methodBusy = false;
-      onchanged(t("owner.subscription.method.unchanged"));
+      // A withdrawal that failed leaves the change held: reload the card to show it as it is.
+      onchanged(res.ok ? t("owner.subscription.method.unchanged") : "");
     };
     try {
       const Razorpay = await loadRazorpay();
@@ -116,7 +117,7 @@
           dismissed: () => void abandon(),
         }),
       );
-      box.on("payment.failed", () => void abandon());
+      // A failed attempt leaves Checkout open for a retry; closing it takes the change back.
       box.open();
     } catch {
       await abandon();

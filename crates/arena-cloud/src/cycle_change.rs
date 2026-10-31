@@ -190,7 +190,14 @@ async fn start_mandate(
     }
     let sent = match provider.create_mandate(&mandate).await {
         Ok(SubscriptionResult::Created(rid)) => {
-            match db.attach_change_razorpay(&change_id, &rid, now).await {
+            let attached = db.attach_change_razorpay(&change_id, &rid, now).await;
+            if !matches!(attached, Ok(true)) {
+                // The owner could still authorise this subscription with no change to match it.
+                if let Err(e) = provider.cancel_subscription(&rid).await {
+                    tracing::error!(subscription_id = %sub.id, error = %e.0, "could not cancel an unattached mandate");
+                }
+            }
+            match attached {
                 Ok(true) => Ok(SubscriptionCheckout {
                     subscription_id: sub.id.clone(),
                     state: sub.state,

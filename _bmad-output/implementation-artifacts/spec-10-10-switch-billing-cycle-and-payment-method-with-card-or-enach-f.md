@@ -2,7 +2,7 @@
 title: "Story 10.10: Switch billing cycle and payment method, with card or eNACH for renewals over Rs 15,000"
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: '83cee7412ced848bb0ab9d11d0010e94780e6bda'
 review_loop_iteration: 0
 context:
@@ -69,3 +69,9 @@ warnings: []
 Status: review. fmt and clippy clean; `cargo test` passes except the baseline `binary::unreachable_at_start_retries_then_exits_1_without_logging_the_token`. `svelte-check` clean; `cycle-change.spec.ts` (7 tests, desktop and phone), `plan-change.spec.ts` and `subscription.spec.ts` pass.
 
 Risks to know: the real Razorpay `addons` upfront charge on a future-start subscription and `cancel_at_cycle_end` are exercised against the fake only; the method and card digits of a new mandate come from the authorising event's payment when present; changing the method in `renewal_needs_approval`/`grace` is left to Story 10.11; a yearly-to-monthly switch whose `authenticated` event is missed is applied by the first monthly charge, which then cancels the old subscription at once.
+
+## Code Review Result
+
+Status: done. Fixed: a payment-method change completed by `subscription.charged` is now invoiced and advances the period; a switch to monthly no longer shows the new mandate on the card before it applies; an unattached Razorpay mandate is cancelled when attaching it fails; Checkout `payment.failed` no longer withdraws the change (closing Checkout does); script-load failure withdraws the held switch; a failed withdrawal no longer reports "unchanged".
+
+Deferred (not blocking): TTL/sweeper for abandoned held changes and staleness of credit if the old subscription renews while a switch is held; real-client `cancel_at_cycle_end` body test; extra gate_state/authorisation test coverage; invoice credit line detail.

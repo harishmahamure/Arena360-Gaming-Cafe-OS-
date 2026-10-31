@@ -19,9 +19,11 @@ use arena_store::{
 use sha2::{Digest, Sha256};
 
 mod audit;
+mod follow;
 mod rebuild;
 
 pub use audit::{BuiltMonth, MonthBuilder};
+pub use follow::apply_replicated;
 pub use rebuild::{RebuildSource, RebuildStage, RebuildStop, Rebuilt, rebuild};
 
 fn bad(message: String) -> AppError {

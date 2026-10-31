@@ -63,6 +63,12 @@ mod pricing;
 mod printer;
 mod process;
 mod receipt;
+pub mod replicate;
+pub use replicate::{
+    REPLICATE_BACKOFF_MAX_MS, REPLICATE_BACKOFF_MIN_MS, REPLICATE_BATCH_ROWS, REPLICATE_PATH,
+    REPLICATE_SNAPSHOT_PATH, ReplicateFrame, ReplicatePosition, ReplicatedChange, ReplicatedKey,
+    SNAPSHOT_EPOCH_HEADER, SNAPSHOT_SEQ_HEADER, replicate_backoff_ms,
+};
 mod refund;
 mod report;
 mod report_export;

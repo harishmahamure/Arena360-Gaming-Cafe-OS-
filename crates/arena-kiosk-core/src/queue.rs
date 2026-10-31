@@ -67,6 +67,8 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::FeatureNotEntitled
         | ErrorCode::PlatformUnsupported
         | ErrorCode::StandbyExists
+        | ErrorCode::SchemaBehind
+        | ErrorCode::ReplicateGap
         | ErrorCode::MfaRequired
         | ErrorCode::GroupNotEmpty
         | ErrorCode::GroupKindMismatch

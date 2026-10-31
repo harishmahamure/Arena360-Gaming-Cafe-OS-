@@ -57,6 +57,8 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::HubNotPaired
         | ErrorCode::PlatformUnsupported
         | ErrorCode::StandbyExists
+        | ErrorCode::SchemaBehind
+        | ErrorCode::ReplicateGap
         | ErrorCode::GroupNotEmpty
         | ErrorCode::GroupKindMismatch
         | ErrorCode::ZoneNotEmpty
@@ -353,6 +355,8 @@ mod tests {
             (ErrorCode::FeatureNotEntitled, 403),
             (ErrorCode::PlatformUnsupported, 409),
             (ErrorCode::StandbyExists, 409),
+            (ErrorCode::SchemaBehind, 409),
+            (ErrorCode::ReplicateGap, 409),
             (ErrorCode::MfaRequired, 403),
             (ErrorCode::PayloadTooLarge, 413),
             (ErrorCode::Fenced, 409),

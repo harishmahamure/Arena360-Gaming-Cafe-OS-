@@ -241,11 +241,11 @@ async fn accept_failed(e: io::Error) {
     tokio::time::sleep(Duration::from_millis(100)).await;
 }
 
-/// The upgrade callback for TLS connections: the WebSocket lives at `/` only. The error type
-/// is fixed by tungstenite.
+/// The upgrade callback for TLS connections: the WebSocket lives at `/`, or at the replication
+/// path (Story 9.19), and nowhere else. The error type is fixed by tungstenite.
 #[allow(clippy::result_large_err)]
 fn only_root(req: &Request, resp: Response) -> Result<Response, ErrorResponse> {
-    if req.uri().path() == "/" {
+    if req.uri().path() == "/" || req.uri().path() == arena_proto::REPLICATE_PATH {
         Ok(resp)
     } else {
         let mut err = ErrorResponse::new(Some("not found".into()));
@@ -286,6 +286,9 @@ async fn serve_tls(
         }
         Route::Pair => return respond(&mut tls, "404 Not Found", "not found").await,
         Route::Media => return super::media::answer(&mut tls, peer, &head, &hub).await,
+        Route::ReplicateSnapshot => {
+            return super::replicate::answer_snapshot(&mut tls, peer, &head, &hub).await;
+        }
         _ => {}
     }
     let stream = Prefixed {
@@ -300,9 +303,22 @@ async fn upgrade_tls<S>(stream: S, peer: SocketAddr, hub: Arc<LanHub>)
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    let replicate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = Arc::clone(&replicate);
+    #[allow(clippy::result_large_err)]
+    let callback = move |req: &Request, resp: Response| {
+        flag.store(
+            req.uri().path() == arena_proto::REPLICATE_PATH,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        only_root(req, resp)
+    };
     let upgrade =
-        tokio_tungstenite::accept_hdr_async_with_config(stream, only_root, Some(ws_config()));
+        tokio_tungstenite::accept_hdr_async_with_config(stream, callback, Some(ws_config()));
     match timeout(HANDSHAKE_TIMEOUT, upgrade).await {
+        Ok(Ok(ws)) if replicate.load(std::sync::atomic::Ordering::Relaxed) => {
+            super::replicate::serve(ws, peer, hub).await;
+        }
         Ok(Ok(ws)) => session::run(ws, Transport::Tls, peer, hub).await,
         Ok(Err(e)) => tracing::debug!(error = %e, "websocket upgrade failed"),
         Err(_) => tracing::debug!("websocket upgrade timed out"),
@@ -340,6 +356,8 @@ pub(crate) enum Route {
     Pair,
     /// `GET /media/<sha256>`: a cached game file for a paired kiosk (TLS only).
     Media,
+    /// `GET /v1/replicate/snapshot`: the standby's snapshot (TLS only, Story 9.19).
+    ReplicateSnapshot,
     NotFound,
 }
 
@@ -361,6 +379,9 @@ pub(crate) fn route(request_line: &str) -> Route {
     }
     if path.starts_with("/media/") {
         return Route::Media;
+    }
+    if path == arena_proto::REPLICATE_SNAPSHOT_PATH {
+        return Route::ReplicateSnapshot;
     }
     match path {
         "/ws" => Route::Ws,
@@ -554,7 +575,7 @@ async fn serve_plain(mut tcp: TcpStream, peer: SocketAddr, hub: Arc<LanHub>) {
         }
         // Everything else is for TLS clients (pairing, media) or does not exist: plain HTTP
         // answers only the kitchen, the WebSocket, `/hub-info` and `/console/<tv>`.
-        Route::NotFound | Route::Pair | Route::Media => {
+        Route::NotFound | Route::Pair | Route::Media | Route::ReplicateSnapshot => {
             write_answer(&mut tcp, super::kds_pair::forbidden()).await
         }
         Route::Ws => {

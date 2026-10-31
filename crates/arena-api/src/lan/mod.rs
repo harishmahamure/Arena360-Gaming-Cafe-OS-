@@ -28,6 +28,7 @@ mod player_login;
 mod player_session;
 mod player_signup;
 pub(crate) mod registry;
+pub mod replicate;
 mod scan_match;
 mod session;
 mod shop;
@@ -41,6 +42,7 @@ use tokio::sync::watch;
 
 pub use listener::MAX_CONNECTIONS;
 pub use listener::{DEFAULT_LAN_PORT, DEFAULT_WEB_PORT, LanListeners, bind_lan, serve_lan};
+pub use replicate::ReplicationSource;
 pub use session::{
     HELLO_TIMEOUT, IDLE_TIMEOUT, LAN_SYSTEM_ACTOR, MAX_FRAME_BYTES, PING_INTERVAL, SESSION_QUEUE,
     VERIFY_CONCURRENCY,
@@ -259,6 +261,9 @@ pub struct LanHub {
     pub kitchen_dir: Option<std::path::PathBuf>,
     /// The game media cache `GET /media/<sha256>` serves from (Story 6.2).
     pub media: Option<Arc<arena_core::media_cache::MediaCache>>,
+    /// Where the standby replication reads the database (Story 9.19); without it the Hub serves
+    /// no standby.
+    pub replication: Option<replicate::ReplicationSource>,
     /// Opens a player's sealed name for `player.authenticate`; without it that frame is
     /// `UNSUPPORTED` (Story 6.8).
     pub player_kek: Option<Arc<dyn arena_core::players::Kek>>,
@@ -303,6 +308,7 @@ impl LanHub {
             kds_pairing: None,
             kitchen_dir: None,
             media: None,
+            replication: None,
             player_kek: None,
             live_keys: Vec::new(),
             registry: Arc::new(registry::Registry::default()),
@@ -350,6 +356,13 @@ impl LanHub {
     /// Serves the built Kitchen display app from `dir` at `/kitchen` (Story 7.6).
     pub fn with_kitchen_dir(mut self, dir: std::path::PathBuf) -> Self {
         self.kitchen_dir = Some(dir);
+        self
+    }
+
+    /// Serves the standby's snapshot and replication stream from the database at `db_path`
+    /// (Story 9.19).
+    pub fn with_replication(mut self, db_path: std::path::PathBuf) -> Self {
+        self.replication = Some(replicate::ReplicationSource { db_path });
         self
     }
 

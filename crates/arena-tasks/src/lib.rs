@@ -8,6 +8,7 @@ pub mod credit_reminder;
 pub mod daily_export;
 pub mod disk;
 pub mod fence;
+pub mod follow;
 pub mod heartbeat;
 pub mod housekeeping;
 pub mod invoice;
@@ -41,6 +42,7 @@ pub use daily_export::{
     DAILY_EXPORT_RETRY, DAILY_EXPORT_TICK, DailyExportTask, Pass as DailyExportPass,
 };
 pub use fence::{Claim, claim_fence};
+pub use follow::{FollowStatus, Follower, FollowerConfig, LinkError, ReplicationLink};
 pub use heartbeat::HeartbeatTask;
 pub use housekeeping::{
     DEDUPE_RETENTION_MS, HOUSEKEEPING_INTERVAL, Housekeeping, HousekeepingTask,

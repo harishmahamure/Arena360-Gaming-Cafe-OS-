@@ -93,6 +93,10 @@ pub enum ErrorCode {
     PlatformUnsupported,
     /// The branch already has a standby Hub (or a standby code waiting); only one is allowed.
     StandbyExists,
+    /// A standby's schema is below the main Hub's: it must update before it can follow (Story 9.19).
+    SchemaBehind,
+    /// The main Hub does not hold the position a standby resumes from: it must take a new snapshot.
+    ReplicateGap,
     CloudUnreachable,
     HubNotPaired,
     /// The group still has devices; move them out first.
@@ -275,6 +279,8 @@ impl ErrorCode {
             Self::FeatureNotEntitled => "FEATURE_NOT_ENTITLED",
             Self::PlatformUnsupported => "PLATFORM_UNSUPPORTED",
             Self::StandbyExists => "STANDBY_EXISTS",
+            Self::SchemaBehind => "SCHEMA_BEHIND",
+            Self::ReplicateGap => "REPLICATE_GAP",
             Self::CloudUnreachable => "CLOUD_UNREACHABLE",
             Self::HubNotPaired => "HUB_NOT_PAIRED",
             Self::GroupNotEmpty => "GROUP_NOT_EMPTY",
@@ -458,6 +464,8 @@ mod tests {
             (ErrorCode::FeatureNotEntitled, "FEATURE_NOT_ENTITLED"),
             (ErrorCode::PlatformUnsupported, "PLATFORM_UNSUPPORTED"),
             (ErrorCode::StandbyExists, "STANDBY_EXISTS"),
+            (ErrorCode::SchemaBehind, "SCHEMA_BEHIND"),
+            (ErrorCode::ReplicateGap, "REPLICATE_GAP"),
             (ErrorCode::CloudUnreachable, "CLOUD_UNREACHABLE"),
             (ErrorCode::HubNotPaired, "HUB_NOT_PAIRED"),
             (ErrorCode::GroupNotEmpty, "GROUP_NOT_EMPTY"),

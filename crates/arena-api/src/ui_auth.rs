@@ -936,7 +936,9 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::StepNotReady
         | ErrorCode::HubNotPaired
         | ErrorCode::PlatformUnsupported
-        | ErrorCode::StandbyExists => StatusCode::CONFLICT,
+        | ErrorCode::StandbyExists
+        | ErrorCode::SchemaBehind
+        | ErrorCode::ReplicateGap => StatusCode::CONFLICT,
         ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired | ErrorCode::SetupCodeInvalid => {
             StatusCode::UNAUTHORIZED
         }

@@ -1,0 +1,138 @@
+/* FAQ and Legal: grouped disclosure lists, the list of policies and a policy page with a Markdown
+   body and its change history. Everything stacks on phones. */
+
+.legal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-9);
+  min-width: 0;
+}
+
+.legal h1,
+.legal h2,
+.legal p {
+  margin: 0;
+}
+
+.legal h2 {
+  font-size: var(--type-kiosk-title-size);
+  font-weight: var(--type-kiosk-title-weight);
+  line-height: var(--type-kiosk-title-line-height);
+}
+
+.legal-intro,
+.legal-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.legal-intro {
+  align-items: flex-start;
+}
+
+.legal-lede {
+  max-width: 64ch;
+}
+
+.legal-meta {
+  color: var(--text-muted);
+}
+
+[data-theme="hc"] .legal-meta {
+  color: var(--text);
+}
+
+.legal-back,
+.legal-list a {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  min-height: var(--space-touch-min);
+}
+
+.legal-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.legal-list li {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  box-sizing: border-box;
+  min-width: 0;
+  padding: var(--space-web-card-padding-phone);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background-color: var(--card-background);
+}
+
+.legal-list a {
+  font-weight: var(--type-kiosk-title-weight);
+}
+
+.legal-body {
+  max-width: 64ch;
+  min-width: 0;
+}
+
+.legal-body > * {
+  margin-block: 0 var(--space-5);
+}
+
+.legal-body h2 {
+  margin-block-start: var(--space-7);
+}
+
+.legal-body a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--space-touch-min);
+}
+
+.legal-history {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 64ch;
+  margin: 0;
+  padding-inline-start: var(--space-6);
+}
+
+/* The FAQ's disclosure list is the Pricing FAQ's, so the two look alike. */
+
+.faq {
+  display: flex;
+  flex-direction: column;
+  max-width: 72ch;
+  border-block-start: 1px solid var(--line);
+}
+
+.faq details {
+  border-block-end: 1px solid var(--line);
+}
+
+.faq summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--space-touch-min);
+  padding-block: var(--space-2);
+  cursor: pointer;
+  font-weight: var(--type-hub-title-weight);
+}
+
+.faq details p {
+  padding-block-end: var(--space-4);
+}
+
+@media (min-width: 768px) {
+  .legal-list li {
+    padding: var(--space-web-card-padding);
+  }
+}

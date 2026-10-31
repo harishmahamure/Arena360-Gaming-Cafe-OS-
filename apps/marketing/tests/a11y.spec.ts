@@ -12,6 +12,9 @@ const PAGES = [
   "/downloads",
   "/help",
   "/help/pair-a-kiosk",
+  "/faq",
+  "/legal",
+  "/legal/privacy",
   "/no-such-page",
 ];
 const VIEWPORTS = [

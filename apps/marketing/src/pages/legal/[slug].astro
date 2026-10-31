@@ -1,0 +1,54 @@
+---
+import { t } from "@arena/ui";
+import { getEntry, render } from "astro:content";
+import Layout from "../../layouts/Layout.astro";
+import { legalDocs } from "../../lib/legal-content";
+import { releaseDate } from "../../lib/releases";
+import "../../styles/legal.css";
+
+export async function getStaticPaths() {
+  const docs = await legalDocs();
+  return docs.map((doc) => ({ params: { slug: doc.slug } }));
+}
+
+const { slug } = Astro.params;
+await legalDocs(); // the Privacy policy's version must match the sign-up constant
+const entry = await getEntry("legal", slug as string);
+if (!entry) throw new Error(`No Legal page ${slug}`);
+const { Content } = await render(entry);
+const { title, summary, version, effective, history } = entry.data;
+---
+
+<Layout title={`${title} · ${t("site.legal.heading")}`} description={summary}>
+  <article class="legal legal-doc" data-slug={slug}>
+    <a class="legal-back" href="/legal">
+      {t("site.legal.back")}
+    </a>
+    <header class="legal-intro">
+      <h1>{title}</h1>
+      <p class="legal-lede">{summary}</p>
+      <p class="legal-meta">
+        <span data-field="version">{t("site.legal.version", { version })}</span> ·{" "}
+        <span data-field="effective">
+          {t("site.legal.effective", { date: releaseDate(effective.toISOString()) })}
+        </span>
+      </p>
+    </header>
+
+    <div class="legal-body">
+      <Content />
+    </div>
+
+    <section class="legal-section" aria-labelledby="history-title">
+      <h2 id="history-title">{t("site.legal.history")}</h2>
+      <ol class="legal-history">
+        {history.map((line) => (
+          <li>
+            <strong>{t("site.legal.history.version", { version: line.version })}</strong> ·{" "}
+            {releaseDate(line.date.toISOString())} · {line.change}
+          </li>
+        ))}
+      </ol>
+    </section>
+  </article>
+</Layout>

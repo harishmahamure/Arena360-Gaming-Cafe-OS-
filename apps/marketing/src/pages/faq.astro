@@ -1,0 +1,33 @@
+---
+import { t } from "@arena/ui";
+import type { MessageKey } from "@arena/ui/messages";
+import Layout from "../layouts/Layout.astro";
+import { FAQ_GROUPS, faqJsonLd } from "../lib/faq";
+import "../styles/legal.css";
+
+const say = (key: string) => t(key as MessageKey);
+const structured = JSON.stringify(faqJsonLd(FAQ_GROUPS, say)).replace(/</g, "\u003c");
+---
+
+<Layout title={t("site.faq.title")} description={t("site.faq.description")}>
+  <script type="application/ld+json" set:html={structured} />
+  <div class="legal">
+    <header class="legal-intro">
+      <h1>{t("site.faq.heading")}</h1>
+      <p class="legal-lede">{t("site.faq.lede")}</p>
+    </header>
+    {FAQ_GROUPS.map((group) => (
+      <section class="legal-section" id={group.id} aria-labelledby={`${group.id}-title`}>
+        <h2 id={`${group.id}-title`}>{say(group.title)}</h2>
+        <div class="faq">
+          {group.items.map((entry) => (
+            <details>
+              <summary>{say(entry.q)}</summary>
+              <p>{say(entry.a)}</p>
+            </details>
+          ))}
+        </div>
+      </section>
+    ))}
+  </div>
+</Layout>

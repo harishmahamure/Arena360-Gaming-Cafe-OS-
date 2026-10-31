@@ -17,6 +17,13 @@ import {
   searchHelp,
   searchIndex,
 } from "../apps/marketing/src/lib/help.ts";
+import { FAQ_GROUPS, faqJsonLd } from "../apps/marketing/src/lib/faq.ts";
+import {
+  LEGAL_SLUGS,
+  POLICY_VERSION_SOURCE,
+  assertLegal,
+  policyVersionFrom,
+} from "../apps/marketing/src/lib/legal.ts";
 import { PRICING_SNAPSHOT } from "../packages/ui/src/pricing.snapshot.ts";
 import { TIERS_SNAPSHOT } from "../packages/ui/src/tiers.snapshot.ts";
 import { messages } from "../packages/ui/src/messages/index.js";
@@ -259,4 +266,73 @@ test("the hardware data file is versioned, has a category field and rejects a ba
     readFileSync(new URL("../apps/marketing/src/data/hardware.json", import.meta.url), "utf8"),
   );
   assert.doesNotThrow(() => parseHardware(shipped));
+});
+
+const doc = (slug, version = "1", date = "2026-10-31") => ({
+  slug,
+  version,
+  effective: new Date(date),
+  history: [{ version, date: new Date(date), change: "First published." }],
+});
+const docs = (privacy = "1") =>
+  LEGAL_SLUGS.map((slug) => doc(slug, slug === "privacy" ? privacy : "1"));
+const policySource = () => readFileSync(POLICY_VERSION_SOURCE, "utf8");
+
+test("the policy-version constant is read from arena-proto", () => {
+  assert.equal(policyVersionFrom('pub const PLAYER_POLICY_VERSION: &str = "7";'), "7");
+  assert.equal(policyVersionFrom('pub const OTHER: &str = "7";'), null);
+  assert.match(policyVersionFrom(policySource()) ?? "", /^\S+$/);
+});
+
+test("the Privacy policy's version must equal the sign-up policy-version constant", () => {
+  const constant = policyVersionFrom(policySource());
+  assert.doesNotThrow(() => assertLegal(docs(constant ?? ""), constant));
+  assert.throws(() => assertLegal(docs("2"), "1"), /differs from PLAYER_POLICY_VERSION/);
+  assert.throws(() => assertLegal(docs("1"), null), /no PLAYER_POLICY_VERSION/);
+});
+
+test("the Legal pages are exactly the four, and each version is its newest history line", () => {
+  assert.throws(() => assertLegal(docs().slice(1), "1"), /Legal pages must be/);
+  const stale = docs();
+  stale[0].history[0].version = "0";
+  assert.throws(() => assertLegal(stale, "1"), /not the newest history line/);
+  const dated = docs();
+  dated[0].effective = new Date("2026-11-01");
+  assert.throws(() => assertLegal(dated, "1"), /effective date/);
+});
+
+test("the shipped Legal pages pass the same checks", () => {
+  const dir = new URL("../apps/marketing/src/content/legal/", import.meta.url);
+  const shipped = LEGAL_SLUGS.map((slug) => {
+    const text = readFileSync(new URL(slug + ".md", dir), "utf8");
+    const version = /^version: ['"](.+)['"]$/m.exec(text)?.[1] ?? "";
+    const effective = /^effective: (\S+)$/m.exec(text)?.[1] ?? "";
+    const first = /^history:\r?\n {2}- version: ['"](.+)['"]\r?\n {4}date: (\S+)$/m.exec(text);
+    return {
+      slug,
+      version,
+      effective: new Date(effective),
+      history: [{ version: first?.[1] ?? "", date: new Date(first?.[2] ?? ""), change: "-" }],
+    };
+  });
+  assert.doesNotThrow(() => assertLegal(shipped, policyVersionFrom(policySource())));
+});
+
+test("the FAQ covers its five groups and shares the Pricing FAQ's catalogue keys", () => {
+  assert.deepEqual(
+    FAQ_GROUPS.map((g) => g.id),
+    ["billing", "data", "offline", "ads", "refunds"],
+  );
+  const refund = FAQ_GROUPS.find((g) => g.id === "refunds")?.items[0];
+  assert.deepEqual(refund, { q: "site.pricing.faq.refund.q", a: "site.pricing.faq.refund.a" });
+  for (const group of FAQ_GROUPS) {
+    assert.ok(messages[group.title], group.title);
+    for (const item of group.items) {
+      assert.ok(messages[item.q], item.q);
+      assert.ok(messages[item.a], item.a);
+    }
+  }
+  const ld = faqJsonLd(FAQ_GROUPS, (key) => messages[key]);
+  assert.equal(ld["@type"], "FAQPage");
+  assert.equal(ld.mainEntity.length, FAQ_GROUPS.flatMap((g) => g.items).length);
 });

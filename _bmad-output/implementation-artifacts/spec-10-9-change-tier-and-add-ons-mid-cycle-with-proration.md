@@ -2,7 +2,7 @@
 title: "Story 10.9: Change tier and add-ons mid-cycle with proration"
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: '2684c60d'
 review_loop_iteration: 0
 followup_review_recommended: true
@@ -73,3 +73,11 @@ deferred:
 Status: review. fmt and clippy clean; `cargo test` passes except the baseline `binary::unreachable_at_start_retries_then_exits_1_without_logging_the_token` and the Windows-flaky `backup::a_hung_run_times_out_with_its_own_code`. `svelte-check` clean; the Owner Playwright suite passes (746 tests, desktop and phone) apart from `shell.spec.ts` "a refused session goes to sign-in and clears the cache", which failed once in the full run and passes alone (also on the baseline).
 
 Risks to know: the real Razorpay `PATCH /subscriptions/{id}` proration and the `addons` upfront charge of a mandate subscription are exercised against the fake only; a held change completes on the new subscription's `subscription.charged` event only; pricing is from the locked book (changed items are not re-priced against the live book).
+
+## Code Review Result
+
+Status: done. No blocking findings. fmt, clippy, `cargo test` (arena-proto, arena-store, arena-cloud), `svelte-check`, the string/hex/tier-lock/secrets/generated checks and `plan-change.spec.ts` (18 tests) pass; the only failing test is the baseline `binary::unreachable_at_start...`.
+
+Non-blocking, left as follow-ups:
+- A change stuck in `charging` (the prorated charge never confirmed) cannot be kept out and blocks a new change until the next renewal charge completes it.
+- A held change's mandate completion records the `cancel_subscription` ops task, so a proration amount mismatch on that path is only logged (one ops task per event).

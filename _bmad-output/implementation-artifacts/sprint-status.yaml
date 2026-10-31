@@ -304,7 +304,7 @@ development_status:
   10-5-upgrade-links-and-add-branch-reuse-the-same-checkout: done
   10-6-a-paid-licence-reaches-the-hub-within-one-heartbeat-and-staf: done
   10-7-every-subscription-charge-gets-a-gst-tax-invoice-from-arena: done
-  10-8-account-subscription-shows-each-branch-s-plan-invoices-and-p: review
+  10-8-account-subscription-shows-each-branch-s-plan-invoices-and-p: done
   10-9-change-tier-and-add-ons-mid-cycle-with-proration: backlog
   10-10-switch-billing-cycle-and-payment-method-with-card-or-enach-f: backlog
   10-11-renewals-that-need-approval-go-to-grace-then-lapse-on-cloud: backlog

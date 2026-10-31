@@ -2,7 +2,7 @@
 title: "Story 10.8: Account -> Subscription shows each branch's plan, invoices and payment method"
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: '24e7ea83ceffa47dd8ca2faac25db9af35693691'
 review_loop_iteration: 0
 followup_review_recommended: false

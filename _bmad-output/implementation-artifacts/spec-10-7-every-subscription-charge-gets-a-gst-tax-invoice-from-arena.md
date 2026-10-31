@@ -2,7 +2,7 @@
 title: 'Story 10.7: Every subscription charge gets a GST tax invoice from Arena 360'
 type: 'feature'
 created: '2026-10-31'
-status: 'in-review'
+status: 'done'
 baseline_revision: '9cfda95c71efdd68db9a8226300d07c419ac9be7'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -85,3 +85,9 @@ Unknown buyer state (no GSTIN) falls to the supplier's state, the IGST Act defau
 Status: review. fmt and clippy clean; `cargo test -p arena-proto -p arena-store -p arena-cloud` passes except baseline `binary::unreachable_at_start_retries_then_exits_1_without_logging_the_token` (`backup::a_hung_run_times_out_with_its_own_code` is flaky on Windows and passed on re-run). Every I/O matrix row is covered in `tests/billing_events.rs` and `invoice.rs` unit tests.
 
 Risks to know: `arena-store` sqld tests skip locally (no `sqld`); `OwnerAlertKind.ts` was edited by hand (run `check:generated`); `control` and `billing-reconcile` roles both need the `ARENA_INVOICE_SELLER_*` variables (not yet in `deployment.yaml`); a payment held for review is invoiced, its "Invoice ready" alert waits for entitlement; the alert links to `/alerts` until Story 10.8 adds the invoice list; `seller_name`/`seller_address` columns were added so the PDF re-renders from the row alone.
+
+## Code Review Result
+
+Reviewed the implementation commit against the spec: no blocking findings. fmt and clippy clean; `cargo test -p arena-proto -p arena-store -p arena-cloud` passes except the documented baseline `binary::unreachable_at_start_retries_then_exits_1_without_logging_the_token`.
+
+Non-blocking notes: with `ARENA_INVOICE_SELLER_GSTIN` unset, a production deployment would issue immutable invoices under the development seller (spec-mandated fallback, error logged); set the `ARENA_INVOICE_SELLER_*` variables in `deployment.yaml` before go-live.

@@ -297,7 +297,7 @@ development_status:
   epic-9-retrospective: optional
 
   epic-10: in-progress
-  10-1-the-price-book-holds-tiers-add-ons-and-ppp-bands-synced-to-r: review
+  10-1-the-price-book-holds-tiers-add-ons-and-ppp-bands-synced-to-r: done
   10-2-a-branch-subscription-is-created-at-a-ppp-band-that-is-locke: backlog
   10-3-razorpay-webhooks-are-verified-applied-once-and-issue-the-en: backlog
   10-4-wizard-step-2-takes-payment-through-razorpay-checkout: backlog

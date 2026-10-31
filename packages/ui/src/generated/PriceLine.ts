@@ -8,6 +8,6 @@ import type { PriceItem } from "./PriceItem";
 export type PriceLine = {
   item: PriceItem;
   cycle: BillingCycle;
-  amount_minor: bigint;
+  amount_minor: number;
   gst_applicable: boolean;
 };

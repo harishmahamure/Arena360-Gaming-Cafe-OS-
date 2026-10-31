@@ -330,6 +330,8 @@ async fn a_published_book_is_immutable() {
         "UPDATE price_book_items SET amount_minor = 1 WHERE price_book_id = 'pb_v1'",
         "DELETE FROM price_book_items WHERE price_book_id = 'pb_v1'",
         "INSERT INTO price_book_items VALUES ('pb_v1', 'IN', 'INR', 'basic', 'monthly', 9, 1, NULL)",
+        "UPDATE price_books SET status = 'draft' WHERE id = 'pb_v1'",
+        "UPDATE price_books SET version = 9 WHERE id = 'pb_v1'",
     ] {
         let e = h.sql(sql).unwrap_err().to_string();
         assert!(e.contains("PRICE_BOOK_IMMUTABLE"), "{sql}: {e}");
@@ -347,6 +349,21 @@ async fn a_published_book_is_immutable() {
     let (draft, _) = price_book::open_draft(&h.db, "harish", "n", T0)
         .await
         .unwrap();
+    // A draft missing a price cannot go live.
+    h.sql(&format!(
+        "DELETE FROM price_book_items WHERE price_book_id = '{draft}' AND band = 'US' AND item = 'basic' AND cycle = 'yearly'"
+    ))
+    .unwrap();
+    assert_eq!(
+        price_book::publish(&h.db, &fake(), &draft, "harish", "go", T0)
+            .await
+            .unwrap_err(),
+        BookError::Incomplete { have: 39, want: 40 }
+    );
+    h.sql(&format!(
+        "INSERT INTO price_book_items VALUES ('{draft}', 'US', 'USD', 'basic', 'yearly', 6000, 0, NULL)"
+    ))
+    .unwrap();
     for bad in [0, -5, price_book::MAX_MONTHLY_MINOR + 1] {
         assert_eq!(
             price_book::set_amount(&h.db, &draft, Band::In, PriceItem::Basic, bad, "h", "n", T0)

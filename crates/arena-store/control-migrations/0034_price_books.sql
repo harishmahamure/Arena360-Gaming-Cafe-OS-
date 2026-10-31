@@ -48,6 +48,13 @@ BEGIN
     SELECT RAISE(ABORT, 'PRICE_BOOK_IMMUTABLE');
 END;
 
+-- A book never goes back to a draft, and a published book keeps its id and version.
+CREATE TRIGGER price_books_no_reopen BEFORE UPDATE ON price_books
+WHEN OLD.status <> 'draft' AND (NEW.status = 'draft' OR NEW.id <> OLD.id OR NEW.version <> OLD.version)
+BEGIN
+    SELECT RAISE(ABORT, 'PRICE_BOOK_IMMUTABLE');
+END;
+
 -- Which bands are on sale. A band is switched on by an operator once Razorpay Subscriptions
 -- coverage for its country is confirmed; until then pricing for it answers BAND_NOT_AVAILABLE.
 CREATE TABLE billing_bands (

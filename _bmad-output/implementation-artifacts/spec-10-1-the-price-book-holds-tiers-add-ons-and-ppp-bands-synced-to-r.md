@@ -2,7 +2,7 @@
 title: 'Story 10.1: The price book holds tiers, add-ons and PPP bands, synced to Razorpay plans'
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: 'dcc6a5134429e90e6ba60ce5d7b2680fe223684c'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -66,6 +66,10 @@ deferred:
 ## Spec Change Log
 
 ## Review Triage Log
+
+Code review (4 layers) on commit ac723b1c:
+- Fixed: `PriceLine.amount_minor` generated as `bigint` (now `#[ts(type = "number")]`, TS regenerated); a published book could be reopened or renumbered by raw SQL (trigger `price_books_no_reopen`); a draft with fewer than 40 prices could be published (`BookError::Incomplete`). Tests extended in `tests/price_book.rs`.
+- Deferred (not blocking, partly already in `deferred`): wizard/Owner app do not call `GET /v1/pricing` yet (Story 10.2); no HTTP stub test for `RazorpayClient::create_plan`; plan orphaning on partial publish failure; GST inclusive/exclusive convention at the provider boundary; band can be enabled without plan ids; operator attribution fallback to `USER`; open `razorpay_create_plans` task not closed when a later publish records plans.
 
 ## Verification
 

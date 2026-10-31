@@ -114,6 +114,7 @@ impl BillingCycle {
 pub struct PriceLine {
     pub item: PriceItem,
     pub cycle: BillingCycle,
+    #[ts(type = "number")]
     pub amount_minor: i64,
     pub gst_applicable: bool,
 }

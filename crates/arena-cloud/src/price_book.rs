@@ -103,6 +103,11 @@ pub enum BookError {
     NoLiveBook,
     UnknownRow(String),
     BadAmount(i64),
+    /// A draft must price every band, item and cycle before it can go live.
+    Incomplete {
+        have: usize,
+        want: usize,
+    },
     /// The provider failed; nothing was written.
     Provider(BillingError),
     /// Another publish got there first; nothing was written.
@@ -126,6 +131,10 @@ impl std::fmt::Display for BookError {
             Self::DraftExists(id) => {
                 write!(f, "DRAFT_EXISTS: price book {id:?} is already a draft")
             }
+            Self::Incomplete { have, want } => write!(
+                f,
+                "PRICE_BOOK_INCOMPLETE: the draft has {have} prices, a book needs {want} (every band, item and cycle)"
+            ),
             Self::NoLiveBook => write!(f, "NO_LIVE_PRICE_BOOK: there is no live book to copy"),
             Self::UnknownRow(what) => write!(f, "UNKNOWN_PRICE_ROW: {what}"),
             Self::BadAmount(n) => write!(
@@ -287,6 +296,13 @@ pub async fn publish(
         return Err(BookError::Retired(book_id.to_owned()));
     }
     let items = db.price_book_items(book_id).await.map_err(db_err)?;
+    let want = Band::ALL.len() * PriceItem::ALL.len() * BillingCycle::ALL.len();
+    if book.status == PriceBookStatus::Draft && items.len() != want {
+        return Err(BookError::Incomplete {
+            have: items.len(),
+            want,
+        });
+    }
     let missing: Vec<&PriceBookItem> = items
         .iter()
         .filter(|i| i.razorpay_plan_id.is_none())

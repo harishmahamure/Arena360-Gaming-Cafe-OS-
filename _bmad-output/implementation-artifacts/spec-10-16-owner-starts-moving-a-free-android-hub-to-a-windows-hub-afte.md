@@ -2,7 +2,7 @@
 title: "Story 10.16: Owner starts moving a Free Android Hub to a Windows Hub after upgrading"
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: '4391fdc1'
 review_loop_iteration: 0
 context:
@@ -73,3 +73,7 @@ warnings: []
 ## Auto Run Result
 
 Status: in-review. Risks to know: the PC's `hubs` row uses the standby slot (role `standby`, `migration_id` set) because the role CHECK cannot be widened without rebuilding `hubs`; every standby read that must not see it filters `migration_id IS NULL`, so a new query on `role = 'standby'` must do the same. A Windows Hub that waits for a move refuses intents with `RESTORE_PENDING` (the existing wait gate) and does not heartbeat, so its licence is not refreshed until Story 10.18 (a standby-style licence refresh is available to its token but not wired). The Windows pairing and the Android item are covered by unit and browser tests; no end-to-end Hub binary test was run because `crates/arena-hub/tests/pairing.rs` (feature `dev-fixtures`) no longer compiles on the clean tree. The disk filled during verification; `target/debug/incremental` was deleted and tests ran with `CARGO_INCREMENTAL=0`.
+
+## Code Review Result
+
+Reviewed 2026-10-31. No blocking findings. fmt, clippy, Rust tests, owner/hub browser specs and string/hex/tier-lock/generated checks pass. Failing tests not tied to this change: `binary::unreachable_at_start_retries_then_exits_1_without_logging_the_token`, `backup::a_hung_run_times_out_with_its_own_code` (zero-duration timeout racing a fast run), and `@arena/hub check` errors in `playwright.kitchen.config.ts` (`process` types, file untouched). Notes: a migration whose Android Hub is later replaced keeps a stale `from_hub_id` (the owner can still cancel); standby code issue is blocked while the migration PC holds the standby slot (intended).

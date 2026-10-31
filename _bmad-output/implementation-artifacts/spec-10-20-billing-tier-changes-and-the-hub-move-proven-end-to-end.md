@@ -2,7 +2,7 @@
 title: 'Story 10.20: Billing, tier changes and the Hub move proven end to end'
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: '6a349ba0'
 review_loop_iteration: 0
 context:
@@ -77,3 +77,7 @@ deferred:
 ## Auto Run Result
 
 Status: review. Proof only; no product code changed. Risks and deviations: (1) the staging nightly run is not run (see deferred); (2) the kiosk follow is driven with arena-kiosk-core rather than the kiosk service, whose runtime tests are Unix-only; (3) for a move by file the kiosks are pointed at the new Hub by address and their pin is re-trusted, consistent with Story 10.19; (4) the downgrade proof registers 24 devices to have pairings beyond the Free cap of 20; (5) `release-bench.yml` was not run on GitHub.
+
+## Code Review Result
+
+Reviewed 2026-10-31: no blocking findings. Workflow test filters match the real test names; fmt, clippy (-D warnings), prettier, arena-core plan_change_proof, arena-api handover (11), arena-cloud billing_events (83), billing-report script (12/12 rows pass) and its node tests (9) are green. Status: done.

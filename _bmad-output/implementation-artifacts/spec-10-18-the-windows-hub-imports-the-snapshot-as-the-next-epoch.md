@@ -2,7 +2,7 @@
 title: "Story 10.18: The Windows Hub imports the snapshot as the next epoch"
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: 'eea81774'
 review_loop_iteration: 0
 context:
@@ -79,4 +79,4 @@ Verify gate re-run (2026-10-31): fmt, clippy (`-D warnings`), the string / hex /
 
 ## Code Review Result
 
-Status: pending.
+Status: done (2026-10-31). Reviewed the cloud claim / finish transactions, key-holder auth, the restore migrate path, the importer and the reporter against the I/O matrix: no blocking findings, no code changes. Fmt, clippy -D warnings, the repo checks and the hub playwright specs pass. Rust test failures on this machine are environmental and untouched by the story: arena-cloud binary unreachable_at_start..., arena-tasks trusted_time_is_cloud_time_plus_monotonic_elapsed (needs 8 days of uptime for Instant subtraction) and printer::lan a_printer_that_stops_reading_times_out (Windows socket buffer).

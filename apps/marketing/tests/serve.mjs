@@ -28,6 +28,8 @@ const MANIFEST_PORT = 5182;
 const manifest = await serve(join(root, "tests", "fixtures"), MANIFEST_PORT);
 const releases = {
   PUBLIC_RELEASES_MANIFEST: `http://127.0.0.1:${MANIFEST_PORT}/releases/manifest.json`,
+  // The Help centre reads its hardware data file from the fixture too, so the table has rows.
+  PUBLIC_HARDWARE_DATA: join(root, "tests", "fixtures", "hardware.json"),
 };
 
 try {

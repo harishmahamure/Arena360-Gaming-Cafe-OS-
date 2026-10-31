@@ -6,6 +6,17 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { MEDIA_ORIGIN, mediaUrl, routeOf } from "../apps/marketing/src/lib/site.ts";
+import {
+  HARDWARE_CATEGORIES,
+  assertHelp,
+  brandsOf,
+  brokenLinks,
+  filterHardware,
+  isTested,
+  parseHardware,
+  searchHelp,
+  searchIndex,
+} from "../apps/marketing/src/lib/help.ts";
 import { PRICING_SNAPSHOT } from "../packages/ui/src/pricing.snapshot.ts";
 import { TIERS_SNAPSHOT } from "../packages/ui/src/tiers.snapshot.ts";
 import { messages } from "../packages/ui/src/messages/index.js";
@@ -146,4 +157,105 @@ test("marketing media is served from the shared marketing/ prefix of the media o
     "https://media.arena360.cloud/marketing/product/hub/poster.jpg",
   );
   assert.ok(mediaUrl("x").startsWith(MEDIA_ORIGIN + "/marketing/"));
+});
+
+test("Help links between articles are checked: a link to a missing slug fails the build", () => {
+  const article = (slug, body = "") => ({
+    slug,
+    title: slug,
+    summary: slug,
+    category: "setup",
+    body,
+  });
+  const ok = [
+    article("a", "See [b](/help/b#top) and [hardware](/help#hardware-compatibility)."),
+    article("b"),
+  ];
+  assert.deepEqual(brokenLinks(ok), []);
+  assert.doesNotThrow(() => assertHelp(ok));
+  const bad = [article("a", "See [c](/help/c) and [b](/help/b)."), article("b")];
+  assert.deepEqual(brokenLinks(bad), ["a -> /help/c"]);
+  assert.throws(() => assertHelp(bad), /missing article: a -> \/help\/c/);
+  assert.throws(() => assertHelp([article("Not Stable")]), /slugs must be lower-case/);
+});
+
+test("Help search matches every typed word in a title or summary, title first", () => {
+  const index = [
+    {
+      slug: "a",
+      title: "Set up a printer",
+      summary: "Connect a receipt printer.",
+      category: "setup",
+    },
+    {
+      slug: "b",
+      title: "The printer is offline",
+      summary: "Fixes for printing.",
+      category: "troubleshooting",
+    },
+    { slug: "c", title: "Pair a kiosk", summary: "Use a printer-free flow.", category: "setup" },
+  ];
+  assert.deepEqual(
+    searchHelp(index, "printer").map((e) => e.slug),
+    ["a", "b", "c"],
+  );
+  assert.deepEqual(
+    searchHelp(index, "OFFLINE printer").map((e) => e.slug),
+    ["b"],
+  );
+  assert.deepEqual(
+    searchHelp(index, "print")
+      .map((e) => e.slug)
+      .sort(),
+    ["a", "b", "c"],
+  );
+  assert.deepEqual(searchHelp(index, "zxqv"), []);
+  assert.deepEqual(searchHelp(index, "   "), []);
+  assert.deepEqual(searchIndex([{ ...index[0], body: "x" }]), [index[0]]);
+});
+
+test("the hardware data file is versioned, has a category field and rejects a bad row", () => {
+  const row = {
+    category: "printer",
+    brand: "Northwind",
+    model: "NP-80",
+    connection: "usb",
+    paper_mm: 80,
+    result: "works",
+    checked: "2026-10-20",
+    tested_on: ["windows", "android"],
+  };
+  const file = parseHardware({
+    version: 1,
+    rows: [row, { ...row, category: "drawer", paper_mm: null, tested_on: ["windows"] }],
+  });
+  assert.equal(file.rows.length, 2);
+  assert.equal(isTested(file.rows[0]), true);
+  assert.equal(isTested(file.rows[1]), false);
+  assert.deepEqual(brandsOf(file.rows), ["Northwind"]);
+  assert.equal(filterHardware(file.rows, "Northwind", "usb").length, 2);
+  assert.equal(filterHardware(file.rows, "Northwind", "lan").length, 0);
+  assert.equal(filterHardware(file.rows, "", "").length, 2);
+  assert.throws(() => parseHardware({ version: 2, rows: [] }), /version/);
+  assert.throws(
+    () => parseHardware({ version: 1, rows: [{ ...row, category: "tv" }] }),
+    /category/,
+  );
+  assert.throws(
+    () => parseHardware({ version: 1, rows: [{ ...row, paper_mm: null }] }),
+    /paper_mm/,
+  );
+  assert.throws(
+    () => parseHardware({ version: 1, rows: [{ ...row, connection: "hdmi" }] }),
+    /connection/,
+  );
+  assert.throws(
+    () => parseHardware({ version: 1, rows: [{ ...row, checked: "yesterday" }] }),
+    /checked/,
+  );
+  assert.deepEqual(HARDWARE_CATEGORIES, ["printer", "drawer"]);
+  const shipped = JSON.parse(
+    readFileSync(new URL("../apps/marketing/src/data/hardware.json", import.meta.url), "utf8"),
+  );
+  assert.doesNotThrow(() => parseHardware(shipped));
 });

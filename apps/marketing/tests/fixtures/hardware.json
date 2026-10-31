@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "rows": [
+    {
+      "category": "printer",
+      "brand": "Northwind",
+      "model": "NP-80",
+      "connection": "usb",
+      "paper_mm": 80,
+      "result": "works",
+      "checked": "2026-10-20",
+      "tested_on": ["windows", "android"]
+    },
+    {
+      "category": "printer",
+      "brand": "Northwind",
+      "model": "NP-58",
+      "connection": "bluetooth",
+      "paper_mm": 58,
+      "result": "partial",
+      "checked": "2026-10-21",
+      "tested_on": ["android"]
+    },
+    {
+      "category": "printer",
+      "brand": "Contoso",
+      "model": "CT-300",
+      "connection": "lan",
+      "paper_mm": 80,
+      "result": "works",
+      "checked": "2026-10-22",
+      "tested_on": ["windows", "android"]
+    },
+    {
+      "category": "drawer",
+      "brand": "Contoso",
+      "model": "CD-1",
+      "connection": "usb",
+      "paper_mm": null,
+      "result": "works",
+      "checked": "2026-10-22",
+      "tested_on": ["windows"]
+    }
+  ]
+}

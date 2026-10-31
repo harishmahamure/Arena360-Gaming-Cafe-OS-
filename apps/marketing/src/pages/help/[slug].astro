@@ -1,0 +1,58 @@
+---
+import { t } from "@arena/ui";
+import { render } from "astro:content";
+import { getEntry } from "astro:content";
+import Layout from "../../layouts/Layout.astro";
+import { helpArticles } from "../../lib/help-content";
+import { releaseDate } from "../../lib/releases";
+import "../../styles/help.css";
+
+export async function getStaticPaths() {
+  const articles = await helpArticles();
+  return articles.map((article) => ({ params: { slug: article.slug } }));
+}
+
+const { slug } = Astro.params;
+const entry = await getEntry("help", slug as string);
+if (!entry) throw new Error(`No Help article ${slug}`);
+const { Content } = await render(entry);
+const { title, summary, reviewed } = entry.data;
+---
+
+<Layout title={`${title} · ${t("site.help.heading")}`} description={summary}>
+  <article class="help help-article">
+    <a class="help-back" href="/help">
+      {t("site.help.back")}
+    </a>
+    <header class="help-intro">
+      <h1>{title}</h1>
+      <p class="help-lede">{summary}</p>
+      <p class="help-reviewed">
+        {t("site.help.reviewed", { date: releaseDate(reviewed.toISOString()) })}
+      </p>
+    </header>
+
+    <div class="help-body">
+      <Content />
+    </div>
+
+    <aside class="help-support" aria-labelledby="support-title">
+      <h2 id="support-title">{t("site.help.support.heading")}</h2>
+      <p>{t("site.help.support.lede")}</p>
+      <dl>
+        <div>
+          <dt>{t("site.help.support.free")}</dt>
+          <dd>{t("site.help.support.free.channel")}</dd>
+        </div>
+        <div>
+          <dt>{t("site.help.support.basic")}</dt>
+          <dd>{t("site.help.support.basic.channel")}</dd>
+        </div>
+        <div>
+          <dt>{t("site.help.support.premium")}</dt>
+          <dd>{t("site.help.support.premium.channel")}</dd>
+        </div>
+      </dl>
+    </aside>
+  </article>
+</Layout>

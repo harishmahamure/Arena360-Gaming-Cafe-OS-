@@ -1,0 +1,68 @@
+---
+import { t } from "@arena/ui";
+import type { MessageKey } from "@arena/ui/messages";
+import HardwareTable from "../../components/HardwareTable.svelte";
+import HelpSearch from "../../components/HelpSearch.svelte";
+import Layout from "../../layouts/Layout.astro";
+import { ARTICLE_CATEGORIES, HARDWARE_ANCHOR, searchIndex } from "../../lib/help";
+import { hardwareFile, helpArticles } from "../../lib/help-content";
+import { releaseDate } from "../../lib/releases";
+import "../../styles/help.css";
+
+const articles = await helpArticles();
+const hardware = hardwareFile();
+const key = (prefix: string, value: string) => `${prefix}.${value}` as MessageKey;
+---
+
+<Layout title={t("site.help.title")} description={t("site.help.description")}>
+  <div class="help">
+    <header class="help-intro">
+      <h1>{t("site.help.heading")}</h1>
+      <p class="help-lede">{t("site.help.lede")}</p>
+      <HelpSearch client:load index={searchIndex(articles)} />
+      <nav aria-label={t("site.help.categories")}>
+        <ul class="help-jump">
+          {ARTICLE_CATEGORIES.map((category) => (
+            <li>
+              <a href={`#${category}`}>{t(key("site.help.category", category))}</a>
+            </li>
+          ))}
+          <li>
+            <a href={`#${HARDWARE_ANCHOR}`}>{t("site.help.category.hardware")}</a>
+          </li>
+        </ul>
+      </nav>
+    </header>
+
+    {ARTICLE_CATEGORIES.map((category) => (
+      <section class="help-section" id={category} aria-labelledby={`${category}-title`}>
+        <h2 id={`${category}-title`}>{t(key("site.help.category", category))}</h2>
+        <p>{t((key("site.help.category", category) + ".about") as MessageKey)}</p>
+        <ul class="help-list">
+          {articles
+            .filter((article) => article.category === category)
+            .map((article) => (
+              <li data-slug={article.slug}>
+                <a href={`/help/${article.slug}`}>{article.title}</a>
+                <p>{article.summary}</p>
+                <p class="help-reviewed">
+                  {t("site.help.reviewed", { date: releaseDate(article.reviewed.toISOString()) })}
+                </p>
+              </li>
+            ))}
+        </ul>
+      </section>
+    ))}
+
+    <section class="help-section" id={HARDWARE_ANCHOR} aria-labelledby="hardware-title">
+      <h2 id="hardware-title">{t("site.help.hardware.heading")}</h2>
+      <p>{t("site.help.hardware.lede")}</p>
+      <p class="help-note">{t("site.help.hardware.tested_note")}</p>
+      {hardware.rows.length === 0 ? (
+        <p class="help-empty">{t("site.help.hardware.empty")}</p>
+      ) : (
+        <HardwareTable client:load rows={hardware.rows} />
+      )}
+    </section>
+  </div>
+</Layout>

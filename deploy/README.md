@@ -376,6 +376,15 @@ Schedule `arena-cloud --role jobs --task billing-reconcile` every 10 minutes: it
 missed webhook left, through the same code path. It needs the billing keys and the database
 variables, like the sweep.
 
+Tax invoices (Story 10.7): the `control` role (and `billing-reconcile`) issues one GST invoice per charge inside the webhook
+transaction. Set `ARENA_INVOICE_SELLER_NAME`, `ARENA_INVOICE_SELLER_ADDRESS` and
+`ARENA_INVOICE_SELLER_GSTIN` (Arena 360's legal name, address and GSTIN) in `arena-cloud-secrets`; with
+the GSTIN unset the control role issues invoices under a development seller and logs an error, and a
+GSTIN that is invalid, or without a name and address, makes the webhook answer 5xx so Razorpay retries.
+Schedule `arena-cloud --role jobs --task invoice-render` every 5 minutes (same environment as
+`offline-watch`, plus `ARENA_DATA_S3_*`): it writes each invoice's PDF under `billing/invoices/` in the
+data bucket and raises the owner's "Invoice ready" alert once.
+
 `GET /v1/pricing?band=IN` (public, cached 5 minutes) serves the live book's lines for a band. The
 web apps read `packages/ui/src/pricing.snapshot.ts`, generated from the seed book; regenerate it
 with `UPDATE_PRICING_SNAPSHOT=1 cargo test -p arena-cloud --test pricing_snapshot` (CI fails when

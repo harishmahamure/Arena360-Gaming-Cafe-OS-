@@ -9,7 +9,7 @@ use std::time::Duration;
 pub const USAGE: &str =
     "usage: arena-cloud --role control|command|builder|all [--listen <addr:port>] [--help] [--version]
        arena-cloud --role control|command|builder|all --dev [--data-dir <dir>] [--listen <loopback addr:port>]
-       arena-cloud --role jobs --task control-backup|command-sweep|offline-watch|retention-sweep|subscription-sweep|billing-reconcile [--dev [--data-dir <dir>]]
+       arena-cloud --role jobs --task control-backup|command-sweep|offline-watch|retention-sweep|subscription-sweep|billing-reconcile|invoice-render [--dev [--data-dir <dir>]]
        arena-cloud ops restore-control (--from-key <key> | --from-file <path|->)
                                        (--identity <file> | --plaintext) [--dev [--data-dir <dir>]]
        arena-cloud ops grant-comp --branch <id> --tier basic|premium --until <YYYY-MM-DD>
@@ -45,6 +45,8 @@ pub const USAGE: &str =
                (run every 15 minutes; needs the billing keys)
                billing-reconcile: read every pending, renewal_needs_approval or grace subscription from
                Razorpay and apply what the webhooks missed (run every 10 minutes; needs the billing keys)
+               invoice-render: write the PDF of each new subscription tax invoice under billing/invoices/
+               in the data bucket and tell the owner the invoice is ready (run every 5 minutes)
   --dev        local dev mode: gz_control is <data-dir>/gz_control.db (SQLite), no env or
                token needed, loopback only (default 127.0.0.1:8080), dev routes under /v1/dev
   --data-dir   dev data directory, created if missing (default ./.arena-cloud-dev)
@@ -196,6 +198,8 @@ pub enum Task {
     SubscriptionSweep,
     /// Reads unsettled subscriptions from Razorpay and applies what the webhooks missed (Story 10.3).
     BillingReconcile,
+    /// Renders the PDF of each new subscription tax invoice and tells the owner (Story 10.7).
+    InvoiceRender,
 }
 
 impl Task {
@@ -207,6 +211,7 @@ impl Task {
             Self::RetentionSweep => "retention-sweep",
             Self::SubscriptionSweep => "subscription-sweep",
             Self::BillingReconcile => "billing-reconcile",
+            Self::InvoiceRender => "invoice-render",
         }
     }
 }
@@ -759,7 +764,7 @@ pub fn parse(
         let task = match task.as_deref() {
             None => {
                 return Err(
-                    "--role jobs needs --task (control-backup, command-sweep, offline-watch, retention-sweep, subscription-sweep or billing-reconcile)"
+                    "--role jobs needs --task (control-backup, command-sweep, offline-watch, retention-sweep, subscription-sweep, billing-reconcile or invoice-render)"
                         .to_owned(),
                 );
             }
@@ -769,6 +774,7 @@ pub fn parse(
             Some("retention-sweep") => Task::RetentionSweep,
             Some("subscription-sweep") => Task::SubscriptionSweep,
             Some("billing-reconcile") => Task::BillingReconcile,
+            Some("invoice-render") => Task::InvoiceRender,
             Some(other) => return Err(format!("unknown --task {other}")),
         };
         if listen.is_some() {

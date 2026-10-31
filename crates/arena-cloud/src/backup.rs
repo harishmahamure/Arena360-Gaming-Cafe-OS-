@@ -51,6 +51,8 @@ pub mod code {
     pub const RETENTION_SWEEP_TIMEOUT: &str = "RETENTION_SWEEP_TIMEOUT";
     pub const BILLING_RECONCILE_FAILED: &str = "BILLING_RECONCILE_FAILED";
     pub const BILLING_RECONCILE_TIMEOUT: &str = "BILLING_RECONCILE_TIMEOUT";
+    pub const INVOICE_RENDER_FAILED: &str = "INVOICE_RENDER_FAILED";
+    pub const INVOICE_RENDER_TIMEOUT: &str = "INVOICE_RENDER_TIMEOUT";
     pub const SUBSCRIPTION_SWEEP_FAILED: &str = "SUBSCRIPTION_SWEEP_FAILED";
     pub const SUBSCRIPTION_SWEEP_TIMEOUT: &str = "SUBSCRIPTION_SWEEP_TIMEOUT";
     pub const RESTORE_CONFIG_INVALID: &str = "RESTORE_CONFIG_INVALID";
@@ -434,6 +436,7 @@ pub async fn run_job(job: &JobConfig, env: impl Fn(&str) -> Option<OsString>) ->
         Task::RetentionSweep => crate::retention::run_job(job, &env, &target).await,
         Task::SubscriptionSweep => crate::subscription::run_job(job, &env, &target).await,
         Task::BillingReconcile => crate::reconcile::run_job(job, &env, &target).await,
+        Task::InvoiceRender => crate::invoice::run_job(job, &env, &target).await,
     }
 }
 

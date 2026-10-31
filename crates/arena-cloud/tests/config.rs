@@ -626,3 +626,18 @@ fn restore_control_takes_one_source_and_one_decryption() {
         assert!(parse(args(bad), env_of(TURSO)).is_err(), "{bad:?}");
     }
 }
+
+#[test]
+fn invoice_render_is_a_jobs_task() {
+    assert_eq!(
+        parse(
+            args(&["--role", "jobs", "--task", "invoice-render"]),
+            env_of(&[])
+        ),
+        Ok(Command::Job(JobConfig {
+            task: Task::InvoiceRender,
+            dev_data_dir: None,
+        }))
+    );
+    assert_eq!(Task::InvoiceRender.as_str(), "invoice-render");
+}

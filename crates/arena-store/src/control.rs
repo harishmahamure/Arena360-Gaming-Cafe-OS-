@@ -26,6 +26,7 @@ mod commands;
 mod dump;
 mod entitlement;
 mod hubs;
+mod invoice;
 mod kek_escrow;
 mod key_requests;
 mod mfa;
@@ -64,6 +65,7 @@ pub use commands::{CommandBacklog, CommandRow, NewCommand, SweepReport};
 pub use dump::{DUMP_HEADER, DUMP_PAGE_ROWS, Dump, DumpManifest, RestoreReport, read_manifest};
 pub use entitlement::{CompGrant, Entitlement, FreeTierOutcome, GrantOutcome, OpsAuditRow};
 pub use hubs::{Beat, FenceMove, HubRow, HubUploadView, NewHub, PairOutcome};
+pub use invoice::{Invoice, NewInvoice};
 pub use key_requests::{KeyDecision, KeyDecisionOutcome, KeyFetch, KeyRefusal, KeyRequestRow};
 pub use mfa::{BackupCodeRow, NewBackupCode, OwnerMfa};
 pub use otp::{
@@ -262,6 +264,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 36,
         sql: include_str!("../control-migrations/0036_billing_events.sql"),
+    },
+    ControlMigration {
+        version: 37,
+        sql: include_str!("../control-migrations/0037_billing_invoices.sql"),
     },
 ];
 

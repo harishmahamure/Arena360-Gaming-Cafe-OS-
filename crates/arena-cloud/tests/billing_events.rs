@@ -1220,3 +1220,489 @@ async fn an_applied_event_wakes_the_branchs_wizard_stream_and_a_repeat_does_not(
     assert_eq!(r.body["status"], "duplicate");
     assert!(rx.try_recv().is_err());
 }
+
+// Story 10.7: every charge gets one immutable GST tax invoice.
+
+use arena_cloud::invoice::{self, render_once};
+use arena_cloud::store::MemoryStore;
+use arena_store::control::{EventOutcome, EventRecord, Invoice, NewInvoice, SubscriptionChange};
+
+impl Harness {
+    async fn charge(&self, event_id: &str, end_s: i64) -> Reply {
+        self.send(
+            event_id,
+            &event("subscription.charged", "sub_fake_001", end_s, Some(false)),
+        )
+        .await
+    }
+
+    async fn invoices(&self) -> Vec<Invoice> {
+        self.db.invoices_to_render(1000).await.unwrap()
+    }
+
+    fn alerts(&self) -> i64 {
+        self.count("SELECT COUNT(*) FROM owner_alerts WHERE kind = 'invoice_ready'")
+    }
+}
+
+fn lines_of(inv: &Invoice) -> Vec<invoice::Line> {
+    serde_json::from_str(&inv.lines_json).unwrap()
+}
+
+#[tokio::test]
+async fn a_first_charge_issues_the_numbered_invoice_priced_from_the_locked_book() {
+    let (h, _a, branch, _id) = Harness::pending_with(json!({
+        "tier": "basic", "cycle": "monthly", "billing_country": "IN",
+        "add_ons": {"devices_20": 2, "tunnel": 1},
+    }))
+    .await;
+    // Not a charge: no invoice.
+    h.send(
+        "evt_auth",
+        &event(
+            "subscription.authenticated",
+            "sub_fake_001",
+            PERIOD_END,
+            None,
+        ),
+    )
+    .await;
+    h.send(
+        "evt_act",
+        &event("subscription.activated", "sub_fake_001", PERIOD_END, None),
+    )
+    .await;
+    assert!(h.invoices().await.is_empty());
+
+    let r = h.charge("evt_charge", PERIOD_END).await;
+    assert_eq!(r.body["status"], "applied", "{}", r.body);
+    let sub = h.only(&branch).await;
+    let quote = arena_cloud::subscription::quote_for(&h.db, &sub)
+        .await
+        .unwrap();
+
+    let all = h.invoices().await;
+    assert_eq!(all.len(), 1);
+    let issued = h.db.invoices_for_event("evt_charge").await.unwrap();
+    assert_eq!(issued, all);
+    let inv = &issued[0];
+    // T0 is 15 Jan 2027: financial year 2026-27.
+    assert_eq!(inv.number, "A360/2026-27/000001");
+    assert_eq!(
+        (inv.fy.as_str(), inv.kind.as_str(), inv.seq),
+        ("2026-27", "invoice", 1)
+    );
+    assert_eq!(h.db.invoice(&inv.number).await.unwrap().as_ref(), Some(inv));
+    assert_eq!(
+        (inv.subtotal_minor, inv.total_minor),
+        (quote.amount_minor, quote.total_minor)
+    );
+    // The branch has no GSTIN: place of supply is the seller's state, CGST + SGST.
+    assert_eq!(inv.cgst_minor + inv.sgst_minor, quote.tax_minor);
+    assert_eq!(inv.igst_minor, 0);
+    assert!(inv.cgst_minor <= inv.sgst_minor);
+    assert_eq!(inv.buyer_gstin, None);
+    assert_eq!(inv.buyer_state_code.as_deref(), Some("27"));
+    assert_eq!((inv.band.as_str(), inv.currency.as_str()), ("IN", "INR"));
+    assert_eq!(inv.sac, "998314");
+    assert_eq!(inv.buyer_name, "Pixel Arena Gaming");
+    assert_eq!(inv.subscription_id, sub.id);
+    assert_eq!(inv.branch_id, branch);
+    assert_eq!(inv.issued_at, T0);
+    assert_eq!(inv.period_end, PERIOD_END * 1000);
+    assert!(inv.period_start < inv.period_end);
+    assert_eq!(inv.seller_gstin, invoice::Seller::dev().gstin);
+    assert_eq!((inv.pdf_key.as_deref(), inv.notified_at), (None, None));
+    // One line per item, add-ons with their quantity.
+    let lines = lines_of(inv);
+    assert_eq!(
+        lines.iter().map(|l| l.quantity).collect::<Vec<_>>(),
+        [1, 2, 1]
+    );
+    assert_eq!(
+        lines.iter().map(|l| l.amount_minor).sum::<i64>(),
+        quote.amount_minor
+    );
+}
+
+#[tokio::test]
+async fn the_buyers_gstin_state_picks_cgst_sgst_or_igst() {
+    let (h, _a, branch, _id) = Harness::pending().await;
+    h.sql(&format!(
+        "UPDATE branches SET gst_registered = 1, gstin = '27AAPFU0939F1ZV' WHERE id = '{branch}'"
+    ));
+    h.charge("evt_1", PERIOD_END).await;
+    let same = h.db.invoices_for_event("evt_1").await.unwrap().remove(0);
+    assert_eq!(same.buyer_gstin.as_deref(), Some("27AAPFU0939F1ZV"));
+    assert_eq!(same.buyer_state_code.as_deref(), Some("27"));
+    assert_eq!(same.igst_minor, 0);
+    assert_eq!(
+        same.cgst_minor + same.sgst_minor,
+        same.total_minor - same.subtotal_minor
+    );
+    assert!(same.cgst_minor > 0);
+
+    // The owner moves the registration to Karnataka before the next renewal.
+    h.sql(&format!(
+        "UPDATE branches SET gstin = '29AAGCB7383J1Z4' WHERE id = '{branch}'"
+    ));
+    h.charge("evt_2", PERIOD_END + 30 * 86_400).await;
+    let other = h.db.invoices_for_event("evt_2").await.unwrap().remove(0);
+    assert_eq!(other.number, "A360/2026-27/000002");
+    assert_eq!(other.buyer_state_code.as_deref(), Some("29"));
+    assert_eq!((other.cgst_minor, other.sgst_minor), (0, 0));
+    assert_eq!(other.igst_minor, same.cgst_minor + same.sgst_minor);
+    assert_eq!(other.total_minor, same.total_minor);
+}
+
+#[tokio::test]
+async fn an_export_band_invoice_has_no_gst_and_says_so() {
+    let h = Harness::with_billing(true).await;
+    let a = h.owner(PHONE_A, "Pixel Arena Gaming").await;
+    let branch = h.cafe_done(&a).await;
+    h.sql(
+        "UPDATE branches SET country = 'MY'; \
+         UPDATE billing_bands SET enabled = 1 WHERE band = 'MY'",
+    );
+    let r = h
+        .subscribe(
+            &branch,
+            &a,
+            json!({"tier": "basic", "cycle": "monthly", "billing_country": "MY"}),
+        )
+        .await;
+    assert_eq!(r.status, 201, "{}", r.body);
+    let r = h
+        .send(
+            "evt_my",
+            &event(
+                "subscription.charged",
+                "sub_fake_001",
+                PERIOD_END,
+                Some(true),
+            ),
+        )
+        .await;
+    assert_eq!(r.body["status"], "applied", "{}", r.body);
+    let inv = h.db.invoices_for_event("evt_my").await.unwrap().remove(0);
+    assert_eq!((inv.band.as_str(), inv.currency.as_str()), ("MY", "MYR"));
+    assert_eq!((inv.cgst_minor, inv.sgst_minor, inv.igst_minor), (0, 0, 0));
+    assert_eq!(inv.total_minor, inv.subtotal_minor);
+    assert_eq!(
+        inv.note.as_deref(),
+        Some("Export of services - zero-rated under LUT")
+    );
+    assert_eq!((inv.buyer_gstin, inv.buyer_state_code), (None, None));
+}
+
+#[tokio::test]
+async fn a_repeat_a_reconcile_and_an_older_event_issue_nothing_more() {
+    let (h, _a, branch, _id) = Harness::pending().await;
+    let r = h.charge("evt_1", PERIOD_END).await;
+    assert_eq!(r.body["status"], "applied");
+    let r = h.charge("evt_1", PERIOD_END).await;
+    assert_eq!(r.body["status"], "duplicate");
+    // The same period under another event id (and the reconcile's view of it): not newer.
+    let r = h.charge("evt_1b", PERIOD_END).await;
+    assert_eq!(r.body["status"], "recorded");
+    let provider = h.st.billing.get().unwrap();
+    h.fake()
+        .set_remote("sub_fake_001", remote("active", 1, india()));
+    h.sql(&format!(
+        "UPDATE subscriptions SET state = 'grace', grace_until = 1 WHERE branch_id = '{branch}'"
+    ));
+    let out = reconcile(&h.db, provider, T0 + 1).await.unwrap();
+    assert_eq!((out.checked, out.applied), (1, 0));
+    assert_eq!(h.invoices().await.len(), 1);
+
+    // A later period is the next number, with no gap.
+    let r = h.charge("evt_2", PERIOD_END + 30 * 86_400).await;
+    assert_eq!(r.body["status"], "applied");
+    let numbers: Vec<String> = h.invoices().await.into_iter().map(|i| i.number).collect();
+    assert_eq!(numbers, ["A360/2026-27/000001", "A360/2026-27/000002"]);
+}
+
+#[tokio::test]
+async fn a_charge_after_an_activation_is_invoiced_once_and_so_is_a_reconcile_first_charge() {
+    let (h, _a, _branch, _id) = Harness::pending().await;
+    h.send(
+        "evt_act",
+        &event("subscription.activated", "sub_fake_001", PERIOD_END, None),
+    )
+    .await;
+    assert!(h.invoices().await.is_empty());
+    h.charge("evt_charge", PERIOD_END).await;
+    h.charge("evt_charge_again", PERIOD_END).await;
+    assert_eq!(h.invoices().await.len(), 1);
+
+    let (h, _a, _branch, _id) = Harness::pending().await;
+    let provider = h.st.billing.get().unwrap();
+    h.fake()
+        .set_remote("sub_fake_001", remote("active", 1, india()));
+    reconcile(&h.db, provider, T0).await.unwrap();
+    assert_eq!(h.invoices().await.len(), 1);
+    // The webhook for the same payment, arriving late, adds nothing.
+    h.charge("evt_late", PERIOD_END).await;
+    assert_eq!(h.invoices().await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_price_the_book_lacks_records_nothing_and_fails_the_call_so_it_is_retried() {
+    let (h, _a, branch, _id) = Harness::pending_with(json!({
+        "tier": "basic", "cycle": "monthly", "billing_country": "IN",
+        "add_ons": {"tunnel": 1},
+    }))
+    .await;
+    h.sql(
+        "DROP TRIGGER price_book_items_no_delete; \
+         DELETE FROM price_book_items WHERE item = 'addon_tunnel' AND band = 'IN' \
+         AND cycle = 'monthly'",
+    );
+    let r = h.charge("evt_1", PERIOD_END).await;
+    assert_eq!(r.status, 500, "{}", r.body);
+    assert_eq!(h.count("SELECT COUNT(*) FROM billing_events"), 0);
+    assert_eq!(h.count("SELECT COUNT(*) FROM billing_invoices"), 0);
+    assert_eq!(h.only(&branch).await.state, SubscriptionState::Pending);
+    assert_eq!(
+        h.count("SELECT COUNT(*) FROM entitlements WHERE source = 'paid'"),
+        0
+    );
+    assert_eq!(h.st.webhook_metrics.counts().failures, 1);
+}
+
+#[tokio::test]
+async fn an_issued_invoice_cannot_change_except_for_its_pdf_and_notice_marks() {
+    let (h, _a, _branch, _id) = Harness::pending().await;
+    h.charge("evt_1", PERIOD_END).await;
+    let path = h._dir.path().join("gz_control.db");
+    let conn = rusqlite::Connection::open(path).unwrap();
+    for sql in [
+        "UPDATE billing_invoices SET total_minor = 1",
+        "UPDATE billing_invoices SET number = 'A360/2026-27/000009'",
+        "UPDATE billing_invoices SET subtotal_minor = 1",
+        "UPDATE billing_invoices SET buyer_gstin = '29AAGCB7383J1Z4'",
+        "UPDATE billing_invoices SET buyer_name = 'x'",
+        "UPDATE billing_invoices SET cgst_minor = 0",
+        "DELETE FROM billing_invoices",
+    ] {
+        assert!(conn.execute(sql, []).is_err(), "{sql}");
+    }
+    // The number is unique.
+    let dup = "INSERT INTO billing_invoices (id, number, fy, kind, seq, tenant_id, branch_id, \
+        subscription_id, billing_event_id, issued_at, period_start, period_end, band, currency, \
+        lines_json, subtotal_minor, total_minor, sac, buyer_name, seller_name, seller_address, \
+        seller_gstin) SELECT 'dup', number, fy, kind, seq + 1, tenant_id, branch_id, \
+        subscription_id, billing_event_id, issued_at, period_start, period_end, band, currency, \
+        lines_json, subtotal_minor, total_minor, sac, buyer_name, seller_name, seller_address, \
+        seller_gstin FROM billing_invoices";
+    assert!(conn.execute(dup, []).is_err());
+    conn.execute(
+        "UPDATE billing_invoices SET pdf_key = 'k', pdf_at = 1, notified_at = 2",
+        [],
+    )
+    .unwrap();
+    assert!(
+        h.invoices().await.is_empty(),
+        "finished invoices are not listed again"
+    );
+    let inv = h.db.invoices_for_event("evt_1").await.unwrap().remove(0);
+    assert_eq!(inv.pdf_key.as_deref(), Some("k"));
+    assert_eq!(h.count("SELECT COUNT(*) FROM billing_invoices"), 1);
+}
+
+fn reissue(of: &Invoice, id: &str, fy: &str) -> NewInvoice {
+    NewInvoice {
+        id: id.to_owned(),
+        fy: fy.to_owned(),
+        tenant_id: of.tenant_id.clone(),
+        branch_id: of.branch_id.clone(),
+        subscription_id: of.subscription_id.clone(),
+        issued_at: of.issued_at,
+        period_start: of.period_start,
+        period_end: of.period_end,
+        band: of.band.clone(),
+        currency: of.currency.clone(),
+        lines_json: of.lines_json.clone(),
+        subtotal_minor: of.subtotal_minor,
+        cgst_minor: of.cgst_minor,
+        sgst_minor: of.sgst_minor,
+        igst_minor: of.igst_minor,
+        total_minor: of.total_minor,
+        sac: of.sac.clone(),
+        buyer_name: of.buyer_name.clone(),
+        buyer_gstin: of.buyer_gstin.clone(),
+        buyer_state_code: of.buyer_state_code.clone(),
+        seller_name: of.seller_name.clone(),
+        seller_address: of.seller_address.clone(),
+        seller_gstin: of.seller_gstin.clone(),
+        note: of.note.clone(),
+    }
+}
+
+#[tokio::test]
+async fn the_sequence_restarts_each_financial_year_and_a_failed_issue_leaves_no_gap() {
+    let (h, _a, branch, _id) = Harness::pending().await;
+    h.charge("evt_1", PERIOD_END).await;
+    let first = h.invoices().await.remove(0);
+    assert_eq!(first.number, "A360/2026-27/000001");
+
+    let steps = [
+        ("2027-28", "A360/2027-28/000001", "rec_a", "hist_a"),
+        ("2026-27", "A360/2026-27/000002", "rec_b", "hist_b"),
+        ("2027-28", "A360/2027-28/000002", "rec_c", "hist_c"),
+    ];
+    for (n, (fy, want, rec, hist)) in steps.into_iter().enumerate() {
+        let sub = h.only(&branch).await;
+        let change = |rev: i64, history_id: &'static str| SubscriptionChange {
+            subscription_id: &sub.id,
+            expect_rev: rev,
+            old_state: sub.state,
+            new_state: sub.state,
+            period_end: None,
+            first_paid_at: None,
+            payment_country: None,
+            mandate_method: None,
+            entitlement: None,
+            history_id,
+            cause: "test",
+            ops_task: None,
+            audit: None,
+            close_task_kind: None,
+        };
+        let event_id = format!("evt_fy_{n}");
+        let record = |id: &'static str| EventRecord {
+            id,
+            razorpay_event_id: &event_id,
+            kind: "subscription.charged",
+            subscription_id: Some(&sub.id),
+            payload_hash: "h",
+            source: "webhook",
+            received_at: T0,
+        };
+        // A stale revision writes nothing, not even an invoice number.
+        let stale =
+            h.db.apply_billing_event(
+                &record("rec_stale"),
+                Some(&change(sub.rev - 1, "hist_stale")),
+                Some(&reissue(&first, "inv_stale", fy)),
+                T0,
+            )
+            .await
+            .unwrap();
+        assert_eq!(stale, EventOutcome::Conflict);
+        let out =
+            h.db.apply_billing_event(
+                &record(rec),
+                Some(&change(sub.rev, hist)),
+                Some(&reissue(&first, &format!("inv_{n}"), fy)),
+                T0,
+            )
+            .await
+            .unwrap();
+        assert_eq!(out, EventOutcome::Recorded);
+        let issued = h.db.invoices_for_event(&event_id).await.unwrap();
+        assert_eq!(issued[0].number, want);
+    }
+    assert_eq!(h.count("SELECT COUNT(*) FROM billing_invoices"), 4);
+}
+
+#[tokio::test]
+async fn the_jobs_task_writes_one_pdf_and_raises_one_alert_however_often_it_runs() {
+    let (h, _a, _branch, _id) = Harness::pending().await;
+    let store = MemoryStore::new();
+    let out = render_once(&h.st, &store).await.unwrap();
+    assert_eq!((out.rendered, out.notified), (0, 0));
+
+    h.charge("evt_1", PERIOD_END).await;
+    let out = render_once(&h.st, &store).await.unwrap();
+    assert_eq!((out.rendered, out.notified, out.failed), (1, 1, 0));
+    let key = "billing/invoices/2026-27/A360-2026-27-000001.pdf";
+    assert_eq!(store.keys(), [key]);
+    let (pdf, _) = store.read(key).unwrap();
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.starts_with("%PDF-1.4") && text.contains("A360/2026-27/000001"));
+    assert_eq!(h.alerts(), 1);
+    let inv = h.db.invoice("A360/2026-27/000001").await.unwrap().unwrap();
+    assert_eq!(inv.pdf_key.as_deref(), Some(key));
+    assert_eq!((inv.pdf_at, inv.notified_at), (Some(T0), Some(T0)));
+    // The alert says what it is, with the number and the amount.
+    let row =
+        h.db.owner_alerts(&inv.tenant_id, 0, None, 10)
+            .await
+            .unwrap()
+            .remove(0);
+    assert_eq!(row.kind, "invoice_ready");
+    assert!(row.params.contains("A360/2026-27/000001") && row.params.contains("Rs "));
+
+    for _ in 0..2 {
+        let out = render_once(&h.st, &store).await.unwrap();
+        assert_eq!((out.rendered, out.notified, out.failed), (0, 0, 0));
+    }
+    assert_eq!(store.keys().len(), 1);
+    assert_eq!(h.alerts(), 1);
+
+    // A renewal is its own invoice, PDF and alert.
+    h.charge("evt_2", PERIOD_END + 30 * 86_400).await;
+    let out = render_once(&h.st, &store).await.unwrap();
+    assert_eq!((out.rendered, out.notified), (1, 1));
+    assert_eq!(store.keys().len(), 2);
+    assert_eq!(h.alerts(), 2);
+}
+
+#[tokio::test]
+async fn a_payment_held_for_review_is_invoiced_and_the_owner_hears_once_it_is_cleared() {
+    let (h, _a, branch, id) = Harness::pending().await;
+    h.send(
+        "evt_charge",
+        &event(
+            "subscription.charged",
+            "sub_fake_001",
+            PERIOD_END,
+            Some(true),
+        ),
+    )
+    .await;
+    assert_eq!(
+        h.only(&branch).await.state,
+        SubscriptionState::PendingReview
+    );
+    assert_eq!(h.invoices().await.len(), 1, "the money was taken");
+    let store = MemoryStore::new();
+    let out = render_once(&h.st, &store).await.unwrap();
+    // The PDF is written; the branch is not entitled yet, so there is nobody to tell.
+    assert_eq!((out.rendered, out.notified, out.failed), (1, 0, 1));
+    assert_eq!(h.alerts(), 0);
+    approve_review(&h.db, &id, "sam", "checked", T0 + 1)
+        .await
+        .unwrap();
+    let out = render_once(&h.st, &store).await.unwrap();
+    assert_eq!((out.rendered, out.notified, out.failed), (0, 1, 0));
+    assert_eq!(h.alerts(), 1);
+}
+
+#[tokio::test]
+async fn a_store_that_fails_leaves_the_invoice_for_the_next_run() {
+    use arena_cloud::store::{ObjectStore, StoreError};
+    struct Down;
+    impl ObjectStore for Down {
+        async fn put(&self, _: &str, _: Vec<u8>) -> Result<(), StoreError> {
+            Err(StoreError("down".to_owned()))
+        }
+        async fn get(&self, _: &str) -> Result<Vec<u8>, StoreError> {
+            Err(StoreError("down".to_owned()))
+        }
+        async fn list(&self, _: &str) -> Result<Vec<String>, StoreError> {
+            Ok(Vec::new())
+        }
+        async fn delete(&self, _: &str) -> Result<(), StoreError> {
+            Ok(())
+        }
+    }
+    let (h, _a, _branch, _id) = Harness::pending().await;
+    h.charge("evt_1", PERIOD_END).await;
+    let out = render_once(&h.st, &Down).await.unwrap();
+    assert_eq!((out.rendered, out.notified, out.failed), (0, 0, 1));
+    assert_eq!(h.alerts(), 0);
+    let out = render_once(&h.st, &MemoryStore::new()).await.unwrap();
+    assert_eq!((out.rendered, out.notified, out.failed), (1, 1, 0));
+}

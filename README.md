@@ -2128,3 +2128,32 @@ built by `upgradeUrl` in `@arena/ui`; each app says where the picker lives with 
   unverified one and a repeat raise none, and an open notice is not doubled.
 - **Windows pairing** is refused only for Free (`FEATURE_NOT_ENTITLED`); Basic and Premium pair. The standby
   flag is on both paid tiers, so a standby code is `TIER_LOCKED` only on Free.
+
+## Subscription tax invoices (Story 10.7)
+
+- **One invoice per charge.** A `subscription.charged` (webhook or reconcile) writes one immutable
+  `billing_invoices` row in the same transaction as the billing event and the subscription transition,
+  keyed by the event, so a repeat delivery, or a reconcile that sees a period no newer than the one held,
+  issues nothing. The number is `A360/<FY>/<seq:06>`; the financial year is April to March in
+  Asia/Kolkata and the sequence restarts at `000001` each year. It is `MAX(seq) + 1` inside the issuing
+  transaction, so a rolled-back event leaves no gap (`(fy, kind, seq)` is unique as the backstop). A
+  price the subscription's locked book lacks, or a wrong `ARENA_INVOICE_SELLER_*`, fails the call before
+  anything is recorded, so Razorpay retries the webhook. A payment held for review is invoiced too (the
+  money was taken).
+- **Tax.** Lines come from the subscription's own price book (one line per item with its quantity); GST is
+  the quote's 18% on the subtotal, half-up to paise, SAC 998314. Band IN: CGST + SGST (the tax split in two,
+  the odd paisa to SGST) when the place of supply is Arena 360's state, else IGST. The place of supply is the
+  state of the branch's GSTIN; a branch with no GSTIN falls to the seller's state. Bands MY, SG and US are
+  in the band's currency with no GST lines and the note "Export of services - zero-rated under LUT".
+  Nothing on an issued invoice changes (database triggers refuse it); only `pdf_key`, `pdf_at` and
+  `notified_at` are set later.
+- **Seller.** `ARENA_INVOICE_SELLER_NAME`, `ARENA_INVOICE_SELLER_ADDRESS` and `ARENA_INVOICE_SELLER_GSTIN`
+  on the `control` role (the webhook) and the `billing-reconcile` job set who issues. With `ARENA_INVOICE_SELLER_GSTIN` unset the
+  development seller (state 27) is used and an error is logged; production sets all three.
+- **`arena-cloud --role jobs --task invoice-render`** (every 5 minutes; same database, sign-up, messaging and
+  licence environment as `offline-watch`, plus `ARENA_DATA_S3_*`): writes each new invoice's PDF to
+  `billing/invoices/<FY>/<number with / as ->.pdf` in the data bucket, never under a branch prefix, then
+  raises one `invoice_ready` owner alert ("Invoice ready: <number> for <amount>.") through the owner-alert
+  path (push and WhatsApp). The alert id is the invoice's, so a re-run sends nothing; a failed write or
+  alert (or a branch not entitled yet) leaves the invoice for the next run.
+- Not here: credit notes (10.15), proration (10.9), and the Owner app's invoice list and download (10.8).

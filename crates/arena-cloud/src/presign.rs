@@ -27,6 +27,27 @@ const DEV_BUCKET: &str = "arena-dev";
 const DEV_ACCESS_KEY_ID: &str = "arena-dev";
 const DEV_SECRET_ACCESS_KEY: &str = "arena-dev-password";
 
+/// The `ARENA_DATA_S3_*` bucket's configuration. With none of the four variables set, `--dev` uses
+/// the dev MinIO and anything else has none (`None`). A half-set or wrong configuration is an
+/// error naming the variable.
+pub fn data_s3_config(
+    dev: bool,
+    env: &impl Fn(&str) -> Option<OsString>,
+) -> Result<Option<S3Config>, String> {
+    let any_set = ["ENDPOINT", "BUCKET", "ACCESS_KEY_ID", "SECRET_ACCESS_KEY"]
+        .iter()
+        .any(|s| get_env(env, &format!("{DATA_S3_PREFIX}_{s}")).is_some_and(|v| !v.is_empty()));
+    if any_set {
+        return S3Config::from_env_prefixed(env, DATA_S3_PREFIX).map(Some);
+    }
+    Ok(dev.then(|| S3Config {
+        endpoint: DEV_ENDPOINT.to_owned(),
+        bucket: DEV_BUCKET.to_owned(),
+        access_key_id: DEV_ACCESS_KEY_ID.to_owned(),
+        secret_access_key: DEV_SECRET_ACCESS_KEY.to_owned(),
+    }))
+}
+
 /// The largest change-log sequence number a batch key holds (twelve digits).
 pub const MAX_SEQ: i64 = 999_999_999_999;
 /// The longest instance part of an epoch.
@@ -267,21 +288,7 @@ impl Presigner {
         dev: bool,
         env: &impl Fn(&str) -> Option<OsString>,
     ) -> Result<Option<Self>, String> {
-        let any_set = ["ENDPOINT", "BUCKET", "ACCESS_KEY_ID", "SECRET_ACCESS_KEY"]
-            .iter()
-            .any(|s| get_env(env, &format!("{DATA_S3_PREFIX}_{s}")).is_some_and(|v| !v.is_empty()));
-        if any_set {
-            let cfg = S3Config::from_env_prefixed(env, DATA_S3_PREFIX)?;
-            return Ok(Some(Self::new(&cfg)));
-        }
-        Ok(dev.then(|| {
-            Self::new(&S3Config {
-                endpoint: DEV_ENDPOINT.to_owned(),
-                bucket: DEV_BUCKET.to_owned(),
-                access_key_id: DEV_ACCESS_KEY_ID.to_owned(),
-                secret_access_key: DEV_SECRET_ACCESS_KEY.to_owned(),
-            })
-        }))
+        Ok(data_s3_config(dev, env)?.map(|cfg| Self::new(&cfg)))
     }
 
     /// A GET URL for `key`, valid for [`PRESIGN_TTL_S`] seconds from now (Story 9.12: the restore

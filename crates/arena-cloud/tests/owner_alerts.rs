@@ -938,6 +938,10 @@ async fn a_hub_may_raise_only_its_six_kinds_with_the_right_parameters() {
         // The cloud's own kinds, and ones nobody knows.
         ("test", json!({})),
         ("branch_offline", json!({"minutes": "20"})),
+        (
+            "invoice_ready",
+            json!({"number": "A360/2026-27/000001", "amount": "Rs 1180.00"}),
+        ),
         ("owner_alert", json!({})),
         ("nope", json!({})),
         // A missing, an unknown, an empty and a personal parameter.

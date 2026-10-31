@@ -13,4 +13,5 @@ export type OwnerAlertKind =
   | "branch_offline"
   | "branch_not_uploading"
   | "branch_online"
-  | "standby_forced";
+  | "standby_forced"
+  | "invoice_ready";

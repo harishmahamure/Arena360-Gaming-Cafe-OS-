@@ -5,6 +5,7 @@
 
 use arena_proto::{MandateMethod, SubscriptionState, Tier};
 
+use super::invoice::{NewInvoice, issue_stmt};
 use super::price_book::NewOpsTask;
 use super::subscription::{COLUMNS, Subscription, subscription_from};
 use super::{
@@ -327,13 +328,16 @@ impl ControlDb {
         self.transact(change_stmts(change, now)).await
     }
 
-    /// Records `event` and, in the same transaction, applies `change`. A Razorpay event id that is
-    /// already recorded writes nothing (`Duplicate`); a subscription that is no longer at the
-    /// revision `change` read writes nothing either (`Conflict`).
+    /// Records `event` and, in the same transaction, applies `change` and issues `invoice` (the tax
+    /// invoice of the charge; only with a change). A Razorpay event id that is already recorded
+    /// writes nothing (`Duplicate`); a subscription that is no longer at the revision `change`
+    /// read writes nothing either (`Conflict`), and neither does an invoice number that another
+    /// transaction took first (`Conflict`: read again and retry).
     pub async fn apply_billing_event(
         &self,
         event: &EventRecord<'_>,
         change: Option<&SubscriptionChange<'_>>,
+        invoice: Option<&NewInvoice>,
         now: i64,
     ) -> Result<EventOutcome, ControlError> {
         let mut stmts = vec![
@@ -355,12 +359,18 @@ impl ControlDb {
         ];
         if let Some(c) = change {
             stmts.extend(change_stmts(c, now));
+            if let Some(inv) = invoice {
+                stmts.push(issue_stmt(inv, event.id));
+            }
         }
         match self.transact(stmts).await {
             Ok(true) => Ok(EventOutcome::Recorded),
             Ok(false) => Ok(EventOutcome::Conflict),
             Err(ControlError::Db(m)) if m.contains("billing_events") && m.contains("UNIQUE") => {
                 Ok(EventOutcome::Duplicate)
+            }
+            Err(ControlError::Db(m)) if m.contains("billing_invoices") && m.contains("UNIQUE") => {
+                Ok(EventOutcome::Conflict)
             }
             Err(e) => Err(e),
         }

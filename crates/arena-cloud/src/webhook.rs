@@ -240,6 +240,8 @@ pub struct Decision {
     pub issue_entitlement: bool,
     /// The first payment does not match the band: hold it for an operator.
     pub review: bool,
+    /// The event is a charge: it is invoiced (Story 10.7).
+    pub charged: bool,
 }
 
 /// The transition `ev` causes on `sub`, or `None` when it changes nothing. `authenticated` alone
@@ -276,6 +278,7 @@ pub fn decide(sub: &Subscription, ev: &ParsedEvent, now: i64) -> Option<Decision
                 mandate,
                 issue_entitlement: !review,
                 review,
+                charged,
             })
         }
         SubscriptionState::Active
@@ -297,6 +300,7 @@ pub fn decide(sub: &Subscription, ev: &ParsedEvent, now: i64) -> Option<Decision
                     mandate,
                     issue_entitlement: false,
                     review: false,
+                    charged: true,
                 })
             } else if sub.first_paid_at.is_none() {
                 // `activated` came first: the first charge still has to be dated.
@@ -308,6 +312,7 @@ pub fn decide(sub: &Subscription, ev: &ParsedEvent, now: i64) -> Option<Decision
                     mandate,
                     issue_entitlement: false,
                     review: false,
+                    charged: true,
                 })
             } else {
                 None
@@ -373,8 +378,9 @@ pub enum Handled {
     Duplicate,
 }
 
-/// Records one event and applies what it causes, in one transaction. `event_id` is Razorpay's
-/// event id (the reconcile job's own for a fetched state).
+/// Records one event and applies what it causes, in one transaction, issuing the tax invoice when
+/// the event is a charge. `event_id` is Razorpay's event id (the reconcile job's own for a fetched
+/// state).
 pub async fn handle(
     db: &ControlDb,
     event_id: &str,
@@ -444,8 +450,18 @@ pub async fn handle(
             }),
             _ => None,
         };
+        // A charge is invoiced in the same transaction. A price the subscription's book lacks, or
+        // a seller that is misconfigured, fails the call before anything is recorded, so the
+        // webhook is retried.
+        let invoice = match (&sub, &decision, &change) {
+            (Some(s), Some(d), Some(c)) if d.charged => Some(
+                crate::invoice::for_charge(db, s, c.period_end.or(s.current_period_end), now)
+                    .await?,
+            ),
+            _ => None,
+        };
         match db
-            .apply_billing_event(&record, change.as_ref(), now)
+            .apply_billing_event(&record, change.as_ref(), invoice.as_ref(), now)
             .await?
         {
             EventOutcome::Recorded => {

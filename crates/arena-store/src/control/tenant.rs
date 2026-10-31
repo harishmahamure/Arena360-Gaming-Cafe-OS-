@@ -143,6 +143,12 @@ impl ControlDb {
         rows.first().map(|r| tenant_from(r)).transpose()
     }
 
+    pub async fn tenant(&self, tenant_id: &str) -> Result<Option<Tenant>, ControlError> {
+        let sql = format!("SELECT {TENANT_COLUMNS} FROM tenants WHERE id = ?");
+        let rows = self.query(&sql, vec![text(tenant_id)]).await?;
+        rows.first().map(|r| tenant_from(r)).transpose()
+    }
+
     pub async fn branches_of_tenant(&self, tenant_id: &str) -> Result<Vec<Branch>, ControlError> {
         let sql = format!(
             "SELECT {BRANCH_COLUMNS} FROM branches b WHERE b.tenant_id = ? \

@@ -52,6 +52,9 @@ pub enum OwnerAlertKind {
     BranchOnline,
     /// A Manager forced the standby Hub to main (Story 9.22).
     StandbyForced,
+    /// A subscription charge's GST tax invoice is ready (Story 10.7). Raised by the cloud's jobs
+    /// role, never by a Hub.
+    InvoiceReady,
 }
 
 /// Why a set of parameters does not fit its kind: the offending name.
@@ -63,7 +66,7 @@ pub struct OwnerAlertParamError {
 
 impl OwnerAlertKind {
     /// Every kind.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Test,
         Self::CashVariance,
         Self::LowStock,
@@ -74,6 +77,7 @@ impl OwnerAlertKind {
         Self::BranchNotUploading,
         Self::BranchOnline,
         Self::StandbyForced,
+        Self::InvoiceReady,
     ];
 
     /// The kinds a Hub raises through `POST /v1/notify` (Story 8.34).
@@ -104,6 +108,7 @@ impl OwnerAlertKind {
             Self::BranchNotUploading => "branch_not_uploading",
             Self::BranchOnline => "branch_online",
             Self::StandbyForced => "standby_forced",
+            Self::InvoiceReady => "invoice_ready",
         }
     }
 
@@ -121,6 +126,7 @@ impl OwnerAlertKind {
             Self::LargeRefund | Self::LargeDiscount => &["amount"],
             Self::BranchOffline | Self::BranchNotUploading | Self::BranchOnline => &["minutes"],
             Self::StandbyForced => &["manager"],
+            Self::InvoiceReady => &["number", "amount"],
         }
     }
 
@@ -213,13 +219,16 @@ impl OwnerAlertKind {
                 "The standby Hub was forced to main by {}. Data since its last sync may be lost.",
                 p("manager")
             ),
+            Self::InvoiceReady => {
+                format!("Invoice ready: {} for {}.", p("number"), p("amount"))
+            }
         }
     }
 
     /// The path in the Owner app that opens what the alert is about.
     pub fn url(self, branch_id: &str) -> String {
         match self {
-            Self::Test => "/alerts".to_owned(),
+            Self::Test | Self::InvoiceReady => "/alerts".to_owned(),
             Self::BranchOffline
             | Self::BranchNotUploading
             | Self::BranchOnline
@@ -424,6 +433,7 @@ mod tests {
             ("days", "9"),
             ("minutes", "20"),
             ("manager", "Asha"),
+            ("number", "A360/2026-27/000001"),
         ];
         params(
             &values
@@ -556,6 +566,25 @@ mod tests {
         assert_eq!(
             OwnerAlertKind::StandbyForced.text(&sample(OwnerAlertKind::StandbyForced)),
             "The standby Hub was forced to main by Asha. Data since its last sync may be lost."
+        );
+    }
+
+    #[test]
+    fn an_invoice_ready_line_names_the_number_and_amount_and_no_hub_raises_it() {
+        let k = OwnerAlertKind::InvoiceReady;
+        let p = params(&[("number", "A360/2026-27/000001"), ("amount", "Rs 1180.00")]);
+        assert_eq!(k.check_params(&p), Ok(()));
+        assert_eq!(
+            k.text(&p),
+            "Invoice ready: A360/2026-27/000001 for Rs 1180.00."
+        );
+        assert_eq!(k.as_str(), "invoice_ready");
+        assert!(!k.hub_sourced());
+        assert_eq!(
+            k.check_params(&params(&[("amount", "Rs 1")]))
+                .unwrap_err()
+                .field,
+            "number"
         );
     }
 

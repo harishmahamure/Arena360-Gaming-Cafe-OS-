@@ -21,6 +21,7 @@ const ALL_TABLES: &[&str] = &[
     "admin_audit",
     "billing_bands",
     "billing_events",
+    "billing_invoices",
     "branch_fence",
     "branch_opening",
     "branch_retention",

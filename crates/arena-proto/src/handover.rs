@@ -35,6 +35,14 @@ pub const HANDOVER_CODE_TTL_MS: i64 = 15 * 60 * 1000;
 pub const HANDOVER_RECEIVED_KEY: &str = "handover_received";
 /// The `hub_meta` key an Android Hub keeps its handover state under.
 pub const HANDOVER_STATE_KEY: &str = "handover";
+/// `POST` (Windows Hub token): claims the next epoch for an imported snapshot (Story 10.18).
+pub const MIGRATION_CLAIM_PATH: &str = "/v1/migration/claim";
+/// `POST` (Windows Hub token): the imported branch is serving; the Windows Hub becomes the main
+/// Hub and the Android Hub's token is revoked (Story 10.18).
+pub const MIGRATION_IMPORTED_PATH: &str = "/v1/migration/imported";
+/// The `hub_meta` key a Windows Hub keeps the epoch it imported a snapshot as under, until the
+/// cloud has been told (Story 10.18). Empty once it has.
+pub const MIGRATION_REPORT_KEY: &str = "migration_report";
 
 /// Where a handover stands, on either Hub.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -176,4 +184,45 @@ pub struct HandedOver {
 /// Whether `code` has the shape of a handover code.
 pub fn valid_handover_code(code: &str) -> bool {
     crate::is_pair_code(code)
+}
+
+/// `POST /v1/migration/claim` (Story 10.18): the Windows Hub holding a checked snapshot asks for
+/// the epoch after the Android Hub's. The fence must still be `fork.parent_epoch`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct MigrationClaimRequest {
+    /// The Windows Hub's `hub_instance_id`, which the epoch is minted for.
+    pub instance_id: String,
+    /// The snapshot's epoch and last `seq`.
+    pub fork: crate::FenceFork,
+}
+
+/// The epoch the cloud issued for the imported branch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct MigrationClaimResponse {
+    pub epoch: String,
+}
+
+/// `POST /v1/migration/imported` (Story 10.18): the Windows Hub serves the imported branch under
+/// `epoch`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct MigrationImportedRequest {
+    pub epoch: String,
+}
+
+/// `POST /ui/migration/file`: the Windows Hub takes the snapshot from a file on this PC.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct HandoverFileRequest {
+    pub path: String,
+}
+
+/// `POST /ui/migration/import`'s answer: the Hub restarts onto the imported branch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct MigrationImporting {
+    pub restarting: bool,
 }

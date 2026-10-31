@@ -5,6 +5,9 @@ import { authHeaders, errorOf, getToken, noticeLocked } from "./auth";
 export const HANDOVER_URL = "http://127.0.0.1:7409/ui/handover";
 /** The Windows Hub's join route: no session, loopback only. */
 export const MIGRATION_JOIN_URL = "http://127.0.0.1:7409/ui/migration/join";
+/** The Windows Hub's file and import routes (Story 10.18): no session, loopback only. */
+export const MIGRATION_FILE_URL = "http://127.0.0.1:7409/ui/migration/file";
+export const MIGRATION_IMPORT_URL = "http://127.0.0.1:7409/ui/migration/import";
 const TIMEOUT_MS = 120_000;
 
 export type HandoverStep = "start" | "file" | "cancel";
@@ -60,3 +63,9 @@ export function handoverStep(step: HandoverStep, pin: string): Promise<HandoverR
 /** The Windows Hub claims the code at the tablet's address and pulls the snapshot. */
 export const joinMove = (address: string, code: string) =>
   post(MIGRATION_JOIN_URL, { address, code }, null);
+
+/** The Windows Hub takes the snapshot from a file on this PC (the tablet could not be reached). */
+export const useMoveFile = (path: string) => post(MIGRATION_FILE_URL, { path }, null);
+
+/** The Windows Hub imports the snapshot it holds and restarts onto it. */
+export const importMove = () => post(MIGRATION_IMPORT_URL, {}, null);

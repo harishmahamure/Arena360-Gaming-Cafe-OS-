@@ -24,7 +24,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 
 use super::error::ApiError;
-use super::heartbeat::authenticate;
+use super::heartbeat::{authenticate, authenticate_key_holder};
 use super::json::ApiJson;
 use super::signup::ceil_s;
 use crate::auth::AuthState;
@@ -119,7 +119,7 @@ async fn request(
     ApiJson(body): ApiJson<KekRequest>,
 ) -> Result<Json<KekRequestResponse>, ApiError> {
     let now = st.now();
-    let hub = authenticate(&st, &headers, now).await?;
+    let hub = authenticate_key_holder(&st, &headers, now).await?;
     if body.hub_instance_id != hub.hub_instance_id {
         return Err(ApiError::validation(
             "hub_instance_id",
@@ -195,7 +195,7 @@ async fn fetch(
     ApiJson(body): ApiJson<KekFetchRequest>,
 ) -> Result<Json<KekFetchResponse>, ApiError> {
     let now = st.now();
-    let hub = authenticate(&st, &headers, now).await?;
+    let hub = authenticate_key_holder(&st, &headers, now).await?;
     if body.hub_instance_id != hub.hub_instance_id {
         return Err(ApiError::validation(
             "hub_instance_id",

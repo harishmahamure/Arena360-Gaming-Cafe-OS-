@@ -2350,8 +2350,36 @@ built by `upgradeUrl` in `@arena/ui`; each app says where the picker lives with 
   snapshot (a stale copy imported later would roll the branch back) and the file written to the backup folder. If the
   owner cancels in the cloud while only the code is showing, the next heartbeat ends the handover; once the Hub has stopped,
   only the manager's "Cancel move" resumes it.
-- Not done here: importing the snapshot, the epoch claim, the branch key release (Story 10.18) and the kiosks following the new
-  Hub (Story 10.19). The snapshot has device token hashes blanked (as every export), so kiosks pair again until then.
+- Not done here: the kiosks following the new Hub (Story 10.19); importing is Story 10.18 (below). The snapshot has device
+  token hashes blanked (as every export), so kiosks pair again until then.
+
+## The Windows Hub imports the snapshot as the next epoch (Story 10.18)
+
+- **Key first.** As soon as the Windows Hub holds a checked snapshot (`HandoverPhase::Received`) its `KeyRequestTask` asks for
+  the branch key exactly as a replacement Hub does (Stories 9.9/9.10: a one-time age key, `POST /v1/kek/request`, polling
+  `/v1/kek/fetch`); `HubStatus::wants_branch_key` is true for a restore _or_ a received move. The cloud lets the move's Windows
+  Hub (standby slot, `hubs.migration_id` set) use those two routes only once the move is `handed_over`, and the owner app's
+  existing "Release branch key to <PC name>" card (step-up MFA) shows its request. The key is stored in the PC's keystore
+  (DPAPI). The screen's "Import the branch" stays disabled until it is held.
+- **Claim, stage, restart.** "Import the branch" (`POST /ui/migration/import`, loopback) calls `POST /v1/migration/claim`
+  with `fork = {snapshot epoch, last seq}`: the one fence compare-and-set (`claim_branch_fence`) moves the fence from the
+  snapshot's epoch to `<counter+1>:<this PC's instance>`; any other fence is `FENCED`. Asking again for the epoch this PC
+  already holds answers it again, so a failed import is simply repeated. The snapshot is then staged with
+  `arena_store::stage_migration` (the Story 9.7 restore machinery) and the Hub restarts. At start the staged file becomes the
+  database: migrated forward, serving under the **claimed epoch, confirmed** (not provisional), `fork` = the snapshot's
+  `{epoch, last seq}`, this PC's pairing, licence and device tokens kept, the move's `hub_meta` keys removed and
+  `hub_meta.migration_report` set. Nothing is set aside (the empty database it replaces is deleted, not orphaned) and
+  `ops.restore` is recorded by the system actor `restore`.
+- **From a file.** `POST /ui/migration/file {path}` checks a snapshot copied from the tablet's backup folder (`purpose: migrate`,
+  this branch, hash) and keeps it as if it had been pulled; the rest is the same.
+- **Report.** `ImportReporter` calls `POST /v1/migration/imported {epoch}` until the cloud answers (the Hub does not beat
+  before, because its token is still the move's). In one transaction the cloud checks the fence is that epoch and this Hub's,
+  revokes the Android Hub's token, makes the PC the branch's `main` Hub (`migration_id` cleared) and marks the move `done`.
+  The tablet's next heartbeat is `TOKEN_REVOKED` and it keeps showing "This branch has moved". The report is a dedicated call
+  rather than a heartbeat field because the cloud refuses a standby token at `/v1/heartbeat`.
+- Not done here: kiosks following the new Hub without pairing again (Story 10.19; they show "Pair again" until then), the
+  end-to-end move proof (Story 10.20), the row-count/checksum comparison of the two databases, and the owner app's later move
+  phases (it still reads the move as "awaiting handover" until `done`).
 
 ## Renewals that need approval, grace and lapse (Story 10.11)
 

@@ -217,7 +217,7 @@ impl KeyRequestTask {
     /// Waiting for the owner's key: the Hub is in "Restore this branch" and has no key yet.
     fn waiting(&self) -> bool {
         let s = self.status.borrow();
-        s.restore_pending.is_some() && !s.restore_key_released
+        s.wants_branch_key() && !s.restore_key_released
     }
 
     fn online(&self) -> bool {
@@ -232,7 +232,7 @@ impl KeyRequestTask {
         let mut status = self.status.subscribe();
         loop {
             if status
-                .wait_for(|s| s.restore_pending.is_some() && !s.restore_key_released)
+                .wait_for(|s| s.wants_branch_key() && !s.restore_key_released)
                 .await
                 .is_err()
             {
@@ -675,6 +675,47 @@ mod tests {
         let before = calls.len();
         tokio::time::sleep(Duration::from_millis(150)).await;
         assert_eq!(seen.lock().unwrap().len(), before);
+        job.abort();
+    }
+
+    #[tokio::test]
+    async fn the_windows_hub_of_a_move_asks_only_once_it_holds_the_snapshot_and_takes_the_key() {
+        let s = stores();
+        let blob = wrapped_for(&s.public, &[5u8; KEK_LEN]);
+        let (port, seen) = serve(Box::new(move |line| {
+            if line.starts_with("POST /v1/kek/request") {
+                (200, r#"{"state":"pending"}"#.into())
+            } else {
+                (
+                    200,
+                    serde_json::json!({"state": "approved", "wrapped_kek": blob}).to_string(),
+                )
+            }
+        }))
+        .await;
+        let (task, status) = make_task(port, &s);
+        // Paired for a move and waiting for the tablet: not a restore, nothing to ask yet.
+        status.send_modify(|st| {
+            st.restore_pending = None;
+            st.migration_wait = Some("Pixel Arena".into());
+        });
+        let job = tokio::spawn(task.run());
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(count(&seen, "POST /v1/kek/request"), 0);
+
+        // The snapshot arrived: the request goes out and the released key is kept.
+        status.send_modify(|st| {
+            st.handover = Some(arena_proto::HandoverView {
+                phase: arena_proto::HandoverPhase::Received,
+                target_hub_name: "Pixel Arena".into(),
+                code: None,
+                last_seq: Some(42),
+                file_name: None,
+            });
+        });
+        until("the flag", || status.borrow().restore_key_released).await;
+        assert_eq!(s.kek.get().unwrap().unwrap(), vec![5u8; KEK_LEN]);
+        assert_eq!(count(&seen, "POST /v1/kek/request"), 1);
         job.abort();
     }
 

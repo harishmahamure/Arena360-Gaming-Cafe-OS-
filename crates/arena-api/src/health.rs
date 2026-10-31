@@ -258,9 +258,8 @@ async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Resp
                     snapshot.migration_wait.clone_from(&status.migration_wait);
                     snapshot.move_notice.clone_from(&status.move_notice);
                     snapshot.handover.clone_from(&status.handover);
-                    snapshot.restore_key_released = (status.restore_pending.is_some()
-                        && status.restore_key_released)
-                        .then_some(true);
+                    snapshot.restore_key_released =
+                        (status.wants_branch_key() && status.restore_key_released).then_some(true);
                     snapshot.licence_unverified = (status.licence
                         == Some(arena_proto::LicenceStanding::Unverified))
                     .then_some(true);

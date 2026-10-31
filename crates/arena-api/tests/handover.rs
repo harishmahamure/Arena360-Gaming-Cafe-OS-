@@ -202,6 +202,10 @@ struct Pc {
 }
 
 async fn pc(branch_id: &str) -> Pc {
+    pc_with_status(branch_id).await.0
+}
+
+async fn pc_with_status(branch_id: &str) -> (Pc, watch::Sender<HubStatus>) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("branch.db");
     let mut store = Store::open(&path, T0).unwrap();
@@ -223,6 +227,9 @@ async fn pc(branch_id: &str) -> Pc {
             .map(|_| ())
         })
         .unwrap();
+    store
+        .write_tx(|tx| arena_store::set_meta(tx, arena_store::MIGRATION_WAIT_KEY, "Dev Branch"))
+        .unwrap();
     let mut initial = HubStatus::opened(LATEST_SCHEMA_VERSION, "01JHUBBBBBBBBBBBBBBBBBBBBB");
     initial.role = Role::Primary;
     initial.lease = Some(LeaseInfo::from(&lease("01JHUBBBBBBBBBBBBBBBBBBBBB")));
@@ -231,10 +238,11 @@ async fn pc(branch_id: &str) -> Pc {
     let clock = Arc::new(ManualClock::new(T0));
     let writer = Writer::spawn(store, clock.clone(), status_rx.clone()).unwrap();
     let reader = Arc::new(SnapshotReader::open(&path).unwrap());
-    let handover =
-        Arc::new(Handover::open(writer, Arc::clone(&reader), status_tx, clock, None).unwrap());
+    let handover = Arc::new(
+        Handover::open(writer, Arc::clone(&reader), status_tx.clone(), clock, None).unwrap(),
+    );
     let folder = dir.path().join("handover");
-    Pc {
+    let made = Pc {
         puller: HandoverPuller::new(
             Arc::clone(&handover),
             reader,
@@ -245,7 +253,8 @@ async fn pc(branch_id: &str) -> Pc {
         handover,
         folder,
         _dir: dir,
-    }
+    };
+    (made, status_tx)
 }
 
 fn join(t: &Tablet, code: &str) -> HandoverJoinRequest {
@@ -367,4 +376,183 @@ async fn an_address_nobody_answers_is_a_plain_message_and_nothing_stops() {
         .await
         .unwrap_err();
     assert_eq!(e.field.as_deref(), Some("address"));
+}
+
+// ---- Story 10.18: the PC imports what it pulled ----
+
+#[derive(Default)]
+struct MemKey(std::sync::Mutex<Option<Vec<u8>>>);
+
+impl arena_tasks::Keystore for MemKey {
+    fn put(&self, secret: &[u8]) -> std::io::Result<()> {
+        *self.0.lock().unwrap() = Some(secret.to_vec());
+        Ok(())
+    }
+    fn get(&self) -> std::io::Result<Option<Vec<u8>>> {
+        Ok(self.0.lock().unwrap().clone())
+    }
+}
+
+type Seen = Arc<std::sync::Mutex<Vec<(String, String)>>>;
+
+/// A cloud that answers every call with `reply` and remembers the request lines and bodies.
+async fn cloud(status: u16, reply: &'static str) -> (u16, Seen) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen: Seen = Arc::default();
+    let log = Arc::clone(&seen);
+    tokio::spawn(async move {
+        loop {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut raw = Vec::new();
+            let mut buf = [0u8; 8192];
+            loop {
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                raw.extend_from_slice(&buf[..n]);
+                if let Some(at) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&raw[..at]).to_ascii_lowercase();
+                    let len = head
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length:"))
+                        .and_then(|v| v.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    while raw.len() < at + 4 + len {
+                        let n = sock.read(&mut buf).await.unwrap_or(0);
+                        if n == 0 {
+                            break;
+                        }
+                        raw.extend_from_slice(&buf[..n]);
+                    }
+                    break;
+                }
+                if n == 0 {
+                    break;
+                }
+            }
+            let text = String::from_utf8_lossy(&raw).into_owned();
+            let line = text.lines().next().unwrap_or("").to_owned();
+            let body = text
+                .split_once("\r\n\r\n")
+                .map(|(_, b)| b.to_owned())
+                .unwrap_or_default();
+            log.lock().unwrap().push((line, body));
+            let head = format!(
+                "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                reply.len()
+            );
+            let _ = sock.write_all(format!("{head}{reply}").as_bytes()).await;
+        }
+    });
+    (port, seen)
+}
+
+struct Importing {
+    _t: Tablet,
+    pc: Pc,
+    importer: arena_tasks::MigrationImporter,
+    status: watch::Sender<HubStatus>,
+    restarted: Arc<std::sync::atomic::AtomicBool>,
+    seen: Seen,
+}
+
+impl Importing {
+    fn db(&self) -> PathBuf {
+        self.pc._dir.path().join("branch.db")
+    }
+}
+
+/// A PC that pulled the snapshot, with a cloud that answers the claim with `status`/`reply`.
+async fn importing(status_code: u16, reply: &'static str) -> Importing {
+    let t = tablet().await;
+    let (pc, status) = pc_with_status(&t.branch_id).await;
+    let code = t.code().await;
+    pc.puller.join(join(&t, &code)).await.unwrap();
+    let (port, seen) = cloud(status_code, reply).await;
+    let cloud = arena_tasks::CloudClient::new(
+        &arena_tasks::CloudEndpoint::parse(&format!("http://127.0.0.1:{port}"), true).unwrap(),
+    )
+    .unwrap();
+    let restarted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = Arc::clone(&restarted);
+    let token = Arc::new(MemKey::default());
+    arena_tasks::Keystore::put(token.as_ref(), b"hub_x.y").unwrap();
+    let importer = arena_tasks::MigrationImporter::new(
+        Arc::clone(&pc.handover),
+        status.clone(),
+        cloud,
+        token,
+        "01JHUBBBBBBBBBBBBBBBBBBBBB".into(),
+        pc._dir.path().join("branch.db"),
+        pc.folder.clone(),
+        Arc::new(move || flag.store(true, std::sync::atomic::Ordering::SeqCst)),
+    );
+    Importing {
+        _t: t,
+        pc,
+        importer,
+        status,
+        restarted,
+        seen,
+    }
+}
+
+#[tokio::test]
+async fn the_import_waits_for_the_owners_key_and_then_claims_stages_and_restarts() {
+    use arena_core::handover::MigrationImportControl;
+    let i = importing(200, r#"{"epoch":"9:01JHUBBBBBBBBBBBBBBBBBBBBB"}"#).await;
+
+    // Without the branch key nothing is asked of the cloud and nothing is staged.
+    let refused = i.importer.import().await.unwrap_err();
+    assert_eq!(refused.code, ErrorCode::StepNotReady);
+    assert!(i.seen.lock().unwrap().is_empty());
+    assert!(!arena_store::has_pending(&i.db()));
+
+    i.status.send_modify(|s| s.restore_key_released = true);
+    let done = i.importer.import().await.unwrap();
+    assert!(done.restarting);
+
+    // The claim named the snapshot's epoch and last seq and this Hub's instance.
+    let (line, body) = i.seen.lock().unwrap()[0].clone();
+    assert!(line.starts_with("POST /v1/migration/claim"), "{line}");
+    let sent: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(sent["instance_id"], "01JHUBBBBBBBBBBBBBBBBBBBBB");
+    let (_, facts) = i.pc.handover.received().await.unwrap();
+    assert_eq!(sent["fork"]["parent_epoch"], facts.epoch);
+    assert_eq!(sent["fork"]["parent_seq"], facts.last_seq);
+
+    // The snapshot is staged for the next start and the Hub is told to restart (after a beat).
+    assert!(arena_store::has_pending(&i.db()));
+    tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+    assert!(i.restarted.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn a_fenced_claim_stages_nothing_and_says_the_branch_moved_on() {
+    use arena_core::handover::MigrationImportControl;
+    let i = importing(
+        409,
+        r#"{"code":"FENCED","message":"A newer Hub has taken over this branch (epoch 5:X)."}"#,
+    )
+    .await;
+    i.status.send_modify(|s| s.restore_key_released = true);
+    let e = i.importer.import().await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::Fenced);
+    assert!(e.message.contains("moved on"), "{}", e.message);
+    assert!(!arena_store::has_pending(&i.db()));
+    tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+    assert!(!i.restarted.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn a_pc_that_is_not_waiting_for_a_move_imports_nothing() {
+    use arena_core::handover::MigrationImportControl;
+    let i = importing(200, r#"{"epoch":"9:X"}"#).await;
+    i.status.send_modify(|s| {
+        s.restore_key_released = true;
+        s.migration_wait = None;
+    });
+    let e = i.importer.import().await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::StepNotReady);
+    assert!(i.seen.lock().unwrap().is_empty());
 }

@@ -8,9 +8,10 @@ use arena_proto::{
     CommandsPage, ErrorCode, FenceClaimRequest, FenceClaimResponse, HeartbeatRequest,
     HeartbeatResponse, HubPairRequest, HubPairResponse, HubPlatform, HubRole, KekEscrowRequest,
     KekEscrowResponse, KekFetchRequest, KekFetchResponse, KekRequest, KekRequestResponse,
-    NotifyRequest, NotifyResponse, PresignRequest, PresignResponse, RestorePlan,
-    RestorePlanRequest, SETUP_MAX_BYTES, SetupTemplateOutcome, SetupTemplateStored, UiError,
-    normalize_pairing_code, valid_pairing_code,
+    MIGRATION_CLAIM_PATH, MIGRATION_IMPORTED_PATH, MigrationClaimRequest, MigrationClaimResponse,
+    MigrationImportedRequest, NotifyRequest, NotifyResponse, PresignRequest, PresignResponse,
+    RestorePlan, RestorePlanRequest, SETUP_MAX_BYTES, SetupTemplateOutcome, SetupTemplateStored,
+    UiError, normalize_pairing_code, valid_pairing_code,
 };
 use arena_store::HubIdentity;
 use sha2::{Digest, Sha256};
@@ -252,6 +253,24 @@ impl CloudClient {
         req: &FenceClaimRequest,
     ) -> Result<FenceClaimResponse, CloudFailure> {
         self.post("/v1/fence/claim", Some(token), req).await
+    }
+
+    /// The Windows Hub of a Hub move claims the epoch after the Android Hub's (Story 10.18).
+    pub async fn migration_claim(
+        &self,
+        token: &str,
+        req: &MigrationClaimRequest,
+    ) -> Result<MigrationClaimResponse, CloudFailure> {
+        self.post(MIGRATION_CLAIM_PATH, Some(token), req).await
+    }
+
+    /// The Windows Hub says it serves the imported branch (Story 10.18).
+    pub async fn migration_imported(
+        &self,
+        token: &str,
+        req: &MigrationImportedRequest,
+    ) -> Result<MigrationClaimResponse, CloudFailure> {
+        self.post(MIGRATION_IMPORTED_PATH, Some(token), req).await
     }
 
     /// Leaves the branch key, wrapped for the escrow public key, with the cloud (Story 9.2).

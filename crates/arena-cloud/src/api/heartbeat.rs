@@ -109,6 +109,43 @@ pub(super) async fn authenticate(
     Ok(hub)
 }
 
+/// The Hub that may ask for and take the branch key: the main Hub, or the Windows Hub of a Hub move
+/// once the Android Hub reported the handover (Story 10.18).
+pub(super) async fn authenticate_key_holder(
+    st: &AuthState,
+    headers: &HeaderMap,
+    now: i64,
+) -> Result<HubRow, ApiError> {
+    let hub = authenticate_any(st, headers, now).await?;
+    if hub.role != HubRole::Standby {
+        return Ok(hub);
+    }
+    if hub.migration_id.is_some() {
+        let handed_over = st
+            .db
+            .live_migration_to_hub(&hub.id)
+            .await
+            .map_err(ApiError::internal)?
+            .is_some_and(|m| {
+                matches!(
+                    m.state,
+                    MigrationState::HandedOver | MigrationState::Imported
+                )
+            });
+        if handed_over {
+            return Ok(hub);
+        }
+        return Err(refused(
+            ErrorCode::StepNotReady,
+            "The Android Hub has not handed the branch over yet.",
+        ));
+    }
+    Err(refused(
+        ErrorCode::Forbidden,
+        "This Hub is the standby. Only the main Hub talks to the cloud.",
+    ))
+}
+
 async fn heartbeat(
     State(st): State<Arc<AuthState>>,
     headers: HeaderMap,

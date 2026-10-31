@@ -627,3 +627,25 @@ impl Handover {
         s.made.as_ref().map(|m| (m.path.clone(), m.facts.clone()))
     }
 }
+
+/// The answer of an import: the Hub is about to restart onto the imported branch.
+pub type ImportFuture<'a> = std::pin::Pin<
+    Box<
+        dyn std::future::Future<
+                Output = Result<arena_proto::MigrationImporting, arena_proto::UiError>,
+            > + Send
+            + 'a,
+    >,
+>;
+
+/// The Windows Hub's handle on the snapshot it holds (Story 10.18): take it from a file on this
+/// PC, or import it. `arena-tasks` implements it.
+pub trait MigrationImportControl: Send + Sync {
+    /// Takes the snapshot from `req.path` when the tablet could not be reached; answers the
+    /// `received` view.
+    fn use_file(&self, req: arena_proto::HandoverFileRequest) -> JoinFuture<'_>;
+
+    /// Claims the next epoch from the cloud, stages the received snapshot and restarts the Hub
+    /// onto it. Refused until the owner released the branch key.
+    fn import(&self) -> ImportFuture<'_>;
+}

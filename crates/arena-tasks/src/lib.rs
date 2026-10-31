@@ -17,6 +17,7 @@ pub mod keys;
 pub mod keystore;
 pub mod lease;
 pub mod mdns;
+pub mod migration_import;
 pub mod notify;
 pub mod notify_trigger;
 pub mod printer;
@@ -66,6 +67,7 @@ pub use mdns::{
     Advert, Advertiser, BranchSource, Interfaces, MDNS_FAILURE_LOG_INTERVAL, MDNS_POLL_INTERVAL,
     MdnsAdvertiser, MdnsTask, NetworkName, SystemInterfaces, lan_ipv4_addresses, mdns_host_name,
 };
+pub use migration_import::{ImportReporter, MigrationImporter};
 pub use notify::{IN_DOUBT_RETRY_MS, NOTIFY_TICK, NotifyDrainTask};
 pub use notify_trigger::{NOTIFY_TRIGGER_TICK, NotifyTriggerTask};
 pub use promote::{CloudClaimer, EpochClaimer, PromoteError, Promoter, Promotion};

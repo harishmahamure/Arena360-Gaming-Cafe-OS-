@@ -68,7 +68,8 @@ pub use commands::{CommandBacklog, CommandRow, NewCommand, SweepReport};
 pub use dump::{DUMP_HEADER, DUMP_PAGE_ROWS, Dump, DumpManifest, RestoreReport, read_manifest};
 pub use entitlement::{CompGrant, Entitlement, FreeTierOutcome, GrantOutcome, OpsAuditRow};
 pub use hub_migration::{
-    HubMigration, MigrationStart, MigrationState, NewMigration, NewMigrationHub,
+    HubMigration, MigrationClaim, MigrationFinish, MigrationStart, MigrationState, NewMigration,
+    NewMigrationHub,
 };
 pub use hubs::{Beat, FenceMove, HubRow, HubUploadView, NewHub, PairOutcome};
 pub use invoice::{Invoice, NewInvoice};

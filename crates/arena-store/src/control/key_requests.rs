@@ -232,7 +232,9 @@ impl ControlDb {
                  decided_at, decided_by, fetched_at, pc_name FROM key_requests k \
                  WHERE k.branch_id = ? AND k.state = 'pending' AND k.requested_at >= ? \
                  AND EXISTS (SELECT 1 FROM hubs h WHERE h.branch_id = k.branch_id \
-                    AND h.hub_instance_id = k.hub_instance_id AND h.role = 'main' \n                    AND h.revoked_at IS NULL) \
+                    AND h.hub_instance_id = k.hub_instance_id \
+                    AND (h.role = 'main' OR h.migration_id IS NOT NULL) \
+                    AND h.revoked_at IS NULL) \
                  ORDER BY k.requested_at DESC, k.id DESC LIMIT 1",
                 vec![
                     text(branch_id),
@@ -381,7 +383,7 @@ impl ControlDb {
                 "UPDATE key_requests SET state = 'approved', decided_at = ?, decided_by = ?, \
                  wrapped_kek = ? WHERE id = ? AND branch_id = ? AND state = 'pending' \
                  AND EXISTS (SELECT 1 FROM hubs h WHERE h.branch_id = key_requests.branch_id \
-                    AND h.hub_instance_id = key_requests.hub_instance_id \n                    AND h.role = 'main' AND h.revoked_at IS NULL) \
+                    AND h.hub_instance_id = key_requests.hub_instance_id \n                    AND (h.role = 'main' OR h.migration_id IS NOT NULL) AND h.revoked_at IS NULL) \
                  AND NOT EXISTS (SELECT 1 FROM key_requests o \
                     WHERE o.branch_id = key_requests.branch_id \
                     AND o.public_key = key_requests.public_key AND o.state = 'approved')",

@@ -6,7 +6,7 @@
 //! cancel until the handover (Story 10.17) begins. Nothing here touches the branch's main Hub, its
 //! token or its fence.
 
-use super::hubs::PairOutcome;
+use super::hubs::{FenceMove, PairOutcome};
 use super::{ControlDb, ControlError, SqlValue, Stmt, col_int, col_opt_text, col_text, text};
 
 /// `hub_migrations.state`. The states past `AwaitingHandover` belong to Stories 10.17-10.19.
@@ -109,6 +109,25 @@ pub enum MigrationStart {
 }
 
 /// The Windows Hub of a move, pairing with its `migrate` code.
+/// What the Windows Hub's claim of the next epoch did (Story 10.18).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MigrationClaim {
+    /// The fence is this Hub's epoch now (or already was).
+    Moved,
+    /// The Android Hub has not handed over (or the move is over).
+    NotReady,
+    /// The fence is not the snapshot's epoch.
+    Stale { current: Option<String> },
+}
+
+/// What the Windows Hub's report that it serves did (Story 10.18).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MigrationFinish {
+    Done,
+    NotReady,
+    Fenced,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewMigrationHub<'a> {
     pub id: &'a str,
@@ -361,5 +380,107 @@ impl ControlDb {
             state: MigrationState::Cancelled,
             ..live
         }))
+    }
+
+    /// The move whose Windows Hub is `to_hub_id`, if it is not over.
+    pub async fn live_migration_to_hub(
+        &self,
+        to_hub_id: &str,
+    ) -> Result<Option<HubMigration>, ControlError> {
+        let sql = format!(
+            "SELECT {MIGRATION_COLUMNS} FROM hub_migrations WHERE to_hub_id = ?              AND state NOT IN ('done', 'cancelled')"
+        );
+        let rows = self.query(&sql, vec![text(to_hub_id)]).await?;
+        rows.first().map(|r| migration_from(r)).transpose()
+    }
+
+    /// The Windows Hub of a move claims the epoch after the Android Hub's (Story 10.18): the
+    /// compare-and-set of [`claim_branch_fence`](Self::claim_branch_fence), allowed only once the
+    /// Android Hub reported the handover. Asking again for the epoch this Hub already holds
+    /// answers `Moved` without writing, so a restart between the claim and the import can retry.
+    pub async fn claim_migration_fence(
+        &self,
+        hub_id: &str,
+        branch_id: &str,
+        expected: &str,
+        epoch: &str,
+        fork_seq: i64,
+        now: i64,
+    ) -> Result<MigrationClaim, ControlError> {
+        let Some(m) = self.live_migration_to_hub(hub_id).await? else {
+            return Ok(MigrationClaim::NotReady);
+        };
+        if !matches!(
+            m.state,
+            MigrationState::HandedOver | MigrationState::Imported
+        ) {
+            return Ok(MigrationClaim::NotReady);
+        }
+        let rows = self
+            .query(
+                "SELECT epoch, hub_id FROM branch_fence WHERE branch_id = ?",
+                vec![text(branch_id)],
+            )
+            .await?;
+        if let Some(row) = rows.first()
+            && col_text(row, 0)? == epoch
+            && col_text(row, 1)? == hub_id
+        {
+            return Ok(MigrationClaim::Moved);
+        }
+        Ok(
+            match self
+                .claim_branch_fence(branch_id, hub_id, expected, epoch, Some(fork_seq), now)
+                .await?
+            {
+                FenceMove::Moved { .. } => MigrationClaim::Moved,
+                FenceMove::Stale { current } => MigrationClaim::Stale { current },
+            },
+        )
+    }
+
+    /// The Windows Hub serves the imported branch under `epoch` (Story 10.18): the Android Hub is
+    /// revoked, the Windows Hub becomes the branch's main Hub and the move is `done`, in one
+    /// transaction. `Fenced` when the branch fence is not this Hub's `epoch`.
+    pub async fn finish_hub_migration(
+        &self,
+        hub_id: &str,
+        epoch: &str,
+        now: i64,
+    ) -> Result<MigrationFinish, ControlError> {
+        let Some(m) = self.live_migration_to_hub(hub_id).await? else {
+            return Ok(MigrationFinish::NotReady);
+        };
+        if !matches!(
+            m.state,
+            MigrationState::HandedOver | MigrationState::Imported
+        ) {
+            return Ok(MigrationFinish::NotReady);
+        }
+        let now = SqlValue::Integer(now);
+        let done = self
+            .transact(vec![
+                // The fence must still be this Hub's imported epoch.
+                Stmt::new(
+                    "UPDATE hub_migrations SET state = 'done', updated_at = ? WHERE id = ?                      AND state IN ('handed_over', 'imported') AND EXISTS (SELECT 1 FROM                      branch_fence f WHERE f.branch_id = hub_migrations.branch_id                      AND f.epoch = ? AND f.hub_id = ?)",
+                    vec![now.clone(), text(&m.id), text(epoch), text(hub_id)],
+                )
+                .expect(1),
+                Stmt::new(
+                    "UPDATE hubs SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+                    vec![now, text(&m.from_hub_id)],
+                ),
+                Stmt::new(
+                    "UPDATE hubs SET role = 'main', migration_id = NULL WHERE id = ?                      AND migration_id = ? AND revoked_at IS NULL",
+                    vec![text(hub_id), text(&m.id)],
+                )
+                .expect(1),
+            ])
+            .await?;
+        Ok(if done {
+            MigrationFinish::Done
+        } else {
+            MigrationFinish::Fenced
+        })
     }
 }

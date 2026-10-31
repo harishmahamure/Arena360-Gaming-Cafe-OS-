@@ -246,8 +246,13 @@ impl HeartbeatTask {
             HEARTBEAT_BOOT_INTERVAL_S
         });
         // A Windows Hub waiting for the Android Hub of a Hub move to hand over holds a token that
-        // is not the main Hub's: it does not beat (Story 10.16).
-        if self.status.borrow().migration_wait.is_some() {
+        // is not the main Hub's: it does not beat (Story 10.16). Nor does one that imported the
+        // snapshot until the cloud has made it the main Hub (Story 10.18).
+        let not_main = {
+            let s = self.status.borrow();
+            s.migration_wait.is_some() || s.migration_report.is_some()
+        };
+        if not_main {
             return interval;
         }
         let (Some(writer), Some(lease), Role::Primary) = (self.writer.clone(), lease, role) else {

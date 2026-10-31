@@ -834,7 +834,11 @@
 {:else if awaitingAndroid !== null}
   <div class="pair-screen" data-theme="dark">
     <main class="hub-main" bind:this={mainEl}>
-      <AwaitAndroid branchName={awaitingAndroid} received={handover} />
+      <AwaitAndroid
+        branchName={awaitingAndroid}
+        received={handover}
+        keyReleased={data.hub.ok ? data.hub.snapshot.restore_key_released === true : false}
+      />
     </main>
   </div>
 {:else if unpaired}

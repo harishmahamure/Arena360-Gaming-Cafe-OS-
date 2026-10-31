@@ -32,6 +32,7 @@ mod kek;
 mod live;
 mod meta;
 pub mod mfa;
+mod migration_import;
 pub mod notify;
 pub mod owned;
 mod owner_read;
@@ -107,6 +108,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>, commands_only: bool) -> Router {
             .merge(pair::router(Arc::clone(st)))
             .merge(heartbeat::router(Arc::clone(st)))
             .merge(fence::router(Arc::clone(st)))
+            .merge(migration_import::router(Arc::clone(st)))
             .merge(presign::router(Arc::clone(st)))
             .merge(kek::router(Arc::clone(st)))
             .merge(restore::router(Arc::clone(st)))

@@ -4,12 +4,13 @@
 //!
 //! A Hub waiting for a move has no staff and no session, so the route sits behind the loopback
 //! guard only, like `/ui/pair-hub`. The code is what authorises the handover, and the Android Hub
-//! limits wrong ones.
+//! limits wrong ones. The file and import routes (Story 10.18) are guarded the same way: the owner
+//! released the branch key to this PC in the cloud, which is what authorises the import.
 
 use std::sync::Arc;
 
-use arena_core::handover::HandoverJoinControl;
-use arena_proto::{ErrorCode, HandoverJoinRequest, UiError};
+use arena_core::handover::{HandoverJoinControl, MigrationImportControl};
+use arena_proto::{ErrorCode, HandoverFileRequest, HandoverJoinRequest, UiError};
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
@@ -45,9 +46,37 @@ async fn join(State(control): State<Control>, body: axum::body::Bytes) -> Respon
     }
 }
 
-pub fn ui_migration_router(control: Control) -> Router {
-    Router::new()
+type Import = Arc<dyn MigrationImportControl>;
+
+/// `POST /ui/migration/file` (Story 10.18): takes the snapshot from a file on this PC, when the
+/// tablet could not be reached.
+async fn file(State(control): State<Import>, body: axum::body::Bytes) -> Response {
+    let Ok(request) = serde_json::from_slice::<HandoverFileRequest>(&body) else {
+        return fail(bad_frame("the body must be {\"path\"}"));
+    };
+    match control.use_file(request).await {
+        Ok(view) => Json(view).into_response(),
+        Err(e) => fail(e),
+    }
+}
+
+/// `POST /ui/migration/import` (Story 10.18): imports the received snapshot and restarts the Hub
+/// onto it. Needs the branch key the owner released to this PC.
+async fn import(State(control): State<Import>) -> Response {
+    match control.import().await {
+        Ok(done) => Json(done).into_response(),
+        Err(e) => fail(e),
+    }
+}
+
+pub fn ui_migration_router(control: Control, importer: Import) -> Router {
+    let join = Router::new()
         .route("/ui/migration/join", post(join))
-        .with_state(control)
+        .with_state(control);
+    let import = Router::new()
+        .route("/ui/migration/file", post(file))
+        .route("/ui/migration/import", post(import))
+        .with_state(importer);
+    join.merge(import)
         .layer(axum::middleware::from_fn(crate::health::ui_guard))
 }

@@ -3629,3 +3629,219 @@ async fn the_handover_report_moves_the_move_on_once_and_only_for_its_android_hub
     assert_eq!(h.beat_handed_over(&android, &id, 42).await.status, 200);
     assert_eq!(h.migration_rows()[0].3, "handed_over");
 }
+
+// ---- Story 10.18: the Windows Hub imports the snapshot as the next epoch ----
+
+const PC_AGE_KEY: &str = "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p";
+
+impl Harness {
+    async fn hub_post(&self, path: &str, token: &str, body: Value) -> Reply {
+        let req = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        reply(self.app.clone().oneshot(req).await.unwrap()).await
+    }
+
+    async fn migration_claim(&self, token: &str, parent: &str, seq: i64) -> Reply {
+        self.hub_post(
+            "/v1/migration/claim",
+            token,
+            json!({"instance_id": "FRONT-PC", "fork": {"parent_epoch": parent, "parent_seq": seq}}),
+        )
+        .await
+    }
+
+    async fn key_request(&self, token: &str) -> Reply {
+        self.hub_post(
+            "/v1/kek/request",
+            token,
+            json!({"hub_instance_id": "FRONT-PC", "public_key": PC_AGE_KEY, "pc_name": "Front desk"}),
+        )
+        .await
+    }
+
+    /// A move whose Android Hub has handed over: (owner access, branch, android token, pc token,
+    /// migration id).
+    async fn handed_over(&self) -> (String, String, String, String, String) {
+        let (a, branch, android) = self.basic_with_android().await;
+        let code = code_of(&self.start_move(&a, &branch).await);
+        let paired = self
+            .pair_named(&code, "windows", "FRONT-PC", "Front desk")
+            .await;
+        assert_eq!(paired.status, 200, "{}", paired.body);
+        let pc = paired.body["token"].as_str().unwrap().to_owned();
+        let id = self.migration_rows()[0].0.clone();
+        self.advance(10_000);
+        assert_eq!(self.beat_handed_over(&android, &id, 42).await.status, 200);
+        (a, branch, android, pc, id)
+    }
+}
+
+#[tokio::test]
+async fn the_pc_claims_the_next_epoch_only_after_the_handover_and_only_from_the_snapshots_epoch() {
+    let h = Harness::new().await;
+    let (a, branch, android) = h.basic_with_android().await;
+    let code = code_of(&h.start_move(&a, &branch).await);
+    let paired = h
+        .pair_named(&code, "windows", "FRONT-PC", "Front desk")
+        .await;
+    let pc = paired.body["token"].as_str().unwrap().to_owned();
+    let id = h.migration_rows()[0].0.clone();
+
+    // Not before the Android Hub reported the handover.
+    let early = h.migration_claim(&pc, "1:HUBA", 42).await;
+    assert_eq!((early.status, early.code()), (409, "STEP_NOT_READY"));
+    assert_eq!(h.fence_row(&branch).0, "1:HUBA");
+    // The main Hub is not the Windows Hub of a move.
+    let main = h.migration_claim(&android, "1:HUBA", 42).await;
+    assert_eq!((main.status, main.code()), (403, "FORBIDDEN"));
+
+    h.advance(10_000);
+    assert_eq!(h.beat_handed_over(&android, &id, 42).await.status, 200);
+
+    // Another instance, or a malformed epoch, is refused.
+    let other = h
+        .hub_post(
+            "/v1/migration/claim",
+            &pc,
+            json!({"instance_id": "OTHER", "fork": {"parent_epoch": "1:HUBA", "parent_seq": 42}}),
+        )
+        .await;
+    assert_eq!(other.status, 422, "{}", other.body);
+    assert_eq!(h.migration_claim(&pc, "legacy", 42).await.status, 422);
+
+    // A snapshot from an epoch the branch has moved past is fenced and changes nothing.
+    let stale = h.migration_claim(&pc, "7:OLD", 42).await;
+    assert_eq!((stale.status, stale.code()), (409, "FENCED"));
+    assert_eq!(h.fence_row(&branch).0, "1:HUBA");
+
+    // The right epoch moves the fence to the next counter for the PC's instance, forked at the
+    // snapshot's last seq.
+    let claimed = h.migration_claim(&pc, "1:HUBA", 42).await;
+    assert_eq!(claimed.status, 200, "{}", claimed.body);
+    assert_eq!(claimed.body["epoch"], "2:FRONT-PC");
+    assert_eq!(h.fence_row(&branch), ("2:FRONT-PC".to_owned(), Some(42)));
+    // Asked again after a lost answer or a restart, it is the same epoch.
+    let again = h.migration_claim(&pc, "1:HUBA", 42).await;
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert_eq!(again.body["epoch"], "2:FRONT-PC");
+    assert_eq!(h.fence_row(&branch).0, "2:FRONT-PC");
+    // Until the PC reports, the Android Hub is still the branch's main Hub.
+    assert_eq!(
+        h.db.active_hub(&branch)
+            .await
+            .unwrap()
+            .unwrap()
+            .platform
+            .as_str(),
+        "android"
+    );
+}
+
+#[tokio::test]
+async fn the_pc_becomes_the_main_hub_and_the_android_token_is_revoked_when_it_reports() {
+    let h = Harness::new().await;
+    let (a, branch, android, pc, _) = h.handed_over().await;
+
+    // Reporting before the epoch is claimed is fenced; nothing changes.
+    let early = h
+        .hub_post(
+            "/v1/migration/imported",
+            &pc,
+            json!({"epoch": "2:FRONT-PC"}),
+        )
+        .await;
+    assert_eq!((early.status, early.code()), (409, "FENCED"));
+    assert_eq!(h.migration_rows()[0].3, "handed_over");
+    assert_eq!(h.hubs().len(), 2);
+
+    assert_eq!(h.migration_claim(&pc, "1:HUBA", 42).await.status, 200);
+    // The Android Hub's own call cannot finish the move.
+    let by_android = h
+        .hub_post(
+            "/v1/migration/imported",
+            &android,
+            json!({"epoch": "2:FRONT-PC"}),
+        )
+        .await;
+    assert_eq!(
+        (by_android.status, by_android.code()),
+        (409, "FENCED"),
+        "{}",
+        by_android.body
+    );
+
+    let done = h
+        .hub_post(
+            "/v1/migration/imported",
+            &pc,
+            json!({"epoch": "2:FRONT-PC"}),
+        )
+        .await;
+    assert_eq!(done.status, 200, "{}", done.body);
+    assert_eq!(h.migration_rows()[0].3, "done");
+
+    // The PC is the main Hub now; the tablet's token stops working.
+    let live = h.db.active_hub(&branch).await.unwrap().unwrap();
+    assert_eq!(live.platform.as_str(), "windows");
+    assert!(live.migration_id.is_none());
+    h.advance(10_000);
+    let tablet = h.beat(&android, "1:HUBA").await;
+    assert_eq!((tablet.status, tablet.code()), (401, "TOKEN_REVOKED"));
+    let beat = h.beat(&pc, "2:FRONT-PC").await;
+    assert_eq!(beat.status, 200, "{}", beat.body);
+    assert!(h.owner_branch(&a).await.get("migration").is_none());
+
+    // Told again after a lost answer, it is the same answer; another epoch is fenced.
+    let repeat = h
+        .hub_post(
+            "/v1/migration/imported",
+            &pc,
+            json!({"epoch": "2:FRONT-PC"}),
+        )
+        .await;
+    assert_eq!(repeat.status, 200, "{}", repeat.body);
+    let wrong = h
+        .hub_post(
+            "/v1/migration/imported",
+            &pc,
+            json!({"epoch": "9:FRONT-PC"}),
+        )
+        .await;
+    assert_eq!((wrong.status, wrong.code()), (409, "FENCED"));
+}
+
+#[tokio::test]
+async fn the_pc_asks_for_the_branch_key_only_after_the_handover_and_the_owner_is_offered_it() {
+    let h = Harness::new().await;
+    let (a, branch, android) = h.basic_with_android().await;
+    let code = code_of(&h.start_move(&a, &branch).await);
+    let paired = h
+        .pair_named(&code, "windows", "FRONT-PC", "Front desk")
+        .await;
+    let pc = paired.body["token"].as_str().unwrap().to_owned();
+    let id = h.migration_rows()[0].0.clone();
+
+    let early = h.key_request(&pc).await;
+    assert_eq!((early.status, early.code()), (409, "STEP_NOT_READY"));
+    assert!(h.owner_branch(&a).await.get("key_request").is_none());
+
+    h.advance(10_000);
+    assert_eq!(h.beat_handed_over(&android, &id, 42).await.status, 200);
+    let asked = h.key_request(&pc).await;
+    assert_eq!(asked.status, 200, "{}", asked.body);
+    assert_eq!(asked.body["state"], "pending");
+    let offered = h.owner_branch(&a).await;
+    assert_eq!(offered["key_request"]["pc_name"], "Front desk", "{offered}");
+    // The decision is polled with the same token.
+    let polled = h
+        .hub_post("/v1/kek/fetch", &pc, json!({"hub_instance_id": "FRONT-PC"}))
+        .await;
+    assert_eq!(polled.status, 200, "{}", polled.body);
+    assert_eq!(polled.body["state"], "pending");
+    let _ = branch;
+}

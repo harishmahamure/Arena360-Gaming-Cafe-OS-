@@ -210,6 +210,21 @@ fn live_branch(live: &Connection) -> Result<Option<(String, String)>, AppError> 
     )
     .optional()
     .map_err(db_error)
+    .and_then(|found| match found {
+        Some(f) => Ok(Some(f)),
+        // The Windows Hub of a Hub move (Story 10.18) holds no branch rows until the snapshot is
+        // in: it is waiting for the branch of its identity.
+        None => live
+            .query_row(
+                "SELECT i.branch_id, m.value FROM hub_identity i
+                   JOIN hub_meta m ON m.key = ?1 AND m.value <> ''
+                  WHERE i.id = 1",
+                [crate::MIGRATION_WAIT_KEY],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(db_error),
+    })
 }
 
 /// Change rows after `(epoch, seq)` in log order (epoch counter, epoch, seq).
@@ -236,6 +251,11 @@ struct Marker {
     /// the file was staged. `None` when the backup could not be read: nothing more is erased.
     #[serde(default)]
     live_keys: Option<Vec<String>>,
+    /// Set when the file is the final snapshot of a Hub move (Story 10.18): the epoch the cloud
+    /// issued for it (`<counter>:<instance>`), which the imported branch serves under from the
+    /// start.
+    #[serde(default)]
+    migrate: Option<String>,
 }
 
 /// What a finished restore leaves for the Hub to record as `ops.restore`.
@@ -275,7 +295,34 @@ pub fn stage_export_checked(
     confirmed_by: &str,
     live_keys: Option<Vec<String>>,
 ) -> Result<Inspection, AppError> {
+    stage_checked(db_path, file, confirmed_by, live_keys, None)
+}
+
+/// Stages the final snapshot of a Hub move (Story 10.18) as the branch of this Windows Hub:
+/// `epoch` is the epoch the cloud issued for it. The file must say `purpose: migrate`. Blocking.
+pub fn stage_migration(db_path: &Path, file: &Path, epoch: &str) -> Result<Inspection, AppError> {
+    stage_checked(
+        db_path,
+        file,
+        RESTORE_SYSTEM_ACTOR,
+        None,
+        Some(epoch.to_owned()),
+    )
+}
+
+fn stage_checked(
+    db_path: &Path,
+    file: &Path,
+    confirmed_by: &str,
+    live_keys: Option<Vec<String>>,
+    migrate: Option<String>,
+) -> Result<Inspection, AppError> {
     let inspection = inspect_export(db_path, file)?;
+    if migrate.is_some()
+        && inspection.header.purpose.as_deref() != Some(arena_proto::HANDOVER_PURPOSE)
+    {
+        return Err(corrupt("this is not a snapshot made for a move"));
+    }
     let dir = data_dir(db_path).join(PENDING_DIR);
     // A file already in the pending folder would be deleted before it is copied.
     if let (Ok(src), Ok(pending)) = (file.canonicalize(), dir.canonicalize())
@@ -303,6 +350,7 @@ pub fn stage_export_checked(
                 .unwrap_or_default(),
             cloud: None,
             live_keys,
+            migrate,
         };
         write_marker(&dir, &marker)
     })();
@@ -349,6 +397,7 @@ pub fn stage_rebuilt(
                 file_name: "cloud-backup".to_owned(),
                 cloud: Some(cloud),
                 live_keys: None,
+                migrate: None,
             },
         )?;
         Ok(inspection)
@@ -553,6 +602,7 @@ fn build_restored(
     old: &Replaced,
     cloud: bool,
     live_keys: Option<&[String]>,
+    migrate: Option<&str>,
 ) -> Result<Built, AppError> {
     let mut store = Store::open(work, now_ms)?;
     if !store.holds_writer_lock() {
@@ -621,17 +671,22 @@ fn build_restored(
 
         // The new epoch is above everything either database has seen.
         let file_lease = crate::read_lease(tx)?;
-        let counter = [
-            epoch_counter(&header.epoch),
-            old.lease_counter,
-            old.max_seen,
-            file_lease.as_ref().map_or(0, |l| l.counter),
-            crate::read_max_seen_counter(tx)?,
-        ]
-        .into_iter()
-        .max()
-        .unwrap_or(0)
-            + 1;
+        // A Hub move serves under the epoch the cloud already issued for it.
+        let claimed = migrate.map(epoch_counter).filter(|c| *c > 0);
+        let max_seen = crate::read_max_seen_counter(tx)?;
+        let counter = claimed.unwrap_or_else(|| {
+            [
+                epoch_counter(&header.epoch),
+                old.lease_counter,
+                old.max_seen,
+                file_lease.as_ref().map_or(0, |l| l.counter),
+                max_seen,
+            ]
+            .into_iter()
+            .max()
+            .unwrap_or(0)
+                + 1
+        });
         let own = old
             .instance_id
             .clone()
@@ -650,7 +705,7 @@ fn build_restored(
             &crate::LeaseRow {
                 counter,
                 hub_instance_id: own.clone(),
-                provisional: true,
+                provisional: claimed.is_none(),
                 renewed_at: now_ms,
                 expires_at: now_ms,
             },
@@ -661,6 +716,19 @@ fn build_restored(
         });
         crate::write_lease_fork(tx, fork.as_ref())?;
         crate::raise_max_seen_counter(tx, counter.max(old.max_seen))?;
+
+        if let Some(epoch) = migrate {
+            // The move's bookkeeping is the Android Hub's; this Hub tells the cloud it serves.
+            for key in [
+                crate::MIGRATION_WAIT_KEY,
+                arena_proto::HANDOVER_RECEIVED_KEY,
+                arena_proto::HANDOVER_STATE_KEY,
+            ] {
+                tx.execute("DELETE FROM hub_meta WHERE key = ?1", [key])
+                    .map_err(db_error)?;
+            }
+            crate::set_meta(tx, arena_proto::MIGRATION_REPORT_KEY, epoch)?;
+        }
 
         // A rebuild from the cloud backup names the devices that were paired with the old Hub:
         // their tokens were stripped, and they pair again (Story 9.13).
@@ -847,6 +915,7 @@ fn restore_from(
         &old,
         marker.cloud.is_some(),
         marker.live_keys.as_deref(),
+        marker.migrate.as_deref(),
     )?;
     checkpoint(work)?;
     for suffix in ["-wal", "-shm", ".lock"] {
@@ -854,7 +923,15 @@ fn restore_from(
     }
 
     let orphan_file = orphan_name(&old.epoch, now_ms);
-    swap(db_path, work, &dir.join(ORPHANED_DIR).join(&orphan_file))?;
+    let orphan = dir.join(ORPHANED_DIR).join(&orphan_file);
+    swap(db_path, work, &orphan)?;
+    if marker.migrate.is_some() {
+        // The database moved aside is this PC's empty one: the snapshot is the final state and
+        // nothing is set aside (Story 10.18).
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = fs::remove_file(with_suffix(&orphan, suffix));
+        }
+    }
 
     let outcome = RestoreOutcome {
         confirmed_by: marker.confirmed_by,
@@ -1796,5 +1873,119 @@ mod tests {
         let e = stage_rebuilt(&live_path, &db, facts(), T).unwrap_err();
         assert_eq!(e.code, ErrorCode::RestoreWrongBranch);
         assert!(!has_pending(&live_path));
+    }
+
+    // ---- Story 10.18: the final snapshot of a Hub move becomes the Windows Hub's database ----
+
+    /// A Windows Hub paired for a move: identity of the branch, waiting for the Android Hub.
+    fn migration_pc(dir: &Path) -> PathBuf {
+        let path = replacement(dir, false);
+        let mut store = Store::open(&path, T).unwrap();
+        store
+            .write_tx(|tx| {
+                set_meta(tx, crate::MIGRATION_WAIT_KEY, "Level Up")?;
+                set_meta(tx, arena_proto::HANDOVER_RECEIVED_KEY, "{}")?;
+                Ok(())
+            })
+            .unwrap();
+        crate::store_licence(&Connection::open(&path).unwrap(), "JWT", 9).unwrap();
+        path
+    }
+
+    fn migrate_file(b: &Branch) -> PathBuf {
+        crate::export::write_export_for(
+            &b.db,
+            b.out.path(),
+            "move.a360",
+            T - 5000,
+            Some(arena_proto::HANDOVER_PURPOSE),
+        )
+        .unwrap()
+        .path
+    }
+
+    #[test]
+    fn a_move_snapshot_is_imported_under_the_claimed_epoch_with_nothing_set_aside() {
+        let b = branch();
+        let pc_dir = tempfile::tempdir().unwrap();
+        let pc = migration_pc(pc_dir.path());
+        let file = migrate_file(&b);
+
+        let staged = stage_migration(&pc, &file, "3:NEWHUB").unwrap();
+        assert_eq!(staged.header.last_seq, 8);
+        assert_eq!(staged.branch_name, "Level Up");
+        assert!(has_pending(&pc));
+        let out = apply_pending(&pc, T + 1000).unwrap().unwrap();
+
+        // The branch serves under the epoch the cloud issued, confirmed, forked at the snapshot.
+        assert_eq!(out.restore.new_epoch, "3:NEWHUB");
+        assert_eq!(out.restore.rows_set_aside, 0);
+        assert_eq!(out.confirmed_by, RESTORE_SYSTEM_ACTOR);
+        let store = Store::open(&pc, T + 2000).unwrap();
+        assert_eq!(store.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
+        assert_eq!(store.changes().unwrap().len(), 8);
+        let lease = store.lease().unwrap().unwrap();
+        assert_eq!(
+            (
+                lease.counter,
+                lease.hub_instance_id.as_str(),
+                lease.provisional
+            ),
+            (3, "NEWHUB", false)
+        );
+        let conn = Connection::open(&pc).unwrap();
+        assert_eq!(
+            crate::read_lease_fork(&conn).unwrap(),
+            Some(BatchFork {
+                parent_epoch: "2:HUB".into(),
+                parent_seq: 8
+            })
+        );
+
+        // The move's bookkeeping is gone, the cloud is yet to be told, this PC's own pairing and
+        // licence are kept, and the empty database it replaced is not kept as an orphan.
+        assert_eq!(store.migration_wait().unwrap(), None);
+        assert_eq!(
+            store.migration_report().unwrap().as_deref(),
+            Some("3:NEWHUB")
+        );
+        assert_eq!(
+            store.meta(arena_proto::HANDOVER_RECEIVED_KEY).unwrap(),
+            None
+        );
+        assert_eq!(store.hub_identity().unwrap().unwrap().hub_id, "H2");
+        assert_eq!(store.cached_licence().unwrap().unwrap().jwt, "JWT");
+        assert!(names(&data_dir(&pc).join(ORPHANED_DIR)).is_empty());
+        assert!(!has_pending(&pc));
+    }
+
+    #[test]
+    fn only_a_snapshot_made_for_a_move_of_this_branch_is_staged_for_one() {
+        let b = branch();
+        let pc_dir = tempfile::tempdir().unwrap();
+        let pc = migration_pc(pc_dir.path());
+        // An ordinary export is not a move's snapshot.
+        let err = stage_migration(&pc, &b.file, "3:NEWHUB").unwrap_err();
+        assert_eq!(err.code, ErrorCode::RestoreCorrupt);
+        assert!(!has_pending(&pc));
+        // Another branch's snapshot is refused as it is for a restore.
+        let other = tempfile::tempdir().unwrap();
+        let other_pc = replacement(other.path(), false);
+        {
+            let mut s = Store::open(&other_pc, T).unwrap();
+            s.write_tx(|tx| {
+                tx.execute("UPDATE hub_identity SET branch_id = 'OTHER'", [])
+                    .map_err(db_error)?;
+                set_meta(tx, crate::MIGRATION_WAIT_KEY, "Other")
+            })
+            .unwrap();
+        }
+        let err = stage_migration(&other_pc, &migrate_file(&b), "3:NEWHUB").unwrap_err();
+        assert_eq!(err.code, ErrorCode::RestoreWrongBranch);
+        // A PC that is not waiting for a move holds no branch to import into.
+        let idle = tempfile::tempdir().unwrap();
+        let idle_pc = replacement(idle.path(), false);
+        let err = stage_migration(&idle_pc, &migrate_file(&b), "3:NEWHUB").unwrap_err();
+        assert_eq!(err.code, ErrorCode::RestoreWrongBranch);
     }
 }

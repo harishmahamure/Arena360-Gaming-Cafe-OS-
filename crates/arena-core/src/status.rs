@@ -119,6 +119,10 @@ pub struct HubStatus {
     /// The owner released the branch key to this waiting Hub and it holds the key (Story 9.10):
     /// "Restore from a file" is offered. Never set while the Hub is not waiting.
     pub restore_key_released: bool,
+    /// The epoch this Windows Hub imported a Hub move's snapshot as and has not yet told the cloud
+    /// about (Story 10.18): the Hub serves, but its token is still the move's until the cloud
+    /// answers, so it does not beat.
+    pub migration_report: Option<String>,
     pub cloud_time: Option<CloudTime>,
     pub live: bool,
     pub licence: Option<arena_proto::LicenceStanding>,
@@ -166,6 +170,18 @@ pub struct UploadStatus {
 }
 
 impl HubStatus {
+    /// Whether this Hub waits to be released the branch key: a replacement Hub waiting to be
+    /// restored (Story 9.9), or the Windows Hub of a Hub move holding the Android Hub's snapshot
+    /// (Story 10.18).
+    pub fn wants_branch_key(&self) -> bool {
+        self.restore_pending.is_some()
+            || (self.migration_wait.is_some()
+                && self
+                    .handover
+                    .as_ref()
+                    .is_some_and(|h| h.phase == arena_proto::HandoverPhase::Received))
+    }
+
     pub fn trusted_now(&self, wall_ms: i64) -> i64 {
         self.cloud_time.map_or(wall_ms, |c| {
             c.cloud_ms.saturating_add(c.at.elapsed().as_millis() as i64)
@@ -195,6 +211,7 @@ impl HubStatus {
             move_notice: None,
             handover: None,
             restore_key_released: false,
+            migration_report: None,
             cloud_time: None,
             live: false,
             licence: None,
@@ -232,5 +249,27 @@ mod tests {
         assert!(e(1, "B") > e(1, "A"));
         assert_eq!(e(3, "X"), e(3, "X"));
         assert_eq!(e(5, "01J").to_string(), "5:01J");
+    }
+
+    #[test]
+    fn a_hub_wants_the_branch_key_while_restoring_or_holding_a_moves_snapshot() {
+        let mut s = HubStatus::opened(1, "01INSTANCE");
+        assert!(!s.wants_branch_key());
+        s.restore_pending = Some("Level Up".into());
+        assert!(s.wants_branch_key());
+        s.restore_pending = None;
+        // Waiting for the tablet is not yet a reason to ask the owner.
+        s.migration_wait = Some("Level Up".into());
+        assert!(!s.wants_branch_key());
+        s.handover = Some(arena_proto::HandoverView {
+            phase: arena_proto::HandoverPhase::Received,
+            target_hub_name: "Level Up".into(),
+            code: None,
+            last_seq: Some(1),
+            file_name: None,
+        });
+        assert!(s.wants_branch_key());
+        s.migration_wait = None;
+        assert!(!s.wants_branch_key());
     }
 }

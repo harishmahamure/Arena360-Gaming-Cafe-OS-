@@ -322,7 +322,9 @@ async fn run(
     // A handover that was under way is still under way after a restart: an Android Hub that had
     // stopped stays stopped (Story 10.17).
     let stored_handover = store.meta(arena_proto::HANDOVER_STATE_KEY)?;
-    initial.restore_key_released = initial.restore_pending.is_some()
+    initial.migration_report = store.migration_report()?;
+    initial.restore_key_released = (initial.restore_pending.is_some()
+        || initial.migration_wait.is_some())
         && arena_tasks::restore_wait::holds_released_key(kek_store.as_ref());
     initial.lan_ports = Some((cfg.lan_port, cfg.web_port));
     // The effective tier is unknown until the heartbeat task has evaluated the cached licence
@@ -675,6 +677,19 @@ async fn run(
         )
         .run(),
     );
+    // The Windows Hub of a Hub move tells the cloud once the imported branch is serving (Story
+    // 10.18).
+    let import_report_job = writer.clone().map(|w| {
+        tokio::spawn(
+            arena_tasks::ImportReporter::new(
+                cloud.clone(),
+                Arc::clone(&keystore),
+                w,
+                status_tx.clone(),
+            )
+            .run(),
+        )
+    });
     // "Restore from cloud backup" downloads the paid branch's backup into a staging folder while
     // the Hub waits (Story 9.12).
     let restore_fetch: Arc<dyn arena_core::RestoreFetchControl> = Arc::new(restore_fetcher);
@@ -840,6 +855,19 @@ async fn run(
     });
     // The daily export (Story 9.5): when the business day closes, the Story 9.4 export is saved to
     // the backup location and the oldest auto files are deleted.
+    // The Windows Hub of a Hub move imports the snapshot it received (Story 10.18).
+    let migration_importer = handover.as_ref().map(|h| {
+        Arc::new(arena_tasks::MigrationImporter::new(
+            Arc::clone(h),
+            status_tx.clone(),
+            cloud.clone(),
+            Arc::clone(&keystore),
+            instance_id.clone(),
+            cfg.db_path(),
+            cfg.data_dir.join("handover"),
+            Arc::new(restore::request_restart),
+        ))
+    });
     let daily_export_job = writer.clone().map(|w| {
         tokio::spawn(
             arena_tasks::DailyExportTask::new(
@@ -900,16 +928,18 @@ async fn run(
         ));
     // The Windows Hub of a Hub move claims the Android Hub's code from its waiting screen
     // (Story 10.17).
-    let router = match &handover {
-        Some(h) if cfg.platform == arena_proto::HubPlatform::Windows => router.merge(
-            arena_api::ui_migration_router(Arc::new(arena_tasks::HandoverPuller::new(
-                Arc::clone(h),
-                Arc::clone(&snapshots),
-                status_rx.clone(),
-                pc_name.clone(),
-                cfg.data_dir.join("handover"),
-            ))),
-        ),
+    let router = match (&handover, &migration_importer) {
+        (Some(h), Some(importer)) if cfg.platform == arena_proto::HubPlatform::Windows => router
+            .merge(arena_api::ui_migration_router(
+                Arc::new(arena_tasks::HandoverPuller::new(
+                    Arc::clone(h),
+                    Arc::clone(&snapshots),
+                    status_rx.clone(),
+                    pc_name.clone(),
+                    cfg.data_dir.join("handover"),
+                )),
+                Arc::clone(importer) as Arc<dyn arena_core::handover::MigrationImportControl>,
+            )),
         _ => router,
     };
     #[cfg(feature = "dev-fixtures")]
@@ -1025,6 +1055,10 @@ async fn run(
     let _ = key_backup_job.await;
     key_request_job.abort();
     let _ = key_request_job.await;
+    if let Some(job) = import_report_job {
+        job.abort();
+        let _ = job.await;
+    }
     template_job.abort();
     let _ = template_job.await;
     template_apply_job.abort();

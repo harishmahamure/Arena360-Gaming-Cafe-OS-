@@ -262,6 +262,22 @@ impl ControlDb {
         rows.first().map(|r| col_text(r, 0)).transpose()
     }
 
+    /// The branch's fence epoch and the Hub that holds it, or `None` before any heartbeat.
+    pub async fn branch_fence_holder(
+        &self,
+        branch_id: &str,
+    ) -> Result<Option<(String, String)>, ControlError> {
+        let rows = self
+            .query(
+                "SELECT epoch, hub_id FROM branch_fence WHERE branch_id = ?",
+                vec![text(branch_id)],
+            )
+            .await?;
+        rows.first()
+            .map(|r| Ok((col_text(r, 0)?, col_text(r, 1)?)))
+            .transpose()
+    }
+
     /// The one compare-and-set on the branch fence (Story 9.3, AD-24): moves the fence from
     /// exactly `expected` to `epoch`, held by `hub_id`, with `fork_seq` as the fork point. Every
     /// epoch counter the cloud issues goes through here (`POST /v1/fence/claim` and the heartbeat

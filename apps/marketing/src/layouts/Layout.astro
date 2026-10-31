@@ -8,9 +8,11 @@ import { canonicalUrl, isStaging, startUrl } from "../lib/site";
 interface Props {
   title: string;
   description: string;
+  /** Pages that are not content (the 404): no canonical URL, and search engines stay away. */
+  noindex?: boolean;
 }
 
-const { title, description } = Astro.props;
+const { title, description, noindex = false } = Astro.props;
 const canonical = canonicalUrl(Astro.url.pathname);
 const current = Astro.url.pathname;
 ---
@@ -22,13 +24,13 @@ const current = Astro.url.pathname;
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
     <meta name="description" content={description} />
-    <link rel="canonical" href={canonical} />
-    {isStaging() && <meta name="robots" content="noindex, nofollow" />}
+    {!noindex && <link rel="canonical" href={canonical} />}
+    {(noindex || isStaging()) && <meta name="robots" content="noindex, nofollow" />}
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content={t("app.name")} />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
-    <meta property="og:url" content={canonical} />
+    {!noindex && <meta property="og:url" content={canonical} />}
     <meta name="twitter:card" content="summary" />
     <script is:inline>
       // Before first paint: the colour mode (`arena.theme`: light, dark or absent for System) and
@@ -45,12 +47,11 @@ const current = Astro.url.pathname;
           return !!window.matchMedia && window.matchMedia(q).matches;
         };
         var hc =
-          mode === "hc" ||
-          (contrast === "on"
+          contrast === "on"
             ? true
             : contrast === "off"
               ? false
-              : media("(prefers-contrast: more)"));
+              : mode === "hc" || media("(prefers-contrast: more)");
         var dark = mode === "dark" || (mode !== "light" && media("(prefers-color-scheme: dark)"));
         document.documentElement.setAttribute("data-theme", hc ? "hc" : dark ? "dark" : "light");
       })();

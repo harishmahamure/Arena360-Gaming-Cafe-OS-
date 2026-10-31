@@ -74,9 +74,11 @@
   });
 
   $effect(() => {
-    document.body.style.overflow = open ? "hidden" : "";
+    if (!open) return;
+    const before = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     return () => {
-      document.body.style.overflow = "";
+      document.body.style.overflow = before;
     };
   });
 </script>

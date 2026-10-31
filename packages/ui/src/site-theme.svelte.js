@@ -56,7 +56,13 @@ export function useSiteTheme() {
   if (users++ === 0) {
     const stored = readThemeChoice();
     siteTheme.mode = stored === "light" || stored === "dark" ? stored : "system";
-    siteTheme.contrast = stored === "hc" ? true : readContrastChoice();
+    siteTheme.contrast = readContrastChoice();
+    if (stored === "hc" && siteTheme.contrast === null) {
+      // A High contrast choice from the shared theme key becomes the switch, so choosing a mode
+      // or turning the switch off later sticks.
+      siteTheme.contrast = true;
+      storeContrastChoice(true);
+    }
     const dark = window.matchMedia?.("(prefers-color-scheme: dark)");
     const more = window.matchMedia?.("(prefers-contrast: more)");
     siteTheme.prefersDark = dark?.matches ?? false;

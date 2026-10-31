@@ -2,9 +2,9 @@
 title: 'Story 11.1: Marketing site shell — navigation, footer, light and dark themes and high contrast'
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: '599f7859'
-review_loop_iteration: 0
+review_loop_iteration: 1
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'
   - '{project-root}/_bmad-output/planning-artifacts/ux-designs/ux-arena-360-final-2026-10-22/DESIGN.md'
@@ -64,3 +64,9 @@ deferred:
 ## Verification
 
 - `pnpm --filter @arena/marketing test` (39 passed), `node --test scripts/marketing-site.test.mjs`, `pnpm run check:strings`, `check:tokens-fresh`, `check:contrast`, `check:hex`, `check:no-blur`, `check:pins`, `pnpm --filter @arena/onboarding check` (consumes the shared UI package).
+
+## Review notes (2026-10-31)
+
+Fixed: a stored legacy `arena.theme=hc` no longer defeats an explicit High contrast Off (the island migrates it to `arena.contrast=on`; the head script and `resolveSiteTheme` agree); the 404 page has no canonical or `og:url` and carries `noindex`; the sitemap skips `_`-prefixed pages; `PUBLIC_PSEUDO` only accepts `1` or `true`; the phone-menu scroll lock restores the previous `overflow`; the test server rejects malformed URLs and sibling-directory paths. Added a staging-build test and 404 and `routeOf` assertions.
+
+Deferred (not blocking): no-JS visitors always get the dark default; `forced-colors` is not mapped to hc; the open phone menu is not run through axe; the 4 px focus ring and 3:1 non-text pairs in hc have no Playwright assertion; no cross-tab `storage` sync; 768 to 1023 px header fit is untested; no `_headers`, favicon or `og:image`.

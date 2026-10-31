@@ -81,13 +81,16 @@ export function storeContrastChoice(on) {
 /**
  * The theme the marketing site paints. High contrast wins over the colour mode; a visitor who
  * never chose it gets it from `prefers-contrast: more`.
- * @param {ThemeChoice} choice  `system`, `light` or `dark` (a stored `hc` counts as High contrast on)
+ * @param {ThemeChoice} choice  `system`, `light` or `dark` (a stored `hc` counts as High contrast on until the switch is chosen)
  * @param {boolean} prefersDark
  * @param {boolean | null} contrast  the stored High contrast choice
  * @param {boolean} prefersMore  `prefers-contrast: more`
  * @returns {"light" | "dark" | "hc"}
  */
 export function resolveSiteTheme(choice, prefersDark, contrast, prefersMore) {
-  if (choice === "hc" || (contrast ?? prefersMore)) return "hc";
-  return resolveTheme(choice, prefersDark);
+  if (contrast ?? (choice === "hc" || prefersMore)) return "hc";
+  return resolveTheme(
+    /** @type {ThemeChoice} */ (choice) === "hc" ? "system" : choice,
+    prefersDark,
+  );
 }

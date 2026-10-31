@@ -120,6 +120,8 @@ test("an unknown path returns the 404 page in the same shell with links to Home 
 }) => {
   const response = await open(page, "/no-such-page");
   expect(response?.status()).toBe(404);
+  await expect(page.locator('link[rel="canonical"]')).toHaveCount(0);
+  await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /noindex/);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(t("site.notfound.heading"));
   await expect(page.getByRole("banner")).toBeVisible();
   await expect(page.getByRole("contentinfo")).toBeVisible();

@@ -32,6 +32,7 @@ export function routeOf(file: string): string | null {
   const match = /(?:^|\/)pages\/(.+)\.astro$/.exec(file);
   const route = match?.[1];
   if (route === undefined || route === "404" || route.includes("[")) return null;
+  if (route.split("/").some((part) => part.startsWith("_"))) return null; // Astro does not route these
   const path = route.replace(/(^|\/)index$/, "");
   return "/" + path;
 }

@@ -55,7 +55,7 @@ const ACCENTS = /** @type {Record<string, string>} */ ({
 });
 
 // A build with `PUBLIC_PSEUDO=1` starts in the pseudo-locale (the marketing layout check at +30%).
-let pseudo = Boolean(/** @type {any} */ (import.meta).env?.PUBLIC_PSEUDO);
+let pseudo = ["1", "true"].includes(String(/** @type {any} */ (import.meta).env?.PUBLIC_PSEUDO));
 
 /**
  * Switches `t()` to the pseudo-locale: every message is accented and padded to at least 130%

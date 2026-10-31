@@ -5,7 +5,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { createServer } from "node:http";
-import { extname, join, normalize, resolve } from "node:path";
+import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -17,6 +17,9 @@ const TYPES = {
   ".txt": "text/plain",
   ".woff2": "font/woff2",
   ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
+  ".png": "image/png",
+  ".json": "application/json",
 };
 
 const astro = (args, env = {}) =>
@@ -33,12 +36,18 @@ astro(["--outDir", "dist-pseudo"], { PUBLIC_PSEUDO: "1" });
 function serve(dir, port) {
   const base = join(root, dir);
   createServer((request, response) => {
-    const path = decodeURIComponent(new URL(request.url ?? "/", "http://x").pathname);
+    let path;
+    try {
+      path = decodeURIComponent(new URL(request.url ?? "/", "http://x").pathname);
+    } catch {
+      response.writeHead(400).end();
+      return;
+    }
     const candidates = [path, join(path, "index.html"), path + ".html"].map((p) =>
       normalize(join(base, p)),
     );
     const file = candidates.find(
-      (p) => p.startsWith(base) && existsSync(p) && statSync(p).isFile(),
+      (p) => p.startsWith(base + sep) && existsSync(p) && statSync(p).isFile(),
     );
     const found = file ?? join(base, "404.html");
     response.writeHead(file ? 200 : 404, {

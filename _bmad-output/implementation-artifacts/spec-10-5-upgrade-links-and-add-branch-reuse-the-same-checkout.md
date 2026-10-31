@@ -2,7 +2,7 @@
 title: 'Story 10.5: Upgrade links and Add branch reuse the same checkout'
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: 'ae412467f0feb1bee3bf643b0f3636e6a49e8cbe'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -70,7 +70,7 @@ deferred: []
 
 ## Auto Run Result
 
-Status: review.
+Status: done. Review fix: upgrade mode no longer follows the wizard after payment (it sent a live branch back into the wizard); regression test added.
 
 Known unrelated failures (they fail on the untouched baseline too): onboarding `account.spec.ts` "copies and downloads" backup codes (clipboard line endings on Windows); hub `reports.spec.ts` Daily sales export, `ad-slot.spec.ts` settle-region, flaky `interstitial.spec.ts`; `pnpm --filter @arena/hub check` (`playwright.kitchen.config.ts` has no `process` type); `check:layers` and the deploy script tests; prettier on `scripts/restore-drill-report*`.
 

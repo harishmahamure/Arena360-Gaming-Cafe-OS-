@@ -97,6 +97,27 @@ test("paying returns to the page the link came from once the entitlement is writ
   expect(visited).toContain(FROM);
 });
 
+test("a branch whose wizard is past the plan step still returns, not into the wizard", async ({
+  page,
+}) => {
+  const cloud = await stubCloud(page, {
+    ...live,
+    wizard: { ...live.wizard, done: ["cafe", "tier"] },
+  });
+  await stubRazorpay(page);
+  const visited = await stubOwner(page);
+  await page.goto(link(`branch=${BRANCH.id}&tier=basic&return=${encodeURIComponent(FROM)}`));
+  await proceed(page).click();
+  await pay(page).click();
+  await expect.poll(() => page.evaluate(() => window.__rzp.opened)).toBe(1);
+  await page.evaluate(() => window.__rzp.pay());
+  await expect(page.getByTestId("confirming")).toBeVisible();
+  await expect(page).toHaveURL(/\/upgrade\?/);
+  cloud.tier = "basic";
+  await expect(page).toHaveURL(FROM, { timeout: 15_000 });
+  expect(visited).toContain(FROM);
+});
+
 test("closing Checkout keeps the owner on the summary with nothing changed, and Back leaves", async ({
   page,
 }) => {

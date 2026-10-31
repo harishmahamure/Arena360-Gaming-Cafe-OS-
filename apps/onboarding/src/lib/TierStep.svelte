@@ -293,7 +293,7 @@
   // The 10.3 webhook marks this step done; the wizard (events, or the layout's 5 s poll) then
   // moves to step 3 by itself and this page follows once, announcing and focusing it.
   $effect(() => {
-    if (phase !== "confirming" || leaving) return;
+    if (phase !== "confirming" || leaving || upgrade) return;
     const state = wizard.state;
     if (state && state.current !== "tier") {
       leaving = true;

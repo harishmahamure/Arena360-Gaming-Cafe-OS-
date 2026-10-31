@@ -216,6 +216,10 @@
             </p>
           {/if}
           <p class="hint type-kiosk-body">{t("player.attract.start_hint")}</p>
+        {:else if view?.state === "over_cap"}
+          <p class="rate type-kiosk-title" data-testid="attract-over-cap">
+            {t("player.attract.over_cap")}
+          </p>
         {:else}
           <p class="rate type-kiosk-title" data-testid="attract-ask">
             {t("player.attract.ask_counter")}

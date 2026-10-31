@@ -170,7 +170,7 @@ pub(super) fn validate_reverted(intent: &Intent, t: &ForceEndRevertTarget) -> Re
     if !b
         .device
         .as_ref()
-        .is_some_and(|d| d.deleted_at.is_none() && d.state != "maintenance")
+        .is_some_and(|d| d.deleted_at.is_none() && d.state != "maintenance" && !d.over_cap)
     {
         return Err(undo_denied("This PC is not available."));
     }

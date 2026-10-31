@@ -69,6 +69,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::PhoneTaken
         | ErrorCode::PcBusy
         | ErrorCode::PcUnavailable
+        | ErrorCode::DeviceOverCap
         | ErrorCode::NoRate
         | ErrorCode::PaymentShort
         | ErrorCode::UndoNotAllowed

@@ -83,6 +83,7 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::UserLimit
         | ErrorCode::PcBusy
         | ErrorCode::PcUnavailable
+        | ErrorCode::DeviceOverCap
         | ErrorCode::NoRate
         | ErrorCode::PaymentShort
         | ErrorCode::ReferenceRequired

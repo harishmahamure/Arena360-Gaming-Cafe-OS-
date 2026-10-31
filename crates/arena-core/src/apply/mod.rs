@@ -95,6 +95,7 @@ mod shift;
 mod staff_credentials;
 mod staff_deactivate;
 mod staff_roles;
+mod standing;
 pub(crate) mod stock;
 mod summary;
 mod test_session;

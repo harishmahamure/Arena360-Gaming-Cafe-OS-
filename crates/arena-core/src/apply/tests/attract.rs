@@ -238,3 +238,34 @@ async fn the_media_is_capped_at_twenty_items() {
     assert_eq!(media[0].video, "00".repeat(32));
     assert_eq!(media[19].video, "13".repeat(32));
 }
+
+/// Story 10.12: an idle device over the plan's device limit shows the over-limit message, not a
+/// rate, and shows its rate again once the plan rises.
+#[tokio::test]
+async fn an_over_cap_pc_asks_staff_until_the_plan_rises() {
+    let f = bootstrapped().await;
+    let a = pc(&f, DeviceKind::Pc, "pc", Some(12_000)).await;
+    let b = pc(&f, DeviceKind::Pc, "pc", Some(12_000)).await;
+    let licence = |devices| {
+        submit(
+            &f,
+            super::prepaid::system(),
+            IntentPayload::LicenceApply(arena_proto::LicenceApply {
+                standing: arena_proto::LicenceStanding::Verified,
+                clock_wrong: false,
+                tier: arena_proto::Tier::Free,
+                flags: String::new(),
+                device_cap: devices,
+                user_cap: 10,
+            }),
+        )
+    };
+    licence(1).await.unwrap();
+    let now = ist("2027-01-15 12:00");
+    let (first, second) = (view(&f, &a, now), view(&f, &b, now));
+    assert_eq!(first.state, AttractState::Ready);
+    assert_eq!(second.state, AttractState::OverCap);
+    assert_eq!((second.rate_minor, second.group_name), (None, None));
+    licence(20).await.unwrap();
+    assert_eq!(view(&f, &b, now).state, AttractState::Ready);
+}

@@ -3,4 +3,4 @@
 /**
  * Why a PC shows no rate.
  */
-export type AttractState = "ready" | "ask_counter";
+export type AttractState = "ready" | "ask_counter" | "over_cap";

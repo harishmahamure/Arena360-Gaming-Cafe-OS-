@@ -40,6 +40,9 @@ pub enum AttractState {
     Ready,
     /// Unassigned, in maintenance, or its group has no active rate: "Ask at the counter".
     AskCounter,
+    /// Over the plan's device limit and idle (Story 10.12): "This PC is over the plan's device
+    /// limit — ask staff."
+    OverCap,
 }
 
 /// One curated video of the branch library, by content hash, and its cover when cached.

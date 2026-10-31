@@ -71,6 +71,7 @@ export type ErrorCode =
   | "PHONE_TAKEN"
   | "PC_BUSY"
   | "PC_UNAVAILABLE"
+  | "DEVICE_OVER_CAP"
   | "NO_RATE"
   | "DEVICE_UNASSIGNED"
   | "CONTROLLERS_UNCHECKED"

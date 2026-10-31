@@ -120,8 +120,9 @@ pub fn attract_views(
                 })
                 .map(|z| z.name.clone())
                 .unwrap_or_default();
+            let over_cap = device.is_some_and(|m| m.over_cap && m.state != "maintenance");
             let group = device
-                .filter(|m| m.state != "maintenance")
+                .filter(|m| m.state != "maintenance" && !m.over_cap)
                 .and_then(|m| m.group_id.as_deref())
                 .and_then(|gid| groups.iter().find(|g| g.group_id == gid));
             let base = group.and_then(|g| rates.iter().find(|r| r.group_id == g.group_id));
@@ -131,6 +132,7 @@ pub fn attract_views(
                         live_rate(&rules, &g.group_id, base.price_per_hour_minor, tz, now_ms);
                     (AttractState::Ready, Some(rate), rule)
                 }
+                _ if over_cap => (AttractState::OverCap, None, None),
                 _ => (AttractState::AskCounter, None, None),
             };
             let view = AttractView {

@@ -29,6 +29,11 @@ export type SnapshotDevice = {
   last_seen_at?: number | null;
   maintenance_note?: string | null;
   /**
+   * Over the plan's device limit: no session starts or moves onto it (Story 10.12). A running
+   * session is unaffected.
+   */
+  over_cap?: boolean;
+  /**
    * The ended console session whose controllers staff have not marked yet.
    */
   controller_check?: string | null;

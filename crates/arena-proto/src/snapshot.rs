@@ -401,6 +401,11 @@ pub struct SnapshotDevice {
     #[serde(default)]
     #[ts(optional, type = "string | null")]
     pub maintenance_note: Option<String>,
+    /// Over the plan's device limit: no session starts or moves onto it (Story 10.12). A running
+    /// session is unaffected.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(optional, type = "boolean")]
+    pub over_cap: bool,
     /// The ended console session whose controllers staff have not marked yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "string | null")]
@@ -463,6 +468,7 @@ mod tests {
                 status: DeviceStatus::Online,
                 last_seen_at: None,
                 maintenance_note: None,
+                over_cap: false,
                 controller_check: None,
                 remote: false,
                 pair_again: false,
@@ -575,6 +581,7 @@ mod locale_tests {
             status,
             last_seen_at: None,
             maintenance_note: None,
+            over_cap: false,
             controller_check: None,
             remote: false,
             pair_again: false,

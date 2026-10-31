@@ -131,9 +131,11 @@ pub struct DeviceMetaRow {
     pub state: String,
     pub prior_state: Option<String>,
     pub maintenance_note: Option<String>,
+    /// Over the plan's device limit (Story 10.12).
+    pub over_cap: bool,
 }
 
-const META_COLUMNS: &str = "device_id, kind, label, group_id, rev, deleted_at, tv_number, zone_id, floor_x, floor_y, state, prior_state, maintenance_note";
+const META_COLUMNS: &str = "device_id, kind, label, group_id, rev, deleted_at, tv_number, zone_id, floor_x, floor_y, state, prior_state, maintenance_note, over_cap";
 
 fn meta_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeviceMetaRow> {
     Ok(DeviceMetaRow {
@@ -150,6 +152,7 @@ fn meta_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeviceMetaRow> {
         state: r.get(10)?,
         prior_state: r.get(11)?,
         maintenance_note: r.get(12)?,
+        over_cap: r.get(13)?,
     })
 }
 
@@ -259,6 +262,35 @@ pub fn count_live_devices(conn: &Connection) -> Result<i64, AppError> {
         |r| r.get(0),
     )
     .map_err(db_error)
+}
+
+/// Every live device with its current `over_cap` flag, oldest pairing first (Story 10.12).
+pub fn live_devices_by_age(conn: &Connection) -> Result<Vec<(String, bool)>, AppError> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT device_id, over_cap FROM devices_meta WHERE deleted_at IS NULL
+             ORDER BY created_at, rowid",
+        )
+        .map_err(db_error)?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(db_error)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
+}
+
+/// Sets the over-cap flag of one device (the stamp step then bumps `rev`).
+pub fn set_device_over_cap(
+    conn: &Connection,
+    device_id: &str,
+    over_cap: bool,
+) -> Result<(), AppError> {
+    let n = conn
+        .execute(
+            "UPDATE devices_meta SET over_cap = ?2 WHERE device_id = ?1",
+            params![device_id, over_cap],
+        )
+        .map_err(db_error)?;
+    expect_one(n, device_id)
 }
 
 pub fn set_device_label(conn: &Connection, device_id: &str, label: &str) -> Result<(), AppError> {

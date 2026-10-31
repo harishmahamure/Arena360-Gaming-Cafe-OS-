@@ -166,6 +166,7 @@ mod tests {
             state: state.into(),
             prior_state: None,
             maintenance_note: None,
+            over_cap: false,
         }
     }
 

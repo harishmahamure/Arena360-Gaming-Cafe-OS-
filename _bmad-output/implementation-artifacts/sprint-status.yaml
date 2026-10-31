@@ -308,7 +308,7 @@ development_status:
   10-9-change-tier-and-add-ons-mid-cycle-with-proration: done
   10-10-switch-billing-cycle-and-payment-method-with-card-or-enach-f: done
   10-11-renewals-that-need-approval-go-to-grace-then-lapse-on-cloud: done
-  10-12-a-lapse-or-downgrade-never-ends-a-running-session-and-over-c: backlog
+  10-12-a-lapse-or-downgrade-never-ends-a-running-session-and-over-c: review
   10-13-a-lapse-or-downgrade-keeps-open-orders-signed-in-staff-and-t: backlog
   10-14-cancel-keeps-the-plan-to-the-end-of-the-period-then-the-bran: backlog
   10-15-full-refund-within-7-days-of-the-first-payment-issued-throug: backlog

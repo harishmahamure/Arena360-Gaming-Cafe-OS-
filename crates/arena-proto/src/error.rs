@@ -126,6 +126,8 @@ pub enum ErrorCode {
     PhoneTaken,
     PcBusy,
     PcUnavailable,
+    /// The device is over the plan's device limit: no session starts or moves onto it (Story 10.12).
+    DeviceOverCap,
     NoRate,
     DeviceUnassigned,
     /// A console has an ended session whose controllers staff have not yet marked.
@@ -308,6 +310,7 @@ impl ErrorCode {
             Self::PhoneTaken => "PHONE_TAKEN",
             Self::PcBusy => "PC_BUSY",
             Self::PcUnavailable => "PC_UNAVAILABLE",
+            Self::DeviceOverCap => "DEVICE_OVER_CAP",
             Self::NoRate => "NO_RATE",
             Self::DeviceUnassigned => "DEVICE_UNASSIGNED",
             Self::ControllersUnchecked => "CONTROLLERS_UNCHECKED",
@@ -497,6 +500,7 @@ mod tests {
             (ErrorCode::PhoneTaken, "PHONE_TAKEN"),
             (ErrorCode::PcBusy, "PC_BUSY"),
             (ErrorCode::PcUnavailable, "PC_UNAVAILABLE"),
+            (ErrorCode::DeviceOverCap, "DEVICE_OVER_CAP"),
             (ErrorCode::NoRate, "NO_RATE"),
             (ErrorCode::DeviceUnassigned, "DEVICE_UNASSIGNED"),
             (ErrorCode::ControllersUnchecked, "CONTROLLERS_UNCHECKED"),

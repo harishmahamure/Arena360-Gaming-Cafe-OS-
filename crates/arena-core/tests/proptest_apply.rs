@@ -426,6 +426,11 @@ enum Op {
     KitchenLicence {
         on: bool,
     },
+    /// The licence's device cap drops or rises as a verified heartbeat would deliver it (Story
+    /// 10.12): the devices beyond the cap are marked, and no session or order row changes.
+    DeviceCapLicence {
+        cap: u8,
+    },
     /// `kitchen.advance` of a ticket to a stage (the next one, or any when `skip`), or its undo:
     /// a ticket only moves one step at a time, and a refused move writes nothing.
     KitchenAdvance {
@@ -912,6 +917,7 @@ fn op() -> impl Strategy<Value = Op> {
         ),
         2 => (any::<u8>(), any::<bool>()).prop_map(|(pick, again)| Op::OrderReady { pick, again }),
         2 => prop::bool::weighted(0.7).prop_map(|on| Op::KitchenLicence { on }),
+        2 => (0..=8u8).prop_map(|cap| Op::DeviceCapLicence { cap }),
         2 => any::<u8>().prop_map(|pick| Op::KotReprint { pick }),
         2 => (any::<u8>(), 0..6u8).prop_map(|(pick, action)| Op::KdsDisplay { pick, action }),
         4 => (any::<u8>(), prop::bool::weighted(0.15), prop::bool::weighted(0.25))
@@ -3524,6 +3530,42 @@ fn step(hub: &mut Hub, op: &Op) -> Result<(), TestCaseError> {
             };
             let _ = hub.rt.block_on(hub.writer.apply_licence(licence));
         }
+        Op::DeviceCapLicence { cap } => {
+            let setting = |key: &str| {
+                hub.reader
+                    .rows(Table::Settings)
+                    .unwrap()
+                    .iter()
+                    .find(|s| text(s, "key") == key)
+                    .map(|s| text(s, "value"))
+            };
+            let flags = setting(arena_proto::KEY_LICENCE_FLAGS).unwrap_or_default();
+            let tier = setting(arena_proto::KEY_LICENCE_TIER)
+                .and_then(|t| arena_proto::Tier::parse(&t))
+                .unwrap_or(arena_proto::Tier::Free);
+            let sessions_before = hub.reader.rows(Table::Sessions).unwrap();
+            let orders_before = hub.reader.rows(Table::Orders).unwrap();
+            let licence = arena_proto::LicenceApply {
+                standing: arena_proto::LicenceStanding::Verified,
+                clock_wrong: false,
+                tier,
+                flags,
+                device_cap: u32::from(*cap),
+                user_cap: tier.defaults().limits.users,
+            };
+            let _ = hub.rt.block_on(hub.writer.apply_licence(licence));
+            prop_assert_eq!(hub.reader.rows(Table::Sessions).unwrap(), sessions_before);
+            prop_assert_eq!(hub.reader.rows(Table::Orders).unwrap(), orders_before);
+            let live: Vec<_> = hub
+                .reader
+                .rows(Table::DevicesMeta)
+                .unwrap()
+                .into_iter()
+                .filter(|m| m["deleted_at"] == RowValue::Null)
+                .collect();
+            let marked = live.iter().filter(|m| int(m, "over_cap") == 1).count();
+            prop_assert_eq!(marked, live.len().saturating_sub(usize::from(*cap)));
+        }
         Op::KitchenAdvance { pick, skip, undo } => {
             let tickets = hub.reader.rows(Table::KitchenTickets).unwrap();
             let Some(t) = tickets.get(usize::from(*pick) % tickets.len().max(1)) else {
@@ -6096,6 +6138,7 @@ b"
                     | ErrorCode::DeviceUnassigned
                     | ErrorCode::GroupKindMismatch
                     | ErrorCode::PcUnavailable
+                    | ErrorCode::DeviceOverCap
                     | ErrorCode::PcBusy
                     | ErrorCode::NoRate
                     | ErrorCode::PlanNotForGroup,

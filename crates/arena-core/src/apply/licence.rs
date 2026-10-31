@@ -75,6 +75,7 @@ pub(super) fn mutate(
             before: None,
         });
     }
+    written.extend(super::standing::recompute(tx)?);
     if plan_changed && find_open_alert(tx, AlertKind::PlanUpdated.as_str(), None)?.is_none() {
         let id = ulid::Ulid::generate().to_string();
         insert_alert(

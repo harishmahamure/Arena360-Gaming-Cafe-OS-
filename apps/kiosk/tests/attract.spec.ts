@@ -470,3 +470,19 @@ test("a PC that owes the counter shows Pay at the counter with the amount and ta
   await page.keyboard.press("a");
   await expect(page.getByTestId("login-panel")).toBeVisible();
 });
+
+test("a PC over the plan's device limit says to ask staff and offers no login (Story 10.12)", async ({
+  page,
+}) => {
+  await open(page, {
+    view: view({ state: "over_cap", rate_minor: undefined, group_name: undefined }),
+    logo: null,
+  });
+  await expect(page.getByTestId("attract-over-cap")).toHaveText(en["player.attract.over_cap"]);
+  await expect(page.getByTestId("attract-ask")).toHaveCount(0);
+  await expect(page.getByTestId("attract-rate")).toHaveCount(0);
+  await page.keyboard.press("a");
+  await page.mouse.click(300, 300);
+  await expect(page.getByTestId("login-panel")).toHaveCount(0);
+  expect(await serious(page)).toEqual([]);
+});

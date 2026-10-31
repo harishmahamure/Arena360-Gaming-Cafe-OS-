@@ -148,6 +148,13 @@ pub(super) fn validate(t: &TransferTarget) -> Result<(), AppError> {
             "This PC is in maintenance.",
         ));
     }
+    if d.over_cap {
+        return Err(AppError::with_field(
+            ErrorCode::DeviceOverCap,
+            "device_id",
+            "This PC is over the plan's device limit.",
+        ));
+    }
     if t.busy {
         return Err(AppError::with_field(
             ErrorCode::PcBusy,

@@ -373,7 +373,7 @@ export async function onPcScreen(cb: (s: PcScreen) => void): Promise<() => void>
 /** What the idle screen shows: the last attract view and the branch logo (a `data:` URI). */
 export type AttractShown = { view: AttractView | null; logo: string | null };
 
-const ATTRACT_STATES = ["ready", "ask_counter"];
+const ATTRACT_STATES = ["ready", "ask_counter", "over_cap"];
 
 const isLocale = (v: unknown): boolean => {
   if (typeof v !== "object" || v === null) return false;

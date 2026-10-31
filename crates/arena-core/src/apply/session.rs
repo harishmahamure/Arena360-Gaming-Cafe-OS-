@@ -160,6 +160,13 @@ pub(super) fn validate(
             "This PC is in maintenance.",
         ));
     }
+    if d.over_cap {
+        return Err(AppError::with_field(
+            ErrorCode::DeviceOverCap,
+            "device_id",
+            "This PC is over the plan's device limit.",
+        ));
+    }
     if t.busy {
         return Err(AppError::with_field(
             ErrorCode::PcBusy,
@@ -1216,7 +1223,7 @@ pub(super) fn validate_end_reverted(intent: &Intent, t: &EndRevertTarget) -> Res
     if !t
         .device
         .as_ref()
-        .is_some_and(|d| d.deleted_at.is_none() && d.state != "maintenance")
+        .is_some_and(|d| d.deleted_at.is_none() && d.state != "maintenance" && !d.over_cap)
     {
         return Err(undo_denied("This PC is not available."));
     }

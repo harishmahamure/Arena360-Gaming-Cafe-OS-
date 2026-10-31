@@ -56,6 +56,7 @@ mod order_place;
 mod order_ready;
 mod order_void;
 mod orphan_sweep;
+mod over_cap;
 mod owner_alert;
 mod owner_commands;
 mod pc_settings;

@@ -415,6 +415,7 @@ pub(super) fn mutate_revoke(
             before: Some(before),
         });
     }
+    written.extend(super::standing::recompute(tx)?);
     Ok(written)
 }
 

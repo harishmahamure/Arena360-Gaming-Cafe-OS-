@@ -2204,6 +2204,24 @@ built by `upgradeUrl` in `@arena/ui`; each app says where the picker lives with 
   the tier/add-ons form with the cloud's summary, and a pending-change block with "Keep current plan".
 - Prices come from the subscription's locked book; re-pricing only the changed items against the live book is not done here.
 
+## Over-cap devices go read-only (Story 10.12)
+
+- **Standing.** `devices_meta.over_cap` (migration 0092) is recomputed by `apply::standing::recompute` inside the transaction
+  of `licence.apply` (the system intent the heartbeat's licence swap, a plan change and an expiry on `trusted_now` all go
+  through) and of `device.revoke`. The live devices Story 2.19 counts are ordered by pairing (`created_at`, then row order);
+  the oldest up to `licence.device_cap` stay active and the rest are marked, so the newest pairing goes first. Only a flag
+  that changes is written, each as a system `devices_meta` change row: that is the audit record of which devices were marked.
+  A higher licence or a revoke frees the oldest marked devices first, with no staff action.
+- **Sessions are never touched.** The recompute reads and writes no session or order. An active, paused or grace session on a
+  marked device keeps extending, pausing, transferring away and ending; the device refuses new work only when it is idle.
+- **Refusals.** `session.start` and `session.transfer` onto a marked device answer `DEVICE_OVER_CAP` (field `device_id`); the
+  undo of an end or force-end that would reopen a session on one answers "not available". The kiosk's plan picker offers no
+  plans for it.
+- **Screens.** The floor tile stays and shows "Over plan limit" (a session line wins while a session runs); its sheet shows
+  the `tier-lock` with Upgrade (`TierLock` takes an optional `label`) and no start form. The idle kiosk (`AttractState::OverCap`)
+  shows "This PC is over the plan's device limit — ask staff." and offers no login.
+- Not done here: open orders, tickets, staff sign-ins and the standby (Story 10.13).
+
 ## Renewals that need approval, grace and lapse (Story 10.11)
 
 - **States** (AD-20): `active -> renewal_needs_approval -> grace -> lapsed`, every move in `subscription_history`. The

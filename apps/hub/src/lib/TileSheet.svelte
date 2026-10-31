@@ -6,6 +6,7 @@
     ReasonPicker,
     StatusBadge,
     TextField,
+    TierLock,
     formatDateTime,
     formatMoney,
     registerAdExclusion,
@@ -119,6 +120,7 @@
     names,
     pauseText,
     groupView,
+    upgradeTier = "Basic",
     transferring = false,
     ontransfer,
     oncanceltransfer,
@@ -142,6 +144,8 @@
     names: Record<string, string>;
     pauseText: (session: SnapshotSession) => string;
     groupView?: { group: SnapshotGroupBill; members: SnapshotSession[]; lines: BillLine[] };
+    /** The tier an over-limit device's Upgrade link opens the picker on. */
+    upgradeTier?: "Basic" | "Premium";
     transferring?: boolean;
     ontransfer?: () => void;
     oncanceltransfer?: () => void;
@@ -177,6 +181,7 @@
   const assigned = $derived(group !== undefined);
   const maintenance = $derived(device.status === "maintenance");
   const offline = $derived(device.status === "offline");
+  const overCap = $derived(device.over_cap === true && session === undefined);
   const live = $derived(seated && assigned && !maintenance && !offline);
   const fitting = $derived(groups.filter((g) => g.kind === device.kind));
   const needsRemote = $derived(!hasPermission(staff, "device.remote"));
@@ -778,6 +783,12 @@
         disabledReason="hub.sheet.waiting"
         onclick={() => void go(maintenanceJob(device.device_id, device.meta_rev ?? undefined))}
       />
+    </div>
+    {#if isPc}{@render admin()}{/if}
+  {:else if overCap}
+    <div class="section" data-testid="sheet-over-cap">
+      <TierLock tier={upgradeTier} label={t("hub.floor.over_cap")} />
+      <p class="note type-hub-body">{t("hub.sheet.over_cap")}</p>
     </div>
     {#if isPc}{@render admin()}{/if}
   {:else if live}

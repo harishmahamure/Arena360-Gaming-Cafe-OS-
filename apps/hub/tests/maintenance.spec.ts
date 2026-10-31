@@ -239,3 +239,22 @@ test("a too-long note is a field error", async ({ page }) => {
   await page.getByRole("button", { name: en["hub.devices.maintenance_confirm"] }).click();
   await expect(page.getByText(en["hub.devices.note_invalid"])).toBeVisible();
 });
+
+test("an over-cap device keeps its tile, says it is over the plan limit and offers Upgrade (Story 10.12)", async ({
+  page,
+}) => {
+  const hub = newHub();
+  hub.devices[0].over_cap = true;
+  await open(page, hub, "/floor");
+  const tiles = page.getByTestId("group-device");
+  await expect(tiles).toHaveCount(3);
+  const tile = tiles.filter({ hasText: "PC 1" });
+  await expect(tile.getByTestId("device-over-cap")).toContainText(en["hub.floor.over_cap"]);
+  await expect(tiles.filter({ hasText: "TV 1" }).getByTestId("device-over-cap")).toHaveCount(0);
+  await tile.click();
+  const lock = page.getByTestId("sheet-over-cap");
+  await expect(lock).toContainText(en["hub.floor.over_cap"]);
+  await expect(lock.getByRole("link", { name: en["staff.tier.upgrade"] })).toBeVisible();
+  await expect(page.getByTestId("session-start")).toHaveCount(0);
+  await expectNoSeriousAxe(page);
+});

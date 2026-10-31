@@ -46,7 +46,7 @@ pub fn player_options(
         options: Vec::new(),
     };
     let group_id = device
-        .filter(|d| d.deleted_at.is_none() && d.state != "maintenance")
+        .filter(|d| d.deleted_at.is_none() && d.state != "maintenance" && !d.over_cap)
         .and_then(|d| d.group_id);
     let (Some(group_id), Some(branch)) = (group_id, branch) else {
         return Ok(none);

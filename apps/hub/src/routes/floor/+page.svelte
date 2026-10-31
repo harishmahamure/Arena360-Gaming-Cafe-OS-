@@ -375,6 +375,10 @@
             ? ` · ${device.maintenance_note}`
             : ""}</span
         >
+      {:else if device.over_cap && !session}
+        <span data-testid="device-over-cap"
+          ><span aria-hidden="true">🔒</span> {t("hub.floor.over_cap")}</span
+        >
       {:else if device.status === "offline" && device.last_seen_at}
         <span data-testid="device-last-seen"
           >{t("hub.floor.last_seen", { at: formatDateTime(device.last_seen_at, tz) })}</span
@@ -534,6 +538,7 @@
         session={sessionOf(active)}
         bill={snapshot?.bills?.find((b) => b.device_id === active.device_id && !b.order_id)}
         unpaid={snapshot?.bills?.find((b) => b.device_id === active.device_id && b.order_id)}
+        upgradeTier={snapshot?.tier === "basic" ? "Premium" : "Basic"}
         locale={snapshot?.locale ?? null}
         {names}
         onclose={closeSheet}

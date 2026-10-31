@@ -143,6 +143,48 @@ pub struct SubscriptionCheckout {
     pub total_minor: i64,
 }
 
+/// `POST /v1/branches/:id/subscription/quote` (Story 10.4): what the owner has picked. The band is
+/// the branch country's, never the browser's, and the amounts are the cloud's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct QuoteSubscription {
+    pub tier: Tier,
+    pub cycle: BillingCycle,
+    #[serde(default)]
+    pub add_ons: AddOns,
+}
+
+/// What a subscription will cost, made by the cloud from the branch's live price book (or, when an
+/// unpaid subscription for the same choice is waiting, from that subscription's own book), for the
+/// checkout summary. Amounts are minor units of `currency`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SubscriptionQuote {
+    pub band: Band,
+    pub currency: String,
+    pub tier: Tier,
+    pub cycle: BillingCycle,
+    pub add_ons: AddOns,
+    /// Tier plus add-ons, GST excluded.
+    #[ts(type = "number")]
+    pub amount_minor: i64,
+    /// GST, on band IN only; 0 elsewhere.
+    #[ts(type = "number")]
+    pub tax_minor: i64,
+    #[ts(type = "number")]
+    pub total_minor: i64,
+    /// The GST rate in percent; 0 when the band has none.
+    pub gst_percent: u32,
+    /// When the first renewal debits, in epoch milliseconds: one cycle after the quote.
+    #[ts(type = "number")]
+    pub renews_at: i64,
+    pub methods: Vec<MandateMethod>,
+    /// Why some methods are missing, when they are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub notice: Option<String>,
+}
+
 /// What `GET /v1/branches/:id/subscription` tells the owner about the branch's subscription: its
 /// state, the end of the paid period and, while the state needs explaining, a sentence for them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -213,5 +255,30 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn a_quote_request_defaults_its_add_ons_and_carries_no_country() {
+        let q: QuoteSubscription =
+            serde_json::from_str(r#"{"tier":"premium","cycle":"yearly"}"#).unwrap();
+        assert_eq!(q.add_ons, AddOns::default());
+        let wire = serde_json::to_value(SubscriptionQuote {
+            band: Band::In,
+            currency: "INR".to_owned(),
+            tier: Tier::Basic,
+            cycle: BillingCycle::Monthly,
+            add_ons: AddOns::default(),
+            amount_minor: 20_000,
+            tax_minor: 3_600,
+            total_minor: 23_600,
+            gst_percent: 18,
+            renews_at: 1,
+            methods: vec![MandateMethod::Upi],
+            notice: None,
+        })
+        .unwrap();
+        assert_eq!(wire["band"], "IN");
+        assert_eq!(wire["methods"], serde_json::json!(["upi"]));
+        assert!(wire.get("notice").is_none());
     }
 }

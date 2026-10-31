@@ -8,8 +8,8 @@ use std::ffi::OsString;
 use std::time::Duration;
 
 use arena_proto::{
-    AddOns, Band, BillingCycle, CreateSubscription, MandateMethod, PriceItem, SubscriptionCheckout,
-    SubscriptionState, Tier,
+    AddOns, Band, BillingCycle, CreateSubscription, MandateMethod, PriceItem, QuoteSubscription,
+    SubscriptionCheckout, SubscriptionQuote, SubscriptionState, Tier,
 };
 use arena_store::control::{
     Branch, ControlDb, NewOpsTask, NewSubscription, PriceBookItem, ReserveOutcome, Subscription,
@@ -250,6 +250,207 @@ fn new_id() -> String {
     ulid::Ulid::generate().to_string()
 }
 
+fn normal_country(country: &str) -> String {
+    country.trim().to_ascii_uppercase()
+}
+
+/// The band `branch` is billed at: the one its country fixes, when that band is on sale.
+async fn band_of(db: &ControlDb, branch: &Branch) -> Result<Band, SubscriptionError> {
+    let band = band_for_country(&branch.country).ok_or(SubscriptionError::BandNotAvailable)?;
+    if db.band_enabled(band).await.map_err(db_err)? {
+        Ok(band)
+    } else {
+        Err(SubscriptionError::BandNotAvailable)
+    }
+}
+
+/// What a request does to the branch's open subscription.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Retry {
+    /// An unpaid `pending` subscription for the very same choice: answer its Checkout again.
+    Reuse,
+    /// An unpaid `pending` subscription for another choice: cancel it and start a new one.
+    Replace,
+    /// Anything else: the branch already has a subscription.
+    Blocked,
+}
+
+fn same_choice(
+    sub: &Subscription,
+    tier: Tier,
+    cycle: BillingCycle,
+    add_ons: &AddOns,
+    band: Band,
+) -> bool {
+    sub.tier == tier
+        && sub.cycle == cycle
+        && sub.band == band
+        && sub.addon_devices_20 == add_ons.devices_20
+        && sub.addon_tunnel == add_ons.tunnel
+        && sub.addon_owner_login == add_ons.owner_login
+}
+
+/// Only an unpaid `pending` subscription that already has its Razorpay subscription can be retried
+/// or replaced; one still being created (no Razorpay id yet) or in any other state blocks.
+fn retry_of(
+    sub: &Subscription,
+    tier: Tier,
+    cycle: BillingCycle,
+    add_ons: &AddOns,
+    band: Band,
+) -> Retry {
+    if sub.state != SubscriptionState::Pending
+        || sub.first_paid_at.is_some()
+        || sub.razorpay_subscription_id.is_none()
+    {
+        Retry::Blocked
+    } else if same_choice(sub, tier, cycle, add_ons, band) {
+        Retry::Reuse
+    } else {
+        Retry::Replace
+    }
+}
+
+/// Cancels the unpaid subscription at the provider and abandons its row. A provider failure
+/// leaves the row as it was.
+async fn replace(
+    db: &ControlDb,
+    provider: &BillingProvider,
+    old: &Subscription,
+    now: i64,
+) -> Result<(), SubscriptionError> {
+    let Some(rid) = &old.razorpay_subscription_id else {
+        return Err(SubscriptionError::Exists(old.state));
+    };
+    match provider.cancel_subscription(rid).await {
+        Ok(CancelResult::Cancelled) => {}
+        Ok(CancelResult::Deferred) => {
+            return Err(SubscriptionError::Provider(
+                "the billing provider is manual".to_owned(),
+            ));
+        }
+        Err(e) => return Err(SubscriptionError::Provider(e.0)),
+    }
+    if db
+        .abandon_subscription(&old.id, None, now)
+        .await
+        .map_err(db_err)?
+    {
+        tracing::info!(
+            subscription_id = %old.id,
+            "an unpaid subscription was replaced by another choice"
+        );
+        Ok(())
+    } else {
+        Err(SubscriptionError::Exists(old.state))
+    }
+}
+
+/// What Checkout needs for an existing subscription, priced from its own book.
+pub async fn checkout_of(
+    db: &ControlDb,
+    provider: &BillingProvider,
+    sub: &Subscription,
+) -> Result<SubscriptionCheckout, SubscriptionError> {
+    let q = quote_for(db, sub).await.map_err(|e| match e {
+        QuoteError::NoPrice(m) => SubscriptionError::Pricing(m),
+        QuoteError::Db(m) => SubscriptionError::Db(m),
+    })?;
+    let (methods, notice) = allowed_methods(sub.band, q.total_minor);
+    let key_id = provider
+        .key_id()
+        .ok_or_else(|| SubscriptionError::Provider("no checkout key".to_owned()))?;
+    let razorpay_id = sub
+        .razorpay_subscription_id
+        .clone()
+        .ok_or(SubscriptionError::Exists(sub.state))?;
+    Ok(SubscriptionCheckout {
+        subscription_id: sub.id.clone(),
+        state: sub.state,
+        key_id: key_id.to_owned(),
+        razorpay_subscription_id: razorpay_id,
+        band: sub.band,
+        currency: q.currency,
+        tier: sub.tier,
+        cycle: sub.cycle,
+        methods,
+        notice: notice.map(str::to_owned),
+        amount_minor: q.amount_minor,
+        tax_minor: q.tax_minor,
+        total_minor: q.total_minor,
+    })
+}
+
+/// One billing cycle after `now` (epoch ms), by the calendar: a month on the same day (or the last
+/// day of a shorter month), a year as twelve months.
+pub fn renews_at(now: i64, cycle: BillingCycle) -> i64 {
+    let months = match cycle {
+        BillingCycle::Monthly => 1,
+        BillingCycle::Yearly => 12,
+    };
+    chrono::DateTime::from_timestamp_millis(now)
+        .and_then(|at| at.checked_add_months(chrono::Months::new(months)))
+        .map_or(now, |at| at.timestamp_millis())
+}
+
+/// The checkout summary of a choice: tier, cycle and add-ons priced by the cloud for the branch's
+/// own band, with GST on band IN, the first renewal date and the payment methods a renewal may
+/// use. An unpaid subscription for the same choice is priced from its own book, so the summary
+/// matches the Checkout it will open; any other choice is priced from the live book.
+pub async fn make_quote(
+    db: &ControlDb,
+    branch: &Branch,
+    req: &QuoteSubscription,
+    now: i64,
+) -> Result<SubscriptionQuote, SubscriptionError> {
+    let item = validate(req.tier, &req.add_ons).map_err(SubscriptionError::Invalid)?;
+    let band = band_of(db, branch).await?;
+    let open = db
+        .subscription_of_branch(&branch.id)
+        .await
+        .map_err(db_err)?;
+    let priced = |e: QuoteError| match e {
+        QuoteError::NoPrice(m) => SubscriptionError::Pricing(m),
+        QuoteError::Db(m) => SubscriptionError::Db(m),
+    };
+    let q = match open
+        .as_ref()
+        .map(|o| (o, retry_of(o, req.tier, req.cycle, &req.add_ons, band)))
+    {
+        None | Some((_, Retry::Replace)) => {
+            let book = db
+                .live_price_book()
+                .await
+                .map_err(db_err)?
+                .ok_or_else(|| SubscriptionError::Pricing("no live price book".to_owned()))?;
+            quote(db, &book.id, band, item, req.cycle, &req.add_ons)
+                .await
+                .map_err(priced)?
+        }
+        Some((o, Retry::Reuse)) => quote_for(db, o).await.map_err(priced)?,
+        Some((o, Retry::Blocked)) => return Err(SubscriptionError::Exists(o.state)),
+    };
+    let (methods, notice) = allowed_methods(band, q.total_minor);
+    Ok(SubscriptionQuote {
+        band,
+        currency: q.currency,
+        tier: req.tier,
+        cycle: req.cycle,
+        add_ons: req.add_ons,
+        amount_minor: q.amount_minor,
+        tax_minor: q.tax_minor,
+        total_minor: q.total_minor,
+        gst_percent: if band.gst_applicable() {
+            u32::try_from(GST_PERCENT).unwrap_or(0)
+        } else {
+            0
+        },
+        renews_at: renews_at(now, req.cycle),
+        methods,
+        notice: notice.map(str::to_owned),
+    })
+}
+
 /// Creates the subscription of `branch`: validates the request, quotes the live book, reserves
 /// the branch (a `pending` row holding the band and book), creates the Razorpay subscription and
 /// answers what Checkout needs. Validation, the band and the existing-subscription check all run
@@ -262,16 +463,24 @@ pub async fn create(
     now: i64,
 ) -> Result<SubscriptionCheckout, SubscriptionError> {
     let item = validate(req.tier, &req.add_ons).map_err(SubscriptionError::Invalid)?;
-    let band = band_for_country(&req.billing_country).ok_or(SubscriptionError::BandNotAvailable)?;
-    if !db.band_enabled(band).await.map_err(db_err)? {
+    // The band is the branch country's alone: a request that names another country is refused.
+    if normal_country(&req.billing_country) != normal_country(&branch.country) {
         return Err(SubscriptionError::BandNotAvailable);
     }
+    let band = band_of(db, branch).await?;
     if let Some(open) = db
         .subscription_of_branch(&branch.id)
         .await
         .map_err(db_err)?
     {
-        return Err(SubscriptionError::Exists(open.state));
+        match retry_of(&open, req.tier, req.cycle, &req.add_ons, band) {
+            // The same unpaid choice again (a closed or declined Checkout): the same parameters.
+            Retry::Reuse => return checkout_of(db, provider, &open).await,
+            // Another choice: the unpaid subscription is cancelled at the provider and abandoned
+            // first, so a provider failure leaves it as it was.
+            Retry::Replace => replace(db, provider, &open, now).await?,
+            Retry::Blocked => return Err(SubscriptionError::Exists(open.state)),
+        }
     }
     let book = db
         .live_price_book()
@@ -641,6 +850,35 @@ mod tests {
                 &AddOns::default()
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn the_renewal_date_is_a_calendar_month_or_year_later() {
+        let ms = |y, m, d| {
+            chrono::NaiveDate::from_ymd_opt(y, m, d)
+                .unwrap()
+                .and_hms_opt(8, 0, 0)
+                .unwrap()
+                .and_utc()
+                .timestamp_millis()
+        };
+        assert_eq!(
+            renews_at(ms(2027, 1, 15), BillingCycle::Monthly),
+            ms(2027, 2, 15)
+        );
+        assert_eq!(
+            renews_at(ms(2027, 1, 15), BillingCycle::Yearly),
+            ms(2028, 1, 15)
+        );
+        // A shorter month ends on its last day; a leap day lands on 28 February.
+        assert_eq!(
+            renews_at(ms(2027, 1, 31), BillingCycle::Monthly),
+            ms(2027, 2, 28)
+        );
+        assert_eq!(
+            renews_at(ms(2028, 2, 29), BillingCycle::Yearly),
+            ms(2029, 2, 28)
         );
     }
 

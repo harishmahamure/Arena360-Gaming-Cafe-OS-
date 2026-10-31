@@ -42,6 +42,7 @@ export {
   BAND_UNAVAILABLE,
   GST_PERCENT,
   PRICING,
+  bandLines,
   bandPricing,
   planPrice,
   priceFor,

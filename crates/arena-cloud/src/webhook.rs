@@ -358,6 +358,8 @@ pub enum Handled {
     /// The subscription moved to `state` (or, for a renewal, to a later period).
     Applied {
         subscription_id: String,
+        /// The branch the subscription belongs to (the wizard stream wakes its owner).
+        branch_id: String,
         state: SubscriptionState,
         /// A first payment was held for review.
         review: bool,
@@ -450,6 +452,7 @@ pub async fn handle(
                 return Ok(match (&sub, &decision) {
                     (Some(s), Some(d)) => Handled::Applied {
                         subscription_id: s.id.clone(),
+                        branch_id: s.branch_id.clone(),
                         state: d.new_state,
                         review: d.review,
                     },

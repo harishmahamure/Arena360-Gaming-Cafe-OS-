@@ -7,8 +7,8 @@
 use std::sync::Arc;
 
 use arena_proto::{
-    AppError, CreateSubscription, ErrorCode, SubscriptionCheckout, SubscriptionState,
-    SubscriptionStatus,
+    AppError, CreateSubscription, ErrorCode, QuoteSubscription, SubscriptionCheckout,
+    SubscriptionQuote, SubscriptionState, SubscriptionStatus,
 };
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -68,6 +68,22 @@ async fn create(
     Ok((StatusCode::CREATED, Json(checkout)))
 }
 
+/// `POST /v1/branches/{id}/subscription/quote` (Story 10.4): the checkout summary for a choice,
+/// priced by the cloud for the branch's own band. Nothing is written and no provider is called.
+async fn quote(
+    State(st): State<Arc<AuthState>>,
+    owned: OwnedBranch,
+    ApiJson(body): ApiJson<QuoteSubscription>,
+) -> Result<Json<SubscriptionQuote>, ApiError> {
+    if !st.billing_enabled {
+        return Err(billing_disabled());
+    }
+    let quote = subscription::make_quote(&st.db, &owned.branch, &body, st.now())
+        .await
+        .map_err(into_api)?;
+    Ok(Json(quote))
+}
+
 /// `GET /v1/branches/{id}/subscription`: where the branch's subscription stands. 404 when the
 /// branch has none that is not over. A first payment held for review says so in plain words.
 async fn status(
@@ -95,5 +111,6 @@ async fn status(
 pub(super) fn router(st: Arc<AuthState>) -> Router {
     Router::new()
         .route("/branches/{id}/subscription", post(create).get(status))
+        .route("/branches/{id}/subscription/quote", post(quote))
         .with_state(st)
 }

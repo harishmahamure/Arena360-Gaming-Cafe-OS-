@@ -576,8 +576,8 @@ pub use stock_report::{
     WASTE_REASONS, WasteProductRow, WasteReasonRow, WasteReport,
 };
 pub use subscription::{
-    AddOns, CreateSubscription, MandateMethod, SubscriptionCheckout, SubscriptionState,
-    SubscriptionStatus,
+    AddOns, CreateSubscription, MandateMethod, QuoteSubscription, SubscriptionCheckout,
+    SubscriptionQuote, SubscriptionState, SubscriptionStatus,
 };
 pub use summary::{
     ATTENTION_ALERT, ATTENTION_CREDIT_OVERDUE, ATTENTION_LOW_STOCK, ATTENTION_SHIFT_VARIANCE,

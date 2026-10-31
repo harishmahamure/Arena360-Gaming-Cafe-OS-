@@ -298,12 +298,13 @@ async fn the_tier_list_offers_free_and_holds_paid_plans_behind_billing() {
 }
 
 #[tokio::test]
-async fn with_billing_on_the_paid_plans_list_as_available_but_still_write_nothing() {
+async fn with_billing_on_the_paid_plans_list_as_available_but_are_never_chosen_here() {
     let h = Harness::with_billing(true).await;
     let a = h.owner(PHONE_A, "Pixel Arena Gaming").await;
     h.cafe_done(&a).await;
     let r = h.call("GET", "/v1/wizard/tier", None, &a).await;
     assert_eq!(r.body["billing_enabled"], true);
+    assert_eq!(r.body["band"], "IN");
     assert_eq!(
         options(&r.body),
         [
@@ -312,11 +313,59 @@ async fn with_billing_on_the_paid_plans_list_as_available_but_still_write_nothin
             opt("premium", true, None, 200),
         ]
     );
-    let r = h
-        .call("PUT", "/v1/wizard/tier", Some(json!({"tier": "basic"})), &a)
-        .await;
-    assert_eq!((r.status, r.code()), (409, "BILLING_DISABLED"));
+    // A paid plan is bought through Checkout and written by the webhook, never by this call.
+    for tier in ["basic", "premium"] {
+        let r = h
+            .call("PUT", "/v1/wizard/tier", Some(json!({"tier": tier})), &a)
+            .await;
+        assert_eq!(
+            (r.status, r.code(), r.field()),
+            (422, "VALIDATION_FAILED", "tier"),
+            "{tier}"
+        );
+    }
     assert!(h.entitlements().is_empty());
+}
+
+#[tokio::test]
+async fn a_country_without_a_band_or_a_band_off_sale_holds_the_paid_plans_and_keeps_free() {
+    let h = Harness::with_billing(true).await;
+    let a = h.owner(PHONE_A, "Pixel Arena Gaming").await;
+    h.cafe_done(&a).await;
+    let held = [
+        opt("free", true, None, 20),
+        opt("basic", false, Some("band_not_available"), 60),
+        opt("premium", false, Some("band_not_available"), 200),
+    ];
+    // A band that is built but not on sale.
+    h.sql("UPDATE branches SET country = 'MY'");
+    let r = h.call("GET", "/v1/wizard/tier", None, &a).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["band"], "MY");
+    assert_eq!(options(&r.body), held);
+    // A country with no band at all.
+    h.sql("UPDATE branches SET country = 'GB'");
+    let r = h.call("GET", "/v1/wizard/tier", None, &a).await;
+    assert!(r.body.get("band").is_none());
+    assert_eq!(options(&r.body), held);
+    // Switching the band on opens it.
+    h.sql("UPDATE branches SET country = 'MY'; UPDATE billing_bands SET enabled = 1 WHERE band = 'MY'");
+    let r = h.call("GET", "/v1/wizard/tier", None, &a).await;
+    assert_eq!(
+        options(&r.body),
+        [
+            opt("free", true, None, 20),
+            opt("basic", true, None, 60),
+            opt("premium", true, None, 200),
+        ]
+    );
+    // Billing off still says billing is off, whatever the band.
+    let h = Harness::new().await;
+    let a = h.owner(PHONE_A, "Pixel Arena Gaming").await;
+    h.cafe_done(&a).await;
+    h.sql("UPDATE branches SET country = 'GB'");
+    let r = h.call("GET", "/v1/wizard/tier", None, &a).await;
+    assert_eq!(options(&r.body)[1].2.as_deref(), Some("billing_disabled"));
 }
 
 #[tokio::test]

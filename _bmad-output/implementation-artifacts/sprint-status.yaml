@@ -300,7 +300,7 @@ development_status:
   10-1-the-price-book-holds-tiers-add-ons-and-ppp-bands-synced-to-r: done
   10-2-a-branch-subscription-is-created-at-a-ppp-band-that-is-locke: done
   10-3-razorpay-webhooks-are-verified-applied-once-and-issue-the-en: done
-  10-4-wizard-step-2-takes-payment-through-razorpay-checkout: backlog
+  10-4-wizard-step-2-takes-payment-through-razorpay-checkout: review
   10-5-upgrade-links-and-add-branch-reuse-the-same-checkout: backlog
   10-6-a-paid-licence-reaches-the-hub-within-one-heartbeat-and-staf: backlog
   10-7-every-subscription-charge-gets-a-gst-tax-invoice-from-arena: backlog

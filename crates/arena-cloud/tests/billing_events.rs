@@ -1168,3 +1168,38 @@ async fn the_ops_command_approves_a_held_payment_and_refuses_anything_else() {
     assert_eq!(h.only(&branch).await.state, SubscriptionState::Active);
     assert_eq!(h.db.ops_audit_for(&id).await.unwrap()[0].operator, "sam");
 }
+
+#[tokio::test]
+async fn an_applied_event_wakes_the_branchs_wizard_stream_and_a_repeat_does_not() {
+    let (h, _a, branch, _id) = Harness::pending().await;
+    let mut rx = h.st.wizard_tx.subscribe();
+
+    // Only recorded: the plan step did not move, so nobody is woken.
+    let r = h
+        .send(
+            "evt_auth",
+            &event(
+                "subscription.authenticated",
+                "sub_fake_001",
+                PERIOD_END,
+                None,
+            ),
+        )
+        .await;
+    assert_eq!(r.body["status"], "recorded");
+    assert!(rx.try_recv().is_err());
+
+    let charged = event(
+        "subscription.charged",
+        "sub_fake_001",
+        PERIOD_END,
+        Some(false),
+    );
+    let r = h.send("evt_charged", &charged).await;
+    assert_eq!(r.body["status"], "applied");
+    assert_eq!(rx.try_recv().unwrap(), branch);
+
+    let r = h.send("evt_charged", &charged).await;
+    assert_eq!(r.body["status"], "duplicate");
+    assert!(rx.try_recv().is_err());
+}

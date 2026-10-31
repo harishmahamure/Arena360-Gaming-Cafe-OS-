@@ -69,6 +69,12 @@ pub async fn tier_choices(st: &AuthState, branch: &Branch) -> Result<TierChoices
         .await
         .map_err(ApiError::internal)?
         .map(|e| e.tier_at(st.now()));
+    // The band the branch country fixes, and whether it is on sale (Story 10.4).
+    let band = crate::subscription::band_for_country(&branch.country);
+    let band_on_sale = match band {
+        Some(b) => st.db.band_enabled(b).await.map_err(ApiError::internal)?,
+        None => false,
+    };
     let tiers = Tier::ALL
         .into_iter()
         .map(|key| {
@@ -77,6 +83,9 @@ pub async fn tier_choices(st: &AuthState, branch: &Branch) -> Result<TierChoices
                 Tier::Free => None,
                 Tier::Basic | Tier::Premium if !st.billing_enabled => {
                     Some(TierUnavailable::BillingDisabled)
+                }
+                Tier::Basic | Tier::Premium if !band_on_sale => {
+                    Some(TierUnavailable::BandNotAvailable)
                 }
                 Tier::Basic | Tier::Premium => None,
             };
@@ -91,6 +100,7 @@ pub async fn tier_choices(st: &AuthState, branch: &Branch) -> Result<TierChoices
     Ok(TierChoices {
         tiers,
         billing_enabled: st.billing_enabled,
+        band,
         current,
     })
 }
@@ -130,9 +140,17 @@ async fn put_tier(
     let owner_id = &signed.owner.id;
     let branch = target_branch(&st, owner_id, body.branch_id.as_deref()).await?;
     match body.tier {
-        Tier::Basic | Tier::Premium => {
+        Tier::Basic | Tier::Premium if !st.billing_enabled => {
             tracing::info!(branch_id = %branch.id, tier = body.tier.as_str(), "paid tier refused: billing is not available");
             return Err(billing_disabled());
+        }
+        Tier::Basic | Tier::Premium => {
+            // A paid plan is bought through Checkout and written by the webhook, never chosen here.
+            tracing::info!(branch_id = %branch.id, tier = body.tier.as_str(), "paid tier refused: it is bought through Checkout");
+            return Err(ApiError::validation(
+                "tier",
+                "Paid plans are bought through checkout.",
+            ));
         }
         Tier::Free => {}
     }

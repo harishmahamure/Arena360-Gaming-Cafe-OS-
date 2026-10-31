@@ -70,6 +70,7 @@ pub async fn reconcile(
                 subscription_id,
                 state,
                 review,
+                ..
             } => {
                 out.applied += 1;
                 tracing::warn!(

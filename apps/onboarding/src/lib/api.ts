@@ -10,9 +10,11 @@ import type {
   BranchCodeSet,
   CafeDetails,
   Country,
+  CreateSubscription,
   ErrorCode,
   InstallHubState,
   PairingCodeIssued,
+  QuoteSubscription,
   SessionInfo,
   SetSetupStart,
   SetupCodeReveal,
@@ -23,6 +25,8 @@ import type {
   StaffInvite,
   StaffInvited,
   StaffInvites,
+  SubscriptionCheckout,
+  SubscriptionQuote,
   SignupChallenge,
   SignupStart,
   SignupVerified,
@@ -74,6 +78,7 @@ const CODES: ReadonlySet<string> = new Set<ErrorCode>([
   "BAND_NOT_AVAILABLE",
   "ONE_FREE_BRANCH",
   "STEP_NOT_READY",
+  "SUBSCRIPTION_EXISTS",
 ]);
 
 function isAppError(v: unknown): v is AppError {
@@ -235,6 +240,14 @@ export const chooseTier = (tier: Tier, branchId?: string) =>
   withRefresh(() =>
     call<WizardState>("PUT", "/wizard/tier", branchId ? { tier, branch_id: branchId } : { tier }),
   );
+const subscriptionPath = (branchId: string) =>
+  `/branches/${encodeURIComponent(branchId)}/subscription`;
+/** The cloud's price for a choice (Story 10.4): the band is the branch country's. */
+export const quoteSubscription = (branchId: string, choice: QuoteSubscription) =>
+  withRefresh(() => call<SubscriptionQuote>("POST", subscriptionPath(branchId) + "/quote", choice));
+/** Starts (or, for the same unpaid choice, repeats) the branch's subscription and answers Checkout's parameters. */
+export const createSubscription = (branchId: string, body: CreateSubscription) =>
+  withRefresh(() => call<SubscriptionCheckout>("POST", subscriptionPath(branchId), body));
 export const getInstallHub = () =>
   withRefresh(() => call<InstallHubState>("GET", "/wizard/install-hub"));
 export const revealSetupCode = () =>

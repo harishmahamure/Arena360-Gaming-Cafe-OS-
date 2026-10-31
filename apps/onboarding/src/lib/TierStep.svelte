@@ -1,14 +1,33 @@
 <script lang="ts">
-  import { Button, PRICING, TabControl, currencyOf, formatMoney, priceFor, t } from "@arena/ui";
+  import { Button, PRICING, TabControl, t } from "@arena/ui";
   import type { MessageKey } from "@arena/ui/messages";
-  import type { Tier, TierChoices, TierUnavailable } from "@arena/ui/generated";
+  import type {
+    AddOns,
+    Band,
+    SubscriptionQuote,
+    Tier,
+    TierChoices,
+    TierUnavailable,
+  } from "@arena/ui/generated";
   import { goto } from "$app/navigation";
-  import { onMount } from "svelte";
-  import { chooseTier, getTierChoices, getWizard, type ApiFailure } from "./api";
+  import { onDestroy, onMount, tick } from "svelte";
+  import {
+    chooseTier,
+    createSubscription,
+    getTierChoices,
+    getWizard,
+    quoteSubscription,
+    type ApiFailure,
+  } from "./api";
+  import AddOnsPanel from "./AddOnsPanel.svelte";
+  import CheckoutSummary from "./CheckoutSummary.svelte";
+  import { CONFIRM_SLOW_MS, checkoutOptions, loadRazorpay } from "./razorpay";
+  import { money, snapshotPrice, type Cycle } from "./tierPrice";
   import { STEP_NAMES, advance, setWizard, stepPath, wizard } from "./wizard.svelte";
 
-  type Period = "monthly" | "yearly";
   type Plan = (typeof PRICING)[number];
+  type Phase = "pick" | "summary" | "confirming";
+  type Period = Cycle;
 
   const id = $props.id();
   const PERIODS: { id: Period; label: MessageKey }[] = [
@@ -18,6 +37,7 @@
   const REASONS: Record<TierUnavailable, MessageKey> = {
     one_free_branch: "onboarding.tier.reason.one_free_branch",
     billing_disabled: "onboarding.tier.reason.billing_disabled",
+    band_not_available: "pricing.band_unavailable",
   };
 
   let period: string = $state("monthly");
@@ -26,9 +46,27 @@
   let selected: Tier | null = $state(null);
   let saving = $state(false);
   let formError: MessageKey | null = $state(null);
+  let phase: Phase = $state("pick");
+  let addOns: AddOns = $state({ devices_20: 0, tunnel: 0, owner_login: 0 });
+  let quote: SubscriptionQuote | null = $state(null);
+  let paying = $state(false);
+  let declined = $state(false);
+  let payError: MessageKey | null = $state(null);
+  let slow = $state(false);
+  let summaryHeading: HTMLElement | null = $state(null);
+  let leaving = false;
 
   const optionOf = (key: Tier) => choices?.tiers.find((o) => o.key === key) ?? null;
   const canContinue = $derived(selected !== null && optionOf(selected)?.available === true);
+  const cycle: Cycle = $derived(period === "yearly" ? "yearly" : "monthly");
+  const band: Band = $derived.by(() => choices?.band ?? "IN");
+  /** A paid plan is picked and can be bought: Continue goes to the summary, not to the API. */
+  const buying = $derived.by(
+    () =>
+      choices?.billing_enabled === true &&
+      (selected === "basic" || selected === "premium") &&
+      optionOf(selected)?.available === true,
+  );
 
   function failure(f: ApiFailure): MessageKey {
     return f.offline ? "onboarding.error.offline" : "onboarding.error.generic";
@@ -70,13 +108,9 @@
   }
 
   function price(plan: Plan): string {
-    const symbol = currencyOf(plan.currency)?.symbol ?? plan.currency;
-    const amount = formatMoney(priceFor(plan, period === "yearly" ? "yearly" : "monthly"), {
-      exponent: 0,
-      symbol,
-      symbol_position: "before",
-      number_format: "indian",
-    });
+    const line = plan.key === "free" ? null : snapshotPrice(band, plan.key, cycle);
+    const currency = line?.currency ?? snapshotPrice(band, "basic", cycle)?.currency ?? "INR";
+    const amount = money(line?.minor ?? 0, currency);
     const key: MessageKey =
       period === "yearly"
         ? plan.perBranch
@@ -88,10 +122,167 @@
     return t(key, { price: amount });
   }
 
+  /** GST shows on band IN only, and only on a priced plan. */
+  const taxed = (plan: Plan): boolean =>
+    plan.key !== "free" && snapshotPrice(band, plan.key, cycle)?.gst === true;
+
+  function pickPlan(key: Tier) {
+    selected = key;
+    if (key !== "basic") addOns.tunnel = 0;
+  }
+
+  async function focus(el: () => HTMLElement | null) {
+    await tick();
+    el()?.focus();
+  }
+
+  async function review() {
+    const branchId = wizard.state?.branch?.id;
+    if (!branchId || (selected !== "basic" && selected !== "premium")) return;
+    saving = true;
+    const res = await quoteSubscription(branchId, {
+      tier: selected,
+      cycle,
+      add_ons: { ...addOns, owner_login: 0 },
+    });
+    saving = false;
+    if (res.ok) {
+      quote = res.data;
+      declined = false;
+      payError = null;
+      phase = "summary";
+      await focus(() => summaryHeading);
+      return;
+    }
+    await refuse(res);
+  }
+
+  async function refuse(res: ApiFailure) {
+    switch (res.error.code) {
+      case "BAND_NOT_AVAILABLE":
+        formError = "pricing.band_unavailable";
+        phase = "pick";
+        await load();
+        return;
+      case "BILLING_DISABLED":
+        formError = "onboarding.tier.error.billing_disabled";
+        phase = "pick";
+        await load();
+        return;
+      case "SUBSCRIPTION_EXISTS":
+      case "FORBIDDEN":
+        if (await leaveForCurrentStep()) return;
+        formError = failure(res);
+        return;
+      default:
+        formError = failure(res);
+    }
+  }
+
+  const PLAN_NAMES: Record<Tier, MessageKey> = {
+    free: "pricing.free.name",
+    basic: "pricing.basic.name",
+    premium: "pricing.premium.name",
+  };
+
+  async function pay() {
+    const branch = wizard.state?.branch;
+    if (paying || !quote || !branch) return;
+    paying = true;
+    declined = false;
+    payError = null;
+    const res = await createSubscription(branch.id, {
+      tier: quote.tier,
+      cycle: quote.cycle,
+      add_ons: quote.add_ons,
+      billing_country: branch.country,
+    });
+    if (!res.ok) {
+      paying = false;
+      if (res.error.code === "BAND_NOT_AVAILABLE") payError = "pricing.band_unavailable";
+      else if (res.error.code === "SUBSCRIPTION_EXISTS" && (await leaveForCurrentStep())) return;
+      else payError = failure(res);
+      return;
+    }
+    let Razorpay;
+    try {
+      Razorpay = await loadRazorpay();
+    } catch {
+      paying = false;
+      payError = "onboarding.pay.no_script";
+      return;
+    }
+    // One outcome wins: a closed or failed Checkout can also report the other afterwards.
+    let settled = false;
+    const settle = (then: () => void) => {
+      if (settled) return;
+      settled = true;
+      then();
+    };
+    try {
+      const checkout = new Razorpay(
+        checkoutOptions(res.data, t(PLAN_NAMES[res.data.tier]), {
+          paid: () =>
+            settle(() => {
+              paying = false;
+              wizard.confirming = true;
+              phase = "confirming";
+            }),
+          dismissed: () => settle(() => (paying = false)),
+        }),
+      );
+      checkout.on("payment.failed", () =>
+        settle(() => {
+          paying = false;
+          declined = true;
+          checkout.close();
+        }),
+      );
+      checkout.open();
+    } catch {
+      settle(() => {
+        paying = false;
+        payError = "onboarding.pay.no_script";
+      });
+    }
+  }
+
+  function change() {
+    phase = "pick";
+    declined = false;
+    payError = null;
+  }
+
+  // The 10.3 webhook marks this step done; the wizard (events, or the layout's 5 s poll) then
+  // moves to step 3 by itself and this page follows once, announcing and focusing it.
+  $effect(() => {
+    if (phase !== "confirming" || leaving) return;
+    const state = wizard.state;
+    if (state && state.current !== "tier") {
+      leaving = true;
+      void advance(state);
+    }
+  });
+
+  $effect(() => {
+    if (phase !== "confirming") return;
+    slow = false;
+    const timer = setTimeout(() => (slow = true), CONFIRM_SLOW_MS);
+    return () => clearTimeout(timer);
+  });
+
+  onDestroy(() => {
+    wizard.confirming = false;
+  });
+
   async function submit(event: SubmitEvent) {
     event.preventDefault();
     if (saving || !selected || !canContinue) return;
     formError = null;
+    if (buying) {
+      await review();
+      return;
+    }
     saving = true;
     const res = await chooseTier(selected, wizard.state?.branch?.id);
     saving = false;
@@ -127,7 +318,9 @@
 </script>
 
 <h1 tabindex="-1">{t(STEP_NAMES.tier)}</h1>
-<p class="intro">{t("onboarding.tier.intro")}</p>
+{#if phase === "pick"}
+  <p class="intro">{t("onboarding.tier.intro")}</p>
+{/if}
 
 {#if loadError}
   <p class="form-error" role="alert">
@@ -138,6 +331,21 @@
   </div>
 {:else if !choices}
   <p role="status">{t("onboarding.setup.loading")}</p>
+{:else if phase === "confirming"}
+  <p class="confirming" role="status" data-testid="confirming">
+    {slow ? t("onboarding.pay.slow") : t("onboarding.pay.confirming")}
+  </p>
+{:else if phase === "summary" && quote}
+  <CheckoutSummary
+    {quote}
+    timezone={wizard.state?.branch?.timezone ?? ""}
+    {paying}
+    failed={declined}
+    error={payError}
+    onpay={pay}
+    onchange={change}
+    bind:heading={summaryHeading}
+  />
 {:else}
   <form class="form" novalidate onsubmit={submit}>
     <TabControl items={PERIODS} label="onboarding.tier.period" bind:selected={period} />
@@ -164,7 +372,7 @@
                   checked={selected === plan.key}
                   disabled={!available}
                   aria-describedby={describedBy(inputId, Boolean(option?.reason))}
-                  onchange={() => (selected = plan.key)}
+                  onchange={() => pickPlan(plan.key)}
                 />
                 <span class="dot" aria-hidden="true"></span>
               </span>
@@ -173,9 +381,14 @@
             <p class="price tabular-nums" id="{inputId}-price" data-testid="price-{plan.key}">
               {price(plan)}
             </p>
-            {#if plan.gstPercent > 0}
+            {#if taxed(plan)}
               <p class="gst" data-testid="gst-{plan.key}">
                 {t("pricing.gst", { percent: plan.gstPercent })}
+              </p>
+            {/if}
+            {#if period === "yearly" && plan.key !== "free"}
+              <p class="saving" data-testid="saving-{plan.key}">
+                {t("onboarding.tier.yearly_saving")}
               </p>
             {/if}
             <ul class="features">
@@ -197,6 +410,9 @@
         {/each}
       </div>
     </fieldset>
+    {#if buying && selected}
+      <AddOnsPanel tier={selected} {band} {cycle} bind:addOns />
+    {/if}
     {#if formError}
       <p class="form-error" role="alert">
         <span class="glyph" aria-hidden="true">⚠</span><span>{t(formError)}</span>
@@ -295,6 +511,7 @@
   }
 
   .gst,
+  .saving,
   .current,
   .reason {
     margin: 0;
@@ -304,6 +521,16 @@
 
   .gst {
     color: var(--text-muted);
+  }
+
+  .saving {
+    font-weight: var(--type-hub-title-weight);
+  }
+
+  .confirming {
+    margin: 0;
+    font-size: var(--type-hub-title-size);
+    line-height: var(--type-hub-label-line-height);
   }
 
   .current {

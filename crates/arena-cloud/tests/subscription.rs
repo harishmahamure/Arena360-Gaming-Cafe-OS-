@@ -348,8 +348,21 @@ async fn a_country_without_a_band_or_a_band_off_sale_is_not_available() {
     assert!(h.rows(&branch).await.is_empty());
     assert!(h.fake().subscriptions().is_empty());
 
-    // Switching the band on opens it: card only, no GST, the band's currency.
+    // Switching the band on is not enough: the band is the branch country's alone, so a request
+    // naming another country is refused.
     h.sql("UPDATE billing_bands SET enabled = 1 WHERE band = 'MY'");
+    let r = h
+        .subscribe(&branch, &a, request("basic", "monthly", "my"))
+        .await;
+    assert_eq!((r.status, r.code()), (409, "BAND_NOT_AVAILABLE"));
+    assert!(h.rows(&branch).await.is_empty());
+
+    // A Malaysian branch opens it: card only, no GST, the band's currency.
+    h.sql("UPDATE branches SET country = 'MY'");
+    let r = h
+        .subscribe(&branch, &a, request("basic", "monthly", "IN"))
+        .await;
+    assert_eq!((r.status, r.code()), (409, "BAND_NOT_AVAILABLE"));
     let r = h
         .subscribe(&branch, &a, request("basic", "monthly", "my"))
         .await;
@@ -369,7 +382,6 @@ async fn a_branch_with_an_open_subscription_cannot_start_another() {
         .await;
     assert_eq!(first.status, 201, "{}", first.body);
     for state in [
-        "pending",
         "active",
         "grace",
         "renewal_needs_approval",
@@ -388,6 +400,16 @@ async fn a_branch_with_an_open_subscription_cannot_start_another() {
     assert_eq!(h.fake().subscriptions().len(), 1);
     assert_eq!(h.rows(&branch).await.len(), 1);
 
+    // An unpaid subscription is retried or replaced; a paid one never is.
+    h.sql(&format!(
+        "UPDATE subscriptions SET state = 'pending', first_paid_at = {T0}"
+    ));
+    let r = h
+        .subscribe(&branch, &a, request("premium", "monthly", "IN"))
+        .await;
+    assert_eq!((r.status, r.code()), (409, "SUBSCRIPTION_EXISTS"));
+    assert!(h.fake().cancelled().is_empty());
+
     // A lapsed (or cancelled, or abandoned) subscription is over: the owner can subscribe again.
     h.sql("UPDATE subscriptions SET state = 'lapsed'");
     let again = h
@@ -404,9 +426,14 @@ async fn two_racing_requests_reach_the_provider_once() {
         h.subscribe(&branch, &a, request("basic", "monthly", "IN")),
         h.subscribe(&branch, &a, request("basic", "monthly", "IN")),
     );
-    let mut statuses = [x.status, y.status];
-    statuses.sort_unstable();
-    assert_eq!(statuses, [201, 409], "{} / {}", x.body, y.body);
+    // The loser either meets the row being created (409) or, a moment later, its Checkout again.
+    assert!(
+        [x.status, y.status].contains(&201)
+            && [x.status, y.status].iter().all(|s| *s == 201 || *s == 409),
+        "{} / {}",
+        x.body,
+        y.body
+    );
     assert_eq!(h.fake().subscriptions().len(), 1);
     assert_eq!(h.rows(&branch).await.len(), 1);
 }
@@ -680,4 +707,367 @@ async fn a_row_that_never_reached_the_provider_is_abandoned_without_a_cancel() {
         .unwrap();
     assert_eq!((out.abandoned, out.failed), (1, 0));
     assert!(h.fake().cancelled().is_empty());
+}
+
+fn quote_path(branch: &str) -> String {
+    format!("/v1/branches/{branch}/subscription/quote")
+}
+
+fn pick(tier: &str, cycle: &str) -> Value {
+    json!({"tier": tier, "cycle": cycle})
+}
+
+#[tokio::test]
+async fn the_same_unpaid_choice_again_answers_the_same_checkout_without_a_new_subscription() {
+    let (h, a, branch) = Harness::owner_with_branch().await;
+    let mut body = request("basic", "yearly", "IN");
+    body["add_ons"] = json!({"devices_20": 1});
+    let first = h.subscribe(&branch, &a, body.clone()).await;
+    assert_eq!(first.status, 201, "{}", first.body);
+    // A closed or declined Checkout, then Pay again.
+    for _ in 0..2 {
+        let again = h.subscribe(&branch, &a, body.clone()).await;
+        assert_eq!(again.status, 201, "{}", again.body);
+        assert_eq!(again.body, first.body);
+    }
+    assert_eq!(h.rows(&branch).await.len(), 1);
+    assert_eq!(h.fake().subscriptions().len(), 1);
+    assert!(h.fake().cancelled().is_empty());
+}
+
+#[tokio::test]
+async fn another_choice_cancels_the_unpaid_subscription_and_starts_a_new_one() {
+    let (h, a, branch) = Harness::owner_with_branch().await;
+    let first = h
+        .subscribe(&branch, &a, request("basic", "monthly", "IN"))
+        .await;
+    assert_eq!(first.status, 201, "{}", first.body);
+    let mut other = request("basic", "monthly", "IN");
+    other["add_ons"] = json!({"tunnel": 1});
+    for changed in [
+        other,
+        request("premium", "monthly", "IN"),
+        request("basic", "yearly", "IN"),
+    ] {
+        let before = h.rows(&branch).await.len();
+        let r = h.subscribe(&branch, &a, changed.clone()).await;
+        assert_eq!(r.status, 201, "{} {}", changed, r.body);
+        assert_ne!(r.body["subscription_id"], first.body["subscription_id"]);
+        let rows = h.rows(&branch).await;
+        assert_eq!(rows.len(), before + 1);
+        assert_eq!(rows[0].state.as_str(), "pending");
+        assert_eq!(rows[1].state.as_str(), "abandoned");
+    }
+    assert_eq!(
+        h.fake().cancelled(),
+        ["sub_fake_001", "sub_fake_002", "sub_fake_003"]
+    );
+    assert_eq!(h.fake().subscriptions().len(), 4);
+    let open: Vec<_> = h
+        .rows(&branch)
+        .await
+        .into_iter()
+        .filter(|s| !s.state.is_over())
+        .collect();
+    assert_eq!(open.len(), 1);
+}
+
+#[tokio::test]
+async fn a_provider_failure_while_replacing_keeps_the_old_subscription() {
+    let (h, a, branch) = Harness::owner_with_branch().await;
+    let first = h
+        .subscribe(&branch, &a, request("basic", "monthly", "IN"))
+        .await;
+    assert_eq!(first.status, 201, "{}", first.body);
+    h.fake().fail_subscriptions(true);
+    let r = h
+        .subscribe(&branch, &a, request("premium", "monthly", "IN"))
+        .await;
+    assert_eq!((r.status, r.code()), (503, "INTERNAL"));
+    assert!(!r.body.to_string().contains("FAKE_SUBSCRIPTION_FAILED"));
+    let rows = h.rows(&branch).await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].state.as_str(), "pending");
+    assert_eq!(rows[0].tier.as_str(), "basic");
+    assert!(h.fake().cancelled().is_empty());
+
+    // The provider is back: the old Checkout is still there to retry.
+    h.fake().fail_subscriptions(false);
+    let again = h
+        .subscribe(&branch, &a, request("basic", "monthly", "IN"))
+        .await;
+    assert_eq!(again.body, first.body);
+}
+
+#[tokio::test]
+async fn a_row_still_being_created_is_not_retried() {
+    let (h, a, branch) = Harness::owner_with_branch().await;
+    let r = h
+        .subscribe(&branch, &a, request("basic", "monthly", "IN"))
+        .await;
+    assert_eq!(r.status, 201, "{}", r.body);
+    h.sql("UPDATE subscriptions SET razorpay_subscription_id = NULL");
+    for tier in ["basic", "premium"] {
+        let r = h
+            .subscribe(&branch, &a, request(tier, "monthly", "IN"))
+            .await;
+        assert_eq!((r.status, r.code()), (409, "SUBSCRIPTION_EXISTS"), "{tier}");
+    }
+    assert!(h.fake().cancelled().is_empty());
+}
+
+#[tokio::test]
+async fn the_quote_is_made_by_the_cloud_for_the_branchs_band() {
+    let (h, a, branch) = Harness::owner_with_branch().await;
+    let r = h
+        .call(
+            "POST",
+            &quote_path(&branch),
+            Some(pick("basic", "yearly")),
+            &a,
+        )
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["band"], "IN");
+    assert_eq!(r.body["currency"], "INR");
+    assert_eq!(r.body["tier"], "basic");
+    assert_eq!(r.body["cycle"], "yearly");
+    assert_eq!(r.body["amount_minor"], 200_000);
+    assert_eq!(r.body["tax_minor"], 36_000);
+    assert_eq!(r.body["total_minor"], 236_000);
+    assert_eq!(r.body["gst_percent"], 18);
+    assert_eq!(
+        r.body["add_ons"],
+        json!({"devices_20": 0, "tunnel": 0, "owner_login": 0})
+    );
+    // T0 is 2027-01-15 08:00 UTC: a year later is 2028-01-15 08:00 UTC.
+    assert_eq!(r.body["renews_at"], 1_831_536_000_000_i64);
+    assert_eq!(methods(&r.body), ["upi", "card", "emandate"]);
+    assert!(r.body.get("notice").is_none());
+
+    let mut monthly = pick("basic", "monthly");
+    monthly["add_ons"] = json!({"devices_20": 2, "tunnel": 1});
+    let r = h
+        .call("POST", &quote_path(&branch), Some(monthly), &a)
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(
+        (
+            r.body["amount_minor"].as_i64(),
+            r.body["tax_minor"].as_i64(),
+            r.body["total_minor"].as_i64()
+        ),
+        (Some(50_000), Some(9_000), Some(59_000))
+    );
+    // 2027-02-15 08:00 UTC.
+    assert_eq!(r.body["renews_at"], 1_802_678_400_000_i64);
+
+    let r = h
+        .call(
+            "POST",
+            &quote_path(&branch),
+            Some(pick("premium", "yearly")),
+            &a,
+        )
+        .await;
+    assert_eq!(r.body["total_minor"], 2_358_820);
+    assert_eq!(methods(&r.body), ["card", "emandate"]);
+    assert_eq!(
+        r.body["notice"],
+        "Renewals over Rs 15,000 need a card or bank mandate"
+    );
+
+    // A quote writes nothing and calls no provider.
+    assert!(h.rows(&branch).await.is_empty());
+    assert!(h.fake().subscriptions().is_empty());
+}
+
+#[tokio::test]
+async fn a_band_outside_india_quotes_without_gst() {
+    let (h, a, branch) = Harness::owner_with_branch().await;
+    h.sql(
+        "UPDATE billing_bands SET enabled = 1 WHERE band = 'MY'; \
+         UPDATE branches SET country = 'MY'",
+    );
+    let r = h
+        .call(
+            "POST",
+            &quote_path(&branch),
+            Some(pick("basic", "monthly")),
+            &a,
+        )
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["band"], "MY");
+    assert_eq!(r.body["currency"], "MYR");
+    assert_eq!(
+        (
+            r.body["tax_minor"].as_i64(),
+            r.body["gst_percent"].as_i64(),
+            r.body["total_minor"].as_i64()
+        ),
+        (Some(0), Some(0), Some(2_300))
+    );
+    assert_eq!(methods(&r.body), ["card"]);
+}
+
+#[tokio::test]
+async fn the_quote_refuses_what_checkout_would() {
+    let (h, a, branch) = Harness::owner_with_branch().await;
+    let with = |tier: &str, add_ons: Value| {
+        let mut b = pick(tier, "monthly");
+        b["add_ons"] = add_ons;
+        b
+    };
+    for (body, field) in [
+        (pick("free", "monthly"), "tier"),
+        (
+            with("basic", json!({"owner_login": 1})),
+            "add_ons.owner_login",
+        ),
+        (with("premium", json!({"tunnel": 1})), "add_ons.tunnel"),
+        (
+            with("basic", json!({"devices_20": 11})),
+            "add_ons.devices_20",
+        ),
+    ] {
+        let r = h
+            .call("POST", &quote_path(&branch), Some(body.clone()), &a)
+            .await;
+        assert_eq!(
+            (r.status, r.code(), r.field()),
+            (422, "VALIDATION_FAILED", field),
+            "{body}"
+        );
+    }
+    let r = h
+        .call(
+            "POST",
+            &quote_path(&branch),
+            Some(pick("basic", "monthly")),
+            "",
+        )
+        .await;
+    assert_eq!(r.status, 401);
+    let b = h.owner(PHONE_B, "Other Den").await;
+    h.cafe_done(&b).await;
+    let r = h
+        .call(
+            "POST",
+            &quote_path(&branch),
+            Some(pick("basic", "monthly")),
+            &b,
+        )
+        .await;
+    assert_eq!((r.status, r.code()), (403, "FORBIDDEN"));
+
+    // A country with no band, or a band off sale.
+    for country in ["GB", "MY"] {
+        h.sql(&format!(
+            "UPDATE branches SET country = '{country}' WHERE id = '{branch}'"
+        ));
+        let r = h
+            .call(
+                "POST",
+                &quote_path(&branch),
+                Some(pick("basic", "monthly")),
+                &a,
+            )
+            .await;
+        assert_eq!(
+            (r.status, r.code()),
+            (409, "BAND_NOT_AVAILABLE"),
+            "{country}"
+        );
+    }
+
+    // A branch with a subscription that is not an unpaid pending one.
+    h.sql(&format!(
+        "UPDATE branches SET country = 'IN' WHERE id = '{branch}'"
+    ));
+    let made = h
+        .subscribe(&branch, &a, request("basic", "monthly", "IN"))
+        .await;
+    assert_eq!(made.status, 201, "{}", made.body);
+    h.sql("UPDATE subscriptions SET state = 'active'");
+    let r = h
+        .call(
+            "POST",
+            &quote_path(&branch),
+            Some(pick("basic", "monthly")),
+            &a,
+        )
+        .await;
+    assert_eq!((r.status, r.code()), (409, "SUBSCRIPTION_EXISTS"));
+    assert_eq!(h.fake().subscriptions().len(), 1);
+}
+
+#[tokio::test]
+async fn billing_off_refuses_the_quote() {
+    let h = Harness::with_billing(false).await;
+    let a = h.owner(PHONE_A, "Pixel Arena Gaming").await;
+    let branch = h.cafe_done(&a).await;
+    let r = h
+        .call(
+            "POST",
+            &quote_path(&branch),
+            Some(pick("basic", "monthly")),
+            &a,
+        )
+        .await;
+    assert_eq!((r.status, r.code()), (409, "BILLING_DISABLED"));
+}
+
+#[tokio::test]
+async fn the_summary_of_a_waiting_choice_uses_its_own_book_and_any_other_the_live_one() {
+    use arena_cloud::price_book;
+    use arena_proto::{Band, PriceItem};
+
+    let (h, a, branch) = Harness::owner_with_branch().await;
+    let made = h
+        .subscribe(&branch, &a, request("basic", "yearly", "IN"))
+        .await;
+    assert_eq!(made.status, 201, "{}", made.body);
+
+    let (draft, _) = price_book::open_draft(&h.db, "harish", "raise", T0)
+        .await
+        .unwrap();
+    price_book::set_amount(
+        &h.db,
+        &draft,
+        Band::In,
+        PriceItem::Basic,
+        30_000,
+        "harish",
+        "raise",
+        T0,
+    )
+    .await
+    .unwrap();
+    let provider = BillingProvider::Fake(FakeRazorpay::new());
+    price_book::publish(&h.db, &provider, &draft, "harish", "go", T0 + 1)
+        .await
+        .unwrap();
+
+    // The same choice: what Checkout will charge, from the locked v1.
+    let same = h
+        .call(
+            "POST",
+            &quote_path(&branch),
+            Some(pick("basic", "yearly")),
+            &a,
+        )
+        .await;
+    assert_eq!(same.body["total_minor"], 236_000);
+    // Another choice replaces it, so it is priced from the live book.
+    let other = h
+        .call(
+            "POST",
+            &quote_path(&branch),
+            Some(pick("basic", "monthly")),
+            &a,
+        )
+        .await;
+    assert_eq!(other.status, 200, "{}", other.body);
+    assert_eq!(other.body["amount_minor"], 30_000);
 }

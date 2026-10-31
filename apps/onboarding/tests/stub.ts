@@ -1,6 +1,8 @@
 import type { Page, Route } from "@playwright/test";
 import type {
+  AddOns,
   AppError,
+  Band,
   CafeDetails,
   Country,
   SessionOwner,
@@ -11,6 +13,8 @@ import type {
   SignupChallenge,
   StaffInvite,
   StaffInviteView,
+  SubscriptionCheckout,
+  SubscriptionQuote,
   Tier,
   TierChoices,
   TotpStarted,
@@ -147,6 +151,25 @@ export type WizardStart = {
   devices?: Partial<SetupDevicesView>;
   goLive?: Partial<GoLiveView>;
   start?: Partial<SetupStartView>;
+  /** Billing on (Story 10.4): the branch's band, and whether that band is on sale. */
+  billing?: { band?: Band | null; onSale?: boolean };
+};
+
+/** What the stub charges, in minor units of INR (the seed price book). */
+export const BOOK = {
+  basic: { monthly: 20_000, yearly: 200_000 },
+  premium: { monthly: 199_900, yearly: 1_999_000 },
+  devices_20: { monthly: 5_000, yearly: 50_000 },
+  tunnel: { monthly: 20_000, yearly: 200_000 },
+};
+/** The renewal date the stub's quote answers (2027-01-15 08:00 UTC). */
+export const RENEWS_AT = Date.UTC(2027, 0, 15, 8);
+
+export type SubscribeBody = {
+  tier: Tier;
+  cycle: "monthly" | "yearly";
+  add_ons: AddOns;
+  billing_country: string;
 };
 
 export const STAFF_CODES = ["K7Q49MZD", "Q4K79MZD", "M3XT8PRW"];
@@ -235,6 +258,19 @@ export type Cloud = {
   reissued: string[];
   setupStart: SetupStartView;
   setupStartCalls: string[];
+  /** Billing on: the band, and whether it is on sale. `null` while billing is off. */
+  billing: { band: Band | undefined; onSale: boolean } | null;
+  quoteBodies: unknown[];
+  subscribeBodies: SubscribeBody[];
+  /** Ids of the subscriptions the stub created, and the one still unpaid. */
+  subscriptionIds: string[];
+  pending: { id: string; body: SubscribeBody } | null;
+  /** Razorpay subscriptions cancelled because the owner chose something else. */
+  cancelled: string[];
+  nextQuote: Reply[];
+  nextSubscribe: Reply[];
+  /** Serve `/v1/wizard/events` as a stream that wakes the wizard on every (re)connect. */
+  sse: boolean;
 };
 
 async function fulfil(route: Route, r: Reply) {
@@ -347,12 +383,34 @@ export async function stubCloud(
       ...start.wizard?.start,
     },
     setupStartCalls: [],
+    billing: start.wizard?.billing
+      ? {
+          band:
+            start.wizard.billing.band === null ? undefined : (start.wizard.billing.band ?? "IN"),
+          onSale: start.wizard.billing.onSale ?? true,
+        }
+      : null,
+    quoteBodies: [],
+    subscribeBodies: [],
+    subscriptionIds: [],
+    pending: null,
+    cancelled: [],
+    nextQuote: [],
+    nextSubscribe: [],
+    sse: false,
   };
   await page.route("**/v1/**", async (route) => {
     const url = new URL(route.request().url());
     const body = route.request().postDataJSON();
     switch (url.pathname) {
       case "/v1/wizard/events":
+        if (cloud.sse) {
+          return route.fulfill({
+            status: 200,
+            contentType: "text/event-stream",
+            body: "retry: 200\n\nevent: wizard.changed\ndata: {}\n\n",
+          });
+        }
         return route.abort("failed");
       case "/v1/signup/start":
         cloud.starts.push(body);
@@ -473,10 +531,16 @@ export function wizardBody(cloud: Cloud): WizardState {
 
 export function tierChoices(cloud: Cloud): TierChoices {
   const keys: Tier[] = ["free", "basic", "premium"];
+  const billing = cloud.billing;
   return {
     tiers: keys.map((key) => {
+      const paidReason = !billing
+        ? "billing_disabled"
+        : !billing.band || !billing.onSale
+          ? "band_not_available"
+          : undefined;
       const reason =
-        key === "free" ? (cloud.otherFree ? "one_free_branch" : undefined) : "billing_disabled";
+        key === "free" ? (cloud.otherFree ? "one_free_branch" : undefined) : paidReason;
       return {
         key,
         available: reason === undefined,
@@ -484,7 +548,8 @@ export function tierChoices(cloud: Cloud): TierChoices {
         limits: TIER_LIMITS[key],
       } as TierChoices["tiers"][number];
     }),
-    billing_enabled: false,
+    billing_enabled: billing !== null,
+    ...(billing?.band ? { band: billing.band } : {}),
     ...(cloud.tier ? { current: cloud.tier } : {}),
   };
 }
@@ -554,6 +619,9 @@ function wizardRoute(cloud: Cloud, path: string, body: unknown, method: string):
         return { status: 400, body: err("BAD_REQUEST") };
       }
       cloud.tierPicks.push(tier);
+      if (tier !== "free" && cloud.billing) {
+        return { status: 422, body: err("VALIDATION_FAILED", { field: "tier" }) };
+      }
       if (tier !== "free") return { status: 409, body: err("BILLING_DISABLED", { field: "tier" }) };
       if (cloud.tier && cloud.tier !== "free") return { status: 409, body: err("ALREADY_SET") };
       if (cloud.otherFree) return { status: 409, body: err("ONE_FREE_BRANCH", { field: "tier" }) };
@@ -606,6 +674,8 @@ function wizardRoute(cloud: Cloud, path: string, body: unknown, method: string):
     cloud.deviceView.commands.push(command);
     return { status: 200, body: command };
   }
+  const buying = /^\/v1\/branches\/([^/]+)\/subscription(\/quote)?$/.exec(path);
+  if (buying && method === "POST") return subscription(cloud, buying[2] !== undefined, body);
   const starting = /^\/v1\/branches\/([^/]+)\/setup-start(\/retry)?$/.exec(path);
   if (starting) {
     const v = cloud.setupStart;
@@ -694,6 +764,86 @@ function wizardRoute(cloud: Cloud, path: string, body: unknown, method: string):
     return { status: 200, body: { branch_code: code } };
   }
   return { status: 404, body: err("NOT_FOUND") };
+}
+
+const same = (a: SubscribeBody, b: SubscribeBody) =>
+  a.tier === b.tier &&
+  a.cycle === b.cycle &&
+  a.add_ons.devices_20 === b.add_ons.devices_20 &&
+  a.add_ons.tunnel === b.add_ons.tunnel;
+
+function priced(cloud: Cloud, tier: Tier, cycle: "monthly" | "yearly", add_ons: AddOns) {
+  const item = tier === "premium" ? BOOK.premium : BOOK.basic;
+  const amount_minor =
+    item[cycle] + add_ons.devices_20 * BOOK.devices_20[cycle] + add_ons.tunnel * BOOK.tunnel[cycle];
+  const tax_minor = Math.round((amount_minor * 18) / 100);
+  return {
+    amount_minor,
+    tax_minor,
+    total_minor: amount_minor + tax_minor,
+    band: cloud.billing?.band,
+  };
+}
+
+/** `POST /v1/branches/:id/subscription` and its `/quote`, as the cloud answers them. */
+function subscription(cloud: Cloud, quoting: boolean, body: unknown): Reply {
+  const next = quoting ? cloud.nextQuote.shift() : cloud.nextSubscribe.shift();
+  if (quoting) cloud.quoteBodies.push(body);
+  if (next) return next;
+  const b = body as SubscribeBody;
+  const billing = cloud.billing;
+  if (!billing) return { status: 409, body: err("BILLING_DISABLED", { field: "tier" }) };
+  if (!billing.band || !billing.onSale) {
+    return { status: 409, body: err("BAND_NOT_AVAILABLE", { field: "billing_country" }) };
+  }
+  const add_ons = { devices_20: 0, tunnel: 0, owner_login: 0, ...b.add_ons };
+  const money = priced(cloud, b.tier, b.cycle, add_ons);
+  const methods =
+    money.total_minor > 1_500_000
+      ? (["card", "emandate"] as const)
+      : (["upi", "card", "emandate"] as const);
+  if (quoting) {
+    const quote: SubscriptionQuote = {
+      band: billing.band,
+      currency: "INR",
+      tier: b.tier,
+      cycle: b.cycle,
+      add_ons,
+      amount_minor: money.amount_minor,
+      tax_minor: money.tax_minor,
+      total_minor: money.total_minor,
+      gst_percent: 18,
+      renews_at: RENEWS_AT,
+      methods: [...methods],
+      ...(money.total_minor > 1_500_000
+        ? { notice: "Renewals over Rs 15,000 need a card or bank mandate" }
+        : {}),
+    };
+    return { status: 200, body: quote };
+  }
+  cloud.subscribeBodies.push(b);
+  // The same unpaid choice answers the same Checkout; another cancels it and starts anew.
+  if (!cloud.pending || !same(cloud.pending.body, { ...b, add_ons })) {
+    if (cloud.pending) cloud.cancelled.push(cloud.pending.id);
+    const id = `sub_stub_${String(cloud.subscriptionIds.length + 1).padStart(3, "0")}`;
+    cloud.subscriptionIds.push(id);
+    cloud.pending = { id, body: { ...b, add_ons } };
+  }
+  const checkout: SubscriptionCheckout = {
+    subscription_id: `sb_${cloud.pending.id}`,
+    state: "pending",
+    key_id: "rzp_test_stub",
+    razorpay_subscription_id: cloud.pending.id,
+    band: billing.band,
+    currency: "INR",
+    tier: b.tier,
+    cycle: b.cycle,
+    methods: [...methods],
+    amount_minor: money.amount_minor,
+    tax_minor: money.tax_minor,
+    total_minor: money.total_minor,
+  };
+  return { status: 201, body: checkout };
 }
 
 /** The cloud's account-setup rules, on `cloud.owner`. */

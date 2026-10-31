@@ -143,3 +143,102 @@ test("a refused branch sends the owner to the current step", async ({ page }) =>
   await expect(page).toHaveURL(/\/setup\/cafe$/);
   await expect(h1(page, "ui.wizard.step.cafe")).toBeVisible();
 });
+
+const billingOn = { ...created, wizard: { branch: {}, billing: {} } };
+
+test("billing on: a paid plan can be picked, shows its cycle price and GST, and enables Continue", async ({
+  page,
+}) => {
+  const cloud = await stubCloud(page, billingOn);
+  await page.goto("/setup/tier");
+  await expect(h1(page, "ui.wizard.step.tier")).toBeVisible();
+  for (const key of ["basic", "premium"] as const) {
+    await expect(radio(page, `pricing.${key}.name`)).toBeEnabled();
+  }
+  await expect(page.getByTestId("addons")).toHaveCount(0);
+
+  await radio(page, "pricing.basic.name").check();
+  await expect(proceed(page)).not.toHaveAttribute("aria-disabled", "true");
+  await expect(page.getByTestId("price-basic")).toHaveText(PRICES.monthly.basic);
+  await expect(page.getByTestId("gst-basic")).toHaveText(t("pricing.gst", { percent: 18 }));
+  await expect(page.getByTestId("saving-basic")).toHaveCount(0);
+
+  await page.getByRole("tab", { name: t("onboarding.tier.yearly") }).click();
+  await expect(page.getByTestId("price-basic")).toHaveText(PRICES.yearly.basic);
+  await expect(page.getByTestId("saving-basic")).toHaveText(t("onboarding.tier.yearly_saving"));
+  await expect(page.getByTestId("saving-premium")).toHaveText(t("onboarding.tier.yearly_saving"));
+  await expect(page.getByTestId("saving-free")).toHaveCount(0);
+
+  // Nothing is chosen through the plan endpoint: a paid plan is bought through checkout.
+  expect(cloud.tierPicks).toEqual([]);
+});
+
+test("billing on: the Add-ons panel offers packs of 20 devices, Tunnel and a locked Owner login", async ({
+  page,
+}) => {
+  await stubCloud(page, billingOn);
+  await page.goto("/setup/tier");
+  await radio(page, "pricing.basic.name").check();
+  const panel = page.getByTestId("addons");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(t("onboarding.addons.title"));
+  const packs = page.getByLabel(t("onboarding.addons.devices"));
+  await expect(packs).toHaveValue("0");
+  await expect(packs).toHaveAttribute("min", "0");
+  await expect(packs).toHaveAttribute("max", "10");
+  await packs.fill("25");
+  await packs.blur();
+  await expect(packs).toHaveValue("10");
+  await packs.fill("3");
+  await packs.blur();
+  await expect(packs).toHaveValue("3");
+
+  const tunnel = page.getByRole("checkbox", { name: t("onboarding.addons.tunnel") });
+  await expect(tunnel).toBeEnabled();
+  await tunnel.check();
+  const login = page.getByRole("checkbox", { name: t("onboarding.addons.owner_login") });
+  await expect(login).toBeDisabled();
+  await expect(page.getByTestId("owner-login-soon")).toHaveText(
+    t("onboarding.addons.owner_login_soon"),
+  );
+
+  // Premium includes Tunnel: no checkbox, and a Tunnel picked on Basic is dropped.
+  await radio(page, "pricing.premium.name").check();
+  await expect(page.getByTestId("tunnel-included")).toHaveText(
+    t("onboarding.addons.tunnel_included"),
+  );
+  await expect(page.getByRole("checkbox", { name: t("onboarding.addons.tunnel") })).toHaveCount(0);
+  await radio(page, "pricing.basic.name").check();
+  await expect(tunnel).not.toBeChecked();
+  await expect(page.getByLabel(t("onboarding.addons.devices"))).toHaveValue("3");
+});
+
+test("billing on, band off sale or without one: paid plans say so and Free still continues", async ({
+  page,
+}) => {
+  for (const billing of [{ onSale: false, band: "MY" as const }, { band: null }]) {
+    const cloud = await stubCloud(page, { ...created, wizard: { branch: {}, billing } });
+    await page.goto("/setup/tier");
+    await expect(radio(page, "pricing.free.name")).toBeEnabled();
+    for (const key of ["basic", "premium"] as const) {
+      await expect(radio(page, `pricing.${key}.name`)).toBeDisabled();
+      await expect(page.getByTestId(`plan-${key}`)).toContainText(t("pricing.band_unavailable"));
+    }
+    await expect(page.getByTestId("addons")).toHaveCount(0);
+    await proceed(page).click();
+    await expect(page).toHaveURL(/\/setup\/install_hub$/);
+    expect(cloud.tierPicks).toEqual(["free"]);
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  }
+});
+
+test("billing on: Free keeps its one-click Continue", async ({ page }) => {
+  const cloud = await stubCloud(page, billingOn);
+  await page.goto("/setup/tier");
+  await expect(radio(page, "pricing.free.name")).toBeChecked();
+  await proceed(page).click();
+  await expect(page).toHaveURL(/\/setup\/install_hub$/);
+  await expect(h1(page, "ui.wizard.step.install_hub")).toBeFocused();
+  expect(cloud.tierPicks).toEqual(["free"]);
+  expect(cloud.quoteBodies).toEqual([]);
+});

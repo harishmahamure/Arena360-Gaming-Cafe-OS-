@@ -61,8 +61,10 @@
     };
     source.onerror = () => (streaming = false);
     source.addEventListener("wizard.changed", () => void sync());
+    // Confirming a payment polls even while the stream is up: the reconcile job runs in another
+    // process and wakes no stream.
     const poll = setInterval(() => {
-      if (!streaming && wizard.state?.current === "install_hub") void sync();
+      if (wizard.confirming || (!streaming && wizard.state?.current === "install_hub")) void sync();
     }, POLL_MS);
     return () => {
       source.close();

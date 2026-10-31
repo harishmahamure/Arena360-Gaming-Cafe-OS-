@@ -35,6 +35,8 @@ export const stepPath = (key: WizardStep) =>
 class Wizard {
   state = $state<WizardState | null>(null);
   announcement = $state("");
+  /** A payment was made and the plan step is waiting for the entitlement (Story 10.4). */
+  confirming = $state(false);
 }
 
 export const wizard = new Wizard();
@@ -49,6 +51,7 @@ export function clearWizard() {
   setupCode.value = null;
   wizard.state = null;
   wizard.announcement = "";
+  wizard.confirming = false;
 }
 
 export function setWizard(next: WizardState): boolean {

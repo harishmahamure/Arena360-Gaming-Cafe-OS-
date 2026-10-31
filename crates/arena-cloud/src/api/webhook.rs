@@ -86,9 +86,12 @@ async fn razorpay(
             match other {
                 Handled::Applied {
                     subscription_id,
+                    branch_id,
                     review,
                     ..
                 } => {
+                    // Wakes the owner's wizard stream: the activation marked the plan step done.
+                    let _ = st.wizard_tx.send(branch_id.clone());
                     if *review {
                         let id = subscription_id.clone();
                         tracing::warn!(subscription_id = %id, "a first payment is held for review");

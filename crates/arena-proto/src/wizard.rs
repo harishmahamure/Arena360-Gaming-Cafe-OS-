@@ -290,6 +290,8 @@ pub struct BranchCodeSet {
 pub enum TierUnavailable {
     OneFreeBranch,
     BillingDisabled,
+    /// The branch's country has no PPP band, or its band is not on sale yet (Story 10.4).
+    BandNotAvailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -308,6 +310,10 @@ pub struct TierOption {
 pub struct TierChoices {
     pub tiers: Vec<TierOption>,
     pub billing_enabled: bool,
+    /// The PPP band the branch country fixes (Story 10.4); absent when the country has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub band: Option<crate::Band>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub current: Option<Tier>,

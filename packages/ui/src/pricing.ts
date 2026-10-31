@@ -45,6 +45,19 @@ export function bandPricing(band: PriceBand) {
   return b.enabled ? { band, currency: b.currency, lines: b.lines } : null;
 }
 
+/**
+ * The snapshot's price lines of a band whether or not the snapshot has it on sale: the cloud
+ * (`TierChoices`) decides what is on sale, the snapshot only holds the amounts.
+ */
+export function bandLines(band: PriceBand) {
+  const b = PRICING_SNAPSHOT.bands[band];
+  return {
+    band,
+    currency: b.currency,
+    lines: b.lines as readonly (SnapshotLine & { gst_applicable: boolean })[],
+  };
+}
+
 const PLANS: Record<PlanKey, PlanPrice> = {
   free: {
     key: "free",

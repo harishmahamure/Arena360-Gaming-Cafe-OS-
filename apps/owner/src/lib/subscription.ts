@@ -135,7 +135,7 @@ export async function pdfLink(row: InvoiceRow): Promise<{ url: string } | "signe
 /** Whether "Change plan" is offered: on an active plan it opens, while a renewal is unsettled it
  * is shown disabled with its reason, and every other state has no plan to change. */
 export function changeOffer(plan: BranchPlan): "open" | "blocked" | "none" {
-  if (plan.pending_change) return "none";
+  if (plan.pending_change || refunding(plan)) return "none";
   if (plan.state === "active") return "open";
   if (plan.state === "needs_approval" || plan.state === "grace" || plan.state === "pending_review")
     return "blocked";
@@ -145,7 +145,7 @@ export function changeOffer(plan: BranchPlan): "open" | "blocked" | "none" {
 /** Whether "Change payment method" is offered: on an active plan, and while a renewal waits for
  * approval or payment, where a new method can settle it (Story 10.11). */
 export function methodOffer(plan: BranchPlan): boolean {
-  if (plan.pending_change) return false;
+  if (plan.pending_change || refunding(plan)) return false;
   return plan.state === "active" || plan.state === "needs_approval" || plan.state === "grace";
 }
 
@@ -227,9 +227,13 @@ export const keepable = (pending: PendingPlanChange): boolean =>
 const cancelPath = (branchId: string, step: string) =>
   `/branches/${encodeURIComponent(branchId)}/subscription/cancel${step}`;
 
+/** Whether a refund request is on its way, so the plan can no longer change (Story 10.15). */
+export const refunding = (plan: BranchPlan): boolean =>
+  plan.refund?.status === "requested" || plan.refund?.status === "issued";
+
 /** Whether "Cancel plan" is offered: an active plan with no change waiting (Story 10.14). */
 export const cancelOffer = (plan: BranchPlan): boolean =>
-  plan.state === "active" && !plan.pending_change;
+  plan.state === "active" && !plan.pending_change && !refunding(plan);
 
 /** Whether "Keep my plan" is offered: a plan set to cancel, before its period ends. */
 export const keepOffer = (plan: BranchPlan): boolean => plan.state === "cancels";
@@ -254,3 +258,37 @@ export async function cancelPlan(plan: BranchPlan): Promise<Sent<null> | "declin
 /** "Keep my plan": withdraws the cancellation; the renewal date stays. */
 export const keepSubscription = (plan: BranchPlan) =>
   send<null>("POST", cancelPath(plan.branch_id, "/withdraw"), { rev: plan.rev });
+
+const refundPath = (branchId: string) =>
+  `/branches/${encodeURIComponent(branchId)}/subscription/refund`;
+
+/**
+ * Asks for a full refund of the first payment and ends the plan (Story 10.15), with the amount the
+ * owner was offered. The cloud wants a second factor first, as for a cancel; `"declined"` when the
+ * owner closes the prompt.
+ */
+export async function requestRefund(plan: BranchPlan): Promise<Sent<null> | "declined"> {
+  const body = { rev: plan.rev, amount_minor: plan.refund_offer?.amount_minor };
+  let res = await send<null>("POST", refundPath(plan.branch_id), body);
+  while (!res.ok && res.code === "MFA_REQUIRED") {
+    if (!(await requestStepUp())) return "declined";
+    res = await send<null>("POST", refundPath(plan.branch_id), body);
+  }
+  return res;
+}
+
+/** What the card says of a refund request, or `null` when there is none. */
+export function refundNote(plan: BranchPlan): string | null {
+  const r = plan.refund;
+  if (!r) return null;
+  switch (r.status) {
+    case "requested":
+      return t("owner.refund.requested");
+    case "issued":
+      return t("owner.refund.issued");
+    case "processed":
+      return t("owner.refund.processed", { amount: money(r.amount_minor, r.currency) });
+    case "rejected":
+      return t("owner.refund.rejected", { reason: r.reason ?? "" });
+  }
+}

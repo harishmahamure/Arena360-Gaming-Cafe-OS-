@@ -170,6 +170,16 @@ pub struct ParsedEvent {
     pub payment: Option<PaymentInfo>,
     /// What the payment charged, in minor units (GST included), when the event carries one.
     pub amount_minor: Option<i64>,
+    /// The refund a `refund.processed` event reports (Story 10.15).
+    pub refund: Option<RefundFact>,
+}
+
+/// A refund as Razorpay reports it: its id, the payment it refunds and the amount, in minor units.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefundFact {
+    pub id: Option<String>,
+    pub payment_id: String,
+    pub amount_minor: i64,
 }
 
 /// Why a verified body is not an event.
@@ -204,6 +214,21 @@ pub fn parse(body: &[u8]) -> Result<ParsedEvent, BadEvent> {
             .and_then(|p| p.get("amount"))
             .and_then(Value::as_i64)
             .filter(|a| *a >= 0),
+        refund: entity("refund").and_then(|r| {
+            Some(RefundFact {
+                id: r
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty() && id.len() <= 64)
+                    .map(str::to_owned),
+                payment_id: r
+                    .get("payment_id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty() && id.len() <= 64)?
+                    .to_owned(),
+                amount_minor: r.get("amount").and_then(Value::as_i64).filter(|a| *a > 0)?,
+            })
+        }),
     })
 }
 
@@ -234,6 +259,7 @@ pub fn from_remote(
             created_at_ms: None,
             payment: remote.payment.clone(),
             amount_minor: None,
+            refund: None,
         },
     )
 }
@@ -484,6 +510,14 @@ pub enum Handled {
     Unmatched,
     /// The Razorpay event id was already recorded.
     Duplicate,
+    /// A refund of one payment was processed (Story 10.15). When it was the last one the
+    /// subscription is `refunded`, the branch is Free and the owner is to be told.
+    Refunded {
+        request_id: String,
+        subscription_id: String,
+        branch_id: String,
+        complete: bool,
+    },
 }
 
 /// Records one event and applies what it causes, in one transaction, issuing the tax invoice when
@@ -497,6 +531,9 @@ pub async fn handle(
     source: Source,
     now: i64,
 ) -> Result<Handled, ControlError> {
+    if ev.kind == crate::refund::PROCESSED_EVENT {
+        return crate::refund::handle_processed(db, event_id, ev, payload_hash, source, now).await;
+    }
     for _ in 0..ATTEMPTS {
         let rid = ev.razorpay_subscription_id.as_deref();
         let mut sub = match rid {
@@ -791,6 +828,11 @@ pub async fn handle(
             }
             _ => None,
         };
+        // The invoice names the payment it charges, so a refund of that payment finds it.
+        let invoice = invoice.map(|mut inv| {
+            inv.payment_id = ev.payment.as_ref().and_then(|p| p.id.clone());
+            inv
+        });
         match db
             .apply_billing_event(&record, change.as_ref(), invoice.as_ref(), now)
             .await?
@@ -967,8 +1009,10 @@ mod tests {
                 method: Some(MandateMethod::Card),
                 origin,
                 detail: None,
+                id: None,
             }),
             amount_minor: None,
+            refund: None,
         }
     }
 

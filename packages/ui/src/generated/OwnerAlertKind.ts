@@ -16,4 +16,5 @@ export type OwnerAlertKind =
   | "standby_forced"
   | "invoice_ready"
   | "renewal_needs_approval"
-  | "renewal_grace";
+  | "renewal_grace"
+  | "refund_processed";

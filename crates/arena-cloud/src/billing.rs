@@ -117,6 +117,15 @@ pub enum CancelResult {
     Deferred,
 }
 
+/// What a refund call did (Story 10.15).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefundResult {
+    /// Razorpay's refund id.
+    Issued(String),
+    /// The provider is `manual`: nothing was called, an operator refunds it in Razorpay's dashboard.
+    Deferred,
+}
+
 /// A change of tier or add-ons on a live Razorpay subscription (Story 10.9): the subscription is
 /// moved to a plan priced at the new renewal total, at once (an upgrade, which Razorpay charges
 /// the prorated difference for) or at the end of the cycle (a downgrade).
@@ -219,6 +228,8 @@ impl PaymentOrigin {
 /// How a payment was made.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PaymentInfo {
+    /// Razorpay's id of the payment (`pay_...`), once the event or the fetch carries one.
+    pub id: Option<String>,
     pub method: Option<MandateMethod>,
     /// What names the method to its owner: the last four digits of a card or the bank of a
     /// mandate. A UPI handle is personal data and is never read.
@@ -284,6 +295,11 @@ pub fn payment_info_from(payment: &Value) -> PaymentInfo {
         _ => None,
     };
     PaymentInfo {
+        id: payment
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| plain_id(id))
+            .map(str::to_owned),
         method: match method {
             Some("upi") => Some(MandateMethod::Upi),
             Some("card") => Some(MandateMethod::Card),
@@ -321,6 +337,9 @@ struct FakeState {
     cancelled_at_cycle_end: Vec<String>,
     /// Subscriptions whose cancel at cycle end was taken back (Story 10.14).
     kept: Vec<String>,
+    /// Payments refunded in full, as `(payment id, amount in minor units)` (Story 10.15).
+    refunds: Vec<(String, i64)>,
+    fail_refunds: bool,
     fail_subscriptions: bool,
     /// Razorpay subscription id -> what a test says Razorpay holds for it.
     remote: BTreeMap<String, RemoteSubscription>,
@@ -388,6 +407,26 @@ impl FakeRazorpay {
     /// The subscriptions whose scheduled cancellation was withdrawn, in order.
     pub fn kept(&self) -> Vec<String> {
         self.with(|s| s.kept.clone())
+    }
+
+    /// The payments refunded so far, as `(payment id, amount in minor units)`, in order.
+    pub fn refunded(&self) -> Vec<(String, i64)> {
+        self.with(|s| s.refunds.clone())
+    }
+
+    /// Makes every refund call fail with `FAKE_REFUND_FAILED`, or succeed again.
+    pub fn fail_refunds(&self, fail: bool) {
+        self.with(|s| s.fail_refunds = fail);
+    }
+
+    fn refund_payment(&self, payment_id: &str, amount_minor: i64) -> Result<String, BillingError> {
+        self.with(|s| {
+            if s.fail_refunds {
+                return Err(BillingError("FAKE_REFUND_FAILED".to_owned()));
+            }
+            s.refunds.push((payment_id.to_owned(), amount_minor));
+            Ok(format!("rfnd_fake_{}", s.refunds.len()))
+        })
     }
 
     /// Makes every plan change call fail with `FAKE_CHANGE_FAILED`, or succeed again.
@@ -722,6 +761,25 @@ impl RazorpayClient {
         .map(|_| ())
     }
 
+    /// Refunds a payment in full (`amount_minor` is the whole payment); Razorpay answers the refund
+    /// id and confirms with `refund.processed`.
+    async fn refund_payment(
+        &self,
+        payment_id: &str,
+        amount_minor: i64,
+    ) -> Result<String, BillingError> {
+        if !plain_id(payment_id) {
+            return Err(BillingError("RAZORPAY_BAD_ID".to_owned()));
+        }
+        let reply = self
+            .post(
+                &format!("/payments/{payment_id}/refund"),
+                &json!({ "amount": amount_minor }),
+            )
+            .await?;
+        Self::id_of(&reply)
+    }
+
     /// Takes back a cancellation scheduled for the end of the cycle: the subscription goes on
     /// billing as before.
     async fn keep_after_cancel(&self, razorpay_subscription_id: &str) -> Result<(), BillingError> {
@@ -862,6 +920,8 @@ impl std::fmt::Debug for FakeRazorpay {
 
 /// The billing provider in use.
 #[derive(Debug)]
+// One provider lives for the whole process, so the recorded fake being the largest variant costs nothing.
+#[allow(clippy::large_enum_variant)]
 pub enum BillingProvider {
     Fake(FakeRazorpay),
     Razorpay(RazorpayClient),
@@ -967,6 +1027,24 @@ impl BillingProvider {
                 .await
                 .map(|()| CancelResult::Cancelled),
             Self::Manual => Ok(CancelResult::Deferred),
+        }
+    }
+
+    /// Refunds the whole of one payment (Story 10.15).
+    pub async fn refund_payment(
+        &self,
+        payment_id: &str,
+        amount_minor: i64,
+    ) -> Result<RefundResult, BillingError> {
+        match self {
+            Self::Fake(f) => f
+                .refund_payment(payment_id, amount_minor)
+                .map(RefundResult::Issued),
+            Self::Razorpay(r) => r
+                .refund_payment(payment_id, amount_minor)
+                .await
+                .map(RefundResult::Issued),
+            Self::Manual => Ok(RefundResult::Deferred),
         }
     }
 

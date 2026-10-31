@@ -301,6 +301,15 @@ pub struct BranchPlan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "number")]
     pub grace_until: Option<i64>,
+    /// The full refund the plan offers now (Story 10.15): `active`, inside 7 days of the first
+    /// payment, with no request yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub refund_offer: Option<RefundOffer>,
+    /// The refund request of this branch's plan, whatever its status.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub refund: Option<RefundView>,
 }
 
 /// When a change of plan takes effect.
@@ -424,6 +433,63 @@ pub struct ChangeMethod {
 pub struct CancelPlan {
     #[ts(type = "number")]
     pub rev: i64,
+}
+
+/// `POST /v1/branches/:id/subscription/refund` (Story 10.15): the `rev` the owner saw and, when
+/// sent, the amount they were offered. Only the whole first payment is ever refunded, so any other
+/// amount is refused `REFUND_NOT_ALLOWED`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct RequestRefund {
+    #[ts(type = "number")]
+    pub rev: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub amount_minor: Option<i64>,
+}
+
+/// The full refund an `active` plan offers inside 7 days of its first payment (Story 10.15).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct RefundOffer {
+    /// Every payment of the subscription, GST included, in minor units.
+    #[ts(type = "number")]
+    pub amount_minor: i64,
+    pub currency: String,
+    /// When the 7 days end, in epoch milliseconds.
+    #[ts(type = "number")]
+    pub until: i64,
+}
+
+/// Where a refund request stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum RefundStatus {
+    /// Waiting for an Arena 360 operator.
+    Requested,
+    /// Refunded at Razorpay; the money is on its way back.
+    Issued,
+    /// Razorpay confirmed every refund.
+    Processed,
+    /// An operator turned it down; the plan stays active.
+    Rejected,
+}
+
+/// A refund request as the owner reads it on the branch's card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct RefundView {
+    pub status: RefundStatus,
+    #[ts(type = "number")]
+    pub amount_minor: i64,
+    pub currency: String,
+    #[ts(type = "number")]
+    pub requested_at: i64,
+    /// The operator's reason, once the request is rejected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reason: Option<String>,
 }
 
 /// What switching the billing cycle comes to, made by the cloud from the subscription's own locked

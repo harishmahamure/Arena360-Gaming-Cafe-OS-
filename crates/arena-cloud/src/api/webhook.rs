@@ -116,6 +116,20 @@ async fn razorpay(
                     }
                     "applied"
                 }
+                Handled::Refunded {
+                    request_id,
+                    complete,
+                    ..
+                } => {
+                    // The last refund of the request: the owner is told now.
+                    if *complete {
+                        let (st, request_id) = (st.clone(), request_id.clone());
+                        tokio::spawn(async move {
+                            crate::refund::notify_processed(&st, &request_id).await;
+                        });
+                    }
+                    "refunded"
+                }
                 Handled::Recorded => "recorded",
                 _ => "unmatched",
             }

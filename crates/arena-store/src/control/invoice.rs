@@ -39,6 +39,11 @@ pub struct NewInvoice {
     pub seller_address: String,
     pub seller_gstin: String,
     pub note: Option<String>,
+    /// The Razorpay payment this invoice charges; set on an invoice so a refund of that payment finds it.
+    pub payment_id: Option<String>,
+    /// Set on a credit note: the number of the invoice it reverses. The note then carries the
+    /// invoice's own lines and amounts and takes the next `CN` number.
+    pub credit_for: Option<String>,
 }
 
 /// An issued invoice.
@@ -78,6 +83,8 @@ pub struct Invoice {
     pub notified_at: Option<i64>,
     /// The number of the invoice a credit note reverses.
     pub original_number: Option<String>,
+    /// The Razorpay payment the invoice charges.
+    pub payment_id: Option<String>,
 }
 
 const COLUMNS: &str = "i.id, i.number, i.fy, i.kind, i.seq, i.tenant_id, i.branch_id, \
@@ -85,7 +92,7 @@ const COLUMNS: &str = "i.id, i.number, i.fy, i.kind, i.seq, i.tenant_id, i.branc
      i.currency, i.lines_json, i.subtotal_minor, i.cgst_minor, i.sgst_minor, i.igst_minor, \
      i.total_minor, i.sac, i.buyer_name, i.buyer_gstin, i.buyer_state_code, i.seller_name, \
      i.seller_address, i.seller_gstin, i.note, i.pdf_key, i.pdf_at, i.notified_at, \
-     i.original_number";
+     i.original_number, i.payment_id";
 
 fn invoice_from(r: &[SqlValue]) -> Result<Invoice, ControlError> {
     Ok(Invoice {
@@ -121,6 +128,7 @@ fn invoice_from(r: &[SqlValue]) -> Result<Invoice, ControlError> {
         pdf_at: col_opt_int(r, 29)?,
         notified_at: col_opt_int(r, 30)?,
         original_number: col_opt_text(r, 31)?,
+        payment_id: col_opt_text(r, 32)?,
     })
 }
 
@@ -128,23 +136,43 @@ fn opt_text(v: Option<&str>) -> SqlValue {
     v.map_or(SqlValue::Null, text)
 }
 
-/// The statement that issues `inv` for the billing event row `event_row_id`: the next number of
-/// its financial year, taken in the same transaction that records the event.
-pub(super) fn issue_stmt(inv: &NewInvoice, event_row_id: &str) -> Stmt {
-    Stmt::new(
-        "INSERT INTO billing_invoices (id, number, fy, kind, seq, tenant_id, branch_id, \
+/// The SQL that issues an invoice or a credit note: the next number of the financial year, taken in
+/// the transaction that records the event. `$infix` is what follows the year in the number.
+macro_rules! issue_sql {
+    ($infix:literal) => {
+        concat!(
+            "INSERT INTO billing_invoices (id, number, fy, kind, seq, tenant_id, branch_id, \
              subscription_id, billing_event_id, issued_at, period_start, period_end, band, \
              currency, lines_json, subtotal_minor, cgst_minor, sgst_minor, igst_minor, \
              total_minor, sac, buyer_name, buyer_gstin, buyer_state_code, seller_name, \
-             seller_address, seller_gstin, note) \
-             SELECT ?, 'A360/' || ? || '/' || printf('%06d', n.seq), ?, 'invoice', n.seq, \
-             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? \
+             seller_address, seller_gstin, note, original_number, payment_id) \
+             SELECT ?, 'A360/' || ? || '",
+            $infix,
+            "' || printf('%06d', n.seq), ?, ?, n.seq, \
+             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? \
              FROM (SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM billing_invoices \
-             WHERE fy = ? AND kind = 'invoice') n",
+             WHERE fy = ? AND kind = ?) n"
+        )
+    };
+}
+
+/// The statement that issues `inv` for the billing event row `event_row_id`: the next number of
+/// its financial year, taken in the same transaction that records the event. An invoice is
+/// `A360/<FY>/<seq:06>`; a credit note (`credit_for` set) is `A360/<FY>/CN<seq:06>` with its own
+/// sequence.
+pub(super) fn issue_stmt(inv: &NewInvoice, event_row_id: &str) -> Stmt {
+    let (sql, kind) = if inv.credit_for.is_some() {
+        (issue_sql!("/CN"), "credit_note")
+    } else {
+        (issue_sql!("/"), "invoice")
+    };
+    Stmt::new(
+        sql,
         vec![
             text(&inv.id),
             text(&inv.fy),
             text(&inv.fy),
+            text(kind),
             text(&inv.tenant_id),
             text(&inv.branch_id),
             text(&inv.subscription_id),
@@ -168,7 +196,10 @@ pub(super) fn issue_stmt(inv: &NewInvoice, event_row_id: &str) -> Stmt {
             text(&inv.seller_address),
             text(&inv.seller_gstin),
             opt_text(inv.note.as_deref()),
+            opt_text(inv.credit_for.as_deref()),
+            opt_text(inv.payment_id.as_deref()),
             text(&inv.fy),
+            text(kind),
         ],
     )
     .expect(1)
@@ -290,5 +321,33 @@ impl ControlDb {
             )
             .await?;
         rows.iter().map(|r| col_text(r, 0)).collect()
+    }
+}
+
+impl ControlDb {
+    /// The invoices (not credit notes) of a subscription, oldest first.
+    pub async fn invoices_of_subscription(
+        &self,
+        subscription_id: &str,
+    ) -> Result<Vec<Invoice>, ControlError> {
+        let sql = format!(
+            "SELECT {COLUMNS} FROM billing_invoices i WHERE i.subscription_id = ? \
+             AND i.kind = 'invoice' ORDER BY i.issued_at, i.id"
+        );
+        let rows = self.query(&sql, vec![text(subscription_id)]).await?;
+        rows.iter().map(|r| invoice_from(r)).collect()
+    }
+
+    /// The invoice (not credit note) that charged Razorpay payment `payment_id`.
+    pub async fn invoice_of_payment(
+        &self,
+        payment_id: &str,
+    ) -> Result<Option<Invoice>, ControlError> {
+        let sql = format!(
+            "SELECT {COLUMNS} FROM billing_invoices i WHERE i.payment_id = ? \
+             AND i.kind = 'invoice' ORDER BY i.issued_at, i.id LIMIT 1"
+        );
+        let rows = self.query(&sql, vec![text(payment_id)]).await?;
+        rows.first().map(|r| invoice_from(r)).transpose()
     }
 }

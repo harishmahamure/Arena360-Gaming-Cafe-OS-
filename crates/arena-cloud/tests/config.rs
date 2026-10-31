@@ -659,3 +659,69 @@ fn invoice_render_is_a_jobs_task() {
     );
     assert_eq!(Task::InvoiceRender.as_str(), "invoice-render");
 }
+
+#[test]
+fn ops_refund_approve_and_reject_need_a_request_and_a_reason() {
+    let ops = |a: &[&str]| {
+        parse(
+            std::iter::once("ops")
+                .chain(a.iter().copied())
+                .map(std::ffi::OsString::from),
+            |_: &str| None,
+        )
+    };
+    let Ok(Command::Refund(r)) = ops(&[
+        "refund",
+        "approve",
+        "--request",
+        "01REQ",
+        "--reason",
+        "asked within 7 days",
+        "--operator",
+        "asha",
+    ]) else {
+        panic!("not a refund");
+    };
+    assert_eq!(
+        (
+            r.request_id.as_str(),
+            r.approve,
+            r.reason.as_str(),
+            r.operator.as_deref()
+        ),
+        ("01REQ", true, "asked within 7 days", Some("asha"))
+    );
+    assert_eq!(r.dev_data_dir, None);
+    let Ok(Command::Refund(no)) = ops(&[
+        "refund",
+        "reject",
+        "--request",
+        "r",
+        "--reason",
+        "not a first payment",
+        "--dev",
+    ]) else {
+        panic!("not a refund");
+    };
+    assert!(!no.approve && no.dev_data_dir.is_some() && no.operator.is_none());
+    for bad in [
+        &["refund", "approve", "--reason", "r"][..],
+        &["refund", "approve", "--request", "r"],
+        &["refund", "reject", "--request", "r", "--reason", " "],
+        &[
+            "refund",
+            "approve",
+            "--request",
+            "r",
+            "--reason",
+            "r",
+            "--data-dir",
+            "x",
+        ],
+        &["refund", "settle", "--request", "r", "--reason", "r"],
+        &["refund"],
+    ] {
+        assert!(ops(bad).is_err(), "{bad:?}");
+    }
+    assert!(matches!(ops(&["refund", "--help"]), Ok(Command::Help)));
+}

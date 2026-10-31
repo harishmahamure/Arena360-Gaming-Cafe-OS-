@@ -7,6 +7,8 @@ import type { PaymentMethodView } from "./PaymentMethodView";
 import type { PendingPlanChange } from "./PendingPlanChange";
 import type { PlanPrice } from "./PlanPrice";
 import type { PlanState } from "./PlanState";
+import type { RefundOffer } from "./RefundOffer";
+import type { RefundView } from "./RefundView";
 import type { Tier } from "./Tier";
 
 /**
@@ -59,4 +61,13 @@ export type BranchPlan = {
    * present only in `grace`.
    */
   grace_until?: number;
+  /**
+   * The full refund the plan offers now (Story 10.15): `active`, inside 7 days of the first
+   * payment, with no request yet.
+   */
+  refund_offer?: RefundOffer;
+  /**
+   * The refund request of this branch's plan, whatever its status.
+   */
+  refund?: RefundView;
 };

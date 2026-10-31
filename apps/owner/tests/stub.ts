@@ -203,6 +203,8 @@ export type StubOptions = {
     step: "cancel" | "keep",
     body: Record<string, unknown>,
   ) => { status: number; body: unknown };
+  /** Answers `POST .../subscription/refund` (Story 10.15); recorded in `calls.bodies["refund"]`; unset: 404. */
+  refund?: (body: Record<string, unknown>) => { status: number; body: unknown };
   /** Answers `GET /v1/account/invoices/{id}/pdf`; unset: a signed link. */
   pdf?: (id: string) => { status: number; body: unknown };
   /** Answers a command post instead of the default (queue one row per branch that can take it). */
@@ -392,6 +394,15 @@ export async function stubCloud(
       const body = (req.postDataJSON() ?? {}) as Record<string, unknown>;
       (bodies["cancel"] ??= []).push({ step, branch: cancel[1], ...body });
       const answer = opts.cancel?.(step, body) ?? { status: 404, body: { code: "NOT_FOUND" } };
+      return answer.status === 204
+        ? route.fulfill({ status: 204 })
+        : json(answer.body, answer.status);
+    }
+    const refund = path.match(/^\/v1\/branches\/([^/]+)\/subscription\/refund$/);
+    if (refund && req.method() === "POST") {
+      const body = (req.postDataJSON() ?? {}) as Record<string, unknown>;
+      (bodies["refund"] ??= []).push({ branch: refund[1], ...body });
+      const answer = opts.refund?.(body) ?? { status: 404, body: { code: "NOT_FOUND" } };
       return answer.status === 204
         ? route.fulfill({ status: 204 })
         : json(answer.body, answer.status);

@@ -61,6 +61,9 @@ pub enum OwnerAlertKind {
     /// A renewal is unpaid and the branch is in its grace period (Story 10.11). Raised by the
     /// cloud on days 1, 5 and 7 of grace.
     RenewalGrace,
+    /// A refund of the first payment was processed (Story 10.15). Raised by the cloud, never by a
+    /// Hub.
+    RefundProcessed,
 }
 
 /// Why a set of parameters does not fit its kind: the offending name.
@@ -72,7 +75,7 @@ pub struct OwnerAlertParamError {
 
 impl OwnerAlertKind {
     /// Every kind.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Test,
         Self::CashVariance,
         Self::LowStock,
@@ -86,6 +89,7 @@ impl OwnerAlertKind {
         Self::InvoiceReady,
         Self::RenewalNeedsApproval,
         Self::RenewalGrace,
+        Self::RefundProcessed,
     ];
 
     /// The kinds a Hub raises through `POST /v1/notify` (Story 8.34).
@@ -119,6 +123,7 @@ impl OwnerAlertKind {
             Self::InvoiceReady => "invoice_ready",
             Self::RenewalNeedsApproval => "renewal_needs_approval",
             Self::RenewalGrace => "renewal_grace",
+            Self::RefundProcessed => "refund_processed",
         }
     }
 
@@ -139,6 +144,7 @@ impl OwnerAlertKind {
             Self::InvoiceReady => &["number", "amount"],
             Self::RenewalNeedsApproval => &["branch"],
             Self::RenewalGrace => &["branch", "day", "date"],
+            Self::RefundProcessed => &["amount"],
         }
     }
 
@@ -243,6 +249,7 @@ impl OwnerAlertKind {
                 p("day"),
                 p("date")
             ),
+            Self::RefundProcessed => format!("Refund of {} processed.", p("amount")),
         }
     }
 
@@ -250,7 +257,7 @@ impl OwnerAlertKind {
     pub fn url(self, branch_id: &str) -> String {
         match self {
             Self::Test | Self::InvoiceReady => "/alerts".to_owned(),
-            Self::RenewalNeedsApproval | Self::RenewalGrace => {
+            Self::RenewalNeedsApproval | Self::RenewalGrace | Self::RefundProcessed => {
                 format!("/account/subscription?branch={branch_id}")
             }
             Self::BranchOffline
@@ -645,6 +652,18 @@ mod tests {
                 .field,
             "day"
         );
+    }
+
+    #[test]
+    fn a_refund_processed_line_names_the_amount_and_no_hub_raises_it() {
+        let k = OwnerAlertKind::RefundProcessed;
+        let p = sample(k);
+        assert_eq!(k.check_params(&p), Ok(()));
+        assert_eq!(k.text(&p), "Refund of Rs 250 processed.");
+        assert_eq!(k.as_str(), "refund_processed");
+        assert_eq!(k.url("B1"), "/account/subscription?branch=B1".to_owned());
+        assert!(!k.hub_sourced());
+        assert_eq!(OwnerAlertKind::parse("refund_processed"), Some(k));
     }
 
     #[test]

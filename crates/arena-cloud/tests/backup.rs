@@ -90,6 +90,8 @@ fn expected_counts() -> BTreeMap<String, u64> {
         ("price_books", 1),
         ("push_subscriptions", 0),
         ("rate_limits", 0),
+        ("refund_payments", 0),
+        ("refund_requests", 0),
         ("send_ledger", 0),
         (
             "schema_migrations",
@@ -804,6 +806,8 @@ async fn restore_control_reads_a_plaintext_dump_from_stdin() {
             "price_books",
             "push_subscriptions",
             "rate_limits",
+            "refund_payments",
+            "refund_requests",
             "schema_migrations",
             "send_ledger",
             "signin_challenges",

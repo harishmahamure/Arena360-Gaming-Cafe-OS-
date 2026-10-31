@@ -24,6 +24,10 @@ pub const USAGE: &str =
                                       [--operator <name>] [--dev [--data-dir <dir>]]
        arena-cloud ops subscription review --id <id> --approve --reason <text> [--operator <name>]
                                            [--dev [--data-dir <dir>]]
+       arena-cloud ops refund approve --request <id> --reason <text> [--operator <name>]
+                                      [--dev [--data-dir <dir>]]
+       arena-cloud ops refund reject --request <id> --reason <text> [--operator <name>]
+                                     [--dev [--data-dir <dir>]]
        arena-cloud ops licence-keygen [--kid <kid>]
        arena-cloud catalog import <file.json|file.csv> --operator <name> [--media-dir <dir>]
                                   [--dev [--data-dir <dir>]]
@@ -69,6 +73,11 @@ pub const USAGE: &str =
   ops subscription review  clear a first payment held because its country did not match the price
                band: the subscription becomes active and the branch is entitled, with an ops_audit row
                (needs --approve, --id, --reason; the operator defaults as for price-book)
+  ops refund   approve or reject an owner's request for a full refund inside 7 days of the first
+               payment: approve refunds every payment of the subscription at Razorpay and cancels it
+               at once (a Razorpay error leaves the request waiting, with the error shown), reject
+               keeps the plan active with the reason the owner reads; both write an ops_audit row
+               (needs --request and --reason; the operator defaults as for price-book)
   ops licence-keygen  print a new Ed25519 PKCS#8 private key PEM on stdout (for SOPS) and, on
                stderr, its kid and the VerifyKey line for arena_proto::licence::LICENCE_VERIFY_KEYS
   catalog import  upsert the game catalogue from a JSON or CSV list by name + launcher, upload
@@ -339,6 +348,7 @@ pub enum Command {
     GrantComp(GrantCompConfig),
     PriceBook(PriceBookConfig),
     SubscriptionReview(SubscriptionReviewConfig),
+    Refund(RefundConfig),
     CatalogImport(CatalogImportConfig),
     LicenceKeygen { kid: Option<String> },
     Help,
@@ -910,6 +920,72 @@ fn parse_subscription(mut args: impl Iterator<Item = OsString>) -> Result<Comman
     }))
 }
 
+/// `ops refund approve|reject …` (Story 10.15): an operator decides an owner's request for a full
+/// refund of the first payment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefundConfig {
+    pub request_id: String,
+    pub approve: bool,
+    /// `None`: the operator named by `ARENA_OPS_OPERATOR`, `USER` or `USERNAME`.
+    pub operator: Option<String>,
+    pub reason: String,
+    pub dev_data_dir: Option<PathBuf>,
+}
+
+fn parse_refund(mut args: impl Iterator<Item = OsString>) -> Result<Command, String> {
+    let approve = match args.next().and_then(|a| a.into_string().ok()).as_deref() {
+        Some("approve") => true,
+        Some("reject") => false,
+        Some("--help" | "-h") => return Ok(Command::Help),
+        Some(other) => return Err(format!("unknown refund command {other}")),
+        None => return Err("refund needs a command (approve or reject)".to_owned()),
+    };
+    let verb = if approve { "approve" } else { "reject" };
+    let mut request: Option<String> = None;
+    let mut operator: Option<String> = None;
+    let mut reason: Option<String> = None;
+    let mut dev = false;
+    let mut data_dir: Option<PathBuf> = None;
+    let early = walk_flags(args, |flag, inline, value| {
+        match flag {
+            "--help" | "-h" => return Ok(Some(Command::Help)),
+            "--request" => request = Some(value()?),
+            "--operator" => operator = Some(value()?),
+            "--reason" => reason = Some(value()?),
+            "--dev" if !inline => dev = true,
+            "--data-dir" => data_dir = Some(PathBuf::from(value()?)),
+            other => return Err(format!("unknown argument {other}")),
+        }
+        Ok(None)
+    })?;
+    if let Some(cmd) = early {
+        return Ok(cmd);
+    }
+    let text = |flag: &str, v: Option<String>| -> Result<String, String> {
+        let v = v.ok_or_else(|| format!("refund {verb} needs {flag}"))?;
+        let v = v.trim().to_owned();
+        if v.is_empty() || v.chars().count() > OPS_TEXT_MAX || v.chars().any(char::is_control) {
+            return Err(format!(
+                "{flag} must be 1 to {OPS_TEXT_MAX} characters of plain text"
+            ));
+        }
+        Ok(v)
+    };
+    let request_id = text("--request", request)?;
+    let reason = text("--reason", reason)?;
+    let operator = operator.map(|o| text("--operator", Some(o))).transpose()?;
+    if data_dir.is_some() && !dev {
+        return Err("--data-dir needs --dev".to_owned());
+    }
+    Ok(Command::Refund(RefundConfig {
+        request_id,
+        approve,
+        operator,
+        reason,
+        dev_data_dir: dev.then(|| data_dir.unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_DIR))),
+    }))
+}
+
 /// `ops <subcommand> …`.
 fn parse_ops(mut args: impl Iterator<Item = OsString>) -> Result<Command, String> {
     match args.next().and_then(|a| a.into_string().ok()).as_deref() {
@@ -917,12 +993,13 @@ fn parse_ops(mut args: impl Iterator<Item = OsString>) -> Result<Command, String
         Some("grant-comp") => return parse_grant_comp(args),
         Some("price-book") => return parse_price_book(args),
         Some("subscription") => return parse_subscription(args),
+        Some("refund") => return parse_refund(args),
         Some("licence-keygen") => return parse_keygen(args),
         Some("--help" | "-h") => return Ok(Command::Help),
         Some(other) => return Err(format!("unknown ops command {other}")),
         None => {
             return Err(
-                "ops needs a command (restore-control, grant-comp, price-book, subscription or licence-keygen)"
+                "ops needs a command (restore-control, grant-comp, price-book, subscription, refund or licence-keygen)"
                     .to_owned(),
             );
         }

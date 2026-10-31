@@ -6,6 +6,8 @@
 
   type Common = {
     label: MessageKey;
+    /** Values for the `{placeholders}` of `label`. */
+    labelParams?: Record<string, string | number>;
     variant?: "primary" | "secondary" | "warning";
     type?: "button" | "submit" | "reset";
     onclick?: HTMLButtonAttributes["onclick"];
@@ -22,6 +24,7 @@
 
   let {
     label,
+    labelParams,
     variant = "primary",
     type = "button",
     onclick,
@@ -58,7 +61,7 @@
     onclick={handleClick}
     aria-disabled={disabled ? "true" : undefined}
     aria-describedby={disabled && disabledReason ? reasonId : undefined}
-    data-force-state={forceState}>{t(label)}</button
+    data-force-state={forceState}>{t(label, labelParams)}</button
   >
   {#if disabled && disabledReason}
     <span class="reason" id={reasonId}>{t(disabledReason, reasonParams)}</span>

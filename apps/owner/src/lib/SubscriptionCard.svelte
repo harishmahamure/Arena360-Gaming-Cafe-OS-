@@ -26,6 +26,7 @@
     planName,
     priceText,
     renewalPrice,
+    refundNote,
     resubscribeOffer,
     stateText,
     toneOf,
@@ -71,6 +72,7 @@
   let keepFailed = $state(false);
   const offer = $derived(changeOffer(plan));
   const unpaid = $derived(plan.state === "needs_approval" || plan.state === "grace");
+  const refundText = $derived(refundNote(plan));
   const unpaidAt = $derived(unpaidDate(plan));
   const pending = $derived(plan.pending_change);
 
@@ -182,6 +184,9 @@
           />
         </span>
       </div>
+      {#if refundText}
+        <p data-testid="refund-note">{refundText}</p>
+      {/if}
       {#if isFree}
         <p>{t("owner.subscription.free_line")}</p>
         <Button label="owner.subscription.upgrade" onclick={upgrade} />

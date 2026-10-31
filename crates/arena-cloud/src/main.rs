@@ -131,6 +131,30 @@ async fn main() -> ExitCode {
                 }
             };
         }
+        Ok(Command::Refund(refund)) => {
+            return match arena_cloud::ops::refund(
+                &refund,
+                |k| std::env::var_os(k),
+                arena_cloud::now_ms(),
+            )
+            .await
+            {
+                Ok(lines) => {
+                    for line in lines {
+                        println!("{line}");
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e @ arena_cloud::ops::OpsError::Config(_)) => {
+                    eprintln!("arena-cloud: refund: {e}");
+                    ExitCode::from(EXIT_USAGE)
+                }
+                Err(e) => {
+                    eprintln!("arena-cloud: refund failed: {e}");
+                    ExitCode::from(EXIT_FAILURE)
+                }
+            };
+        }
         Ok(Command::CatalogImport(import)) => {
             return match arena_cloud::ops::catalog_import(
                 &import,

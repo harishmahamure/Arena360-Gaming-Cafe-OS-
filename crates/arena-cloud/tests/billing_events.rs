@@ -943,6 +943,7 @@ fn remote(status: &str, paid: u32, origin: PaymentOrigin) -> RemoteSubscription 
             method: Some(arena_proto::MandateMethod::Card),
             origin,
             detail: None,
+            id: None,
         }),
     }
 }
@@ -1541,6 +1542,8 @@ fn reissue(of: &Invoice, id: &str, fy: &str) -> NewInvoice {
         seller_address: of.seller_address.clone(),
         seller_gstin: of.seller_gstin.clone(),
         note: of.note.clone(),
+        payment_id: None,
+        credit_for: None,
     }
 }
 
@@ -3764,4 +3767,582 @@ async fn a_cancel_is_refused_while_a_renewal_waits_and_after_the_plan_is_over() 
     ));
     let r = h.cancel_call(&branch, &a, "", rev).await;
     assert_eq!(r.status, 404, "{}", r.body);
+}
+
+// ---- Story 10.15: full refund within 7 days of the first payment, issued through the ops path ----
+
+use arena_cloud::refund::DecideError;
+
+impl Harness {
+    async fn refund_call(&self, branch: &str, access: &str, body: Value) -> Reply {
+        self.call(
+            "POST",
+            &format!("/v1/branches/{branch}/subscription/refund"),
+            Some(body),
+            access,
+        )
+        .await
+    }
+
+    /// The refund request of the branch's only subscription.
+    async fn refund_of(&self, branch: &str) -> arena_store::control::RefundRequest {
+        let id = self.only(branch).await.id;
+        self.db
+            .refund_request_of(&id)
+            .await
+            .unwrap()
+            .expect("a refund request")
+    }
+
+    /// An owner's `active` plan with a refund requested through the API.
+    async fn refund_requested() -> (Self, String, String, String, String) {
+        let (h, a, branch, id, token) = Harness::paid_with_hub().await;
+        h.stepped_up();
+        let rev = h.only(&branch).await.rev;
+        let r = h.refund_call(&branch, &a, json!({ "rev": rev })).await;
+        assert_eq!(r.status, 204, "{}", r.body);
+        (h, a, branch, id, token)
+    }
+
+    async fn approve(&self, request: &str) -> Result<arena_cloud::refund::Approved, DecideError> {
+        arena_cloud::refund::approve(
+            &self.db,
+            self.st.billing.get().unwrap(),
+            request,
+            "asha",
+            "customer asked within 7 days",
+            self.clock.load(Ordering::SeqCst),
+        )
+        .await
+    }
+
+    async fn refund_processed(&self, event_id: &str, payment: &str, amount: i64) -> Reply {
+        self.send(
+            event_id,
+            &json!({
+                "event": "refund.processed",
+                "created_at": 1_800_000_200,
+                "payload": {
+                    "refund": {"entity": {"id": "rfnd_1", "payment_id": payment, "amount": amount}},
+                    "payment": {"entity": {"id": payment}},
+                },
+            }),
+        )
+        .await
+    }
+
+    async fn paid_total(&self, branch: &str) -> i64 {
+        let id = self.only(branch).await.id;
+        self.db
+            .invoices_of_subscription(&id)
+            .await
+            .unwrap()
+            .iter()
+            .map(|i| i.total_minor)
+            .sum()
+    }
+}
+
+#[tokio::test]
+async fn the_plan_offers_a_full_refund_inside_seven_days_and_not_after() {
+    let (h, a, branch, _id, _token) = Harness::paid_with_hub().await;
+    let total = h.paid_total(&branch).await;
+    assert!(total > 0);
+    let plans = h.plans(&a, "").await;
+    let offer = &plans.body["branches"][0]["refund_offer"];
+    assert_eq!(
+        offer["amount_minor"].as_i64(),
+        Some(total),
+        "{}",
+        plans.body
+    );
+    assert_eq!(offer["currency"], "INR");
+    let sub = h.only(&branch).await;
+    let paid_at = sub.first_paid_at.unwrap();
+    assert_eq!(offer["until"].as_i64(), Some(paid_at + 7 * DAY_MS));
+
+    // The last millisecond of the window still offers it; the next one does not.
+    assert!(
+        arena_cloud::refund::offer(&h.db, &sub, paid_at + 7 * DAY_MS - 1)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        arena_cloud::refund::offer(&h.db, &sub, paid_at + 7 * DAY_MS)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn a_refund_request_needs_a_fresh_step_up_and_a_matching_amount() {
+    let (h, a, branch, _id, _token) = Harness::paid_with_hub().await;
+    let rev = h.only(&branch).await.rev;
+    let r = h.refund_call(&branch, &a, json!({ "rev": rev })).await;
+    assert_eq!((r.status, r.code()), (403, "MFA_REQUIRED"), "{}", r.body);
+    assert_eq!(h.count("SELECT COUNT(*) FROM refund_requests"), 0);
+
+    h.stepped_up();
+    let total = h.paid_total(&branch).await;
+    // Any part of the amount, or more than was paid, is refused.
+    for amount in [total - 1, 1, total + 1] {
+        let r = h
+            .refund_call(&branch, &a, json!({ "rev": rev, "amount_minor": amount }))
+            .await;
+        assert_eq!(
+            (r.status, r.code()),
+            (409, "REFUND_NOT_ALLOWED"),
+            "{amount}: {}",
+            r.body
+        );
+    }
+    let stale = h.refund_call(&branch, &a, json!({ "rev": rev - 1 })).await;
+    assert_eq!(
+        (stale.status, stale.code()),
+        (409, "STALE"),
+        "{}",
+        stale.body
+    );
+    assert_eq!(h.count("SELECT COUNT(*) FROM refund_requests"), 0);
+
+    let r = h
+        .refund_call(&branch, &a, json!({ "rev": rev, "amount_minor": total }))
+        .await;
+    assert_eq!(r.status, 204, "{}", r.body);
+}
+
+#[tokio::test]
+async fn a_request_writes_the_row_and_changes_nothing_else() {
+    let (h, a, branch, id, token) = Harness::refund_requested().await;
+    let total = h.paid_total(&branch).await;
+    let req = h.refund_of(&branch).await;
+    assert_eq!(
+        (
+            req.subscription_id.as_str(),
+            req.payment_id.as_str(),
+            req.amount_minor,
+            req.currency.as_str(),
+            req.status.as_str()
+        ),
+        (id.as_str(), "pay_1", total, "INR", "requested")
+    );
+    assert_eq!(req.requested_at, h.clock.load(Ordering::SeqCst));
+    // Razorpay is not touched, the plan is still active and entitled, the licence is unchanged.
+    assert!(h.fake().refunded().is_empty());
+    assert!(h.fake().cancelled().is_empty());
+    assert_eq!(h.state_of(&branch).await, SubscriptionState::Active);
+    assert_eq!(h.licence_tier(&token).await, arena_proto::Tier::Basic);
+    // The card says it is requested, and offers no second request.
+    let plans = h.plans(&a, "").await;
+    let card = &plans.body["branches"][0];
+    assert_eq!(card["refund"]["status"], "requested", "{}", plans.body);
+    assert_eq!(card["refund"]["amount_minor"].as_i64(), Some(total));
+    assert!(card["refund_offer"].is_null());
+
+    // A second request is refused, and so is any change of the plan meanwhile.
+    h.stepped_up();
+    let rev = h.only(&branch).await.rev;
+    let again = h.refund_call(&branch, &a, json!({ "rev": rev })).await;
+    assert_eq!(
+        (again.status, again.code()),
+        (409, "REFUND_NOT_ALLOWED"),
+        "{}",
+        again.body
+    );
+    let cancel = h.cancel_call(&branch, &a, "", rev).await;
+    assert_ne!(cancel.status, 204, "{}", cancel.body);
+    assert!(h.fake().cancelled_at_cycle_end().is_empty());
+    assert_eq!(h.count("SELECT COUNT(*) FROM refund_requests"), 1);
+}
+
+#[tokio::test]
+async fn a_request_after_seven_days_is_refused_and_the_cancel_flow_remains() {
+    let (h, a, branch, _id, _token) = Harness::paid_with_hub().await;
+    let sub = h.only(&branch).await;
+    let paid_at = sub.first_paid_at.unwrap();
+    let late = arena_cloud::refund::request(&h.db, &sub, sub.rev, None, paid_at + 7 * DAY_MS).await;
+    assert!(
+        matches!(late, Err(arena_cloud::refund::RefundError::NotAllowed(_))),
+        "{late:?}"
+    );
+    assert_eq!(h.count("SELECT COUNT(*) FROM refund_requests"), 0);
+    // The Story 10.14 cancel still works for this plan.
+    h.stepped_up();
+    let r = h.cancel_call(&branch, &a, "", sub.rev).await;
+    assert_eq!(r.status, 204, "{}", r.body);
+}
+
+#[tokio::test]
+async fn approving_refunds_every_payment_cancels_at_once_and_audits() {
+    let (h, _a, branch, id, token) = Harness::refund_requested().await;
+    let total = h.paid_total(&branch).await;
+    let req = h.refund_of(&branch).await;
+    let done = h.approve(&req.id).await.unwrap();
+    assert_eq!(done.request.status, "issued");
+    assert_eq!(done.refunds.len(), 1);
+    assert_eq!(h.fake().refunded(), [("pay_1".to_owned(), total)]);
+    assert_eq!(h.fake().cancelled(), ["sub_fake_001"]);
+    let req = h.refund_of(&branch).await;
+    assert_eq!(
+        (
+            req.status.as_str(),
+            req.decided_by.as_deref(),
+            req.decided_reason.as_deref()
+        ),
+        ("issued", Some("asha"), Some("customer asked within 7 days"))
+    );
+    let audit = h.count(&format!(
+        "SELECT COUNT(*) FROM ops_audit WHERE action = 'refund.approve' AND target = '{id}' \
+         AND operator = 'asha' AND reason = 'customer asked within 7 days' \
+         AND details_json LIKE '%\"amount_minor\":{total}%'"
+    ));
+    assert_eq!(audit, 1);
+    // Until Razorpay confirms, the plan and the licence are as they were.
+    assert_eq!(h.state_of(&branch).await, SubscriptionState::Active);
+    assert_eq!(h.licence_tier(&token).await, arena_proto::Tier::Basic);
+    // It cannot be decided twice.
+    assert!(matches!(
+        h.approve(&req.id).await,
+        Err(DecideError::NotRequested { .. })
+    ));
+    assert_eq!(h.fake().refunded().len(), 1);
+}
+
+#[tokio::test]
+async fn a_razorpay_error_leaves_the_request_waiting_and_a_retry_refunds_once() {
+    let (h, _a, branch, _id, _token) = Harness::refund_requested().await;
+    let req = h.refund_of(&branch).await;
+    h.fake().fail_refunds(true);
+    let err = h.approve(&req.id).await.unwrap_err();
+    assert_eq!(err, DecideError::Provider("FAKE_REFUND_FAILED".to_owned()));
+    let waiting = h.refund_of(&branch).await;
+    assert_eq!(waiting.status, "requested");
+    assert_eq!(waiting.last_error.as_deref(), Some("FAKE_REFUND_FAILED"));
+    assert!(h.fake().refunded().is_empty());
+    assert!(h.fake().cancelled().is_empty());
+    assert_eq!(
+        h.count("SELECT COUNT(*) FROM ops_audit WHERE action = 'refund.approve'"),
+        0
+    );
+
+    // The refund goes through but the cancel fails: the retry skips the refund already made.
+    h.fake().fail_refunds(false);
+    h.fake().fail_subscriptions(true);
+    let err = h.approve(&req.id).await.unwrap_err();
+    assert_eq!(
+        err,
+        DecideError::Provider("FAKE_SUBSCRIPTION_FAILED".to_owned())
+    );
+    assert_eq!(h.fake().refunded().len(), 1);
+    assert_eq!(h.refund_of(&branch).await.status, "requested");
+
+    h.fake().fail_subscriptions(false);
+    let done = h.approve(&req.id).await.unwrap();
+    assert_eq!(done.request.status, "issued");
+    assert_eq!(done.request.last_error, None);
+    assert_eq!(h.fake().refunded().len(), 1, "never refunded twice");
+    assert_eq!(h.fake().cancelled(), ["sub_fake_001"]);
+}
+
+#[tokio::test]
+async fn refund_processed_refunds_the_plan_issues_a_credit_note_and_drops_the_branch_to_free() {
+    let (h, a, branch, id, token) = Harness::refund_requested().await;
+    let total = h.paid_total(&branch).await;
+    let req = h.refund_of(&branch).await;
+    h.approve(&req.id).await.unwrap();
+
+    let r = h.refund_processed("evt_refund", "pay_1", total).await;
+    assert_eq!(r.body["status"], "refunded", "{}", r.body);
+    let s = h.only(&branch).await;
+    assert_eq!(s.state, SubscriptionState::Refunded);
+    let e = h.db.entitlement(&branch).await.unwrap().unwrap();
+    assert_eq!(
+        (e.tier, e.source),
+        (
+            arena_proto::Tier::Free,
+            arena_proto::EntitlementSource::Free
+        )
+    );
+    assert_eq!(h.licence_tier(&token).await, arena_proto::Tier::Free);
+    assert_eq!(h.refund_of(&branch).await.status, "processed");
+    let history = h.db.subscription_history(&id).await.unwrap();
+    assert_eq!(history.last().unwrap().new_state, "refunded");
+
+    // One credit note reverses the invoice, under its own sequence.
+    let fy = arena_cloud::invoice::fy_of(h.clock.load(Ordering::SeqCst));
+    let all = h.invoices().await;
+    let note = all.iter().find(|i| i.kind == "credit_note").unwrap();
+    assert_eq!(note.number, format!("A360/{fy}/CN000001"));
+    let original = all.iter().find(|i| i.kind == "invoice").unwrap();
+    assert_eq!(
+        note.original_number.as_deref(),
+        Some(original.number.as_str())
+    );
+    assert_eq!(
+        (
+            note.subtotal_minor,
+            note.cgst_minor,
+            note.sgst_minor,
+            note.total_minor
+        ),
+        (
+            original.subtotal_minor,
+            original.cgst_minor,
+            original.sgst_minor,
+            original.total_minor
+        )
+    );
+    assert_eq!(
+        h.count("SELECT COUNT(*) FROM billing_invoices WHERE kind = 'credit_note'"),
+        1
+    );
+    let pdf = arena_cloud::invoice::pdf_of(note);
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(
+        text.contains("CREDIT NOTE") && text.contains(&note.number),
+        "{text}"
+    );
+    let list = h.invoice_list(&a, "").await;
+    let rows = list.body["invoices"].as_array().unwrap();
+    assert_eq!(
+        rows.iter().find(|i| i["kind"] == "credit_note").unwrap()["total_minor"].as_i64(),
+        Some(-total)
+    );
+
+    // The owner is told once, and the card reads processed.
+    for _ in 0..100 {
+        if h.alerts_of("refund_processed") == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(h.alerts_of("refund_processed"), 1);
+    let plans = h.plans(&a, "").await;
+    let card = &plans.body["branches"][0];
+    assert_eq!(card["state"], "free", "{}", plans.body);
+    assert_eq!(card["refund"]["status"], "processed", "{}", plans.body);
+
+    // A repeat of the event, and another event for the same payment, change nothing.
+    let again = h.refund_processed("evt_refund", "pay_1", total).await;
+    assert_eq!(again.body["status"], "duplicate");
+    let other = h.refund_processed("evt_refund_2", "pay_1", total).await;
+    assert_eq!(other.body["status"], "recorded", "{}", other.body);
+    assert_eq!(
+        h.count("SELECT COUNT(*) FROM billing_invoices WHERE kind = 'credit_note'"),
+        1
+    );
+    assert_eq!(h.alerts_of("refund_processed"), 1);
+}
+
+#[tokio::test]
+async fn a_refund_of_a_payment_nobody_requested_is_only_recorded() {
+    let (h, _a, branch, _id, _token) = Harness::paid_with_hub().await;
+    let r = h.refund_processed("evt_stray", "pay_other", 100).await;
+    assert_eq!(r.body["status"], "unmatched", "{}", r.body);
+    assert_eq!(h.state_of(&branch).await, SubscriptionState::Active);
+    assert_eq!(
+        h.count("SELECT COUNT(*) FROM billing_invoices WHERE kind = 'credit_note'"),
+        0
+    );
+    assert_eq!(
+        h.count("SELECT COUNT(*) FROM billing_events WHERE type = 'refund.processed'"),
+        1
+    );
+}
+
+#[tokio::test]
+async fn every_payment_is_refunded_and_the_plan_ends_with_the_last_refund() {
+    let (h, a, branch, _id, _token) = Harness::paid_with_hub().await;
+    // A second charge inside the window, paid separately.
+    let mut second = card("4242");
+    second["id"] = json!("pay_2");
+    let r = h
+        .send(
+            "evt_second",
+            &paid_event("sub_fake_001", PERIOD_END + 30 * 86_400, second),
+        )
+        .await;
+    assert_eq!(r.body["status"], "applied", "{}", r.body);
+    let total = h.paid_total(&branch).await;
+    h.stepped_up();
+    let rev = h.only(&branch).await.rev;
+    let r = h.refund_call(&branch, &a, json!({ "rev": rev })).await;
+    assert_eq!(r.status, 204, "{}", r.body);
+    let req = h.refund_of(&branch).await;
+    assert_eq!(req.amount_minor, total);
+
+    let done = h.approve(&req.id).await.unwrap();
+    assert_eq!(done.refunds.len(), 2);
+    let refunded = h.fake().refunded();
+    assert_eq!(
+        refunded.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(),
+        ["pay_1", "pay_2"]
+    );
+    assert_eq!(refunded.iter().map(|(_, a)| a).sum::<i64>(), total);
+
+    // The first refund processed: one credit note, the plan is still there.
+    let r = h.refund_processed("evt_r1", "pay_1", refunded[0].1).await;
+    assert_eq!(r.body["status"], "refunded", "{}", r.body);
+    assert_eq!(h.state_of(&branch).await, SubscriptionState::Active);
+    assert_eq!(h.refund_of(&branch).await.status, "issued");
+    assert_eq!(
+        h.count("SELECT COUNT(*) FROM billing_invoices WHERE kind = 'credit_note'"),
+        1
+    );
+
+    // The last one ends it, with the second credit note.
+    let r = h.refund_processed("evt_r2", "pay_2", refunded[1].1).await;
+    assert_eq!(r.body["status"], "refunded", "{}", r.body);
+    assert_eq!(h.state_of(&branch).await, SubscriptionState::Refunded);
+    assert_eq!(h.refund_of(&branch).await.status, "processed");
+    let fy = arena_cloud::invoice::fy_of(h.clock.load(Ordering::SeqCst));
+    let mut numbers: Vec<String> = h
+        .invoices()
+        .await
+        .into_iter()
+        .filter(|i| i.kind == "credit_note")
+        .map(|i| i.number)
+        .collect();
+    numbers.sort();
+    assert_eq!(
+        numbers,
+        [format!("A360/{fy}/CN000001"), format!("A360/{fy}/CN000002")]
+    );
+}
+
+#[tokio::test]
+async fn rejecting_keeps_the_plan_active_and_the_owner_reads_the_reason() {
+    let (h, a, branch, id, _token) = Harness::refund_requested().await;
+    let req = h.refund_of(&branch).await;
+    let rejected = arena_cloud::refund::reject(
+        &h.db,
+        &req.id,
+        "asha",
+        "Payment was a renewal, not a first payment",
+        h.clock.load(Ordering::SeqCst),
+    )
+    .await
+    .unwrap();
+    assert_eq!(rejected.status, "rejected");
+    assert!(h.fake().refunded().is_empty());
+    assert_eq!(h.state_of(&branch).await, SubscriptionState::Active);
+    let audit = h.count(&format!(
+        "SELECT COUNT(*) FROM ops_audit WHERE action = 'refund.reject' AND target = '{id}' \
+         AND operator = 'asha'"
+    ));
+    assert_eq!(audit, 1);
+    let plans = h.plans(&a, "").await;
+    let card = &plans.body["branches"][0];
+    assert_eq!(card["state"], "active", "{}", plans.body);
+    assert_eq!(card["refund"]["status"], "rejected");
+    assert_eq!(
+        card["refund"]["reason"],
+        "Payment was a renewal, not a first payment"
+    );
+    assert!(card["refund_offer"].is_null());
+    // A decided request cannot be decided again, and the owner cannot ask twice.
+    assert!(matches!(
+        h.approve(&req.id).await,
+        Err(DecideError::NotRequested { .. })
+    ));
+    h.stepped_up();
+    let rev = h.only(&branch).await.rev;
+    let again = h.refund_call(&branch, &a, json!({ "rev": rev })).await;
+    assert_eq!(
+        (again.status, again.code()),
+        (409, "REFUND_NOT_ALLOWED"),
+        "{}",
+        again.body
+    );
+    // With the request decided, the plan can change again.
+    let cancel = h.cancel_call(&branch, &a, "", rev).await;
+    assert_eq!(cancel.status, 204, "{}", cancel.body);
+}
+
+fn ops_refund(
+    h: &Harness,
+    request: &str,
+    approve: bool,
+    reason: &str,
+) -> arena_cloud::config::RefundConfig {
+    arena_cloud::config::RefundConfig {
+        request_id: request.to_owned(),
+        approve,
+        operator: Some("asha".to_owned()),
+        reason: reason.to_owned(),
+        dev_data_dir: Some(h._dir.path().to_path_buf()),
+    }
+}
+
+#[tokio::test]
+async fn the_ops_command_approves_and_rejects_and_names_the_failures() {
+    let (h, _a, branch, _id, _token) = Harness::refund_requested().await;
+    let req = h.refund_of(&branch).await;
+    let env = |_: &str| None;
+
+    let unknown = arena_cloud::ops::refund(&ops_refund(&h, "nope", true, "r"), env, T0).await;
+    assert!(
+        unknown
+            .unwrap_err()
+            .to_string()
+            .starts_with("UNKNOWN_REFUND"),
+    );
+    let lines = arena_cloud::ops::refund(&ops_refund(&h, &req.id, true, "within 7 days"), env, T0)
+        .await
+        .unwrap();
+    assert!(lines[0].contains("is issued"), "{lines:?}");
+    assert_eq!(h.refund_of(&branch).await.status, "issued");
+    let again = arena_cloud::ops::refund(&ops_refund(&h, &req.id, false, "late"), env, T0).await;
+    assert!(again.unwrap_err().to_string().starts_with("NOT_REQUESTED"));
+}
+
+#[tokio::test]
+async fn the_ops_command_rejects_with_the_reason_in_the_audit() {
+    let (h, _a, branch, id, _token) = Harness::refund_requested().await;
+    let req = h.refund_of(&branch).await;
+    let lines = arena_cloud::ops::refund(
+        &ops_refund(&h, &req.id, false, "Not a first payment"),
+        |_: &str| None,
+        T0,
+    )
+    .await
+    .unwrap();
+    assert!(lines[0].contains("is rejected"), "{lines:?}");
+    assert_eq!(
+        h.count(&format!(
+            "SELECT COUNT(*) FROM ops_audit WHERE action = 'refund.reject' AND target = '{id}' \
+             AND reason = 'Not a first payment'"
+        )),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_credit_note_gets_a_pdf_but_no_invoice_ready_alert() {
+    let (h, _a, branch, _id, _token) = Harness::refund_requested().await;
+    let total = h.paid_total(&branch).await;
+    let req = h.refund_of(&branch).await;
+    h.approve(&req.id).await.unwrap();
+    let store = MemoryStore::new();
+    let out = render_once(&h.st, &store).await.unwrap();
+    assert_eq!((out.rendered, out.notified, out.failed), (1, 1, 0));
+    h.refund_processed("evt_refund", "pay_1", total).await;
+    let out = render_once(&h.st, &store).await.unwrap();
+    // The credit note is rendered, and marked told without an "Invoice ready" alert.
+    assert_eq!((out.rendered, out.notified, out.failed), (1, 0, 0));
+    assert_eq!(h.alerts(), 1);
+    let fy = arena_cloud::invoice::fy_of(T0);
+    let key = format!("billing/invoices/{fy}/A360-{fy}-CN000001.pdf");
+    assert!(store.keys().contains(&key), "{:?}", store.keys());
+    let note =
+        h.db.invoice(&format!("A360/{fy}/CN000001"))
+            .await
+            .unwrap()
+            .unwrap();
+    assert!(note.pdf_key.is_some() && note.notified_at.is_some());
+    // A second run finds nothing left to do.
+    let out = render_once(&h.st, &store).await.unwrap();
+    assert_eq!((out.rendered, out.notified, out.failed), (0, 0, 0));
 }

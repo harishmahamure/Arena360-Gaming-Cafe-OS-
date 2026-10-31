@@ -335,6 +335,8 @@ fn finish(
         seller_address: input.seller.address.clone(),
         seller_gstin: input.seller.gstin.clone(),
         note,
+        payment_id: None,
+        credit_for: None,
     }
 }
 
@@ -470,15 +472,32 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
 fn layout(inv: &Invoice) -> Vec<String> {
     let lines: Vec<Line> = serde_json::from_str(&inv.lines_json).unwrap_or_default();
     let export = inv.band != Band::In.as_str();
+    let credit = inv.kind == "credit_note";
     let mut out = vec![
-        if export { "INVOICE" } else { "TAX INVOICE" }.to_owned(),
+        match (credit, export) {
+            (true, _) => "CREDIT NOTE",
+            (false, true) => "INVOICE",
+            (false, false) => "TAX INVOICE",
+        }
+        .to_owned(),
         "-".repeat(WIDTH),
         inv.seller_name.clone(),
     ];
     out.extend(wrap(&inv.seller_address, WIDTH));
     out.push(format!("GSTIN: {}", inv.seller_gstin));
     out.push(String::new());
-    out.push(format!("Invoice no : {}", inv.number));
+    out.push(format!(
+        "{} : {}",
+        if credit {
+            "Credit note no"
+        } else {
+            "Invoice no"
+        },
+        inv.number
+    ));
+    if let Some(original) = &inv.original_number {
+        out.push(format!("Against inv: {original}"));
+    }
     out.push(format!("Date       : {}", day(inv.issued_at)));
     out.push(format!(
         "Period     : {} to {}",
@@ -537,7 +556,14 @@ fn layout(inv: &Invoice) -> Vec<String> {
         out.extend(wrap(note, WIDTH));
     }
     out.push(String::new());
-    out.push("This is a computer generated invoice.".to_owned());
+    out.push(
+        if credit {
+            "This is a computer generated credit note."
+        } else {
+            "This is a computer generated invoice."
+        }
+        .to_owned(),
+    );
     out
 }
 
@@ -663,6 +689,14 @@ pub async fn render_once<S: ObjectStore>(
             pdf_key_now = Some(key);
         }
         if inv.notified_at.is_some() || pdf_key_now.is_none() {
+            continue;
+        }
+        // A credit note is announced by the "Refund processed" alert, not by "Invoice ready".
+        if inv.kind == "credit_note" {
+            st.db
+                .mark_invoice_notified(&inv.id, now)
+                .await
+                .map_err(failed)?;
             continue;
         }
         let Some(branch) = st.db.branch(&inv.branch_id).await.map_err(failed)? else {
@@ -1082,6 +1116,7 @@ mod tests {
             pdf_at: None,
             notified_at: None,
             original_number: None,
+            payment_id: None,
         }
     }
 

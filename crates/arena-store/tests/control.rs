@@ -59,6 +59,8 @@ const ALL_TABLES: &[&str] = &[
     "price_books",
     "push_subscriptions",
     "rate_limits",
+    "refund_payments",
+    "refund_requests",
     "schema_migrations",
     "send_ledger",
     "signin_challenges",

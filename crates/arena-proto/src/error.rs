@@ -226,6 +226,9 @@ pub enum ErrorCode {
     BandNotAvailable,
     /// The branch already has a subscription that is not over (Story 10.2).
     SubscriptionExists,
+    /// A refund request after the 7-day window, a second one, or for a part of the amount
+    /// (Story 10.15).
+    RefundNotAllowed,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -358,6 +361,7 @@ impl ErrorCode {
             Self::PriceBookImmutable => "PRICE_BOOK_IMMUTABLE",
             Self::BandNotAvailable => "BAND_NOT_AVAILABLE",
             Self::SubscriptionExists => "SUBSCRIPTION_EXISTS",
+            Self::RefundNotAllowed => "REFUND_NOT_ALLOWED",
         }
     }
 }
@@ -551,6 +555,7 @@ mod tests {
             (ErrorCode::PriceBookImmutable, "PRICE_BOOK_IMMUTABLE"),
             (ErrorCode::BandNotAvailable, "BAND_NOT_AVAILABLE"),
             (ErrorCode::SubscriptionExists, "SUBSCRIPTION_EXISTS"),
+            (ErrorCode::RefundNotAllowed, "REFUND_NOT_ALLOWED"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

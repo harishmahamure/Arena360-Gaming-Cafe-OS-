@@ -9,9 +9,10 @@ use std::sync::Arc;
 use arena_proto::{
     AppError, CancelPlan, ChangeConfirmed, ChangeMethod, ChangePlan, CreateSubscription,
     CycleSwitchPreview, ErrorCode, HubPlatform, PlanChangePreview, QuoteSubscription,
-    SubscriptionCheckout, SubscriptionQuote, SubscriptionState, SubscriptionStatus, SwitchCycle,
+    RequestRefund, SubscriptionCheckout, SubscriptionQuote, SubscriptionState, SubscriptionStatus,
+    SwitchCycle,
 };
-use arena_store::control::Subscription;
+use arena_store::control::{REFUND_ISSUED, REFUND_REQUESTED, Subscription};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
@@ -24,6 +25,7 @@ use crate::auth::AuthState;
 use crate::cancel;
 use crate::cycle_change;
 use crate::plan_change::{self, ChangeError};
+use crate::refund::{self, RefundError};
 use crate::subscription::{self, SubscriptionError};
 
 fn billing_disabled() -> ApiError {
@@ -128,8 +130,30 @@ fn change_error(e: ChangeError) -> ApiError {
     }
 }
 
-/// The branch's subscription and the platform of its main Hub, for a change of plan.
+/// The branch's subscription and the platform of its main Hub, for a change of plan. Nothing
+/// changes while a refund is on its way: the plan is about to end.
 async fn changing(
+    st: &AuthState,
+    owned: &OwnedBranch,
+) -> Result<(Subscription, Option<HubPlatform>), ApiError> {
+    let (sub, platform) = loaded(st, owned).await?;
+    let refunding = st
+        .db
+        .refund_request_of(&sub.id)
+        .await
+        .map_err(ApiError::internal)?
+        .is_some_and(|r| matches!(r.status.as_str(), REFUND_REQUESTED | REFUND_ISSUED));
+    if refunding {
+        return Err(ApiError::validation(
+            "tier",
+            "A refund is being processed for this plan.",
+        ));
+    }
+    Ok((sub, platform))
+}
+
+/// The branch's subscription and the platform of its main Hub.
+async fn loaded(
     st: &AuthState,
     owned: &OwnedBranch,
 ) -> Result<(Subscription, Option<HubPlatform>), ApiError> {
@@ -282,6 +306,30 @@ async fn keep_plan(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// `POST /v1/branches/{id}/subscription/refund` (Story 10.15): "Cancel and get a full refund"
+/// inside 7 days of the first payment. Needs a fresh step-up; writes the request an operator
+/// approves and answers 204. After 7 days, a second request or a part of the amount it is
+/// `REFUND_NOT_ALLOWED`.
+async fn refund_plan(
+    State(st): State<Arc<AuthState>>,
+    owned: OwnedBranch,
+    ApiJson(body): ApiJson<RequestRefund>,
+) -> Result<StatusCode, ApiError> {
+    let (sub, _) = loaded(&st, &owned).await?;
+    let now = st.now();
+    require_stepup(&owned, now)?;
+    refund::request(&st.db, &sub, body.rev, body.amount_minor, now)
+        .await
+        .map_err(|e| match e {
+            RefundError::NotAllowed(reason) => {
+                AppError::new(ErrorCode::RefundNotAllowed, reason).into()
+            }
+            RefundError::Stale => change_error(ChangeError::Stale),
+            RefundError::Db(d) => ApiError::internal(d),
+        })?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct KeepPlan {
     rev: i64,
@@ -331,5 +379,6 @@ pub(super) fn router(st: Arc<AuthState>) -> Router {
             "/branches/{id}/subscription/cancel/withdraw",
             post(keep_plan),
         )
+        .route("/branches/{id}/subscription/refund", post(refund_plan))
         .with_state(st)
 }

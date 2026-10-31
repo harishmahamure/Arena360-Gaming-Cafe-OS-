@@ -38,6 +38,7 @@ mod pairing;
 mod plan_change;
 mod price_book;
 mod rate_limit;
+mod refund;
 mod retention;
 mod send_ledger;
 mod session;
@@ -91,6 +92,11 @@ pub use price_book::{
     PriceBookStatus, PublishOutcome, SetAmountOutcome,
 };
 pub use rate_limit::{RateReservation, RateRule, RateWindow};
+pub use refund::{
+    Decision as RefundDecision, ISSUED as REFUND_ISSUED, NewRefundRequest,
+    PROCESSED as REFUND_PROCESSED, ProcessedRefund, REJECTED as REFUND_REJECTED,
+    REQUESTED as REFUND_REQUESTED, RefundPayment, RefundRequest, RequestOutcome,
+};
 pub use retention::{RetentionBranch, RetentionState};
 pub use send_ledger::{LedgerRow, MessageTemplate, NewLedgerRow, NewTemplate, Settlement};
 pub use session::{
@@ -293,6 +299,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 42,
         sql: include_str!("../control-migrations/0042_subscription_cancel.sql"),
+    },
+    ControlMigration {
+        version: 43,
+        sql: include_str!("../control-migrations/0043_subscription_refund.sql"),
     },
 ];
 

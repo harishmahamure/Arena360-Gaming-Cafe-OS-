@@ -151,7 +151,7 @@ fn opt_int(v: Option<i64>) -> SqlValue {
 
 /// The statements that apply `c`: the subscription row, the entitlement it issues, its history row
 /// and the operator task and audit row it leaves.
-fn change_stmts(c: &SubscriptionChange<'_>, now: i64) -> Vec<Stmt> {
+pub(super) fn change_stmts(c: &SubscriptionChange<'_>, now: i64) -> Vec<Stmt> {
     let mut stmts = Vec::new();
     stmts.push(
         Stmt::new(
@@ -299,6 +299,25 @@ fn change_stmts(c: &SubscriptionChange<'_>, now: i64) -> Vec<Stmt> {
         ));
     }
     stmts
+}
+
+/// The statement that records `event`; `applied` stamps `applied_at` with `now`.
+pub(super) fn event_stmt(event: &EventRecord<'_>, applied: bool, now: i64) -> Stmt {
+    Stmt::new(
+        "INSERT INTO billing_events (id, razorpay_event_id, type, subscription_id, \
+         payload_hash, source, received_at, applied_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        vec![
+            text(event.id),
+            text(event.razorpay_event_id),
+            text(event.kind),
+            opt_text(event.subscription_id),
+            text(event.payload_hash),
+            text(event.source),
+            SqlValue::Integer(event.received_at),
+            opt_int(applied.then_some(now)),
+        ],
+    )
+    .expect(1)
 }
 
 impl ControlDb {
@@ -452,23 +471,7 @@ impl ControlDb {
         invoice: Option<&NewInvoice>,
         now: i64,
     ) -> Result<EventOutcome, ControlError> {
-        let mut stmts = vec![
-            Stmt::new(
-                "INSERT INTO billing_events (id, razorpay_event_id, type, subscription_id, \
-                 payload_hash, source, received_at, applied_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                vec![
-                    text(event.id),
-                    text(event.razorpay_event_id),
-                    text(event.kind),
-                    opt_text(event.subscription_id),
-                    text(event.payload_hash),
-                    text(event.source),
-                    SqlValue::Integer(event.received_at),
-                    opt_int(change.map(|_| now)),
-                ],
-            )
-            .expect(1),
-        ];
+        let mut stmts = vec![event_stmt(event, change.is_some(), now)];
         if let Some(c) = change {
             stmts.extend(change_stmts(c, now));
             if let Some(inv) = invoice {

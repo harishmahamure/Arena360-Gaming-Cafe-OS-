@@ -85,7 +85,8 @@ pub async fn raise(st: &AuthState, r: Raise<'_>) -> Result<Raised, ApiError> {
         .await
         .map_err(ApiError::internal)?
         .map_or(Tier::Free, |e| e.tier_at(now));
-    if tier == Tier::Free {
+    // A refund leaves the branch on Free, and the owner is told all the same.
+    if tier == Tier::Free && r.kind != OwnerAlertKind::RefundProcessed {
         return Err(AppError::new(
             ErrorCode::FeatureNotEntitled,
             "Owner alerts need a paid plan.",

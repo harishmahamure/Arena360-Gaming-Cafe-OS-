@@ -75,6 +75,8 @@ fn free(branch: &Branch, tier: Tier, platform: Option<HubPlatform>) -> BranchPla
         hub_platform: platform,
         pending_change: None,
         grace_until: None,
+        refund_offer: None,
+        refund: None,
     }
 }
 
@@ -86,10 +88,31 @@ pub async fn plan_of(
     tier: Tier,
     platform: Option<HubPlatform>,
     subs: &[Subscription],
+    now: i64,
 ) -> Result<BranchPlan, PlanError> {
+    let db_err = |e: arena_store::control::ControlError| PlanError::Db(e.to_string());
     let Some(sub) = current(subs) else {
-        return Ok(free(branch, tier, platform));
+        // A refunded plan leaves the branch on Free; the card still says the refund went through
+        // until the branch subscribes again.
+        let mut plan = free(branch, tier, platform);
+        if let Some(refunded) = subs
+            .first()
+            .filter(|s| s.state == SubscriptionState::Refunded)
+        {
+            plan.refund = db
+                .refund_request_of(&refunded.id)
+                .await
+                .map_err(db_err)?
+                .map(|r| crate::refund::view_of(&r));
+        }
+        return Ok(plan);
     };
+    let refund_offer = crate::refund::offer(db, sub, now).await.map_err(db_err)?;
+    let refund = db
+        .refund_request_of(&sub.id)
+        .await
+        .map_err(db_err)?
+        .map(|r| crate::refund::view_of(&r));
     let pending_change = db
         .open_plan_change(&sub.id)
         .await
@@ -143,6 +166,8 @@ pub async fn plan_of(
         hub_platform: platform,
         pending_change,
         grace_until: sub.grace_until.filter(|_| state == PlanState::Grace),
+        refund_offer,
+        refund,
     })
 }
 

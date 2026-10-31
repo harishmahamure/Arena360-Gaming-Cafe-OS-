@@ -2260,6 +2260,38 @@ built by `upgradeUrl` in `@arena/ui`; each app says where the picker lives with 
 - **Owner app.** Account -> Subscription: "Cancel plan" opens a panel with the policy text and what changes on Free, then asks
   for the code; a cancelled card shows "Cancels on <date>" and "Keep my plan".
 
+## Full refund within 7 days of the first payment (Story 10.15)
+
+- **The offer.** `BranchPlan.refund_offer` is present while the subscription is `active`, `now < first_paid_at + 7 days` (cloud
+  time), no refund was ever requested for it, no plan change is waiting and every invoice names its Razorpay payment
+  (`billing_invoices.payment_id`, set from the charge event). `amount_minor` is every invoice of the subscription, GST
+  included. After the window the cancel panel shows only the Story 10.14 flow.
+- **Request.** `POST /v1/branches/{id}/subscription/refund {rev, amount_minor?}` needs a fresh step-up (`MFA_REQUIRED`) and
+  writes one `refund_requests` row (`requested`; unique per subscription, so a second request is refused). It changes nothing
+  else: the plan stays `active`, Razorpay is not called, the licence is unchanged. `REFUND_NOT_ALLOWED` (409) for a request
+  after the window, a second request, a pending plan change, or any `amount_minor` other than the whole amount; a stale `rev`
+  is `STALE`. While a request is `requested` or `issued` every other subscription change is refused.
+- **Approve / reject** (the service Epic 11's admin app will call):
+  `arena-cloud ops refund approve --request <id> --reason <text> [--operator <name>] [--dev]` refunds each payment in full
+  through the Razorpay adapter (`POST /payments/{id}/refund`, one `refund_payments` row per payment as it is refunded, so a
+  retry skips what was done and never refunds twice), cancels the Razorpay subscription at once and moves the request to
+  `issued`, with an `ops_audit` row (`refund.approve`: operator, reason, amounts, refund ids). A Razorpay error leaves the
+  request `requested` with `last_error` and the error on the operator's terminal. `ops refund reject --request <id> --reason
+<text>` moves it to `rejected` (`refund.reject`); the owner reads the reason on the card and the plan stays `active`.
+  `billing.provider = manual` refuses to approve (`MANUAL_PROVIDER`): refund in Razorpay's dashboard.
+- **`refund.processed`.** The webhook finds the request by the payment id, marks that `refund_payments` row processed and issues
+  a credit note `A360/<FY>/CN<seq:06>` (own gap-free sequence per FY) that copies the invoice's lines and amounts and names it in
+  `original_number`; the owner's invoice list shows it negative and the jobs task renders its PDF ("CREDIT NOTE") without an
+  "Invoice ready" alert. When the last payment's refund is processed the same transaction makes the subscription `refunded`,
+  the entitlement `free` (the next heartbeat delivers a Free licence, handled as in Stories 10.12 and 10.13) and the request
+  `processed`; the owner gets one `refund_processed` alert, "Refund of <amount> processed" (raised although the branch is now
+  Free). An event for a payment no request refunded is only recorded.
+- **Net of refunds.** The refund stays on the subscription (`refund_requests`, `refund_payments`, the credit notes), which is
+  what the partner commission of Epic 11 reads.
+- **Owner app.** The cancel panel offers "Cancel and get a full refund of <amount>" beside "Cancel plan"; the card shows
+  "Refund requested — usually processed within 2 working days", then the issued, processed and rejected sentences.
+- Not done here: operators who cannot find a payment id on an invoice (older rows) refund by hand in the dashboard.
+
 ## Renewals that need approval, grace and lapse (Story 10.11)
 
 - **States** (AD-20): `active -> renewal_needs_approval -> grace -> lapsed`, every move in `subscription_history`. The

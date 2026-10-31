@@ -82,7 +82,10 @@ pub async fn reconcile(
                     webhook::alert_ops(&subscription_id).await;
                 }
             }
-            Handled::Recorded | Handled::Unmatched | Handled::Duplicate => {}
+            Handled::Recorded
+            | Handled::Unmatched
+            | Handled::Duplicate
+            | Handled::Refunded { .. } => {}
         }
     }
     tracing::info!(

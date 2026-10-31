@@ -35,6 +35,7 @@ pub enum OpsError {
         tier: Tier,
     },
     Book(BookError),
+    Refund(crate::refund::DecideError),
     UnknownSubscription(String),
     NotInReview {
         subscription_id: String,
@@ -54,6 +55,7 @@ impl std::fmt::Display for OpsError {
                 tier.as_str()
             ),
             Self::Book(e) => e.fmt(f),
+            Self::Refund(e) => e.fmt(f),
             Self::UnknownSubscription(id) => {
                 write!(
                     f,
@@ -393,4 +395,85 @@ pub async fn subscription_review(
         ),
         format!("ops_audit written for {} by {operator}", sub.id),
     ])
+}
+
+/// `refund approve|reject …` (Story 10.15): the lines to print. Approving refunds every payment of
+/// the subscription at Razorpay and cancels it; a provider error leaves the request waiting.
+pub async fn refund(
+    cfg: &crate::config::RefundConfig,
+    env: impl Fn(&str) -> Option<OsString>,
+    now_ms: i64,
+) -> Result<Vec<String>, OpsError> {
+    let database = match &cfg.dev_data_dir {
+        Some(dir) => Database::Local {
+            data_dir: dir.clone(),
+        },
+        None => crate::config::remote_database(&env).map_err(OpsError::Config)?,
+    };
+    let operator = cfg
+        .operator
+        .clone()
+        .or_else(|| {
+            ["ARENA_OPS_OPERATOR", "USER", "USERNAME"]
+                .into_iter()
+                .filter_map(|k| crate::config::get_env(&env, k))
+                .find(|v| {
+                    !v.is_empty() && v.chars().count() <= 200 && !v.chars().any(char::is_control)
+                })
+        })
+        .ok_or_else(|| {
+            OpsError::Config(
+                "refund needs --operator (or ARENA_OPS_OPERATOR in the environment)".to_owned(),
+            )
+        })?;
+    // The provider is read before the database is touched, so a bad key fails the command at once.
+    let provider = if cfg.approve {
+        Some(
+            crate::billing::provider_from_env(cfg.dev_data_dir.is_some(), &env)
+                .map_err(OpsError::Config)?,
+        )
+    } else {
+        None
+    };
+    let db = open_migrated(&database, now_ms).await?;
+    if let Some(provider) = provider {
+        let done = crate::refund::approve(
+            &db,
+            &provider,
+            &cfg.request_id,
+            &operator,
+            &cfg.reason,
+            now_ms,
+        )
+        .await
+        .map_err(OpsError::Refund)?;
+        let mut lines = vec![format!(
+            "refund request {} of subscription {} is {}: {} {} refunded, subscription cancelled at once",
+            done.request.id,
+            done.request.subscription_id,
+            done.request.status,
+            done.request.currency,
+            done.request.amount_minor,
+        )];
+        for (payment, amount, refund_id) in &done.refunds {
+            lines.push(format!(
+                "payment {payment}: refunded {amount} minor units as {refund_id}"
+            ));
+        }
+        lines.push(format!(
+            "ops_audit written by {operator}; the credit note follows refund.processed"
+        ));
+        Ok(lines)
+    } else {
+        let req = crate::refund::reject(&db, &cfg.request_id, &operator, &cfg.reason, now_ms)
+            .await
+            .map_err(OpsError::Refund)?;
+        Ok(vec![
+            format!(
+                "refund request {} of subscription {} is {}; the plan stays active",
+                req.id, req.subscription_id, req.status
+            ),
+            format!("ops_audit written by {operator}; the owner reads the reason"),
+        ])
+    }
 }

@@ -1,0 +1,47 @@
+---
+import { t } from "@arena/ui";
+import DownloadList from "../components/DownloadList.svelte";
+import Layout from "../layouts/Layout.astro";
+import { fetchManifest, type Release } from "../lib/releases";
+import { RELEASES_MANIFEST_URL } from "../lib/site";
+import "../styles/downloads.css";
+
+// The list as of this build. If the manifest cannot be read now the rows say "Coming soon", and the
+// browser reads it again anyway. `PUBLIC_RELEASES_MANIFEST` points a build at another manifest (tests).
+const source = import.meta.env.PUBLIC_RELEASES_MANIFEST || RELEASES_MANIFEST_URL;
+let releases: Release[] = [];
+try {
+  releases = await fetchManifest(source, 5000);
+} catch {
+  releases = [];
+}
+const builtAt = new Date().toISOString();
+---
+
+<Layout title={t("site.downloads.title")} description={t("site.downloads.description")}>
+  <div class="downloads">
+    <header class="downloads-intro">
+      <h1>{t("site.downloads.heading")}</h1>
+      <p class="downloads-lede">{t("site.downloads.lede")}</p>
+    </header>
+
+    <section aria-labelledby="downloads-list">
+      <h2 id="downloads-list">{t("site.downloads.list")}</h2>
+      <DownloadList client:load releases={releases} builtAt={builtAt} />
+    </section>
+
+    <section class="downloads-req" id="requirements" aria-labelledby="downloads-req">
+      <h2 id="downloads-req">{t("site.downloads.req.heading")}</h2>
+      <ul>
+        <li>{t("site.downloads.req.hub")}</li>
+        <li>{t("site.downloads.req.kiosk")}</li>
+        <li>{t("site.downloads.req.android")}</li>
+        <li>{t("site.downloads.req.printer")}</li>
+        <li>{t("site.downloads.req.windows7")}</li>
+      </ul>
+      <p>
+        <a href="/help#hardware-compatibility">{t("site.downloads.req.compat")}</a>
+      </p>
+    </section>
+  </div>
+</Layout>

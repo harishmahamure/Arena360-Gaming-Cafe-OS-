@@ -52,3 +52,15 @@ export const MEDIA_ORIGIN = "https://media.arena360.cloud";
 
 /** The URL of a file under the shared `marketing/` prefix. */
 export const mediaUrl = (path: string) => `${MEDIA_ORIGIN}/marketing/${path}`; // i18n-ignore
+
+/**
+ * Where the signed installers and the release manifest are served from: the `releases/` prefix of
+ * the R2 bucket (AD-32), in front of Cloudflare. One origin for production and staging.
+ */
+export const RELEASES_ORIGIN = "https://downloads.arena360.cloud";
+
+/** The release manifest the pipeline writes next to the installers. */
+export const RELEASES_MANIFEST_URL = `${RELEASES_ORIGIN}/releases/manifest.json`; // i18n-ignore
+
+/** The Android Hub's page on Google Play (package `in.arena360.hub`, never an APK). */
+export const PLAY_URL = "https://play.google.com/store/apps/details?id=in.arena360.hub";

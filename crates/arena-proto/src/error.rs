@@ -218,6 +218,10 @@ pub enum ErrorCode {
     RestoreGap,
     /// "Promote to main" while the main Hub's lease is still fresh (Story 9.21).
     LeaseFresh,
+    /// A price book that is live or retired cannot be edited; publish a new version instead (Story 10.1).
+    PriceBookImmutable,
+    /// Paid plans are not on sale in this band yet (Story 10.1).
+    BandNotAvailable,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -346,6 +350,8 @@ impl ErrorCode {
             Self::KeyNotReleased => "KEY_NOT_RELEASED",
             Self::RestoreGap => "RESTORE_GAP",
             Self::LeaseFresh => "LEASE_FRESH",
+            Self::PriceBookImmutable => "PRICE_BOOK_IMMUTABLE",
+            Self::BandNotAvailable => "BAND_NOT_AVAILABLE",
         }
     }
 }
@@ -535,6 +541,8 @@ mod tests {
             (ErrorCode::KeyNotReleased, "KEY_NOT_RELEASED"),
             (ErrorCode::RestoreGap, "RESTORE_GAP"),
             (ErrorCode::LeaseFresh, "LEASE_FRESH"),
+            (ErrorCode::PriceBookImmutable, "PRICE_BOOK_IMMUTABLE"),
+            (ErrorCode::BandNotAvailable, "BAND_NOT_AVAILABLE"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

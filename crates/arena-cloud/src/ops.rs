@@ -4,7 +4,10 @@ use arena_proto::{Tier, TierLimits};
 use arena_store::control::{CompGrant, ControlDb, GrantOutcome};
 
 use crate::catalog::{self, ImportError, ImportSummary};
-use crate::config::{CatalogImportConfig, Database, GrantCompConfig};
+use crate::config::{
+    CatalogImportConfig, Database, GrantCompConfig, PriceBookAction, PriceBookConfig,
+};
+use crate::price_book::{self, BookError};
 use crate::templates::TemplateStore;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +30,7 @@ pub enum OpsError {
     UnknownBranch(String),
     PastDate(String),
     PaidPlan { branch_id: String, tier: Tier },
+    Book(BookError),
 }
 
 impl std::fmt::Display for OpsError {
@@ -40,6 +44,7 @@ impl std::fmt::Display for OpsError {
                 "PAID_PLAN: branch {branch_id:?} has a paid {} plan; grant-comp never replaces a paid plan",
                 tier.as_str()
             ),
+            Self::Book(e) => e.fmt(f),
             Self::PastDate(d) => write!(
                 f,
                 "PAST_DATE: --until {d} has already ended in Asia/Kolkata"
@@ -195,5 +200,107 @@ impl GrantSummary {
                 self.audit_id, self.operator
             ),
         ]
+    }
+}
+
+/// The operator an ops command is audited under: `--operator`, else the environment's user.
+fn operator_of(
+    cfg: &PriceBookConfig,
+    env: &impl Fn(&str) -> Option<OsString>,
+) -> Result<String, OpsError> {
+    let from_env = || {
+        ["ARENA_OPS_OPERATOR", "USER", "USERNAME"]
+            .into_iter()
+            .filter_map(|k| crate::config::get_env(env, k))
+            .find(|v| !v.is_empty() && v.chars().count() <= 200 && !v.chars().any(char::is_control))
+    };
+    cfg.operator.clone().or_else(from_env).ok_or_else(|| {
+        OpsError::Config(
+            "price-book needs --operator (or ARENA_OPS_OPERATOR in the environment)".to_owned(),
+        )
+    })
+}
+
+/// `price-book …` (Story 10.1): the lines to print.
+pub async fn price_book(
+    cfg: &PriceBookConfig,
+    env: impl Fn(&str) -> Option<OsString>,
+    now_ms: i64,
+) -> Result<Vec<String>, OpsError> {
+    let database = match &cfg.dev_data_dir {
+        Some(dir) => Database::Local {
+            data_dir: dir.clone(),
+        },
+        None => crate::config::remote_database(&env).map_err(OpsError::Config)?,
+    };
+    let operator = if cfg.action == PriceBookAction::List {
+        String::new()
+    } else {
+        operator_of(cfg, &env)?
+    };
+    // The provider is read before the database is touched, so a bad key fails the command at once.
+    let provider = match &cfg.action {
+        PriceBookAction::Publish { .. } => Some(
+            crate::billing::provider_from_env(cfg.dev_data_dir.is_some(), &env)
+                .map_err(OpsError::Config)?,
+        ),
+        _ => None,
+    };
+    let db = open_migrated(&database, now_ms).await?;
+    let book = OpsError::Book;
+    match &cfg.action {
+        PriceBookAction::List => price_book::list_lines(&db).await.map_err(book),
+        PriceBookAction::Draft => {
+            let (id, version) = price_book::open_draft(&db, &operator, &cfg.reason, now_ms)
+                .await
+                .map_err(book)?;
+            Ok(vec![format!(
+                "opened draft price book {id} (version {version}) as a copy of the live book"
+            )])
+        }
+        PriceBookAction::Set {
+            id,
+            band,
+            item,
+            monthly_minor,
+        } => {
+            price_book::set_amount(
+                &db,
+                id,
+                *band,
+                *item,
+                *monthly_minor,
+                &operator,
+                &cfg.reason,
+                now_ms,
+            )
+            .await
+            .map_err(book)?;
+            Ok(vec![format!(
+                "{id}: {} {} is now {monthly_minor} minor units a month, {} a year",
+                band.as_str(),
+                item.as_str(),
+                monthly_minor * 10
+            )])
+        }
+        PriceBookAction::Publish { id } => {
+            let provider = provider.expect("publish reads the provider");
+            Ok(
+                price_book::publish(&db, &provider, id, &operator, &cfg.reason, now_ms)
+                    .await
+                    .map_err(book)?
+                    .lines(),
+            )
+        }
+        PriceBookAction::Band { band, enabled } => {
+            price_book::set_band(&db, *band, *enabled, &operator, &cfg.reason, now_ms)
+                .await
+                .map_err(book)?;
+            Ok(vec![format!(
+                "band {} is now {}",
+                band.as_str(),
+                if *enabled { "on sale" } else { "off sale" }
+            )])
+        }
     }
 }

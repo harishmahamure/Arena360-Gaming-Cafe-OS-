@@ -14,6 +14,14 @@ pub const USAGE: &str =
                                        (--identity <file> | --plaintext) [--dev [--data-dir <dir>]]
        arena-cloud ops grant-comp --branch <id> --tier basic|premium --until <YYYY-MM-DD>
                                   --operator <name> --reason <text> [--dev [--data-dir <dir>]]
+       arena-cloud ops price-book list [--dev [--data-dir <dir>]]
+       arena-cloud ops price-book draft --reason <text> [--operator <name>] [--dev [--data-dir <dir>]]
+       arena-cloud ops price-book set --id <id> --band IN|MY|SG|US --item <item> --monthly-minor <n>
+                                      --reason <text> [--operator <name>] [--dev [--data-dir <dir>]]
+       arena-cloud ops price-book publish --id <id> --reason <text> [--operator <name>]
+                                      [--dev [--data-dir <dir>]]
+       arena-cloud ops price-book band --band MY|SG|US|IN --enabled true|false --reason <text>
+                                      [--operator <name>] [--dev [--data-dir <dir>]]
        arena-cloud ops licence-keygen [--kid <kid>]
        arena-cloud catalog import <file.json|file.csv> --operator <name> [--media-dir <dir>]
                                   [--dev [--data-dir <dir>]]
@@ -41,6 +49,12 @@ pub const USAGE: &str =
   ops grant-comp  give a branch a comp Basic or Premium entitlement until the end of that date
                (Asia/Kolkata), write an ops_audit row and mark the wizard's plan step done;
                exit 1 for an unknown branch, a past date or a database failure
+  ops price-book  the versioned price book: list shows the books and the live prices, draft copies
+               the live book into a new draft, set changes one item's monthly amount in the draft
+               (yearly follows at 10x), publish mirrors every row to a Razorpay plan, makes the draft
+               live and retires the old book (a published book is immutable: PRICE_BOOK_IMMUTABLE),
+               band switches a country band on or off; every change writes an ops_audit row, the
+               operator defaults to ARENA_OPS_OPERATOR, USER or USERNAME
   ops licence-keygen  print a new Ed25519 PKCS#8 private key PEM on stdout (for SOPS) and, on
                stderr, its kid and the VerifyKey line for arena_proto::licence::LICENCE_VERIFY_KEYS
   catalog import  upsert the game catalogue from a JSON or CSV list by name + launcher, upload
@@ -87,6 +101,11 @@ environment (not with --dev):
                           month goes first)
   ARENA_ADMIN_TOKENS      <staff-id>:<sha256 hex of the staff token>,... who may call /v1/admin/*;
                           unset: that API answers 404
+  ARENA_BILLING_PROVIDER  razorpay or manual (default: razorpay when the keys below are set, else manual).
+                          manual makes every Razorpay call a no-op that writes an ops task
+                          (--dev: the recorded fake)
+  ARENA_RAZORPAY_KEY_ID, ARENA_RAZORPAY_KEY_SECRET  the Razorpay API keys; ARENA_RAZORPAY_API_BASE
+                          (optional) the API base
   ARENA_BILLING_ENABLED   unset or false: billing is not available in this build (true exits 64)
   ARENA_KEK_ESCROW_KEY    the AGE-SECRET-KEY-1... private half of the branch key escrow (a SOPS secret):
                           opens the escrowed branch key to release it to a replacement Hub. Unset: the
@@ -292,6 +311,7 @@ pub enum Command {
     Job(JobConfig),
     RestoreControl(RestoreConfig),
     GrantComp(GrantCompConfig),
+    PriceBook(PriceBookConfig),
     CatalogImport(CatalogImportConfig),
     LicenceKeygen { kid: Option<String> },
     Help,
@@ -376,6 +396,142 @@ fn parse_grant_comp(args: impl Iterator<Item = OsString>) -> Result<Command, Str
         tier,
         until_date,
         until_ms,
+        operator,
+        reason,
+        dev_data_dir: dev.then(|| data_dir.unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_DIR))),
+    }))
+}
+
+/// What `ops price-book` does (Story 10.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PriceBookAction {
+    List,
+    Draft,
+    Set {
+        id: String,
+        band: arena_proto::Band,
+        item: arena_proto::PriceItem,
+        monthly_minor: i64,
+    },
+    Publish {
+        id: String,
+    },
+    Band {
+        band: arena_proto::Band,
+        enabled: bool,
+    },
+}
+
+/// `ops price-book …`. Every action but `list` is audited with `operator` and `reason`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PriceBookConfig {
+    pub action: PriceBookAction,
+    /// `None`: the operator named by `ARENA_OPS_OPERATOR`, `USER` or `USERNAME`.
+    pub operator: Option<String>,
+    pub reason: String,
+    pub dev_data_dir: Option<PathBuf>,
+}
+
+fn parse_price_book(mut args: impl Iterator<Item = OsString>) -> Result<Command, String> {
+    let sub = match args.next().and_then(|a| a.into_string().ok()).as_deref() {
+        Some("--help" | "-h") => return Ok(Command::Help),
+        Some(s @ ("list" | "draft" | "set" | "publish" | "band")) => s.to_owned(),
+        Some(other) => return Err(format!("unknown price-book command {other}")),
+        None => {
+            return Err(
+                "price-book needs a command (list, draft, set, publish or band)".to_owned(),
+            );
+        }
+    };
+    let mut id: Option<String> = None;
+    let mut band: Option<String> = None;
+    let mut item: Option<String> = None;
+    let mut monthly: Option<String> = None;
+    let mut enabled: Option<String> = None;
+    let mut operator: Option<String> = None;
+    let mut reason: Option<String> = None;
+    let mut dev = false;
+    let mut data_dir: Option<PathBuf> = None;
+    let early = walk_flags(args, |flag, inline, value| {
+        match flag {
+            "--help" | "-h" => return Ok(Some(Command::Help)),
+            "--id" => id = Some(value()?),
+            "--band" => band = Some(value()?),
+            "--item" => item = Some(value()?),
+            "--monthly-minor" => monthly = Some(value()?),
+            "--enabled" => enabled = Some(value()?),
+            "--operator" => operator = Some(value()?),
+            "--reason" => reason = Some(value()?),
+            "--dev" if !inline => dev = true,
+            "--data-dir" => data_dir = Some(PathBuf::from(value()?)),
+            other => return Err(format!("unknown argument {other}")),
+        }
+        Ok(None)
+    })?;
+    if let Some(cmd) = early {
+        return Ok(cmd);
+    }
+    let text = |flag: &str, v: Option<String>| -> Result<String, String> {
+        let v = v.ok_or_else(|| format!("price-book {sub} needs {flag}"))?;
+        let v = v.trim().to_owned();
+        if v.is_empty() || v.chars().count() > OPS_TEXT_MAX || v.chars().any(char::is_control) {
+            return Err(format!(
+                "{flag} must be 1 to {OPS_TEXT_MAX} characters of plain text"
+            ));
+        }
+        Ok(v)
+    };
+    let band_of = |v: Option<String>| -> Result<arena_proto::Band, String> {
+        let v = v.ok_or_else(|| format!("price-book {sub} needs --band (IN, MY, SG or US)"))?;
+        arena_proto::Band::parse(v.trim())
+            .ok_or_else(|| format!("--band must be IN, MY, SG or US, not {v:?}"))
+    };
+    let action = match sub.as_str() {
+        "list" => PriceBookAction::List,
+        "draft" => PriceBookAction::Draft,
+        "set" => {
+            let item = item.ok_or("price-book set needs --item")?;
+            let monthly = monthly.ok_or("price-book set needs --monthly-minor")?;
+            PriceBookAction::Set {
+                id: text("--id", id)?,
+                band: band_of(band)?,
+                item: arena_proto::PriceItem::parse(item.trim()).ok_or_else(|| {
+                    format!(
+                        "--item must be basic, premium, addon_devices_20, addon_tunnel or addon_owner_login, not {item:?}"
+                    )
+                })?,
+                monthly_minor: monthly
+                    .trim()
+                    .parse::<i64>()
+                    .map_err(|_| format!("--monthly-minor must be a whole number, not {monthly:?}"))?,
+            }
+        }
+        "publish" => PriceBookAction::Publish {
+            id: text("--id", id)?,
+        },
+        _ => PriceBookAction::Band {
+            band: band_of(band)?,
+            enabled: match enabled.as_deref().map(str::trim) {
+                Some("true") => true,
+                Some("false") => false,
+                None => return Err("price-book band needs --enabled true|false".to_owned()),
+                Some(other) => {
+                    return Err(format!("--enabled must be true or false, not {other:?}"));
+                }
+            },
+        },
+    };
+    let reason = if action == PriceBookAction::List {
+        String::new()
+    } else {
+        text("--reason", reason)?
+    };
+    let operator = operator.map(|o| text("--operator", Some(o))).transpose()?;
+    if data_dir.is_some() && !dev {
+        return Err("--data-dir needs --dev".to_owned());
+    }
+    Ok(Command::PriceBook(PriceBookConfig {
+        action,
         operator,
         reason,
         dev_data_dir: dev.then(|| data_dir.unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_DIR))),
@@ -661,12 +817,14 @@ fn parse_ops(mut args: impl Iterator<Item = OsString>) -> Result<Command, String
     match args.next().and_then(|a| a.into_string().ok()).as_deref() {
         Some("restore-control") => {}
         Some("grant-comp") => return parse_grant_comp(args),
+        Some("price-book") => return parse_price_book(args),
         Some("licence-keygen") => return parse_keygen(args),
         Some("--help" | "-h") => return Ok(Command::Help),
         Some(other) => return Err(format!("unknown ops command {other}")),
         None => {
             return Err(
-                "ops needs a command (restore-control, grant-comp or licence-keygen)".to_owned(),
+                "ops needs a command (restore-control, grant-comp, price-book or licence-keygen)"
+                    .to_owned(),
             );
         }
     }

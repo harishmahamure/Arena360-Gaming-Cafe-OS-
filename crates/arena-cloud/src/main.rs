@@ -83,6 +83,30 @@ async fn main() -> ExitCode {
                 }
             };
         }
+        Ok(Command::PriceBook(book)) => {
+            return match arena_cloud::ops::price_book(
+                &book,
+                |k| std::env::var_os(k),
+                arena_cloud::now_ms(),
+            )
+            .await
+            {
+                Ok(lines) => {
+                    for line in lines {
+                        println!("{line}");
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e @ arena_cloud::ops::OpsError::Config(_)) => {
+                    eprintln!("arena-cloud: price-book: {e}");
+                    ExitCode::from(EXIT_USAGE)
+                }
+                Err(e) => {
+                    eprintln!("arena-cloud: price-book failed: {e}");
+                    ExitCode::from(EXIT_FAILURE)
+                }
+            };
+        }
         Ok(Command::CatalogImport(import)) => {
             return match arena_cloud::ops::catalog_import(
                 &import,

@@ -93,6 +93,8 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::KeyAlreadyReleased
         | ErrorCode::RestoreGap
         | ErrorCode::LeaseFresh
+        | ErrorCode::PriceBookImmutable
+        | ErrorCode::BandNotAvailable
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::PairCodeInvalid | ErrorCode::PairCodeExpired | ErrorCode::SetupCodeInvalid => {
             StatusCode::UNAUTHORIZED
@@ -366,6 +368,8 @@ mod tests {
             (ErrorCode::CommandExpired, 409),
             (ErrorCode::AuditBuilding, 202),
             (ErrorCode::AuditBuildFailed, 502),
+            (ErrorCode::PriceBookImmutable, 409),
+            (ErrorCode::BandNotAvailable, 409),
         ] {
             assert_eq!(status_of(code).as_u16(), status, "{code:?}");
         }

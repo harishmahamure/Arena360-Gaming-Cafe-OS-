@@ -1,7 +1,10 @@
 import type { MessageKey } from "./messages/index.js";
+import { PRICING_SNAPSHOT } from "./pricing.snapshot.ts";
 
 export type PlanKey = "free" | "basic" | "premium";
 export type BillingPeriod = "monthly" | "yearly";
+/** A purchasing-power band (Story 10.1): it fixes the currency a branch is billed in. */
+export type PriceBand = keyof typeof PRICING_SNAPSHOT.bands;
 
 export type PlanPrice = {
   key: PlanKey;
@@ -15,6 +18,32 @@ export type PlanPrice = {
 };
 
 export const GST_PERCENT = 18;
+
+/** Shown when a band is not on sale yet; Free stays selectable. */
+export const BAND_UNAVAILABLE: MessageKey = "pricing.band_unavailable";
+
+type SnapshotLine = {
+  readonly item: string;
+  readonly cycle: string;
+  readonly amount_minor: number;
+};
+
+/** The live book's amount for an item in major units of the home band (INR), from the snapshot. */
+function inr(item: "basic" | "premium", cycle: BillingPeriod): number {
+  const lines: readonly SnapshotLine[] = PRICING_SNAPSHOT.bands.IN.lines;
+  const line = lines.find((l) => l.item === item && l.cycle === cycle);
+  if (!line) throw new Error(`pricing snapshot has no IN ${item} ${cycle} line`); // i18n-ignore
+  return line.amount_minor / 100;
+}
+
+/**
+ * The prices of one band from the generated snapshot of the live price book, or null while
+ * the band is not on sale (the API answers `BAND_NOT_AVAILABLE` for it).
+ */
+export function bandPricing(band: PriceBand) {
+  const b = PRICING_SNAPSHOT.bands[band];
+  return b.enabled ? { band, currency: b.currency, lines: b.lines } : null;
+}
 
 const PLANS: Record<PlanKey, PlanPrice> = {
   free: {
@@ -31,8 +60,8 @@ const PLANS: Record<PlanKey, PlanPrice> = {
     key: "basic",
     name: "pricing.basic.name",
     currency: "INR",
-    monthly: 200,
-    yearly: 2000,
+    monthly: inr("basic", "monthly"),
+    yearly: inr("basic", "yearly"),
     gstPercent: GST_PERCENT,
     perBranch: true,
     features: ["pricing.basic.uploads", "pricing.basic.reports"],
@@ -41,8 +70,8 @@ const PLANS: Record<PlanKey, PlanPrice> = {
     key: "premium",
     name: "pricing.premium.name",
     currency: "INR",
-    monthly: 1999,
-    yearly: 19990,
+    monthly: inr("premium", "monthly"),
+    yearly: inr("premium", "yearly"),
     gstPercent: GST_PERCENT,
     perBranch: false,
     features: [

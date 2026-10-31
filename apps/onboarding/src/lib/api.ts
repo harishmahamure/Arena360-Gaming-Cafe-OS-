@@ -71,6 +71,7 @@ const CODES: ReadonlySet<string> = new Set<ErrorCode>([
   "AUTH_LOCKED",
   "BRANCH_CODE_TAKEN",
   "BILLING_DISABLED",
+  "BAND_NOT_AVAILABLE",
   "ONE_FREE_BRANCH",
   "STEP_NOT_READY",
 ]);

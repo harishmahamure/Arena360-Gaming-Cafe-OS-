@@ -323,6 +323,42 @@ step must be done before a release that verifies licences.
   Asia/Kolkata. Exit 64 is a usage error (including a missing `ARENA_CONTROL_DB_*`); exit 1 an unknown
   branch, a past date, a branch on a paid plan (never replaced) or a database failure.
 
+### 6d. Price book and the billing provider
+
+Every price Arena 360 charges lives in the versioned price book in `gz_control` (Story 10.1):
+`price_books` and `price_book_items` (band `IN|MY|SG|US`, item `basic|premium|addon_devices_20|addon_tunnel|addon_owner_login`,
+cycle `monthly|yearly`, amounts in minor units, yearly always 10× monthly, GST on band IN only).
+The seed book `pb_v1` is live from the first migration. A published book is immutable (a trigger
+and the ops commands refuse with `PRICE_BOOK_IMMUTABLE`); prices change only by publishing a new
+version:
+
+```sh
+arena-cloud ops price-book list
+arena-cloud ops price-book draft --reason "Q1 prices"            # copies the live book
+arena-cloud ops price-book set --id <draft> --band IN --item basic --monthly-minor 22000 --reason "Q1 prices"
+arena-cloud ops price-book publish --id <draft> --reason "Q1 prices"
+arena-cloud ops price-book band --band MY --enabled true --reason "Razorpay MY confirmed"
+```
+
+`publish` creates one Razorpay plan per (band, item, cycle), then in one transaction stores the
+plan ids, makes the draft live and retires the old book. A Razorpay error leaves the draft a draft
+and writes nothing; run it again. On the live seed book `publish` only creates the missing plans
+(`price_book_sync` in `ops_audit`). Every change writes an `ops_audit` row; the operator is
+`--operator`, else `ARENA_OPS_OPERATOR`, `USER` or `USERNAME`.
+
+Environment: `ARENA_BILLING_PROVIDER=razorpay|manual` (default `razorpay` when the keys are set,
+else `manual`), `ARENA_RAZORPAY_KEY_ID`, `ARENA_RAZORPAY_KEY_SECRET` (SOPS secrets) and
+optionally `ARENA_RAZORPAY_API_BASE`. With `manual` every Razorpay call is a no-op that leaves an
+open `razorpay_create_plans` row in `ops_tasks` listing the plans to create by hand, so a Razorpay
+outage never blocks the rest of the cloud. `--dev` uses the recorded fake. MY, SG and US are off
+sale (`billing_bands.enabled = 0`, `GET /v1/pricing?band=MY` answers `BAND_NOT_AVAILABLE`) until
+`price-book band` switches them on.
+
+`GET /v1/pricing?band=IN` (public, cached 5 minutes) serves the live book's lines for a band. The
+web apps read `packages/ui/src/pricing.snapshot.ts`, generated from the seed book; regenerate it
+with `UPDATE_PRICING_SNAPSHOT=1 cargo test -p arena-cloud --test pricing_snapshot` (CI fails when
+it differs from the book).
+
 ### 7. Encrypt the secrets
 
 Each `deploy/secrets/<env>.enc.yaml` holds **all four** Secrets below; `ghcr-pull` is

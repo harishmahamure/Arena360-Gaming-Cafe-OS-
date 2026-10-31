@@ -2413,6 +2413,7 @@
   "pricing.premium.everything_basic": "Everything in Basic",
   "pricing.premium.orders": "Kiosk food orders and kitchen display",
   "pricing.premium.standby": "Standby Hub",
+  "pricing.band_unavailable": "Paid plans aren't available in your country yet — Free is.",
   "pricing.price.month": "{price} / month",
   "pricing.price.year": "{price} / year",
   "pricing.price.branch_month": "{price} per branch / month",

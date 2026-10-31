@@ -36,6 +36,7 @@ mod owner_read;
 mod pair;
 mod panic;
 pub mod presign;
+mod pricing;
 mod restore;
 pub mod security;
 pub mod session;
@@ -94,6 +95,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>, commands_only: bool) -> Router {
             .merge(admin_audit::router(Arc::clone(st)))
             .merge(alerts::router(Arc::clone(st)))
             .merge(catalog::router(Arc::clone(st)))
+            .merge(pricing::router(Arc::clone(st)))
             .merge(pair::router(Arc::clone(st)))
             .merge(heartbeat::router(Arc::clone(st)))
             .merge(fence::router(Arc::clone(st)))

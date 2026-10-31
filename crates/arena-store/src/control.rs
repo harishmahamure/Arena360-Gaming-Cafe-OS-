@@ -33,6 +33,7 @@ mod owner;
 mod owner_alerts;
 mod owner_commands;
 mod pairing;
+mod price_book;
 mod rate_limit;
 mod retention;
 mod send_ledger;
@@ -71,6 +72,10 @@ pub use owner_alerts::{
 pub use owner_commands::{OwnerCommandFilter, OwnerCommandRow};
 pub use pairing::{
     IssueOutcome, NewPairingCode, PAIRING_HISTORY_MS, PairingCodeRow, RedeemInvalid, Redeemed,
+};
+pub use price_book::{
+    BookAudit, DraftOutcome, MirroredPlan, NewOpsTask, OpsTaskRow, PriceBook, PriceBookItem,
+    PriceBookStatus, PublishOutcome, SetAmountOutcome,
 };
 pub use rate_limit::{RateReservation, RateRule, RateWindow};
 pub use retention::{RetentionBranch, RetentionState};
@@ -238,6 +243,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 33,
         sql: include_str!("../control-migrations/0033_standby_hub.sql"),
+    },
+    ControlMigration {
+        version: 34,
+        sql: include_str!("../control-migrations/0034_price_books.sql"),
     },
 ];
 

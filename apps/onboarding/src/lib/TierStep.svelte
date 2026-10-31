@@ -108,6 +108,10 @@
         formError = "onboarding.tier.error.billing_disabled";
         await load();
         return;
+      case "BAND_NOT_AVAILABLE":
+        formError = "pricing.band_unavailable";
+        await load();
+        return;
       case "FORBIDDEN":
         if (await leaveForCurrentStep()) return;
         formError = failure(res);

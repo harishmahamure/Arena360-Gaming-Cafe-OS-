@@ -1053,6 +1053,8 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::KeyAlreadyReleased
         | ErrorCode::RestoreGap
         | ErrorCode::LeaseFresh
+        | ErrorCode::PriceBookImmutable
+        | ErrorCode::BandNotAvailable
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::NotPrimary
         | ErrorCode::HubSlow

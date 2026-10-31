@@ -1,5 +1,12 @@
 import { expect, test } from "@playwright/test";
-import { GST_PERCENT, PRICING, planPrice, priceFor } from "../../../packages/ui/src/pricing";
+import {
+  BAND_UNAVAILABLE,
+  GST_PERCENT,
+  PRICING,
+  bandPricing,
+  planPrice,
+  priceFor,
+} from "../../../packages/ui/src/pricing";
 
 test("the pricing table pins every plan's price, GST and feature lines", () => {
   expect(PRICING.map((p) => p.key)).toEqual(["free", "basic", "premium"]);
@@ -31,4 +38,17 @@ test("the pricing table pins every plan's price, GST and feature lines", () => {
   ]).toEqual(["INR", 1999, 19990, 18, false]);
   expect(priceFor(basic, "monthly")).toBe(200);
   expect(priceFor(premium, "yearly")).toBe(19990);
+});
+
+test("the snapshot of the live price book serves the home band and hides the bands not on sale", () => {
+  const home = bandPricing("IN");
+  expect(home?.currency).toBe("INR");
+  const line = (item: string, cycle: string) =>
+    home?.lines.find((l) => l.item === item && l.cycle === cycle)?.amount_minor;
+  expect(line("basic", "monthly")).toBe(20000);
+  expect(line("premium", "yearly")).toBe(1999000);
+  expect(line("addon_devices_20", "monthly")).toBe(5000);
+  expect(home?.lines.every((l) => l.gst_applicable)).toBe(true);
+  for (const band of ["MY", "SG", "US"] as const) expect(bandPricing(band)).toBeNull();
+  expect(BAND_UNAVAILABLE).toBe("pricing.band_unavailable");
 });

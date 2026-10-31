@@ -5,7 +5,7 @@ import { DESKTOP, PHONE, THEMES, open } from "./helpers";
 // Accessibility floor in every theme at 390 and 1440 px: zero serious or critical axe violations,
 // targets of at least 44 px and no horizontal scroll. High contrast is also held to 7:1.
 
-const PAGES = ["/", "/no-such-page"];
+const PAGES = ["/", "/pricing", "/no-such-page"];
 const VIEWPORTS = [
   { name: "390", size: PHONE },
   { name: "1440", size: DESKTOP },

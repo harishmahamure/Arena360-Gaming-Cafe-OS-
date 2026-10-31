@@ -4,7 +4,7 @@
 import { currencyOf, formatMoney, planPrice } from "@arena/ui";
 
 /** Whole rupees as money with Indian digit grouping: `₹1,999`. */
-function rupees(whole: number): string {
+export function rupees(whole: number): string {
   return formatMoney(whole, {
     exponent: 0,
     symbol: currencyOf("INR")?.symbol ?? "₹", // i18n-ignore

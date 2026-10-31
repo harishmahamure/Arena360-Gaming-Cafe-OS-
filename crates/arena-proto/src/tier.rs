@@ -239,4 +239,50 @@ mod tests {
         }
         assert_eq!(EntitlementSource::parse("trial"), None);
     }
+    const SNAPSHOT: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../packages/ui/src/tiers.snapshot.ts"
+    );
+
+    const HEADER: &str = "// Generated from the tier table in crates/arena-proto/src/tier.rs by\n\
+// `UPDATE_TIERS_SNAPSHOT=1 cargo test -p arena-proto tier_snapshot` (Story 11.3).\n\
+// Do not edit: CI fails when it differs from the table. `null` is no cap.\n";
+
+    /// The tier table as the marketing Pricing page reads it.
+    fn snapshot() -> String {
+        let cap = |n: u32| (n != UNLIMITED).then_some(n);
+        let tiers: Vec<_> = TIERS
+            .iter()
+            .map(|d| {
+                serde_json::json!({
+                    "tier": d.tier.as_str(),
+                    "devices": d.limits.devices,
+                    "users": cap(d.limits.users),
+                    "branches": cap(d.limits.branches),
+                    "flags": d.flags,
+                    "upload_interval_s": d.upload_interval_s,
+                    "retention_days": d.retention_days,
+                })
+            })
+            .collect();
+        format!(
+            "{HEADER}export const TIERS_SNAPSHOT = {} as const;\n",
+            serde_json::to_string_pretty(&tiers).unwrap()
+        )
+    }
+
+    #[test]
+    fn tier_snapshot_matches_the_tier_table() {
+        let want = snapshot();
+        if std::env::var_os("UPDATE_TIERS_SNAPSHOT").is_some() {
+            std::fs::write(SNAPSHOT, &want).unwrap();
+            return;
+        }
+        let have = std::fs::read_to_string(SNAPSHOT).unwrap_or_default();
+        assert!(
+            have.replace("\r\n", "\n") == want,
+            "packages/ui/src/tiers.snapshot.ts differs from the tier table; regenerate it with \
+             UPDATE_TIERS_SNAPSHOT=1 cargo test -p arena-proto tier_snapshot"
+        );
+    }
 }

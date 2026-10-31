@@ -6,6 +6,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { routeOf } from "../apps/marketing/src/lib/site.ts";
+import { PRICING_SNAPSHOT } from "../packages/ui/src/pricing.snapshot.ts";
+import { TIERS_SNAPSHOT } from "../packages/ui/src/tiers.snapshot.ts";
+import { messages } from "../packages/ui/src/messages/index.js";
 import { shouldPlay } from "../packages/ui/src/hero-video.js";
 import { resolveSiteTheme } from "../packages/ui/src/theme.js";
 import { failures, median } from "../apps/marketing/scripts/lighthouse.mjs";
@@ -92,4 +95,47 @@ test("the Lighthouse gate fails on LCP of 2.5 s or more and on scores under 90",
     2,
   );
   assert.equal(median([3000, 1000, 2000]), 2000);
+});
+
+test("every amount on Pricing is a price-book amount and none is typed into the copy", () => {
+  const rupees = (minor) => "₹" + new Intl.NumberFormat("en-IN").format(minor / 100);
+  const book = new Set(PRICING_SNAPSHOT.bands.IN.lines.map((l) => rupees(l.amount_minor)));
+
+  // The catalogue holds words and placeholders only: a digit next to a rupee sign is a typed price.
+  for (const [key, text] of Object.entries(messages)) {
+    if (key.startsWith("site.pricing.") || key.startsWith("site.home.gets.")) {
+      assert.doesNotMatch(text, /₹\s*\d/, `${key} has a typed amount`);
+    }
+  }
+
+  const root = fileURLToPath(new URL("../apps/marketing", import.meta.url));
+  const out = mkdtempSync(join(tmpdir(), "marketing-pricing-"));
+  try {
+    execFileSync("pnpm", ["exec", "astro", "build", "--outDir", out], {
+      cwd: root,
+      stdio: "pipe",
+      shell: process.platform === "win32",
+    });
+    const page = readFileSync(join(out, "pricing", "index.html"), "utf8");
+    const main = page.slice(page.indexOf("<main"), page.indexOf("</main>"));
+    const shown = new Set(main.match(/₹\d[\d,]*/g));
+    assert.ok(
+      shown.size >= 6,
+      `Pricing shows Free, both paid plans in two cycles and the add-ons, not ${[...shown]}`,
+    );
+    for (const amount of shown) {
+      assert.ok(book.has(amount) || amount === "₹0", `${amount} is not in the price-book snapshot`);
+    }
+    for (const line of PRICING_SNAPSHOT.bands.IN.lines.filter(
+      (l) => l.cycle === "monthly" || /^(basic|premium)$/.test(l.item),
+    )) {
+      assert.ok(shown.has(rupees(line.amount_minor)), `${line.item} ${line.cycle} is not shown`);
+    }
+    // Each limit in the comparison table is a tier-table limit.
+    for (const row of TIERS_SNAPSHOT) {
+      assert.ok(main.includes(`>${row.devices}</td>`), `${row.tier} devices`);
+    }
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
 });

@@ -5,11 +5,14 @@
   let {
     href,
     label,
+    params,
     variant = "primary",
     size = "md",
   }: {
     href: string;
     label: MessageKey;
+    /** Values for the label's `{placeholders}`. */
+    params?: Record<string, string | number>;
     variant?: "primary" | "secondary";
     /** `lg` is the hero and closing-band call to action: taller with more side padding. */
     size?: "md" | "lg";
@@ -19,7 +22,7 @@
 <a
   class="ui-interactive link-button link-button--{variant} link-button--{size}"
   {href}
-  data-component="link-button">{t(label)}</a
+  data-component="link-button">{t(label, params)}</a
 >
 
 <style>

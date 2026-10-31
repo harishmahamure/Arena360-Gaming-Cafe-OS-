@@ -1,5 +1,6 @@
 import type { MessageKey } from "./messages/index.js";
 import { PRICING_SNAPSHOT } from "./pricing.snapshot.ts";
+import { TIERS_SNAPSHOT } from "./tiers.snapshot.ts";
 
 export type PlanKey = "free" | "basic" | "premium";
 export type BillingPeriod = "monthly" | "yearly";
@@ -28,8 +29,11 @@ type SnapshotLine = {
   readonly amount_minor: number;
 };
 
+/** The add-ons a paid branch can buy, by their price-book item. */
+export type AddOnKey = "addon_devices_20" | "addon_tunnel" | "addon_owner_login";
+
 /** The live book's amount for an item in major units of the home band (INR), from the snapshot. */
-function inr(item: "basic" | "premium", cycle: BillingPeriod): number {
+function inr(item: "basic" | "premium" | AddOnKey, cycle: BillingPeriod): number {
   const lines: readonly SnapshotLine[] = PRICING_SNAPSHOT.bands.IN.lines;
   const line = lines.find((l) => l.item === item && l.cycle === cycle);
   if (!line) throw new Error(`pricing snapshot has no IN ${item} ${cycle} line`); // i18n-ignore
@@ -103,4 +107,31 @@ export function planPrice(key: PlanKey): PlanPrice {
 
 export function priceFor(plan: PlanPrice, period: BillingPeriod): number {
   return period === "monthly" ? plan.monthly : plan.yearly;
+}
+
+/** What an add-on costs per branch in the home band (INR), from the snapshot. */
+export function addOnPrice(key: AddOnKey): { monthly: number; yearly: number } {
+  return { monthly: inr(key, "monthly"), yearly: inr(key, "yearly") };
+}
+
+/** The whole months a yearly price saves over twelve monthly ones: 2 on Basic and Premium, 0 on Free. */
+export function monthsFree(plan: PlanPrice): number {
+  return plan.monthly === 0 ? 0 : Math.round(12 - plan.yearly / plan.monthly);
+}
+
+/** One row of the `arena-proto` tier table (`null` is no cap), from the generated snapshot. */
+export type TierRow = {
+  readonly tier: PlanKey;
+  readonly devices: number;
+  readonly users: number | null;
+  readonly branches: number | null;
+  readonly flags: readonly string[];
+  readonly upload_interval_s: number;
+  readonly retention_days: number;
+};
+
+export function tierRow(key: PlanKey): TierRow {
+  const row = (TIERS_SNAPSHOT as readonly TierRow[]).find((r) => r.tier === key);
+  if (!row) throw new Error(`tier snapshot has no ${key} row`); // i18n-ignore
+  return row;
 }

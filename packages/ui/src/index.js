@@ -56,10 +56,13 @@ export {
   BAND_UNAVAILABLE,
   GST_PERCENT,
   PRICING,
+  addOnPrice,
   bandLines,
   bandPricing,
+  monthsFree,
   planPrice,
   priceFor,
+  tierRow,
 } from "./pricing.ts";
 export { default as LinkButton } from "./components/LinkButton.svelte";
 export { default as ContrastSwitch } from "./components/ContrastSwitch.svelte";

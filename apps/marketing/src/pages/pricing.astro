@@ -1,0 +1,176 @@
+---
+import { LinkButton, t } from "@arena/ui";
+import { planPrice } from "@arena/ui/pricing";
+import BillingTabs from "../components/BillingTabs.svelte";
+import PricingTabs from "../components/PricingTabs.svelte";
+import Layout from "../layouts/Layout.astro";
+import {
+  ADDONS,
+  addOnMonthly,
+  comparisonRows,
+  gstPercent,
+  paidParams,
+  tierCards,
+} from "../lib/pricing-page";
+import { startUrl } from "../lib/site";
+import "../styles/pricing.css";
+
+const cards = tierCards();
+const rows = comparisonRows();
+const gst = gstPercent();
+const monthsFree = cards.find((c) => c.key === "basic")?.monthsFree ?? 0;
+const announce = {
+  monthly: t("site.pricing.announce.monthly", paidParams("monthly")),
+  yearly: t("site.pricing.announce.yearly", paidParams("yearly")),
+};
+const faq = ["offline", "cancel", "refund"] as const;
+---
+
+<Layout title={t("site.pricing.title")} description={t("site.pricing.description")}>
+  <script is:inline>
+    // Before first paint: the tab and billing cycle named in the URL pick the panel and the prices
+    // (`pricing-state.ts` has the same rule for the islands).
+    (function () {
+      var q = new URLSearchParams(location.search);
+      var html = document.documentElement;
+      if (q.get("tab") === "partners") html.setAttribute("data-pricing-tab", "partners");
+      if (q.get("billing") === "yearly") html.setAttribute("data-pricing-billing", "yearly");
+    })();
+  </script>
+  <div class="pricing">
+    <h1>{t("site.pricing.heading")}</h1>
+    <p class="pricing-sub">{t("site.pricing.sub")}</p>
+    <PricingTabs client:load />
+
+    <div class="pricing-panel pricing-cafes">
+      <div class="pricing-cta">
+        <LinkButton href={startUrl()} label="site.cta.get_started" size="lg" />
+        <p>{t("site.pricing.cta_note")}</p>
+      </div>
+      <div class="pricing-cycle">
+        <BillingTabs client:load announce={announce} />
+        <p>{t("site.pricing.billing_note", { months: monthsFree })}</p>
+      </div>
+
+      <ul class="tiers">
+        {cards.map((card) => (
+          <li class="tier">
+            <h2>{t(planPrice(card.key).name)}</h2>
+            {card.key === "free" ? (
+              <p class="tier-price tabular">
+                <span class="amount">{card.price.monthly}</span>
+                <span class="per">{t("site.pricing.tier.free.per")}</span>
+              </p>
+            ) : (
+              <>
+                <p class="tier-price tabular cycle-monthly">
+                  <span class="amount">{card.price.monthly}</span>
+                  <span class="per">{t("site.pricing.per.month", { gst })}</span>
+                </p>
+                <p class="tier-price tabular cycle-yearly">
+                  <span class="amount">{card.price.yearly}</span>
+                  <span class="per">{t("site.pricing.per.year", { gst })}</span>
+                  <span class="free-months">
+                    {t("site.pricing.months_free", { months: card.monthsFree })}
+                  </span>
+                </p>
+              </>
+            )}
+            <p>{t(`site.pricing.tier.${card.key}.blurb`)}</p>
+            <ul class="tier-points">
+              {card.points.map((point) => (
+                <li>{t(point.key, point.params)}</li>
+              ))}
+            </ul>
+            <LinkButton
+              href={`${startUrl()}?tier=${card.key}`}
+              label="site.pricing.choose"
+              params={{ tier: t(planPrice(card.key).name) }}
+              variant="secondary"
+            />
+          </li>
+        ))}
+      </ul>
+      <p class="gst-note">{t("site.pricing.gst_note", { gst })}</p>
+
+      <section aria-labelledby="pricing-compare">
+        <h2 id="pricing-compare">{t("site.pricing.compare")}</h2>
+        <div
+          class="table-scroll"
+          role="region"
+          aria-label={t("site.pricing.table.scroll")}
+          tabindex="0"
+        >
+          <table>
+            <caption>{t("site.pricing.table.caption")}</caption>
+            <thead>
+              <tr>
+                <th scope="col">{t("site.pricing.table.capability")}</th>
+                {cards.map((card) => (
+                  <th scope="col">{t(planPrice(card.key).name)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr>
+                  <th scope="row">{t(row.label)}</th>
+                  {cards.map((card) => {
+                    const cell = row.cells[card.key];
+                    return (
+                      <td class="tabular">
+                        {cell.kind === "yes" ? (
+                          <>
+                            <span aria-hidden="true">✓</span>
+                            <span class="visually-hidden">{t("site.pricing.cell.included")}</span>
+                          </>
+                        ) : cell.kind === "no" ? (
+                          <>
+                            <span aria-hidden="true">—</span>
+                            <span class="visually-hidden">
+                              {t("site.pricing.cell.not_included")}
+                            </span>
+                          </>
+                        ) : cell.kind === "number" ? (
+                          cell.n
+                        ) : (
+                          t(cell.key, cell.params)
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section aria-labelledby="pricing-addons">
+        <h2 id="pricing-addons">{t("site.pricing.addons.title")}</h2>
+        <ul class="addons tabular">
+          {ADDONS.map((addon) => (
+            <li>{t(addon.label, { price: addOnMonthly(addon.item) })}</li>
+          ))}
+        </ul>
+        <p>{t("site.pricing.addons.note", { gst })}</p>
+      </section>
+
+      <section aria-labelledby="pricing-faq">
+        <h2 id="pricing-faq">{t("site.pricing.faq.title")}</h2>
+        <div class="faq">
+          {faq.map((item) => (
+            <details>
+              <summary>{t(`site.pricing.faq.${item}.q`)}</summary>
+              <p>{t(`site.pricing.faq.${item}.a`)}</p>
+            </details>
+          ))}
+        </div>
+      </section>
+    </div>
+
+    <div class="pricing-panel pricing-partners">
+      <p>{t("site.pricing.partners.soon")}</p>
+    </div>
+  </div>
+</Layout>

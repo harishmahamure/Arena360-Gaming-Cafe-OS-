@@ -1,0 +1,208 @@
+/* Pricing: the selected tab and billing cycle are attributes on <html> (pricing-state.ts); both
+   cycles' prices are in the page and exactly one shows. Three equal tier cards, one column on
+   phones; the comparison table scrolls inside its own container with its first column pinned. */
+
+html:not([data-pricing-tab="partners"]) .pricing-partners,
+html[data-pricing-tab="partners"] .pricing-cafes,
+html:not([data-pricing-billing="yearly"]) .cycle-yearly,
+html[data-pricing-billing="yearly"] .cycle-monthly {
+  display: none;
+}
+
+.pricing {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.pricing h1,
+.pricing p {
+  margin: 0;
+}
+
+.pricing-sub {
+  max-width: 64ch;
+}
+
+.pricing-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  width: 100%;
+  min-width: 0;
+}
+
+.pricing h2 {
+  margin: 0 0 var(--space-4);
+  font-size: var(--type-kiosk-title-size);
+  font-weight: var(--type-kiosk-title-weight);
+  line-height: var(--type-kiosk-title-line-height);
+}
+
+.pricing-cta,
+.pricing-cycle {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.pricing-cta p,
+.pricing-cycle p,
+.gst-note {
+  color: var(--text-muted);
+}
+
+[data-theme="hc"] .pricing-cta p,
+[data-theme="hc"] .pricing-cycle p,
+[data-theme="hc"] .gst-note {
+  color: var(--text);
+}
+
+.tiers {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tier {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  box-sizing: border-box;
+  padding: var(--space-web-card-padding-phone);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background-color: var(--card-background);
+}
+
+.tier h2 {
+  margin: 0;
+}
+
+.tier p {
+  margin: 0;
+}
+
+.tier .link-button {
+  margin-block-start: auto;
+}
+
+.tier-price {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+}
+
+.tier-price .amount {
+  font-size: var(--type-web-display-size);
+  font-weight: var(--type-web-display-weight);
+  line-height: var(--type-web-display-line-height);
+}
+
+.free-months {
+  flex-basis: 100%;
+  font-weight: var(--type-hub-title-weight);
+}
+
+.tier-points {
+  margin: 0;
+  padding-inline-start: var(--space-5);
+}
+
+/* Positioned, so the screen-reader-only text in cells is clipped with the table, not the page. */
+.table-scroll {
+  position: relative;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+
+table {
+  width: 100%;
+  min-width: 640px;
+  border-collapse: separate;
+  border-spacing: 0;
+  background-color: var(--bg);
+}
+
+caption {
+  padding: var(--space-3) var(--space-4);
+  color: var(--text-muted);
+  text-align: start;
+}
+
+[data-theme="hc"] caption {
+  color: var(--text);
+}
+
+th,
+td {
+  padding: var(--space-3) var(--space-4);
+  border-block-start: 1px solid var(--line);
+  text-align: start;
+  vertical-align: top;
+}
+
+thead th {
+  font-weight: var(--type-hub-title-weight);
+}
+
+tbody th {
+  position: sticky;
+  inset-inline-start: 0;
+  z-index: 1;
+  min-width: 9rem;
+  background-color: var(--bg);
+  font-weight: var(--type-hub-title-weight);
+}
+
+.addons {
+  margin: 0 0 var(--space-3);
+  padding-inline-start: var(--space-5);
+}
+
+.faq {
+  display: flex;
+  flex-direction: column;
+  max-width: 72ch;
+  border-block-start: 1px solid var(--line);
+}
+
+.faq details {
+  border-block-end: 1px solid var(--line);
+}
+
+.faq summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--space-touch-min);
+  padding-block: var(--space-2);
+  cursor: pointer;
+  font-weight: var(--type-hub-title-weight);
+}
+
+.faq details p {
+  padding-block-end: var(--space-4);
+}
+
+@media (min-width: 768px) {
+  .tier {
+    padding: var(--space-web-card-padding);
+  }
+}
+
+@media (min-width: 840px) {
+  .tiers {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-6);
+  }
+}

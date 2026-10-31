@@ -2,7 +2,7 @@
 title: 'Story 11.5: Downloads with installers, system requirements and checksums'
 type: 'feature'
 created: '2026-10-31'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 0
 baseline_revision: 'c0429149'
 context:
@@ -70,6 +70,8 @@ deferred:
 ## Spec Change Log
 
 ## Review Triage Log
+
+- 2026-10-31 code review: no blocking findings. Manifest parsing, URL and PowerShell-name safety, no-checksum-no-link rule and stale fallback verified; typecheck, prettier, string check, node tests and 106 Playwright tests green.
 
 ## Verification
 

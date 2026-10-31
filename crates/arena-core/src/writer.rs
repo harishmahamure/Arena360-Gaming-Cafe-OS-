@@ -83,16 +83,18 @@ impl Drop for DeadOnDrop {
 fn ctx_from<'a>(clock: &'a dyn Clock, status: &watch::Receiver<HubStatus>) -> ApplyCtx<'a> {
     // A Hub waiting for a restore, or for the Android Hub of a move to hand over, refuses every
     // intent: it serves nothing.
-    let (role, epoch, restore_pending) = {
+    let (role, epoch, restore_pending, handing_over) = {
         let s = status.borrow();
         (
             s.role,
             s.lease.as_ref().map(LeaseInfo::epoch),
             s.restore_pending.is_some() || s.migration_wait.is_some(),
+            s.handover.as_ref().is_some_and(|h| h.phase.stops_hub()),
         )
     };
     ApplyCtx {
         restore_pending,
+        handing_over,
         ..ApplyCtx::new(clock, epoch, role)
     }
 }
@@ -565,6 +567,24 @@ impl WriterHandle {
                 arena_store::store_licence(tx, &licence, identity.paired_at)?;
                 arena_store::mark_restore_pending(tx, &name)?;
                 Ok(true)
+            })
+        })
+        .await
+    }
+
+    /// Returns once every job queued before it has run: the writer queue is drained (Story 10.17).
+    /// A job already applied stays applied; a later one meets whatever the status says by then.
+    pub async fn barrier(&self) -> Result<(), AppError> {
+        self.run(|_| Ok(())).await
+    }
+
+    /// Stores a `hub_meta` value outside the change log (the handover state, Story 10.17); an
+    /// empty value clears it. Not an intent: it works while the Hub refuses intents.
+    pub async fn record_meta(&self, key: &'static str, value: String) -> Result<(), AppError> {
+        self.run(move |store| {
+            store.write_tx_mut(|tx| {
+                arena_store::set_meta(tx, key, &value)?;
+                Ok(())
             })
         })
         .await

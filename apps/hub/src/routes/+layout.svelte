@@ -12,6 +12,8 @@
   import Clock from "../lib/Clock.svelte";
   import RuleChips from "../lib/RuleChips.svelte";
   import AwaitAndroid from "../lib/AwaitAndroid.svelte";
+  import HandoverStopped from "../lib/HandoverStopped.svelte";
+  import MoveBranch from "../lib/MoveBranch.svelte";
   import RestoreBranch from "../lib/RestoreBranch.svelte";
   import { nextRuleChange, ruleChips } from "../lib/rules";
   import DeviceGate from "../lib/DeviceGate.svelte";
@@ -98,6 +100,15 @@
   const restoring = $derived(data.hub.ok ? (data.hub.snapshot.restore_pending ?? null) : null);
   /** A Windows Hub paired for a Hub move, waiting for the Android Hub's handover (Story 10.16). */
   const awaitingAndroid = $derived(data.hub.ok ? (data.hub.snapshot.migration_wait ?? null) : null);
+  /** The handover of the branch between an Android and a Windows Hub, as this Hub sees it (Story 10.17). */
+  const handover = $derived(data.hub.ok ? (data.hub.snapshot.handover ?? null) : null);
+  /** An Android Hub that has stopped to hand the branch over: nothing else is shown. */
+  const handingOver = $derived(
+    handover !== null && ["transferring", "file", "moved"].includes(handover.phase)
+      ? handover
+      : null,
+  );
+  let movePanel = $state(false);
   const staff = $derived(data.session.state === "signed_in" ? data.session.staff : null);
   const signedOut = $derived(data.session.state === "signed_out");
   /** The Hub answered the snapshot and said who is signed in (an unknown session retries). */
@@ -385,6 +396,10 @@
   /** A list row: acknowledges that alert and opens its tile's sheet. */
   async function pickAlert(row: AlertRow) {
     alertsOpen = false;
+    if (row.key === "move") {
+      movePanel = true;
+      return;
+    }
     if (row.alertId && !staysOpen(row.alertId)) void ackAlerts([row.alertId]);
     if (!row.deviceId) {
       if (row.href) await goto(row.href);
@@ -810,10 +825,16 @@
       />
     </main>
   </div>
+{:else if handingOver !== null}
+  <div class="pair-screen" data-theme="dark">
+    <main class="hub-main" bind:this={mainEl}>
+      <HandoverStopped view={handingOver} />
+    </main>
+  </div>
 {:else if awaitingAndroid !== null}
   <div class="pair-screen" data-theme="dark">
     <main class="hub-main" bind:this={mainEl}>
-      <AwaitAndroid branchName={awaitingAndroid} />
+      <AwaitAndroid branchName={awaitingAndroid} received={handover} />
     </main>
   </div>
 {:else if unpaired}
@@ -906,6 +927,14 @@
           names={deviceNames}
           onpick={pickAlert}
           onclose={closeAlerts}
+        />
+      {/if}
+      {#if movePanel && data.hub.ok && data.hub.snapshot.move_notice}
+        <MoveBranch
+          pc={data.hub.snapshot.move_notice.target_hub_name}
+          view={handover}
+          addresses={data.hub.snapshot.lan?.addresses ?? []}
+          onclose={() => (movePanel = false)}
         />
       {/if}
     </header>

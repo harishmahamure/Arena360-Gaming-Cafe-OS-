@@ -2,6 +2,7 @@
 import type { AdCounts } from "./AdCounts";
 import type { BranchOpening } from "./BranchOpening";
 import type { BranchSetup } from "./BranchSetup";
+import type { HandedOver } from "./HandedOver";
 import type { HeartbeatBackup } from "./HeartbeatBackup";
 import type { ResendUnavailable } from "./ResendUnavailable";
 import type { TunnelReport } from "./TunnelReport";
@@ -69,4 +70,9 @@ export type HeartbeatRequest = {
    * 9.17). Times only; never player data.
    */
   backup?: HeartbeatBackup;
+  /**
+   * The Windows Hub holds the final snapshot of a Hub move (Story 10.17): sent by the Android
+   * Hub until the answer no longer asks for the move.
+   */
+  handed_over?: HandedOver;
 };

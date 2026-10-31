@@ -113,6 +113,9 @@ pub struct HubStatus {
     /// The move this Android Hub is asked to hand over (Story 10.16), as the last heartbeat said:
     /// staff see a persistent "Move this branch to <PC name>" item while it is set.
     pub move_notice: Option<arena_proto::MigrationNotice>,
+    /// The handover of the branch as this Hub sees it (Story 10.17). On an Android Hub in a phase
+    /// that `stops_hub` every intent is refused `HUB_HANDING_OVER`.
+    pub handover: Option<arena_proto::HandoverView>,
     /// The owner released the branch key to this waiting Hub and it holds the key (Story 9.10):
     /// "Restore from a file" is offered. Never set while the Hub is not waiting.
     pub restore_key_released: bool,
@@ -190,6 +193,7 @@ impl HubStatus {
             restore_pending: None,
             migration_wait: None,
             move_notice: None,
+            handover: None,
             restore_key_released: false,
             cloud_time: None,
             live: false,

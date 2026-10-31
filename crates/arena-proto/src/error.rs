@@ -232,6 +232,9 @@ pub enum ErrorCode {
     /// The branch's Hub move is already under way: the Windows Hub has paired with its code
     /// (Story 10.16).
     HubMigrationActive,
+    /// This Android Hub is handing its branch to a Windows Hub and takes no new intents
+    /// (Story 10.17).
+    HubHandingOver,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -366,6 +369,7 @@ impl ErrorCode {
             Self::SubscriptionExists => "SUBSCRIPTION_EXISTS",
             Self::RefundNotAllowed => "REFUND_NOT_ALLOWED",
             Self::HubMigrationActive => "HUB_MIGRATION_ACTIVE",
+            Self::HubHandingOver => "HUB_HANDING_OVER",
         }
     }
 }
@@ -561,6 +565,7 @@ mod tests {
             (ErrorCode::SubscriptionExists, "SUBSCRIPTION_EXISTS"),
             (ErrorCode::RefundNotAllowed, "REFUND_NOT_ALLOWED"),
             (ErrorCode::HubMigrationActive, "HUB_MIGRATION_ACTIVE"),
+            (ErrorCode::HubHandingOver, "HUB_HANDING_OVER"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

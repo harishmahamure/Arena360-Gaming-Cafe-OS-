@@ -238,6 +238,24 @@ async fn heartbeat(
         .await
         .inspect_err(|e| tracing::warn!(error = %e, "heartbeat: pending commands unavailable"))
         .unwrap_or(0);
+    // The Android Hub of a Hub move says the Windows Hub holds the final snapshot (Story 10.17).
+    // A report for a move that is not waiting for it is ignored.
+    if let Some(done) = body.handed_over.as_ref() {
+        match st
+            .db
+            .mark_migration_handed_over(&hub.id, &done.migration_id, now)
+            .await
+        {
+            Ok(true) => tracing::info!(
+                hub_id = %hub.id,
+                migration_id = %done.migration_id,
+                last_seq = done.last_seq,
+                "hub migration handed over"
+            ),
+            Ok(false) => {}
+            Err(e) => tracing::warn!(error = %e, "heartbeat: handover not recorded"),
+        }
+    }
     let setup_template = super::setup_start::retry_link(&st, &hub.branch_id, now).await;
     // Cloudflare is slow now and then; the licence, fence and commands in this answer must not
     // wait on it past the Hub's own request timeout. A late answer is "change nothing".

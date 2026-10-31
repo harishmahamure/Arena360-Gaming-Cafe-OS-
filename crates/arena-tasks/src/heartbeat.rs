@@ -60,6 +60,9 @@ pub struct HeartbeatTask {
     templates: Option<Arc<crate::SetupTemplateInbox>>,
     resend: Option<Arc<crate::ResendInbox>>,
     tunnel: Option<Arc<crate::TunnelInbox>>,
+    /// The handover of the branch to a Windows Hub (Story 10.17): its report goes in the beat and
+    /// the move the cloud still asks for goes back.
+    handover: Option<Arc<arena_core::handover::Handover>>,
 }
 
 pub type Presence = Arc<dyn Fn(&str) -> (bool, Option<i64>) + Send + Sync>;
@@ -89,7 +92,15 @@ impl HeartbeatTask {
             templates: None,
             resend: None,
             tunnel: None,
+            handover: None,
         }
+    }
+
+    /// Reports the handover to the cloud and tells it which move the cloud still asks for
+    /// (Story 10.17).
+    pub fn with_handover(mut self, handover: Arc<arena_core::handover::Handover>) -> Self {
+        self.handover = Some(handover);
+        self
     }
 
     /// Where the cloud's tunnel answer is left for the tunnel task, and where the heartbeat reads
@@ -271,6 +282,10 @@ impl HeartbeatTask {
         } else {
             None
         };
+        let handed_over = match &self.handover {
+            Some(h) => h.handed_over().await,
+            None => None,
+        };
         let req = HeartbeatRequest {
             epoch: lease.epoch().to_string(),
             version: self.version.clone(),
@@ -289,6 +304,7 @@ impl HeartbeatTask {
             opening,
             tunnel: self.tunnel.as_ref().map(|t| t.report()),
             backup: paid.then(|| backup_block(&upload)),
+            handed_over,
         };
         let sent = Instant::now();
         match self.cloud.heartbeat(&token, &req).await {
@@ -308,6 +324,9 @@ impl HeartbeatTask {
                     s.move_notice.clone_from(&res.migration);
                     true
                 });
+                if let Some(h) = &self.handover {
+                    h.on_notice(res.migration.as_ref()).await;
+                }
                 if let Some(inbox) = &self.resend {
                     if let Some(sent) = &req.resend_unavailable {
                         inbox.acknowledge(sent);

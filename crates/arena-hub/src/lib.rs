@@ -319,6 +319,9 @@ async fn run(
     initial.restore_pending = store.restore_pending()?.map(|r| r.branch_name);
     // A Windows Hub that restarts is still waiting for the Android Hub's handover (Story 10.16).
     initial.migration_wait = store.migration_wait()?;
+    // A handover that was under way is still under way after a restart: an Android Hub that had
+    // stopped stays stopped (Story 10.17).
+    let stored_handover = store.meta(arena_proto::HANDOVER_STATE_KEY)?;
     initial.restore_key_released = initial.restore_pending.is_some()
         && arena_tasks::restore_wait::holds_released_key(kek_store.as_ref());
     initial.lan_ports = Some((cfg.lan_port, cfg.web_port));
@@ -363,6 +366,21 @@ async fn run(
     )
     .await?;
     let writer = lease.writer();
+    let scratch_dir = cfg.db_path().parent().map_or_else(
+        || std::path::PathBuf::from("."),
+        std::path::Path::to_path_buf,
+    );
+    // The handover of the branch between an Android and a Windows Hub (Story 10.17).
+    let handover = match writer.clone() {
+        Some(w) => Some(Arc::new(arena_core::handover::Handover::open(
+            w,
+            Arc::clone(&snapshots),
+            status_tx.clone(),
+            Arc::clone(&clock),
+            stored_handover.as_deref(),
+        )?)),
+        None => None,
+    };
     let restore_job = restored.and_then(|outcome| {
         restore::spawn_record(writer.clone(), Arc::clone(&clock), cfg.db_path(), outcome)
     });
@@ -477,6 +495,9 @@ async fn run(
     if let Some(dir) = kitchen_dir {
         lan_hub = lan_hub.with_kitchen_dir(dir);
     }
+    if let Some(h) = &handover {
+        lan_hub = lan_hub.with_handover(Arc::clone(h), scratch_dir.clone());
+    }
     let lan_hub = Arc::new(lan_hub);
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
     #[cfg(feature = "dev-fixtures")]
@@ -543,6 +564,9 @@ async fn run(
         ui_auth = ui_auth.with_media_cache(Arc::clone(cache));
     }
     let ui_auth = Arc::new(ui_auth);
+    if let Some(h) = &handover {
+        ui_auth.set_handover(Arc::clone(h));
+    }
     let command_poke = Arc::new(Notify::new());
     let setup_templates = arena_tasks::SetupTemplateInbox::new();
     let resend = arena_tasks::ResendInbox::new();
@@ -567,26 +591,27 @@ async fn run(
             .run(),
         )
     });
-    let heartbeat_job = tokio::spawn(
-        HeartbeatTask::new(
-            cloud.clone(),
-            Arc::clone(&keystore),
-            writer.clone(),
-            pair_gate.clone(),
-            status_tx.clone(),
-            verify_keys.clone(),
-            env!("CARGO_PKG_VERSION").to_owned(),
-        )
-        .with_poke(Arc::clone(&command_poke))
-        .with_templates(Arc::clone(&setup_templates))
-        .with_resend(Arc::clone(&resend))
-        .with_tunnel(tunnel_inbox)
-        .with_presence({
-            let presence = lan_hub.presence();
-            Arc::new(move |id| presence.status(id))
-        })
-        .run(),
-    );
+    let mut heartbeat = HeartbeatTask::new(
+        cloud.clone(),
+        Arc::clone(&keystore),
+        writer.clone(),
+        pair_gate.clone(),
+        status_tx.clone(),
+        verify_keys.clone(),
+        env!("CARGO_PKG_VERSION").to_owned(),
+    )
+    .with_poke(Arc::clone(&command_poke))
+    .with_templates(Arc::clone(&setup_templates))
+    .with_resend(Arc::clone(&resend))
+    .with_tunnel(tunnel_inbox)
+    .with_presence({
+        let presence = lan_hub.presence();
+        Arc::new(move |id| presence.status(id))
+    });
+    if let Some(h) = &handover {
+        heartbeat = heartbeat.with_handover(Arc::clone(h));
+    }
+    let heartbeat_job = tokio::spawn(heartbeat.run());
     // `backup.now` (Story 8.19) asks the upload task for an immediate cycle.
     let (backup_requester, backup_responder) = arena_tasks::backup_channel();
     // The change-log upload (Story 8.2): primary and paid only, reads through the snapshot reader.
@@ -838,7 +863,7 @@ async fn run(
     );
     cloud_pairer = cloud_pairer
         .with_templates(setup_templates)
-        .with_hub_name(pc_name);
+        .with_hub_name(pc_name.clone());
     cloud_pairer = cloud_pairer.with_restore(restore_key, status_tx.clone());
     if let Some(s) = &secrets {
         cloud_pairer = cloud_pairer.with_kek_store(Arc::clone(&s.kek));
@@ -861,7 +886,7 @@ async fn run(
     });
     let router = arena_api::router(status_rx.clone(), Arc::clone(&clock))
         .merge(arena_api::ui_router(
-            snapshots,
+            Arc::clone(&snapshots),
             Arc::clone(&clock),
             lan_hub.presence(),
             Some(status_rx.clone()),
@@ -873,6 +898,20 @@ async fn run(
             restore_fetch,
             restore_rebuild,
         ));
+    // The Windows Hub of a Hub move claims the Android Hub's code from its waiting screen
+    // (Story 10.17).
+    let router = match &handover {
+        Some(h) if cfg.platform == arena_proto::HubPlatform::Windows => router.merge(
+            arena_api::ui_migration_router(Arc::new(arena_tasks::HandoverPuller::new(
+                Arc::clone(h),
+                Arc::clone(&snapshots),
+                status_rx.clone(),
+                pc_name.clone(),
+                cfg.data_dir.join("handover"),
+            ))),
+        ),
+        _ => router,
+    };
     #[cfg(feature = "dev-fixtures")]
     let router = router.merge(arena_api::health::dev_router(
         writer.clone(),

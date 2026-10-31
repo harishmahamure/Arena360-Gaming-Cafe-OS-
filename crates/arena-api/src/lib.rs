@@ -14,10 +14,12 @@ mod ui_backup;
 mod ui_backup_tests;
 mod ui_coupons;
 pub mod ui_events;
+mod ui_handover;
 mod ui_import;
 mod ui_library;
 #[cfg(test)]
 mod ui_library_tests;
+mod ui_migration;
 pub mod ui_pair;
 mod ui_pairing;
 #[cfg(test)]
@@ -43,6 +45,7 @@ pub use health::{
 };
 pub use standby::StandbyObserver;
 pub use ui_auth::{UiAuth, ui_auth_router};
+pub use ui_migration::ui_migration_router;
 pub use ui_pair::ui_pair_router;
 pub use ui_restore_fetch::ui_restore_fetch_router;
 pub use ui_standby::ui_standby_router;

@@ -305,6 +305,25 @@ impl ControlDb {
         })
     }
 
+    /// The Android Hub says the Windows Hub holds the final snapshot (Story 10.17): the move goes
+    /// from `awaiting_handover` to `handed_over`. `false` when `from_hub_id` has no such move (it
+    /// was cancelled, or already reported), so a late report changes nothing.
+    pub async fn mark_migration_handed_over(
+        &self,
+        from_hub_id: &str,
+        migration_id: &str,
+        now: i64,
+    ) -> Result<bool, ControlError> {
+        self.transact(vec![
+            Stmt::new(
+                "UPDATE hub_migrations SET state = 'handed_over', updated_at = ?                  WHERE id = ? AND from_hub_id = ? AND state = 'awaiting_handover'",
+                vec![SqlValue::Integer(now), text(migration_id), text(from_hub_id)],
+            )
+            .expect(1),
+        ])
+        .await
+    }
+
     /// The owner cancels the move before the handover: the move is `cancelled`, the Windows Hub's
     /// token is revoked and a waiting code is invalidated. `None` when there was no move to cancel
     /// (none, already over, or the handover has begun).

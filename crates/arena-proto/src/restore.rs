@@ -264,6 +264,7 @@ mod tests {
                 schema_version: 84,
                 exported_at: 1_800_000_000_000,
                 sha256: "ab".repeat(32),
+                purpose: None,
             },
             old_epoch: "4:abc".into(),
             new_epoch: "5:abc".into(),

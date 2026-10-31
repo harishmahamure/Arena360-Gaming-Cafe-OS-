@@ -32,6 +32,7 @@ mod frame;
 mod game_catalog;
 mod gst;
 mod gst_archive;
+mod handover;
 mod import;
 mod intent;
 mod kek;
@@ -230,6 +231,13 @@ pub use gst_archive::{
     GstArchiveEntry, GstArchiveInvoice, GstArchiveLine, GstArchiveList, GstArchivePublish,
     GstArchiveRate, GstArchiveRateTotal, GstArchiveV1, PRESIGN_KIND_GST_ARCHIVE,
     gst_archive_object_key, gst_archive_year_label, valid_fy,
+};
+pub use handover::{
+    HANDOVER_ACK_PATH, HANDOVER_CLAIM_PATH, HANDOVER_CODE_TTL_MS, HANDOVER_FAILURES_PER_CODE,
+    HANDOVER_PURPOSE, HANDOVER_RECEIVED_KEY, HANDOVER_SNAPSHOT_PATH, HANDOVER_SNAPSHOT_TYPE,
+    HANDOVER_STATE_KEY, HandedOver, HandoverAck, HandoverClaim, HandoverClaimed,
+    HandoverJoinRequest, HandoverPhase, HandoverPinRequest, HandoverRefused, HandoverSnapshotFacts,
+    HandoverView, valid_handover_code,
 };
 pub use import::{
     IMPORT_CHUNK_ROWS, IMPORT_CREDIT_REMINDER_DAYS, IMPORT_MAX_BYTES, IMPORT_MAX_FAILURES,

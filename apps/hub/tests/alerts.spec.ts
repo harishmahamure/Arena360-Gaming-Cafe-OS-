@@ -410,7 +410,8 @@ test("a Hub move is a persistent branch row naming the PC, with no sound, until 
   const row = page.getByTestId("alert-row");
   await expect(row).toContainText(en["hub.alerts.branch"]);
   await expect(row).toContainText("Move this branch to Front desk");
-  await expect(row.getByRole("button")).toHaveCount(0);
+  // It opens the move panel (Story 10.17) and acknowledges nothing.
+  await expect(row.getByRole("button")).toHaveCount(1);
   await page.clock.runFor(MIN);
   expect(await plays(page)).toEqual([]);
   hub.move = null;

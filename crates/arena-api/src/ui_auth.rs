@@ -431,6 +431,8 @@ pub struct UiAuth {
     key_backup: Option<Arc<dyn arena_core::KeyBackupLookup>>,
     /// Promotes this standby to main (Story 9.21); set once by the Hub when it runs as a standby.
     promote: std::sync::OnceLock<PromoteHook>,
+    /// The handover of the branch to a Windows Hub (Story 10.17); set once by the Hub.
+    handover: std::sync::OnceLock<Arc<arena_core::handover::Handover>>,
 }
 
 /// Asks the host process to stop and start again.
@@ -510,6 +512,7 @@ impl UiAuth {
             restart: None,
             key_backup: None,
             promote: std::sync::OnceLock::new(),
+            handover: std::sync::OnceLock::new(),
             streams: Mutex::new(HashMap::new()),
         }
     }
@@ -538,6 +541,15 @@ impl UiAuth {
     /// Sets what "Promote to main" runs (Story 9.21). Set once; a second call changes nothing.
     pub fn set_promote(&self, hook: PromoteHook) {
         let _ = self.promote.set(hook);
+    }
+
+    /// Sets the handover the Hub UI's "Move this branch" routes drive (Story 10.17). Set once.
+    pub fn set_handover(&self, handover: Arc<arena_core::handover::Handover>) {
+        let _ = self.handover.set(handover);
+    }
+
+    pub(crate) fn handover(&self) -> Option<Arc<arena_core::handover::Handover>> {
+        self.handover.get().cloned()
     }
 
     pub(crate) fn promote_hook(&self) -> Option<PromoteHook> {
@@ -1063,6 +1075,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         ErrorCode::NotPrimary
         | ErrorCode::HubSlow
         | ErrorCode::NoHub
+        | ErrorCode::HubHandingOver
         | ErrorCode::RestorePending => StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         ErrorCode::Fenced
@@ -3803,6 +3816,9 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         .route("/ui/backup/restore", post(crate::ui_backup::restore))
         .route("/ui/backup/status", get(crate::ui_backup::status))
         .route("/ui/standby/promote", post(crate::ui_promote::promote))
+        .route("/ui/handover/start", post(crate::ui_handover::start))
+        .route("/ui/handover/file", post(crate::ui_handover::file))
+        .route("/ui/handover/cancel", post(crate::ui_handover::cancel))
         .route(
             "/ui/backup/gst-archive",
             get(crate::ui_backup::gst_archives),

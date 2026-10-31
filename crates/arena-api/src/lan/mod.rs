@@ -17,6 +17,7 @@
 
 mod call_staff;
 mod games;
+mod handover;
 mod kds_pair;
 mod kitchen_board;
 pub mod listener;
@@ -264,6 +265,10 @@ pub struct LanHub {
     /// Where the standby replication reads the database (Story 9.19); without it the Hub serves
     /// no standby.
     pub replication: Option<replicate::ReplicationSource>,
+    /// The handover of the branch to a Windows Hub and the folder its scratch snapshot is written
+    /// in (Story 10.17); without it the Hub serves no handover.
+    pub handover: Option<(Arc<arena_core::handover::Handover>, std::path::PathBuf)>,
+    handover_attempts: handover::Attempts,
     /// Opens a player's sealed name for `player.authenticate`; without it that frame is
     /// `UNSUPPORTED` (Story 6.8).
     pub player_kek: Option<Arc<dyn arena_core::players::Kek>>,
@@ -309,6 +314,8 @@ impl LanHub {
             kitchen_dir: None,
             media: None,
             replication: None,
+            handover: None,
+            handover_attempts: handover::Attempts::default(),
             player_kek: None,
             live_keys: Vec::new(),
             registry: Arc::new(registry::Registry::default()),
@@ -369,6 +376,17 @@ impl LanHub {
         self
     }
 
+    /// Serves the handover routes from `handover`, writing its scratch snapshot in `scratch`
+    /// (Story 10.17).
+    pub fn with_handover(
+        mut self,
+        handover: Arc<arena_core::handover::Handover>,
+        scratch: std::path::PathBuf,
+    ) -> Self {
+        self.handover = Some((handover, scratch));
+        self
+    }
+
     /// Serves `GET /media/<sha256>` on `:7401` from `cache` (Story 6.2).
     pub fn with_media(mut self, cache: Arc<arena_core::media_cache::MediaCache>) -> Self {
         self.media = Some(cache);
@@ -426,8 +444,21 @@ impl LanHub {
         s.restore_pending.is_some() || s.migration_wait.is_some()
     }
 
-    /// `RESTORE_PENDING` while the Hub waits to be restored.
+    /// `RESTORE_PENDING` while the Hub waits to be restored, `HUB_HANDING_OVER` once it has stopped
+    /// to hand the branch to a Windows Hub (Story 10.17).
     fn refuse_while_restoring(&self) -> Result<(), arena_proto::AppError> {
+        if self
+            .status
+            .borrow()
+            .handover
+            .as_ref()
+            .is_some_and(|h| h.phase.stops_hub())
+        {
+            return Err(arena_proto::AppError::new(
+                arena_proto::ErrorCode::HubHandingOver,
+                "this hub is handing the branch to another hub",
+            ));
+        }
         if self.restore_pending() {
             return Err(arena_proto::AppError::new(
                 arena_proto::ErrorCode::RestorePending,

@@ -404,6 +404,11 @@ pub struct HeartbeatRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub backup: Option<HeartbeatBackup>,
+    /// The Windows Hub holds the final snapshot of a Hub move (Story 10.17): sent by the Android
+    /// Hub until the answer no longer asks for the move.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub handed_over: Option<crate::HandedOver>,
 }
 
 /// The backup block of a paid Hub's heartbeat (Story 9.17). Times are Hub-clock ms, like

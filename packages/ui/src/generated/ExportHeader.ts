@@ -27,4 +27,9 @@ export type ExportHeader = {
    * Lower-case hex SHA-256 of the compressed body.
    */
   sha256: string;
+  /**
+   * Why the file was made when it is not an ordinary export: `migrate` for the final snapshot
+   * an Android Hub hands to a Windows Hub (Story 10.17). Absent in every other file.
+   */
+  purpose?: string;
 };

@@ -127,7 +127,7 @@ pub use devices::{
     set_group_deleted, set_zone_deleted, tv_number_taken, update_device_meta, update_group,
     update_zone,
 };
-pub use export::{ExportedFile, prune_auto_exports, write_export};
+pub use export::{ExportedFile, prune_auto_exports, write_export, write_export_for};
 pub use export_reference::{Meanings, reference_gaps, render_export_reference};
 pub use game_plays::{
     NewGamePlay, insert_game_play, last_played, session_on_device_at, top_played,

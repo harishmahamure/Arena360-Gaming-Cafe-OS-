@@ -165,6 +165,15 @@ fn copy_and_strip(db_path: &Path, scratch: &Path) -> Result<Facts, AppError> {
         copy.execute_batch("UPDATE devices SET token_hash = '';")
             .map_err(db_error)?;
     }
+    // The handover state of the Hub that made the copy (its code and transfer token) is not part
+    // of the branch.
+    if table_exists(&copy, "hub_meta")? {
+        copy.execute(
+            "DELETE FROM hub_meta WHERE key = ?1",
+            [arena_proto::HANDOVER_STATE_KEY],
+        )
+        .map_err(db_error)?;
+    }
     if table_exists(&copy, "kitchen_displays")? {
         copy.execute_batch("UPDATE kitchen_displays SET token_hash = '';")
             .map_err(db_error)?;
@@ -254,6 +263,18 @@ pub fn write_export(
     file_name: &str,
     exported_at: i64,
 ) -> Result<ExportedFile, AppError> {
+    write_export_for(db_path, folder, file_name, exported_at, None)
+}
+
+/// [`write_export`] with the header's `purpose` set: the final snapshot an Android Hub hands to a
+/// Windows Hub is made with `Some("migrate")` (Story 10.17).
+pub fn write_export_for(
+    db_path: &Path,
+    folder: &Path,
+    file_name: &str,
+    exported_at: i64,
+    purpose: Option<&str>,
+) -> Result<ExportedFile, AppError> {
     let scratch_dir = db_path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -296,6 +317,7 @@ pub fn write_export(
         schema_version: facts.schema_version,
         exported_at,
         sha256,
+        purpose: purpose.map(str::to_owned),
     };
     let encoded = header.encode();
     let written = write_part(&part, &encoded, &packed).and_then(|()| fs::rename(&part, &target));

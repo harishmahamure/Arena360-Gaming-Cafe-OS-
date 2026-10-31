@@ -2324,6 +2324,35 @@ built by `upgradeUrl` in `@arena/ui`; each app says where the picker lives with 
 - Not done here (Stories 10.17-10.19): the handover itself, the snapshot, the epoch claim, the branch key release and the
   kiosks following the new Hub. `hub_migrations.state` already names those states because a CHECK cannot be widened later.
 
+## The Android Hub hands over a final snapshot and steps down (Story 10.17)
+
+- **Confirm on the tablet.** The alert-list row "Move this branch to <PC name>" opens a panel; an Owner or Manager enters their
+  PIN (`ops.promote`, the permission that moves the main role between Hubs; the PIN is always asked, even of a signed-in
+  Manager) at `POST /ui/handover/start` and the tablet shows a 6-digit code (valid 15 min) and its LAN address. The state is a
+  `Handover` (`arena-core`) kept in `hub_meta.handover` outside the change log, so a restart finds a stopped Hub still stopped.
+- **The PC claims it.** The Windows Hub's "Waiting for your Android Hub" screen takes the tablet's address (`host[:port]`,
+  `:7401` by default) and the code (`POST /ui/migration/join`, loopback only). The code never crosses the wire: each side sends
+  `SHA-256(code, TLS certificate fingerprint it saw, purpose, extra)` (`handover_proof`), so a certificate in the middle cannot
+  claim or answer, and the PC checks the tablet's certificate is the same on every later connection. `POST /v1/handover/claim`
+  on `:7401` (TLS only) counts wrong proofs per code (the sixth attempt invalidates it and shows a new one, `code_replaced`)
+  and per address (30 per 15 min).
+- **Stop, drain, snapshot.** A good claim sets `HandoverPhase::Transferring`: `ApplyCtx::handing_over` refuses every intent
+  `HUB_HANDING_OVER` and the LAN `hello` is refused the same way (kiosks show their reconnecting state and count down on
+  `lock_after_ms`); `WriterHandle::barrier()` waits for the writer queue; then the snapshot is a `.a360` file (Story 9.4
+  format) whose header has `purpose: "migrate"`, the last `seq` and the epoch. The Hub's own handover state is stripped from
+  the copy. Nothing changes the epoch or the log, so a cancelled move leaves the Hub exactly as it was.
+- **Transfer.** The PC pulls `GET /v1/handover/snapshot` with the transfer token the claim answered, checks size, SHA-256,
+  branch id, `seq`, epoch and the header's purpose, keeps the file under `<data dir>/handover/`, then `POST /v1/handover/ack`.
+  The tablet enters `Moved` ("This branch has moved to <PC name>", read-only, serves nothing) and its next heartbeat carries
+  `handed_over {migration_id, last_seq}`; the cloud moves the move to `handed_over` (the owner can no longer cancel it).
+- **No LAN.** "Use a file instead" (PIN) writes the same snapshot to the backup folder as `<code>-<stamp>-move.a360` and the Hub
+  stays stopped (`HandoverPhase::File`). "Cancel move" (PIN) at any point before `Moved` resumes the Hub as main, deletes the
+  snapshot (a stale copy imported later would roll the branch back) and the file written to the backup folder. If the
+  owner cancels in the cloud while only the code is showing, the next heartbeat ends the handover; once the Hub has stopped,
+  only the manager's "Cancel move" resumes it.
+- Not done here: importing the snapshot, the epoch claim, the branch key release (Story 10.18) and the kiosks following the new
+  Hub (Story 10.19). The snapshot has device token hashes blanked (as every export), so kiosks pair again until then.
+
 ## Renewals that need approval, grace and lapse (Story 10.11)
 
 - **States** (AD-20): `active -> renewal_needs_approval -> grace -> lapsed`, every move in `subscription_history`. The

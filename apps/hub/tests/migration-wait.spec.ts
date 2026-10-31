@@ -76,7 +76,9 @@ test("a Windows Hub paired for a move shows only Waiting for your Android Hub", 
   await expect(page).toHaveURL(/\/floor$/);
   await expect(page.locator("nav")).toHaveCount(0);
   await expect(page.locator("h1")).toHaveCount(1);
-  await expect(page.getByRole("button")).toHaveCount(0);
+  // The only control is the form that takes the tablet's address and code (Story 10.17).
+  await expect(page.getByRole("button")).toHaveCount(1);
+  await expect(page.getByRole("button")).toBeDisabled();
 });
 
 test("the Waiting for your Android Hub screen meets the accessibility floor", async ({ page }) => {

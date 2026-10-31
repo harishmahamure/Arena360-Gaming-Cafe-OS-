@@ -114,6 +114,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         ErrorCode::NotPrimary
         | ErrorCode::HubSlow
         | ErrorCode::NoHub
+        | ErrorCode::HubHandingOver
         | ErrorCode::RestorePending => StatusCode::SERVICE_UNAVAILABLE,
         ErrorCode::HubIncompatible => StatusCode::CONFLICT,
         ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
@@ -377,6 +378,7 @@ mod tests {
             (ErrorCode::SubscriptionExists, 409),
             (ErrorCode::RefundNotAllowed, 409),
             (ErrorCode::HubMigrationActive, 409),
+            (ErrorCode::HubHandingOver, 503),
         ] {
             assert_eq!(status_of(code).as_u16(), status, "{code:?}");
         }

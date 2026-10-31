@@ -6370,6 +6370,7 @@ b"
                     schema_version: 84,
                     exported_at: hub.clock_now(),
                     sha256: "ab".repeat(32),
+                    purpose: None,
                 },
                 old_epoch: "2:proptest".into(),
                 new_epoch: "3:proptest".into(),

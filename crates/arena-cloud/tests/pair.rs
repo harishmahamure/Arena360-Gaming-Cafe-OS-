@@ -3569,3 +3569,63 @@ async fn a_move_code_pairs_nothing_once_the_plan_is_free_again() {
     assert!(late.status >= 400, "{}", late.body);
     assert!(h.migration_rows()[0].1.is_none());
 }
+
+// ---- Story 10.17: the Android Hub reports that the Windows Hub holds the snapshot ----
+
+impl Harness {
+    async fn beat_handed_over(&self, token: &str, migration_id: &str, last_seq: i64) -> Reply {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/heartbeat")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::from(
+                json!({"epoch": "1:HUBA", "version": "0.2.0", "schema_version": 12,
+                       "last_seq_uploaded": 0,
+                       "handed_over": {"migration_id": migration_id, "last_seq": last_seq}})
+                .to_string(),
+            ))
+            .unwrap();
+        reply(self.app.clone().oneshot(req).await.unwrap()).await
+    }
+}
+
+#[tokio::test]
+async fn the_handover_report_moves_the_move_on_once_and_only_for_its_android_hub() {
+    let h = Harness::new().await;
+    let (a, branch, android) = h.basic_with_android().await;
+    let code = code_of(&h.start_move(&a, &branch).await);
+    let paired = h
+        .pair_named(&code, "windows", "FRONT-PC", "Front desk")
+        .await;
+    assert_eq!(paired.status, 200, "{}", paired.body);
+    let pc_token = paired.body["token"].as_str().unwrap().to_owned();
+    let id = h.migration_rows()[0].0.clone();
+
+    // A report for another move, or from the PC, changes nothing.
+    h.advance(10_000);
+    assert_eq!(h.beat_handed_over(&android, "OTHER", 9).await.status, 200);
+    assert_eq!(h.migration_rows()[0].3, "awaiting_handover");
+    let from_pc = h.beat_handed_over(&pc_token, &id, 9).await;
+    assert_eq!(from_pc.status, 403, "{}", from_pc.body);
+    assert_eq!(h.migration_rows()[0].3, "awaiting_handover");
+
+    // The Android Hub's own report moves it, and the answer stops asking for the move.
+    h.advance(10_000);
+    let beat = h.beat_handed_over(&android, &id, 42).await;
+    assert_eq!(beat.status, 200, "{}", beat.body);
+    assert!(beat.body.get("migration").is_none(), "{}", beat.body);
+    assert_eq!(h.migration_rows()[0].3, "handed_over");
+    assert_eq!(
+        h.owner_branch(&a).await["migration"]["phase"],
+        "awaiting_handover"
+    );
+
+    // Past the handover the owner can no longer cancel it, and the report is not repeated into a
+    // second state change.
+    let cancel = h.cancel_move(&a, &branch).await;
+    assert_eq!((cancel.status, cancel.code()), (404, "NOT_FOUND"));
+    h.advance(10_000);
+    assert_eq!(h.beat_handed_over(&android, &id, 42).await.status, 200);
+    assert_eq!(h.migration_rows()[0].3, "handed_over");
+}

@@ -36,6 +36,7 @@ mod game_play;
 mod group_bill;
 mod gst;
 mod gst_archive;
+mod handover;
 mod import_plans;
 mod import_players;
 mod import_products;

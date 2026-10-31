@@ -140,6 +140,9 @@ pub struct ApplyCtx<'a> {
     pub role: Role,
     /// This Hub waits to be restored and refuses every intent `RESTORE_PENDING` (Story 9.9).
     pub restore_pending: bool,
+    /// This Android Hub hands its branch to a Windows Hub and refuses every intent
+    /// `HUB_HANDING_OVER` (Story 10.17).
+    pub handing_over: bool,
     /// Test hook: fail right after `mutate`, to prove the rollback.
     #[cfg(test)]
     pub(crate) fail_after_mutate: bool,
@@ -152,6 +155,7 @@ impl<'a> ApplyCtx<'a> {
             epoch,
             role,
             restore_pending: false,
+            handing_over: false,
             #[cfg(test)]
             fail_after_mutate: false,
         }
@@ -497,6 +501,12 @@ pub(crate) fn run(
         return Err(AppError::new(
             arena_proto::ErrorCode::RestorePending,
             "this hub is waiting for the branch to be restored",
+        ));
+    }
+    if ctx.handing_over {
+        return Err(AppError::new(
+            arena_proto::ErrorCode::HubHandingOver,
+            "this hub is handing the branch to another hub",
         ));
     }
     let now = ctx.clock.now_ms();

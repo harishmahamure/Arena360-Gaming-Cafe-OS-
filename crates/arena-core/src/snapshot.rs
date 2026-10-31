@@ -50,6 +50,7 @@ pub fn build_snapshot(
         restore_pending: None,
         migration_wait: None,
         move_notice: None,
+        handover: None,
         restore_key_released: None,
         needs_repair: None,
         licence_unverified: None,
@@ -786,6 +787,16 @@ impl SnapshotReader {
     }
 
     /// The database file this reader reads.
+    /// The branch id the cloud paired this Hub with, if it is paired (Story 10.17). Blocking
+    /// (SQLite).
+    pub fn hub_branch_id(&self) -> Result<Option<String>, AppError> {
+        let store = self
+            .reader
+            .lock()
+            .map_err(|_| AppError::new(ErrorCode::Internal, "snapshot reader lock poisoned"))?;
+        Ok(store.hub_identity()?.map(|i| i.branch_id))
+    }
+
     pub fn db_path(&self) -> Result<std::path::PathBuf, AppError> {
         let store = self
             .reader
@@ -2782,6 +2793,7 @@ mod tests {
                 restore_pending: None,
                 migration_wait: None,
                 move_notice: None,
+                handover: None,
                 restore_key_released: None,
                 needs_repair: None,
                 licence_unverified: None,
@@ -2840,6 +2852,7 @@ mod tests {
                 restore_pending: None,
                 migration_wait: None,
                 move_notice: None,
+                handover: None,
                 restore_key_released: None,
                 needs_repair: None,
                 licence_unverified: None,

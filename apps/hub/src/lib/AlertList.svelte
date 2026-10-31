@@ -35,7 +35,8 @@
 
   const where = (row: AlertRow) =>
     row.deviceId ? (names[row.deviceId] ?? "") : t("hub.alerts.branch");
-  const acts = (row: AlertRow) => row.alertId !== null;
+  /** An alert acknowledges; the "move this branch" item opens its panel (Story 10.17). */
+  const acts = (row: AlertRow) => row.alertId !== null || row.key === "move";
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->

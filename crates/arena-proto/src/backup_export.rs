@@ -49,6 +49,11 @@ pub struct ExportHeader {
     pub exported_at: i64,
     /// Lower-case hex SHA-256 of the compressed body.
     pub sha256: String,
+    /// Why the file was made when it is not an ordinary export: `migrate` for the final snapshot
+    /// an Android Hub hands to a Windows Hub (Story 10.17). Absent in every other file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub purpose: Option<String>,
 }
 
 /// Why bytes are not an export file.
@@ -408,6 +413,7 @@ mod tests {
             schema_version: 85,
             exported_at: 1_800_000_000_000,
             sha256: "ab".repeat(32),
+            purpose: None,
         }
     }
 

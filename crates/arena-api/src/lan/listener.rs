@@ -289,6 +289,24 @@ async fn serve_tls(
         Route::ReplicateSnapshot => {
             return super::replicate::answer_snapshot(&mut tls, peer, &head, &hub).await;
         }
+        Route::HandoverSnapshot => {
+            return super::handover::answer_snapshot(&mut tls, peer, &head, &hub).await;
+        }
+        Route::HandoverClaim => {
+            let hub = Arc::clone(&hub);
+            return answer_pair(&mut tls, &head, |body| async move {
+                super::handover::claim(&hub, peer, &body).await
+            })
+            .await;
+        }
+        Route::HandoverAck => {
+            let hub = Arc::clone(&hub);
+            let token = super::handover::bearer(&head);
+            return answer_pair(&mut tls, &head, |body| async move {
+                super::handover::ack(&hub, token, &body).await
+            })
+            .await;
+        }
         _ => {}
     }
     let stream = Prefixed {
@@ -358,6 +376,11 @@ pub(crate) enum Route {
     Media,
     /// `GET /v1/replicate/snapshot`: the standby's snapshot (TLS only, Story 9.19).
     ReplicateSnapshot,
+    /// `POST /v1/handover/claim`, `GET /v1/handover/snapshot`, `POST /v1/handover/ack`: the
+    /// Windows Hub takes the branch over (TLS only, Story 10.17).
+    HandoverClaim,
+    HandoverSnapshot,
+    HandoverAck,
     NotFound,
 }
 
@@ -374,6 +397,12 @@ pub(crate) fn route(request_line: &str) -> Route {
     if method == "POST" && path == arena_proto::KDS_PAIR_PATH {
         return Route::KitchenPair;
     }
+    if method == "POST" && path == arena_proto::HANDOVER_CLAIM_PATH {
+        return Route::HandoverClaim;
+    }
+    if method == "POST" && path == arena_proto::HANDOVER_ACK_PATH {
+        return Route::HandoverAck;
+    }
     if method != "GET" {
         return Route::NotFound;
     }
@@ -382,6 +411,9 @@ pub(crate) fn route(request_line: &str) -> Route {
     }
     if path == arena_proto::REPLICATE_SNAPSHOT_PATH {
         return Route::ReplicateSnapshot;
+    }
+    if path == arena_proto::HANDOVER_SNAPSHOT_PATH {
+        return Route::HandoverSnapshot;
     }
     match path {
         "/ws" => Route::Ws,
@@ -575,9 +607,13 @@ async fn serve_plain(mut tcp: TcpStream, peer: SocketAddr, hub: Arc<LanHub>) {
         }
         // Everything else is for TLS clients (pairing, media) or does not exist: plain HTTP
         // answers only the kitchen, the WebSocket, `/hub-info` and `/console/<tv>`.
-        Route::NotFound | Route::Pair | Route::Media | Route::ReplicateSnapshot => {
-            write_answer(&mut tcp, super::kds_pair::forbidden()).await
-        }
+        Route::NotFound
+        | Route::Pair
+        | Route::Media
+        | Route::ReplicateSnapshot
+        | Route::HandoverClaim
+        | Route::HandoverSnapshot
+        | Route::HandoverAck => write_answer(&mut tcp, super::kds_pair::forbidden()).await,
         Route::Ws => {
             let stream = Prefixed {
                 prefix: head,

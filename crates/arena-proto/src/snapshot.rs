@@ -80,6 +80,11 @@ pub struct HubSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub move_notice: Option<crate::MigrationNotice>,
+    /// The handover of the branch between an Android and a Windows Hub, as this Hub sees it
+    /// (Story 10.17).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub handover: Option<crate::HandoverView>,
     /// The owner released the branch key to this waiting Hub and it holds the key (Story 9.10):
     /// "Restore from a file" is enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -494,6 +499,7 @@ mod tests {
             restore_pending: None,
             migration_wait: None,
             move_notice: None,
+            handover: None,
             restore_key_released: None,
             needs_repair: None,
             licence_unverified: None,

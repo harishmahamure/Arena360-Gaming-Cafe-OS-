@@ -41,6 +41,7 @@ fn restore(f: &Fixture) -> OpsRestore {
             schema_version: 84,
             exported_at: T0 - 60_000,
             sha256: "ab".repeat(32),
+            purpose: None,
         },
         old_epoch: "4:abc".into(),
         new_epoch: "5:abc".into(),

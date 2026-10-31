@@ -825,10 +825,10 @@
       />
     </main>
   </div>
-{:else if handingOver !== null}
+{:else if handingOver !== null && !(onSignIn && !staff && handingOver.phase !== "moved")}
   <div class="pair-screen" data-theme="dark">
     <main class="hub-main" bind:this={mainEl}>
-      <HandoverStopped view={handingOver} />
+      <HandoverStopped view={handingOver} signedIn={staff !== null} />
     </main>
   </div>
 {:else if awaitingAndroid !== null}

@@ -269,8 +269,14 @@ async fn the_acknowledgement_moves_the_hub_to_read_only_and_is_reported() {
         change(&m.f).await.unwrap_err().code,
         ErrorCode::HubHandingOver
     );
-    // The token is spent and the Hub cannot take the move back.
+    // The token no longer serves the snapshot; the same acknowledgement is answered again (a lost
+    // answer), but another token is not.
     assert!(m.handover.snapshot_for(&c.transfer_token).await.is_none());
+    m.handover
+        .acknowledge(&c.transfer_token, &ack)
+        .await
+        .unwrap();
+    assert!(m.handover.acknowledge("nope", &ack).await.is_err());
     assert_eq!(
         m.handover.cancel().await.unwrap_err().code,
         ErrorCode::HubHandingOver

@@ -376,8 +376,10 @@ impl Handover {
     pub async fn acknowledge(&self, token: &str, ack: &HandoverAck) -> Result<(), HandoverRefused> {
         let mut guard = self.state.lock().await;
         let internal = |e: AppError| refused(e.code, &e.message, false);
-        let Some(s) = guard.as_mut().filter(|s| {
-            s.phase == HandoverPhase::Transferring && token_is(s, token) && s.made.is_some()
+        let Some(s) = guard.as_ref().filter(|s| {
+            matches!(s.phase, HandoverPhase::Transferring | HandoverPhase::Moved)
+                && token_is(s, token)
+                && s.made.is_some()
         }) else {
             return Err(refused(
                 ErrorCode::TokenInvalid,
@@ -393,16 +395,23 @@ impl Handover {
                 false,
             ));
         }
-        s.phase = HandoverPhase::Moved;
-        s.token_hash = None;
-        s.code.clear();
-        let _ = std::fs::remove_file(&made.path);
-        s.made = Some(Made {
+        if s.phase == HandoverPhase::Moved {
+            // The PC asks again because our answer was lost: the same facts, the same answer.
+            return Ok(());
+        }
+        // Store first: a failed write leaves the Hub as it was, and the PC may ask again.
+        let mut moved = s.clone();
+        moved.phase = HandoverPhase::Moved;
+        moved.code.clear();
+        moved.made = Some(Made {
             path: PathBuf::new(),
-            ..made
+            ..made.clone()
         });
-        let moved = guard.clone();
-        self.store(&moved).await.map_err(internal)
+        let next = Some(moved);
+        self.store(&next).await.map_err(internal)?;
+        *guard = next;
+        let _ = std::fs::remove_file(&made.path);
+        Ok(())
     }
 
     /// "Use a file instead": the Hub stops (if the Windows Hub has not claimed yet), drains, and
@@ -502,6 +511,12 @@ impl Handover {
                     "this branch has already moved",
                 ));
             }
+            Some(s) if s.phase == HandoverPhase::Received => {
+                return Err(AppError::new(
+                    ErrorCode::ValidationFailed,
+                    "this Hub holds the snapshot; there is no move to cancel here",
+                ));
+            }
             Some(_) => {}
         }
         self.store(&None).await?;
@@ -515,14 +530,16 @@ impl Handover {
     /// cancelled it) ends a handover that has not stopped the Hub yet; one that has stopped it
     /// waits for the manager's "Cancel move".
     pub async fn on_notice(&self, notice: Option<&arena_proto::MigrationNotice>) {
-        let waiting = {
-            let guard = self.state.lock().await;
-            guard
-                .as_ref()
-                .is_some_and(|s| s.phase == HandoverPhase::Code)
-        };
-        if waiting && notice.is_none() {
-            let _ = self.cancel().await;
+        if notice.is_some() {
+            return;
+        }
+        // One lock for the check and the end, so a claim cannot land in between.
+        let mut guard = self.state.lock().await;
+        let waiting = guard
+            .as_ref()
+            .is_some_and(|s| s.phase == HandoverPhase::Code);
+        if waiting && self.store(&None).await.is_ok() {
+            *guard = None;
         }
     }
 }

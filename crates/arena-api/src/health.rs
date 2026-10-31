@@ -257,6 +257,7 @@ async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Resp
                     snapshot.restore_pending.clone_from(&status.restore_pending);
                     snapshot.migration_wait.clone_from(&status.migration_wait);
                     snapshot.move_notice.clone_from(&status.move_notice);
+                    snapshot.handover.clone_from(&status.handover);
                     snapshot.restore_key_released = (status.restore_pending.is_some()
                         && status.restore_key_released)
                         .then_some(true);

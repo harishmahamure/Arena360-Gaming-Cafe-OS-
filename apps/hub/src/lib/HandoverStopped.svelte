@@ -3,21 +3,20 @@
   import type { HandoverView } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { invalidate } from "$app/navigation";
-  import { SESSION_DEPENDENCY, getToken } from "./auth";
+  import { SESSION_DEPENDENCY } from "./auth";
   import { handoverStep, type HandoverStep } from "./handover";
   import { SNAPSHOT_DEPENDENCY } from "./snapshot";
 
   // The Android Hub after a PC claimed the handover code (Story 10.17): it takes no changes and serves
   // nothing. While the snapshot moves it says so; with a file it names the file; once the PC holds the
   // snapshot it only says the branch has moved. Until then "Cancel move" (PIN) resumes it as main.
-  let { view }: { view: HandoverView } = $props();
+  let { view, signedIn }: { view: HandoverView; signedIn: boolean } = $props();
 
   type PinResult = { ok: true } | { ok: false; message: MessageKey; retryAfterS?: number };
 
   let asking: HandoverStep | null = $state(null);
   let problem: MessageKey | null = $state(null);
   const pc = $derived(view.target_hub_name);
-  const signedIn = $derived(getToken() !== null);
 
   async function submit(step: HandoverStep, pin: string): Promise<PinResult> {
     const result = await handoverStep(step, pin);

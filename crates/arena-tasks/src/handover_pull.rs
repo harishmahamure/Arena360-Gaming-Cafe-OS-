@@ -451,10 +451,14 @@ impl HandoverPuller {
         if reply.status != 200 {
             return Err(refused(reply).await);
         }
-        let file_name = format!(
-            "handover-{}.a360",
-            &facts.sha256[..16.min(facts.sha256.len())]
-        );
+        // The hash names the file: only a SHA-256 in hex may.
+        if facts.sha256.len() != 64 || !facts.sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(err(
+                ErrorCode::RestoreCorrupt,
+                "The snapshot from the tablet does not match what it said it sent (hash).",
+            ));
+        }
+        let file_name = format!("handover-{}.a360", &facts.sha256[..16]);
         std::fs::create_dir_all(&self.dir).map_err(|e| {
             err(
                 ErrorCode::Internal,
@@ -470,11 +474,18 @@ impl HandoverPuller {
         }
 
         // 3. Say it arrived and matched, then remember it.
-        let acknowledged = acknowledge(&host, port, &fingerprint, token, &facts).await;
-        if let Err(e) = acknowledged {
-            let _ = std::fs::remove_file(&target);
-            return Err(e);
+        // The tablet answers the same ask twice the same way, so a lost answer is asked again. The
+        // checked file stays when it is still unknown whether the tablet stepped down: it may be
+        // the only copy.
+        let mut acknowledged = acknowledge(&host, port, &fingerprint, token, &facts).await;
+        for _ in 0..2 {
+            if acknowledged.is_ok() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            acknowledged = acknowledge(&host, port, &fingerprint, token, &facts).await;
         }
+        acknowledged?;
         tracing::info!(
             last_seq = facts.last_seq,
             "handover: the snapshot was received"

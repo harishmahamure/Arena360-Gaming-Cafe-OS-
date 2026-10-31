@@ -2,7 +2,7 @@
 title: "Story 10.17: The Android Hub hands over a final snapshot and steps down"
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: 'd0765fec'
 review_loop_iteration: 0
 context:
@@ -78,3 +78,7 @@ warnings: []
 ## Auto Run Result
 
 Status: review. Risks to know: (1) the handover claim authenticates by the code bound to the TLS certificate, not by a pinned certificate, because the PC has never seen the tablet's; a six-digit code is guessable offline by someone who records a claim, so the 15-minute code lifetime, five tries per code and 30 wrong claims per address per 15 minutes are the real limits. (2) A tablet that has stopped refuses every intent, so a manager who signs out cannot sign back in with the intent path; Cancel move and Use a file need a session that already exists on the tablet (the screen disables them with "Sign in as an Owner or Manager first" when there is none). (3) The snapshot blanks device token hashes like every export, so kiosks pair again until Story 10.19. (4) After `handed_over` the owner app still reads the move as "awaiting handover" until Stories 10.18/10.20 add the later phases. (5) No end-to-end Hub binary test was run: `crates/arena-hub/tests/pairing.rs` (feature `dev-fixtures`) did not compile before this story; the exchange is covered by `arena-api/tests/handover.rs` over a real TLS listener. The disk filled during verification; stale test binaries under `target/debug/deps` were deleted and tests ran with `CARGO_INCREMENTAL=0`.
+
+## Code Review Result
+
+Status: done. Fixed in review: (1) `/ui/snapshot` never copied `status.handover` into `HubSnapshot.handover`, so the code, stopped, moved and received screens never showed on a real Hub (`health.rs`); (2) the acknowledgement now persists before it changes memory or deletes the file, and is answered again for the same facts, and the PC retries it and keeps its checked file when the outcome is unknown instead of deleting what may be the only copy; (3) the unclaimed-code end on a heartbeat answer checks and ends under one lock, so a claim cannot land in between; (4) `cancel` is refused on the Windows Hub's `received` state; (5) the tablet's `sha256` must be 64 hex digits before it names a file on the PC; (6) the stopped screen no longer hides the sign-in page, so a signed-out manager can sign in to cancel or use a file, and its sign-in state is reactive. Deferred: man-in-the-middle limits of a 6-digit code (documented risk), wrong-branch check before the tablet stops, unit tests for the pull checks / `/ui/handover/*` PIN gating / per-address limiter / export strip, audit-log entries for start/file/cancel.

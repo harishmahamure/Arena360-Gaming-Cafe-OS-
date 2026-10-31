@@ -92,6 +92,14 @@ impl StandbyProgress {
         self.last_frame_at = Some(now_ms);
     }
 
+    /// How long the line from the main Hub has been quiet at `now_ms`, counting from the last
+    /// frame, or from when the standby started if it has heard none (Story 9.21). The main Hub
+    /// pings at least every 10 s while it holds its lease, so this is how long the lease has not
+    /// been renewed, as far as the standby can tell.
+    pub fn silent_ms(&self, now_ms: i64) -> i64 {
+        (now_ms - self.last_frame_at.unwrap_or(self.started_at)).max(0)
+    }
+
     /// The standby's report at `now_ms`.
     pub fn report(&self, now_ms: i64) -> StandbyReport {
         let lag_rows = self.lag_rows();

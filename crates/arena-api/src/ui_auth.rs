@@ -426,10 +426,23 @@ pub struct UiAuth {
     /// Stops the Hub so it restarts onto a staged restore (Story 9.7); without it a confirmed
     /// restore stays staged until the Hub is next started.
     restart: Option<RestartHook>,
+    /// Promotes this standby to main (Story 9.21); set once by the Hub when it runs as a standby.
+    promote: std::sync::OnceLock<PromoteHook>,
 }
 
 /// Asks the host process to stop and start again.
 pub type RestartHook = Arc<dyn Fn() + Send + Sync>;
+
+/// What the standby runs when a Manager promotes it (Story 9.21): given the Manager's staff id,
+/// it makes this Hub the main Hub and answers the new epoch, or why it could not.
+pub type PromoteHook = Arc<
+    dyn Fn(
+            String,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<arena_proto::Promoted, AppError>> + Send>,
+        > + Send
+        + Sync,
+>;
 
 pub type BackupProbe =
     Arc<dyn Fn(&std::path::Path) -> Result<(), arena_proto::BackupDirProblem> + Send + Sync>;
@@ -486,6 +499,7 @@ impl UiAuth {
             player_index: Arc::default(),
             media: None,
             restart: None,
+            promote: std::sync::OnceLock::new(),
             streams: Mutex::new(HashMap::new()),
         }
     }
@@ -498,6 +512,15 @@ impl UiAuth {
 
     pub(crate) fn restart_hook(&self) -> Option<RestartHook> {
         self.restart.clone()
+    }
+
+    /// Sets what "Promote to main" runs (Story 9.21). Set once; a second call changes nothing.
+    pub fn set_promote(&self, hook: PromoteHook) {
+        let _ = self.promote.set(hook);
+    }
+
+    pub(crate) fn promote_hook(&self) -> Option<PromoteHook> {
+        self.promote.get().cloned()
     }
 
     /// Answers `GET /ui/media-cache` from `cache` (Story 6.2).
@@ -1008,6 +1031,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::EraseBlocked
         | ErrorCode::KeyAlreadyReleased
         | ErrorCode::RestoreGap
+        | ErrorCode::LeaseFresh
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::NotPrimary
         | ErrorCode::HubSlow
@@ -1834,6 +1858,19 @@ impl UiAuth {
         me: &SessionStaff,
         pin: Option<String>,
     ) -> Result<String, UiError> {
+        self.pin_holder(me, pin, Permission::OpsRestore).await
+    }
+
+    /// Whose PIN `pin` is, for an action that needs `perm`: the signed-in member's own when they
+    /// hold it, else the PIN of another member who does. Answers that member's staff id. The rules
+    /// and the lockout are those of [`restore_owner`](Self::restore_owner), which is this for
+    /// `ops.restore`; a promote (Story 9.21) is this for `ops.promote`.
+    pub(crate) async fn pin_holder(
+        &self,
+        me: &SessionStaff,
+        pin: Option<String>,
+        perm: Permission,
+    ) -> Result<String, UiError> {
         let Some(pin) = pin else {
             return Err(ui_error(arena_core::rbac::denied()));
         };
@@ -1844,7 +1881,7 @@ impl UiAuth {
             .map_err(|_| internal())?
             .begin(&requester, self.clock.now_ms());
         if let Err(retry_after_s) = reserved {
-            tracing::warn!(staff_id = %requester, "restore refused: paused");
+            tracing::warn!(staff_id = %requester, permission = perm.as_str(), "pin check refused: paused");
             return Err(locked(retry_after_s));
         }
         let settle = |matched: Option<bool>| -> Option<u32> {
@@ -1864,7 +1901,7 @@ impl UiAuth {
             settle(None);
             return Err(internal());
         };
-        let is_owner = me.permissions.contains(&Permission::OpsRestore);
+        let is_owner = me.permissions.contains(&perm);
         let staff = Arc::clone(&self.staff);
         let id = requester.clone();
         let found = tokio::task::spawn_blocking(move || -> Result<Option<(String, bool)>, _> {
@@ -1872,7 +1909,7 @@ impl UiAuth {
             if is_owner {
                 return Ok(staff.verify_own_pin(&id, &pin)?.then(|| (id.clone(), true)));
             }
-            if let Some((owner, _)) = staff.match_pin(&[Permission::OpsRestore], &id, &pin)? {
+            if let Some((owner, _)) = staff.match_pin(&[perm], &id, &pin)? {
                 return Ok(Some((owner, true)));
             }
             // Their own PIN is right, but they are not the Owner.
@@ -1897,7 +1934,7 @@ impl UiAuth {
             }
             Ok(Ok(None)) => {
                 let paused = settle(Some(false));
-                tracing::warn!(staff_id = %requester, "restore: wrong owner pin");
+                tracing::warn!(staff_id = %requester, permission = perm.as_str(), "wrong pin");
                 Err(match paused {
                     Some(retry) => locked(retry),
                     None => ui_error(pin_rejected()),
@@ -3738,6 +3775,7 @@ pub fn ui_auth_router(auth: Arc<UiAuth>) -> Router {
         )
         .route("/ui/backup/restore", post(crate::ui_backup::restore))
         .route("/ui/backup/status", get(crate::ui_backup::status))
+        .route("/ui/standby/promote", post(crate::ui_promote::promote))
         .route(
             "/ui/backup/gst-archive",
             get(crate::ui_backup::gst_archives),

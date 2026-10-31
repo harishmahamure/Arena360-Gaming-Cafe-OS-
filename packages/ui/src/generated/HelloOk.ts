@@ -20,4 +20,9 @@ export type HelloOk = {
    * `NOT_PRIMARY`.
    */
   primary: boolean;
+  /**
+   * The epoch this Hub holds, `<counter>:<instance>` (Story 9.21). A device keeps the highest
+   * it has seen and refuses a Hub with a lower one. Absent from a Hub with no lease yet.
+   */
+  epoch?: string;
 };

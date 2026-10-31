@@ -117,6 +117,7 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::KeyAlreadyReleased
         | ErrorCode::KeyNotReleased
         | ErrorCode::RestoreGap
+        | ErrorCode::LeaseFresh
         | ErrorCode::DeviceUnassigned => true,
         ErrorCode::AuditBuilding | ErrorCode::AuditBuildFailed => false,
         ErrorCode::BadFrame

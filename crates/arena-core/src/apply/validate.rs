@@ -64,6 +64,10 @@ pub(super) fn validate(intent: &Intent, target: &Target) -> Result<(), AppError>
             Target::Setting(row) => super::backup_export::validate(intent, p, row.as_ref()),
             _ => Err(internal_target()),
         },
+        IntentPayload::LeasePromote(p) => match target {
+            Target::Setting(row) => super::lease_promote::validate(intent, p, row.as_ref()),
+            _ => Err(internal_target()),
+        },
         IntentPayload::OpsRestore(p) => match target {
             Target::Setting(row) => super::ops_restore::validate(intent, p, row.as_ref()),
             _ => Err(internal_target()),

@@ -3161,3 +3161,76 @@ async fn a_standby_may_ask_for_the_catalogue_manifest_but_not_the_main_hubs_othe
         r.body
     );
 }
+
+// ---- Story 9.21: a standby claims the fence to promote itself ----
+
+#[tokio::test]
+async fn a_standby_claims_the_fence_to_promote_and_becomes_the_branchs_main_hub() {
+    let h = Harness::new().await;
+    let (a, branch, main) = h.premium_with_main().await;
+    let main_token = main.body["token"].as_str().unwrap().to_owned();
+    h.advance(10_000);
+    assert_eq!(h.beat(&main_token, "1:MAIN").await.status, 200);
+
+    let code = code_of(&h.standby_code(&a, &branch).await);
+    let standby = h.pair_as(&code, "windows", "SECOND", Some("standby")).await;
+    assert_eq!(standby.status, 200, "{}", standby.body);
+    let standby_token = standby.body["token"].as_str().unwrap().to_owned();
+    let standby_id = standby.body["hub_id"].as_str().unwrap().to_owned();
+
+    h.advance(1_000);
+    let won = h
+        .claim(&standby_token, claim_body("1:MAIN", "SECOND", 7))
+        .await;
+    assert_eq!(won.status, 200, "{}", won.body);
+    assert_eq!(won.body["epoch"], "2:SECOND");
+    assert_eq!(h.fence_row(&branch), ("2:SECOND".to_owned(), Some(7)));
+
+    // The standby is the branch's main Hub now, and there is no standby.
+    assert_eq!(
+        h.db.active_hub(&branch).await.unwrap().unwrap().id,
+        standby_id
+    );
+    assert!(h.db.standby_hub(&branch).await.unwrap().is_none());
+    // Its token reaches the main Hub's endpoints; the old main Hub's token no longer does.
+    h.advance(10_000);
+    assert_eq!(h.beat(&standby_token, "2:SECOND").await.status, 200);
+    let old = h.beat(&main_token, "1:MAIN").await;
+    assert_ne!(old.status, 200, "{}", old.body);
+}
+
+#[tokio::test]
+async fn a_standby_may_claim_only_to_promote_and_a_stale_claim_changes_nothing() {
+    let h = Harness::new().await;
+    let (a, branch, main) = h.premium_with_main().await;
+    let main_token = main.body["token"].as_str().unwrap().to_owned();
+    h.advance(10_000);
+    assert_eq!(h.beat(&main_token, "1:MAIN").await.status, 200);
+    let code = code_of(&h.standby_code(&a, &branch).await);
+    let standby = h.pair_as(&code, "windows", "SECOND", Some("standby")).await;
+    let standby_token = standby.body["token"].as_str().unwrap().to_owned();
+    let fence = h.fence_row(&branch);
+
+    // Any other reason is the main Hub's alone.
+    let mut restore = claim_body("1:MAIN", "SECOND", 7);
+    restore["reason"] = json!("restore");
+    let refused = h.claim(&standby_token, restore).await;
+    assert_eq!((refused.status, refused.code()), (403, "FORBIDDEN"));
+
+    // A fence that is not the one the standby expects is `FENCED`, and nobody changes role.
+    let stale = h
+        .claim(&standby_token, claim_body("5:ELSE", "SECOND", 7))
+        .await;
+    assert_eq!((stale.status, stale.code()), (409, "FENCED"));
+    assert_eq!(h.fence_row(&branch), fence);
+    assert_eq!(
+        h.db.active_hub(&branch).await.unwrap().unwrap().id,
+        main.body["hub_id"].as_str().unwrap()
+    );
+    assert_eq!(
+        h.db.standby_hub(&branch).await.unwrap().unwrap().id,
+        standby.body["hub_id"].as_str().unwrap()
+    );
+    h.advance(10_000);
+    assert_eq!(h.beat(&main_token, "1:MAIN").await.status, 200);
+}

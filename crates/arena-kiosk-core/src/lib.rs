@@ -7,6 +7,7 @@
 pub mod admin_exit;
 pub mod backoff;
 pub mod client;
+pub mod epoch;
 pub mod hud;
 pub mod ipc;
 pub mod keys;
@@ -23,6 +24,7 @@ pub use client::{
     PING_INTERVAL, REMOTE_PORT, REQUEST_TIMEOUT, capture_fingerprint, connect_ws,
     connect_ws_remote, hex_lower, parse_fingerprint, pinned_config, web_config,
 };
+pub use epoch::EpochFloor;
 pub use ipc::{IpcError, IpcMsg, MAX_APP_LINE_BYTES, read_msg, read_msg_limited, write_msg};
 pub use pair::{PAIR_TIMEOUT, PairError, pair, pair_remote};
 pub use queue::{QUEUE_TTL_MS, ReplayStep};

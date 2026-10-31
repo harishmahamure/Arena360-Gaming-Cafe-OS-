@@ -424,6 +424,7 @@ pub(super) fn base_rev(intent: &Intent, target: &Target) -> Result<(), AppError>
                 intent.payload,
                 arena_proto::IntentPayload::PrinterStatus(_)
                     | arena_proto::IntentPayload::OpsRestore(_)
+                    | arena_proto::IntentPayload::LeasePromote(_)
                     | arena_proto::IntentPayload::BackupExport(_)
             ) =>
         {

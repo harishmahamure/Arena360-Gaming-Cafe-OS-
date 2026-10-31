@@ -113,4 +113,5 @@ export type ErrorCode =
   | "RESTORE_PENDING"
   | "KEY_ALREADY_RELEASED"
   | "KEY_NOT_RELEASED"
-  | "RESTORE_GAP";
+  | "RESTORE_GAP"
+  | "LEASE_FRESH";

@@ -10,7 +10,10 @@
 
 use std::sync::Arc;
 
-use arena_proto::{AppError, ErrorCode, FenceClaimRequest, FenceClaimResponse, FenceFork};
+use arena_proto::{
+    AppError, ErrorCode, FenceClaimReason, FenceClaimRequest, FenceClaimResponse, FenceFork,
+    HubRole,
+};
 use arena_store::control::{FenceMove, RateRule};
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -18,7 +21,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 
 use super::error::ApiError;
-use super::heartbeat::authenticate;
+use super::heartbeat::authenticate_any;
 use super::json::ApiJson;
 use super::signup::ceil_s;
 use crate::auth::AuthState;
@@ -87,7 +90,19 @@ async fn claim(
     ApiJson(body): ApiJson<FenceClaimRequest>,
 ) -> Result<Json<FenceClaimResponse>, ApiError> {
     let now = st.now();
-    let hub = authenticate(&st, &headers, now).await?;
+    let hub = authenticate_any(&st, &headers, now).await?;
+    // A standby claims the fence only to promote itself (Story 9.21).
+    let promote = match (hub.role, body.reason) {
+        (HubRole::Standby, FenceClaimReason::Promote) => true,
+        (HubRole::Standby, _) => {
+            return Err(AppError::new(
+                ErrorCode::Forbidden,
+                "This Hub is the standby. It can only claim the fence to promote itself.",
+            )
+            .into());
+        }
+        (HubRole::Main, _) => false,
+    };
     let checked = check(&body)?;
     let key = format!("{RATE_PREFIX}{}", hub.branch_id);
     let rule = RateRule {
@@ -105,18 +120,30 @@ async fn claim(
     {
         return Err(ApiError::rate_limited(ceil_s(wait_ms)));
     }
-    let moved = st
-        .db
-        .claim_branch_fence(
-            &hub.branch_id,
-            &hub.id,
-            checked.expected.as_str(),
-            &checked.next,
-            Some(checked.fork_seq),
-            now,
-        )
-        .await
-        .map_err(ApiError::internal)?;
+    let moved = if promote {
+        st.db
+            .promote_standby_fence(
+                &hub.branch_id,
+                &hub.id,
+                checked.expected.as_str(),
+                &checked.next,
+                Some(checked.fork_seq),
+                now,
+            )
+            .await
+    } else {
+        st.db
+            .claim_branch_fence(
+                &hub.branch_id,
+                &hub.id,
+                checked.expected.as_str(),
+                &checked.next,
+                Some(checked.fork_seq),
+                now,
+            )
+            .await
+    }
+    .map_err(ApiError::internal)?;
     match moved {
         FenceMove::Moved { requeued } => {
             tracing::info!(

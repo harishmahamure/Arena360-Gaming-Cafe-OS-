@@ -54,6 +54,12 @@ pub trait ReplicationLink: Send {
         schema_version: u32,
     ) -> impl Future<Output = Result<Position, LinkError>> + Send;
 
+    /// The main Hub's schema version as its `ready` frame stated it, for the last `open`
+    /// (Story 9.21). The default knows nothing.
+    fn main_schema(&self) -> Option<u32> {
+        None
+    }
+
     /// The next frame, or `None` when the stream closed.
     fn next(&mut self) -> impl Future<Output = Result<Option<ReplicateFrame>, LinkError>> + Send;
 
@@ -230,6 +236,20 @@ impl<L: ReplicationLink> Follower<L> {
         .map_err(|e| AppError::new(ErrorCode::Internal, format!("store task failed: {e}")))?
     }
 
+    /// The main Hub refused this standby as behind: its schema is at least one above ours, which
+    /// is all a promote needs to know to refuse (Story 9.21).
+    async fn note_main_ahead(&self, own: u32) {
+        let _ = self
+            .blocking(move |s| s.record_main_schema(own.saturating_add(1), true))
+            .await;
+    }
+
+    async fn note_main_ahead_now(&self) {
+        if let Ok(own) = self.blocking(|s| s.schema_version()).await {
+            self.note_main_ahead(own).await;
+        }
+    }
+
     /// Follows until `stop` turns true. Returns `Behind` is reported through the status and the
     /// run ends; any other end is a stop request.
     pub async fn run(&mut self, mut stop: watch::Receiver<bool>) {
@@ -286,8 +306,18 @@ impl<L: ReplicationLink> Follower<L> {
         }
         self.note(|p, now| p.start_at(position.clone(), now));
         match self.link.open(position.clone(), schema).await {
-            Ok(tip) => self.note(|p, now| p.ready(tip, now)),
-            Err(LinkError::Refused(ErrorCode::SchemaBehind, _)) => return Ended::Behind,
+            Ok(tip) => {
+                self.note(|p, now| p.ready(tip, now));
+                if let Some(main) = self.link.main_schema() {
+                    let _ = self
+                        .blocking(move |s| s.record_main_schema(main, false))
+                        .await;
+                }
+            }
+            Err(LinkError::Refused(ErrorCode::SchemaBehind, _)) => {
+                self.note_main_ahead(schema).await;
+                return Ended::Behind;
+            }
             Err(LinkError::Refused(ErrorCode::ReplicateGap, _)) => return Ended::Resync,
             Err(_) => return Ended::Retry,
         }
@@ -343,6 +373,9 @@ impl<L: ReplicationLink> Follower<L> {
                 }
                 ReplicateFrame::Ready { .. } | ReplicateFrame::Report { .. } => {}
                 ReplicateFrame::Refused { code, .. } => {
+                    if code == ErrorCode::SchemaBehind {
+                        self.note_main_ahead(schema).await;
+                    }
                     return match code {
                         ErrorCode::SchemaBehind => Ended::Behind,
                         ErrorCode::ReplicateGap => Ended::Resync,
@@ -359,7 +392,10 @@ impl<L: ReplicationLink> Follower<L> {
         let scratch = self.scratch.clone();
         let stated = match self.link.snapshot(scratch.clone()).await {
             Ok(p) => p,
-            Err(LinkError::Refused(ErrorCode::SchemaBehind, _)) => return Err(Ended::Behind),
+            Err(LinkError::Refused(ErrorCode::SchemaBehind, _)) => {
+                self.note_main_ahead_now().await;
+                return Err(Ended::Behind);
+            }
             Err(_) => return Err(Ended::Retry),
         };
         let file = scratch.clone();
@@ -370,7 +406,10 @@ impl<L: ReplicationLink> Follower<L> {
                 debug_assert_eq!(tip, stated);
                 Ok(tip)
             }
-            Err(e) if e.code == ErrorCode::SchemaBehind => Err(Ended::Behind),
+            Err(e) if e.code == ErrorCode::SchemaBehind => {
+                self.note_main_ahead_now().await;
+                Err(Ended::Behind)
+            }
             Err(_) => Err(Ended::Retry),
         }
     }

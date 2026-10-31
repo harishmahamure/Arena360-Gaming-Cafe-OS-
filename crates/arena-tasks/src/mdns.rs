@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arena_core::{Applied, HubStatus, Role, SnapshotReader};
-use arena_proto::{HubPlatform, MDNS_SERVICE, PROTOCOL_VERSION, txt_records};
+use arena_proto::{HubPlatform, MDNS_SERVICE, PROTOCOL_VERSION, TXT_EPOCH, txt_records};
 use tokio::sync::{Notify, broadcast, watch};
 use tokio::time::{Instant, MissedTickBehavior};
 
@@ -40,6 +40,17 @@ impl Advert {
                 web_port,
             ),
         }
+    }
+}
+
+impl Advert {
+    /// Adds the Hub's epoch to the TXT record (Story 9.21), so a kiosk that re-resolves after a
+    /// promote sees the new one without opening a connection. `None` leaves the record as it was.
+    pub fn with_epoch(mut self, epoch: Option<String>) -> Self {
+        if let Some(epoch) = epoch {
+            self.txt.push((TXT_EPOCH.to_owned(), epoch));
+        }
+        self
     }
 }
 
@@ -269,7 +280,7 @@ impl<A: Advertiser, B: BranchSource, I: Interfaces> MdnsTask<A, B, I> {
     }
 
     async fn desired(&self, current: &Option<Advert>) -> Option<Advert> {
-        let (fingerprint, primary, no_lan) = {
+        let (fingerprint, primary, no_lan, epoch) = {
             let s = self.status.borrow();
             (
                 s.tls_fingerprint.clone(),
@@ -277,19 +288,23 @@ impl<A: Advertiser, B: BranchSource, I: Interfaces> MdnsTask<A, B, I> {
                 // An Android Hub with no address withdraws its advert and re-advertises when
                 // the network returns; elsewhere the advert stays as it always did.
                 s.platform == HubPlatform::Android && s.lan_addresses.is_empty(),
+                s.lease.as_ref().map(|l| l.epoch().to_string()),
             )
         };
         let (Some(fingerprint), true, false) = (fingerprint, primary, no_lan) else {
             return None;
         };
         match self.branch.branch_name().await {
-            Ok(Some(name)) => Some(Advert::new(
-                &self.hub_name,
-                self.lan_port,
-                self.web_port,
-                &name,
-                &fingerprint,
-            )),
+            Ok(Some(name)) => Some(
+                Advert::new(
+                    &self.hub_name,
+                    self.lan_port,
+                    self.web_port,
+                    &name,
+                    &fingerprint,
+                )
+                .with_epoch(epoch),
+            ),
             Ok(None) => None,
             Err(e) => {
                 tracing::debug!(error = %e, "mdns: the branch read failed; keeping the advert");
@@ -471,6 +486,81 @@ mod tests {
         assert_eq!(a.txt[3].1, "cd".repeat(32));
         assert_eq!(a.txt[4].1, "7401");
         assert_eq!(a.host, "front-desk-cdcdcdcd.local.");
+    }
+
+    #[test]
+    fn the_epoch_joins_the_txt_record_only_when_there_is_one() {
+        let plain = Advert::new("front-desk", 7400, 7401, "B", &"ab".repeat(32));
+        assert_eq!(plain.clone().with_epoch(None), plain);
+        let with = plain.with_epoch(Some("4:01JSTBY".into()));
+        assert_eq!(
+            with.txt.last().unwrap(),
+            &("epoch".to_owned(), "4:01JSTBY".to_owned())
+        );
+        let get = |k: &str| {
+            with.txt
+                .iter()
+                .find(|(n, _)| n == k)
+                .map(|(_, v)| v.clone())
+        };
+        assert_eq!(arena_proto::txt_epoch(get).as_deref(), Some("4:01JSTBY"));
+        assert_eq!(arena_proto::txt_epoch(|_| Some("nonsense".into())), None);
+        assert_eq!(arena_proto::txt_epoch(|_| None), None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_new_epoch_is_advertised_again_and_a_renewal_is_not() {
+        let daemon = FakeDaemon::default();
+        let status = status();
+        status.send_modify(|s| {
+            s.lease = Some(arena_core::LeaseInfo {
+                counter: 3,
+                hub_instance_id: "01JHUB".into(),
+                provisional: false,
+                expires_at: 100,
+            });
+        });
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let job = tokio::spawn(
+            MdnsTask::new(
+                daemon.clone(),
+                FakeBranch(Arc::new(Mutex::new(Some("B".into())))),
+                FakeIfs::default(),
+                status.clone(),
+                "h",
+                7400,
+                7401,
+            )
+            .run(async {
+                let _ = stop_rx.await;
+            }),
+        );
+        settle().await;
+        let epoch_of = |call: &Call| match call {
+            Call::Register(a) => a
+                .txt
+                .iter()
+                .find(|(k, _)| k == "epoch")
+                .map(|(_, v)| v.clone()),
+            _ => None,
+        };
+        assert_eq!(daemon.calls().len(), 1);
+        assert_eq!(epoch_of(&daemon.calls()[0]).as_deref(), Some("3:01JHUB"));
+
+        // A lease renewal changes the expiry only.
+        status.send_modify(|s| s.lease.as_mut().unwrap().expires_at = 200);
+        settle().await;
+        assert_eq!(daemon.calls().len(), 1, "a renewal is not a new epoch");
+
+        // A promote opens a new one.
+        status.send_modify(|s| s.lease.as_mut().unwrap().counter = 4);
+        settle().await;
+        let calls = daemon.calls();
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[1], Call::Unregister);
+        assert_eq!(epoch_of(&calls[2]).as_deref(), Some("4:01JHUB"));
+        stop_tx.send(()).unwrap();
+        job.await.unwrap();
     }
 
     #[test]

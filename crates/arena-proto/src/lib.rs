@@ -75,6 +75,7 @@ pub use standby::{
     StandbyBehindCause, StandbyLicenceRequest, StandbyLicenceResponse, StandbyLine, StandbyPanel,
     StandbyReport, StandbyScreen, StandbyView, standby_behind,
 };
+mod promote;
 mod refund;
 mod report;
 mod report_export;
@@ -194,8 +195,8 @@ pub use discount::{
 pub use discovery::{
     DEFAULT_WEB_PORT, DISCOVERY_WINDOW_MS, DiscoveredHub, DiscoveryFound, HUB_PRODUCT, HubInfo,
     MAX_BRANCH_NAME_BYTES, MAX_HUB_NAME_BYTES, MDNS_SERVICE, PROBE_TIMEOUT_MS, ProbeOk,
-    SelectedHub, TXT_BRANCH, TXT_FP, TXT_HUB, TXT_PROTO, TXT_WEB, is_fingerprint,
-    sanitize_branch_name, sanitize_hub_name, txt_records,
+    SelectedHub, TXT_BRANCH, TXT_EPOCH, TXT_FP, TXT_HUB, TXT_PROTO, TXT_WEB, is_fingerprint,
+    sanitize_branch_name, sanitize_hub_name, txt_epoch, txt_records,
 };
 pub use display::{
     HC_DEFAULT, HC_PREFIX, HcTarget, KEY_HC_HUB, hc_key, parse_hc_key, parse_hc_value,
@@ -433,6 +434,11 @@ pub use process::{
     ProcessBlockReason, ProcessList, ProcessMode, ProcessRule, SYSTEM_DIR_TOKEN, is_catch_all_glob,
     is_file_name_glob, is_full_path_glob, is_user_writable_glob, parse_process_mode,
     parse_process_rules, truncate_path_left,
+};
+pub use promote::{
+    DEFAULT_OPS_LAST_PROMOTE, KEY_OPS_LAST_PROMOTE, LEASE_FRESH_MESSAGE, LeasePromote,
+    MAIN_LEASE_STALE_MS, PROMOTE_BUDGET_MS, PROMOTE_CLAIM_WAIT_MS, PromoteRequest, Promoted,
+    main_lease_fresh,
 };
 pub use receipt::{
     DEFAULT_NOTIFY, DEFAULT_RECEIPT_ADDRESS, DEFAULT_RECEIPT_DEFAULT, DEFAULT_RECEIPT_DRAWER,

@@ -349,6 +349,7 @@ where
     };
     let ready = ReplicateFrame::Ready {
         tip: tip.map(|(epoch, seq)| ReplicatePosition { epoch, seq }),
+        main_schema: Some(ours),
     };
     if !send(&mut sink, &ready).await {
         return;

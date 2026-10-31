@@ -563,6 +563,16 @@ impl HubClient {
         &self.hello_ok
     }
 
+    /// Checks the Hub's epoch from `hello.ok` against the highest this device has seen (Story
+    /// 9.21): a lower one is [`ClientError::Hub`] with `FENCED` and the caller drops the
+    /// connection; otherwise the floor rises to it. Answers whether the floor rose, so the caller
+    /// stores it.
+    pub fn admit_epoch(&self, floor: &mut crate::EpochFloor) -> Result<bool, ClientError> {
+        floor
+            .admit(self.hello_ok.epoch.as_deref())
+            .map_err(ClientError::Hub)
+    }
+
     /// Sends a `kind` frame with `body` (a JSON object, or null) and waits for the frame with
     /// the same `rid`: `Ok` for a reply, [`ClientError::Hub`] for an error frame and
     /// [`ClientError::HubSlow`] after [`REQUEST_TIMEOUT`].

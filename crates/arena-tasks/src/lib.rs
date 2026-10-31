@@ -19,6 +19,9 @@ pub mod mdns;
 pub mod notify;
 pub mod notify_trigger;
 pub mod printer;
+pub mod promote;
+#[cfg(test)]
+mod promote_tests;
 pub mod receipts;
 pub mod restore_fetch;
 pub mod restore_wait;
@@ -63,6 +66,7 @@ pub use mdns::{
 };
 pub use notify::{IN_DOUBT_RETRY_MS, NOTIFY_TICK, NotifyDrainTask};
 pub use notify_trigger::{NOTIFY_TRIGGER_TICK, NotifyTriggerTask};
+pub use promote::{CloudClaimer, EpochClaimer, PromoteError, Promoter, Promotion};
 pub use receipts::{PRINT_BATCH, PRINT_TICK, ReceiptPrintTask};
 pub use restore_fetch::{
     RestoreFetcher, STAGING_DIR as RESTORE_STAGING_DIR, StagedBatch, StagedManifest,

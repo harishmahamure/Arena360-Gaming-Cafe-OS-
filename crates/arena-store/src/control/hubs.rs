@@ -275,36 +275,47 @@ impl ControlDb {
         fork_seq: Option<i64>,
         now: i64,
     ) -> Result<FenceMove, ControlError> {
-        let rows = self
-            .transact_rows(vec![
-                Stmt::new(
-                    "UPDATE branch_fence SET epoch = ?, hub_id = ?, fork_seq = ?, created_at = ? \
-                     WHERE branch_id = ? AND epoch = ?",
-                    vec![
-                        text(epoch),
-                        text(hub_id),
-                        opt_int(fork_seq),
-                        SqlValue::Integer(now),
-                        text(branch_id),
-                        text(expected),
-                    ],
-                )
-                .expect(1),
-                Stmt::new(
-                    "UPDATE commands SET status = 'pending', applied_seq = NULL, error = NULL, \
-                     resolved_at = NULL, fetched_at = NULL, applied_epoch = NULL \
-                     WHERE branch_id = ? AND (status = 'fetched' OR (status = 'applied' \
-                     AND applied_seq > ? AND applied_epoch = ?)) RETURNING id",
-                    vec![
-                        text(branch_id),
-                        SqlValue::Integer(fork_seq.unwrap_or(i64::MAX)),
-                        text(expected),
-                    ],
-                )
-                .fetch(),
-            ])
-            .await?;
-        match rows {
+        let stmts = fence_statements(branch_id, hub_id, expected, epoch, fork_seq, now);
+        self.settle_fence_move(branch_id, stmts).await
+    }
+
+    /// A standby's promote (Story 9.21): the compare-and-set of
+    /// [`claim_branch_fence`](Self::claim_branch_fence) and, in the same transaction, the role swap.
+    /// The branch's live main Hub is revoked (its token stops working, so exactly one Hub talks
+    /// to the cloud) and `hub_id`, which must be the branch's live standby, becomes the main Hub.
+    /// When the fence is not `expected`, or `hub_id` is not a live standby, nothing is written.
+    pub async fn promote_standby_fence(
+        &self,
+        branch_id: &str,
+        hub_id: &str,
+        expected: &str,
+        epoch: &str,
+        fork_seq: Option<i64>,
+        now: i64,
+    ) -> Result<FenceMove, ControlError> {
+        let mut stmts = fence_statements(branch_id, hub_id, expected, epoch, fork_seq, now);
+        stmts.push(Stmt::new(
+            "UPDATE hubs SET revoked_at = ? WHERE branch_id = ? AND role = 'main' \
+             AND revoked_at IS NULL AND id <> ?",
+            vec![SqlValue::Integer(now), text(branch_id), text(hub_id)],
+        ));
+        stmts.push(
+            Stmt::new(
+                "UPDATE hubs SET role = 'main' WHERE id = ? AND branch_id = ? \
+                 AND role = 'standby' AND revoked_at IS NULL",
+                vec![text(hub_id), text(branch_id)],
+            )
+            .expect(1),
+        );
+        self.settle_fence_move(branch_id, stmts).await
+    }
+
+    async fn settle_fence_move(
+        &self,
+        branch_id: &str,
+        stmts: Vec<Stmt>,
+    ) -> Result<FenceMove, ControlError> {
+        match self.transact_rows(stmts).await? {
             Some(rows) => Ok(FenceMove::Moved {
                 requeued: rows.get(1).map_or(0, |r| r.len() as u64),
             }),
@@ -351,6 +362,45 @@ impl ControlDb {
             .await?;
         rows.first().map(|r| hub_from(r)).transpose()
     }
+}
+
+/// The statements of one fence compare-and-set: the fence move (which must change exactly one
+/// row) and the command re-queue.
+fn fence_statements(
+    branch_id: &str,
+    hub_id: &str,
+    expected: &str,
+    epoch: &str,
+    fork_seq: Option<i64>,
+    now: i64,
+) -> Vec<Stmt> {
+    vec![
+        Stmt::new(
+            "UPDATE branch_fence SET epoch = ?, hub_id = ?, fork_seq = ?, created_at = ? \
+             WHERE branch_id = ? AND epoch = ?",
+            vec![
+                text(epoch),
+                text(hub_id),
+                opt_int(fork_seq),
+                SqlValue::Integer(now),
+                text(branch_id),
+                text(expected),
+            ],
+        )
+        .expect(1),
+        Stmt::new(
+            "UPDATE commands SET status = 'pending', applied_seq = NULL, error = NULL, \
+             resolved_at = NULL, fetched_at = NULL, applied_epoch = NULL \
+             WHERE branch_id = ? AND (status = 'fetched' OR (status = 'applied' \
+             AND applied_seq > ? AND applied_epoch = ?)) RETURNING id",
+            vec![
+                text(branch_id),
+                SqlValue::Integer(fork_seq.unwrap_or(i64::MAX)),
+                text(expected),
+            ],
+        )
+        .fetch(),
+    ]
 }
 
 /// What the cloud remembers of one Hub's change-log upload (Story 8.3).

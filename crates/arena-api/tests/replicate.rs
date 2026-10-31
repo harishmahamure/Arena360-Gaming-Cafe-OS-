@@ -205,6 +205,7 @@ impl Main {
             fingerprint: self.fingerprint.clone(),
             token: token.to_owned(),
             schema_override: None,
+            main_schema: None,
             stream: None,
         }
     }
@@ -217,6 +218,7 @@ struct WsLink {
     fingerprint: String,
     token: String,
     schema_override: Option<u32>,
+    main_schema: Option<u32>,
     stream: Option<HubStream>,
 }
 
@@ -292,13 +294,18 @@ impl ReplicationLink for WsLink {
             _ => return Err(io("closed before ready")),
         };
         match frame {
-            ReplicateFrame::Ready { tip } => {
+            ReplicateFrame::Ready { tip, main_schema } => {
+                self.main_schema = main_schema;
                 self.stream = Some(ws);
                 Ok(tip.map(|p| (p.epoch, p.seq)))
             }
             ReplicateFrame::Refused { code, message } => Err(LinkError::Refused(code, message)),
             other => Err(io(format!("unexpected {other:?}"))),
         }
+    }
+
+    fn main_schema(&self) -> Option<u32> {
+        self.main_schema
     }
 
     async fn next(&mut self) -> Result<Option<ReplicateFrame>, LinkError> {
@@ -386,6 +393,11 @@ async fn a_standby_bootstraps_then_follows_live_and_resumes_after_a_restart() {
     let standby = Store::open_reader(dir.path().join("standby.db")).unwrap();
     assert_eq!(standby.changes().unwrap(), main.changes());
     assert!(!dir.path().join("snapshot.part").exists());
+    // It learned the main Hub's schema from `ready`, which a promote checks against its own.
+    assert_eq!(
+        standby.main_schema().unwrap(),
+        Some(standby.schema_version().unwrap())
+    );
 
     // Stop it, let the main Hub move on, and start a new follower on the same database: it
     // resumes from its own tip (no snapshot, no gap, no duplicate).
@@ -461,6 +473,9 @@ async fn a_schema_behind_standby_is_refused_and_stops() {
         .await
         .expect("the follower stops by itself");
     assert_eq!(*status.borrow_and_update(), FollowStatus::Behind);
+    // Refused as behind, the standby knows the main Hub is above it, so it will not promote.
+    let held = Store::open_reader(dir.path().join("standby.db")).unwrap();
+    assert!(held.main_schema().unwrap().unwrap() > held.schema_version().unwrap());
 }
 
 #[tokio::test]
@@ -522,6 +537,10 @@ impl ReplicationLink for Flaky {
             return Err(LinkError::Refused(ErrorCode::ReplicateGap, "gap".into()));
         }
         self.inner.open(from, schema_version).await
+    }
+
+    fn main_schema(&self) -> Option<u32> {
+        self.inner.main_schema
     }
 
     async fn next(&mut self) -> Result<Option<ReplicateFrame>, LinkError> {

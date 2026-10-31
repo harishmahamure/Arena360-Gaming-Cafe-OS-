@@ -171,6 +171,10 @@ pub(super) fn mutate(
             Target::Setting(row) => super::backup_export::mutate(tx, intent, p, row.as_ref()),
             _ => Err(mismatch()),
         },
+        IntentPayload::LeasePromote(p) => match target {
+            Target::Setting(row) => super::lease_promote::mutate(tx, intent, p, row.as_ref()),
+            _ => Err(mismatch()),
+        },
         IntentPayload::OpsRestore(p) => match target {
             Target::Setting(row) => super::ops_restore::mutate(tx, intent, p, row.as_ref()),
             _ => Err(mismatch()),

@@ -78,7 +78,12 @@ pub enum ReplicateFrame {
         from: Option<ReplicatePosition>,
     },
     /// Main to standby: the stream starts after `from`; `tip` is where the main log ends now.
-    Ready { tip: Option<ReplicatePosition> },
+    Ready {
+        tip: Option<ReplicatePosition>,
+        /// The main Hub's schema version, so a standby can refuse to promote behind it (Story 9.21).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        main_schema: Option<u32>,
+    },
     /// Main to standby: rows in log order, with the key state of every player they touch.
     /// `live` is false while the closed history is still being sent.
     Batch {
@@ -157,7 +162,10 @@ mod tests {
                     seq: 6,
                 }),
             },
-            ReplicateFrame::Ready { tip: None },
+            ReplicateFrame::Ready {
+                tip: None,
+                main_schema: Some(89),
+            },
             ReplicateFrame::Batch {
                 changes: vec![change()],
                 keys: vec![

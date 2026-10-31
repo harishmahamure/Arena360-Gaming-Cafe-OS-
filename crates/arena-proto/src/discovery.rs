@@ -10,6 +10,8 @@ pub const TXT_HUB: &str = "hub";
 pub const TXT_PROTO: &str = "proto";
 pub const TXT_FP: &str = "fp";
 pub const TXT_WEB: &str = "web";
+/// The Hub's epoch, `<counter>:<instance>` (Story 9.21): a promoted standby advertises its new one.
+pub const TXT_EPOCH: &str = "epoch";
 pub const DEFAULT_WEB_PORT: u16 = 7401;
 pub const MAX_HUB_NAME_BYTES: usize = 63;
 pub const MAX_BRANCH_NAME_BYTES: usize = 80;
@@ -84,6 +86,13 @@ fn bounded_label(raw: &str, max_bytes: usize) -> String {
         out.push(c);
     }
     out.trim_end().to_owned()
+}
+
+/// The epoch a Hub advertised in its TXT record, when it is one (`<counter>:<instance>`).
+pub fn txt_epoch(get: impl Fn(&str) -> Option<String>) -> Option<String> {
+    let epoch = get(TXT_EPOCH)?;
+    let epoch = epoch.trim();
+    crate::epoch_parts(epoch).map(|_| epoch.to_owned())
 }
 
 pub fn sanitize_hub_name(raw: &str) -> String {

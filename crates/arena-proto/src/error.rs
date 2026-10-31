@@ -216,6 +216,8 @@ pub enum ErrorCode {
     KeyNotReleased,
     /// A batch of the cloud backup is missing or damaged; the message names the seq range (Story 9.12).
     RestoreGap,
+    /// "Promote to main" while the main Hub's lease is still fresh (Story 9.21).
+    LeaseFresh,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -343,6 +345,7 @@ impl ErrorCode {
             Self::KeyAlreadyReleased => "KEY_ALREADY_RELEASED",
             Self::KeyNotReleased => "KEY_NOT_RELEASED",
             Self::RestoreGap => "RESTORE_GAP",
+            Self::LeaseFresh => "LEASE_FRESH",
         }
     }
 }
@@ -531,6 +534,7 @@ mod tests {
             (ErrorCode::KeyAlreadyReleased, "KEY_ALREADY_RELEASED"),
             (ErrorCode::KeyNotReleased, "KEY_NOT_RELEASED"),
             (ErrorCode::RestoreGap, "RESTORE_GAP"),
+            (ErrorCode::LeaseFresh, "LEASE_FRESH"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

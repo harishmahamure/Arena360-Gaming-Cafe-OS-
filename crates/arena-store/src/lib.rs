@@ -38,6 +38,9 @@ mod player_packs;
 mod players;
 mod pricing_rules;
 mod products;
+mod promote;
+#[cfg(test)]
+mod promote_tests;
 mod reference;
 mod refunds;
 mod replicate;
@@ -208,6 +211,7 @@ pub use products::{
     insert_product, list_components, list_menu_products, list_products, live_bundles_with,
     set_product_deleted, units_sold, update_product,
 };
+pub use promote::{META_MAIN_SCHEMA, PromoteBasis, PromoteInput, PromoteOutcome};
 pub use reference::{
     FileKind, FileState, RefFile, RefGame, RefSignature, ReferenceDb, is_sha256_hex,
 };

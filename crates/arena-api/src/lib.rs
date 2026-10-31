@@ -23,6 +23,9 @@ mod ui_pairing;
 #[cfg(test)]
 mod ui_player_tests;
 mod ui_printer;
+mod ui_promote;
+#[cfg(test)]
+mod ui_promote_tests;
 mod ui_refund;
 mod ui_report;
 mod ui_restore_fetch;

@@ -584,6 +584,12 @@ pub(crate) async fn run<S>(
                 app: hub.version.clone(),
             },
             primary: hub.is_primary(),
+            epoch: hub
+                .status
+                .borrow()
+                .lease
+                .as_ref()
+                .map(|l| l.epoch().to_string()),
         }),
     );
     if sink.send(text(&ok)).await.is_err() {

@@ -57,6 +57,7 @@ import type { KitchenAdvanceReverted } from "./KitchenAdvanceReverted";
 import type { KotPrintFailed } from "./KotPrintFailed";
 import type { KotPrinted } from "./KotPrinted";
 import type { KotReprint } from "./KotReprint";
+import type { LeasePromote } from "./LeasePromote";
 import type { LibraryDelete } from "./LibraryDelete";
 import type { LibraryDismiss } from "./LibraryDismiss";
 import type { LibraryDismissClear } from "./LibraryDismissClear";
@@ -267,4 +268,5 @@ export type IntentPayload =
   | ({ kind: "ad.impression_recorded" } & AdImpressionRecorded)
   | ({ kind: "ad.request_recorded" } & AdRequestRecorded)
   | ({ kind: "backup.export" } & BackupExport)
-  | ({ kind: "ops.restore" } & OpsRestore);
+  | ({ kind: "ops.restore" } & OpsRestore)
+  | ({ kind: "lease.promote" } & LeasePromote);

@@ -540,6 +540,14 @@ enum Op {
         other_branch: bool,
         rows: i64,
     },
+    /// `lease.promote` (Story 9.21) by the Owner, a Manager or a Counter, with sound facts or a
+    /// negative lag: the Owner and a Manager may record it, a Counter is refused, and a good
+    /// record sets `ops.last_promote` to those facts with one change row.
+    LeasePromote {
+        by: u8,
+        bad: bool,
+        lag: i64,
+    },
     /// A controller check of a session that may be running, on a PC, ended or already marked: it
     /// applies once for an ended console session and otherwise writes nothing.
     ControllerCheck {
@@ -996,6 +1004,8 @@ fn op() -> impl Strategy<Value = Op> {
             .prop_map(|(by, bad, seq)| Op::BackupExport { by, bad, seq }),
         1 => (0..3u8, prop::bool::weighted(0.3), 0..=100_000i64)
             .prop_map(|(by, other_branch, rows)| Op::OpsRestore { by, other_branch, rows }),
+        1 => (0..3u8, prop::bool::weighted(0.3), 0..=100_000i64)
+            .prop_map(|(by, bad, lag)| Op::LeasePromote { by, bad, lag }),
         3 => (
             0..4u8,
             prop::bool::ANY,
@@ -6298,6 +6308,58 @@ b"
             } else {
                 prop_assert_eq!(hub.change_count(), before);
                 prop_assert_eq!(hub.setting("backup.last_restore"), was);
+            }
+        }
+        Op::LeasePromote { by, bad, lag } => {
+            let Some(who) = hub.staff.get(usize::from(*by)).cloned() else {
+                return Ok(());
+            };
+            if hub.setting("ops.last_promote").is_none() {
+                return Ok(());
+            }
+            let facts = arena_proto::LeasePromote {
+                old_epoch: "2:proptest".into(),
+                fork_seq: 5,
+                new_epoch: "3:proptest".into(),
+                provisional: false,
+                lag_rows: if *bad { -1 } else { *lag },
+                force: false,
+                erasures_reapplied: 0,
+                kitchen_displays_to_repair: 0,
+                promoted_at: hub.clock_now(),
+                by: None,
+            };
+            let before = hub.change_count();
+            let was = hub.setting("ops.last_promote");
+            let mut intent = hub.intent(IntentPayload::LeasePromote(facts.clone()), None);
+            intent.actor = Actor {
+                kind: ActorKind::Staff,
+                id: who,
+            };
+            let out = hub.submit_new(intent);
+            if *by == 2 {
+                prop_assert_eq!(code(&out).map(|c| c.0), Some(ErrorCode::PermissionDenied));
+            } else if *bad {
+                prop_assert_eq!(
+                    code(&out),
+                    Some((ErrorCode::ValidationFailed, Some("promote")))
+                );
+            } else {
+                prop_assert!(out.is_ok(), "{:?}", out);
+            }
+            if out.is_ok() {
+                prop_assert_eq!(hub.change_count(), before + 1);
+                let RowValue::Text(json) =
+                    hub.setting("ops.last_promote").unwrap()["value"].clone()
+                else {
+                    return Err(TestCaseError::fail("ops.last_promote is not text"));
+                };
+                let kept = arena_proto::LeasePromote::parse(&json).expect("a consistent record");
+                prop_assert!(kept.by.is_some());
+                prop_assert_eq!(arena_proto::LeasePromote { by: None, ..kept }, facts);
+            } else {
+                prop_assert_eq!(hub.change_count(), before);
+                prop_assert_eq!(hub.setting("ops.last_promote"), was);
             }
         }
         Op::ControllerCheck { slot, missing } => {

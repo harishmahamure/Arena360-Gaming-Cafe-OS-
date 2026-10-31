@@ -380,6 +380,11 @@ pub struct HelloOk {
     /// Whether this Hub is the branch's primary writer; a follower refuses every intent with
     /// `NOT_PRIMARY`.
     pub primary: bool,
+    /// The epoch this Hub holds, `<counter>:<instance>` (Story 9.21). A device keeps the highest
+    /// it has seen and refuses a Hub with a lower one. Absent from a Hub with no lease yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub epoch: Option<String>,
 }
 
 /// Asks the Hub to apply an intent. The Hub overwrites `intent.actor` with the session's.
@@ -683,6 +688,35 @@ mod tests {
                    "versions": {"app": "0.1.0"}, "capabilities": ["events"]})
         );
         assert_eq!(parse_frame(&f.to_text()).unwrap(), f);
+    }
+
+    #[test]
+    fn hello_ok_carries_the_epoch_only_when_the_hub_has_one() {
+        let ok = |epoch: Option<&str>| {
+            Frame::new(
+                "1",
+                FrameBody::HelloOk(HelloOk {
+                    class: ClientClass::Paired,
+                    device_id: None,
+                    versions: Versions {
+                        app: "0.1.0".into(),
+                    },
+                    primary: true,
+                    epoch: epoch.map(str::to_owned),
+                }),
+            )
+        };
+        let with = ok(Some("4:STBY"));
+        let v: Value = serde_json::from_str(&with.to_text()).unwrap();
+        assert_eq!(v["epoch"], "4:STBY");
+        assert_eq!(parse_frame(&with.to_text()).unwrap(), with);
+        let without = ok(None);
+        let v: Value = serde_json::from_str(&without.to_text()).unwrap();
+        assert!(v.get("epoch").is_none());
+        // An older Hub's answer has no epoch at all.
+        let old = r#"{"v":1,"kind":"hello.ok","rid":"1","class":"paired",
+                      "versions":{"app":"0.1.0"},"primary":true}"#;
+        assert_eq!(parse_frame(old).unwrap(), without);
     }
 
     #[test]

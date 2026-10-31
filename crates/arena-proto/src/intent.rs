@@ -426,11 +426,15 @@ pub enum IntentKind {
     /// fact after the start-up swap, as the Owner who confirmed it (`ops.restore`).
     #[serde(rename = "ops.restore")]
     OpsRestore,
+    /// The standby was promoted to main as a new epoch (Story 9.21). The Hub records the fact
+    /// once its writer is open, as the Manager who promoted (`ops.promote`).
+    #[serde(rename = "lease.promote")]
+    LeasePromote,
 }
 
 impl IntentKind {
     /// Every kind.
-    pub const ALL: [IntentKind; 133] = [
+    pub const ALL: [IntentKind; 134] = [
         Self::BranchBootstrap,
         Self::BranchSeedDefaults,
         Self::SettingsSet,
@@ -564,6 +568,7 @@ impl IntentKind {
         Self::AdRequestRecorded,
         Self::BackupExport,
         Self::OpsRestore,
+        Self::LeasePromote,
     ];
 
     /// The wire and stored form, e.g. `branch.bootstrap`.
@@ -702,6 +707,7 @@ impl IntentKind {
             Self::AdRequestRecorded => "ad.request_recorded",
             Self::BackupExport => "backup.export",
             Self::OpsRestore => "ops.restore",
+            Self::LeasePromote => "lease.promote",
         }
     }
 
@@ -726,7 +732,8 @@ impl IntentKind {
             | Self::AdImpressionRecorded
             | Self::AdRequestRecorded
             | Self::BackupExport
-            | Self::OpsRestore => IntentCategory::Settings,
+            | Self::OpsRestore
+            | Self::LeasePromote => IntentCategory::Settings,
             Self::DeviceRegister
             | Self::DeviceRevoke
             | Self::DeviceVersionReported
@@ -855,6 +862,7 @@ impl IntentKind {
             Self::BranchBootstrap | Self::BranchSeedDefaults => Requirement::System,
             Self::BackupExport => Requirement::Perm(Permission::BackupExport),
             Self::OpsRestore => Requirement::Perm(Permission::OpsRestore),
+            Self::LeasePromote => Requirement::Perm(Permission::OpsPromote),
             Self::SettingsSet | Self::AdsConsent | Self::PrinterStatus => {
                 Requirement::Perm(Permission::SettingsEdit)
             }
@@ -1045,6 +1053,7 @@ impl IntentKind {
             | Self::AdRequestRecorded
             | Self::BackupExport
             | Self::OpsRestore
+            | Self::LeasePromote
             | Self::ZoneUpsert
             | Self::ZoneDelete
             | Self::DevicePlace
@@ -1833,6 +1842,8 @@ pub enum IntentPayload {
     BackupExport(crate::BackupExport),
     #[serde(rename = "ops.restore")]
     OpsRestore(crate::OpsRestore),
+    #[serde(rename = "lease.promote")]
+    LeasePromote(crate::LeasePromote),
 }
 
 impl IntentPayload {
@@ -1971,6 +1982,7 @@ impl IntentPayload {
             Self::AdRequestRecorded(_) => IntentKind::AdRequestRecorded,
             Self::BackupExport(_) => IntentKind::BackupExport,
             Self::OpsRestore(_) => IntentKind::OpsRestore,
+            Self::LeasePromote(_) => IntentKind::LeasePromote,
         }
     }
 }
@@ -2053,7 +2065,6 @@ mod tests {
         Permission::StockOverride,
         Permission::ShiftOverrideVariance,
         Permission::DevicePair,
-        Permission::OpsPromote,
         Permission::AuditView,
     ];
 
@@ -2368,6 +2379,7 @@ mod tests {
                 "order.void" => Requirement::Perm(Permission::PosVoid),
                 "backup.export" => Requirement::Perm(Permission::BackupExport),
                 "ops.restore" => Requirement::Perm(Permission::OpsRestore),
+                "lease.promote" => Requirement::Perm(Permission::OpsPromote),
                 "kitchen.advance" | "kitchen.advance.reverted" | "kot.reprint" => {
                     Requirement::Perm(Permission::KitchenUse)
                 }

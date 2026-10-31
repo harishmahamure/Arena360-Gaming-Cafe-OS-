@@ -85,6 +85,7 @@ async fn fake_hub() -> FakeHub {
                                     app: "0.1.0".into(),
                                 },
                                 primary: true,
+                                epoch: None,
                             }),
                         );
                         let ev = Frame::new(

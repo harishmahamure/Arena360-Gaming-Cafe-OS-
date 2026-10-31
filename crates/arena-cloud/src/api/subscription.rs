@@ -1,11 +1,15 @@
 //! `POST /v1/branches/{id}/subscription` (Story 10.2): starts a paid subscription for a branch the
 //! owner holds. The band comes from the billing country, the live price book is locked onto the
-//! subscription, and the answer carries what Razorpay Checkout needs. Paying and activation are
-//! the webhook story's. Gated by `billing_enabled`, like the wizard's paid tiers.
+//! subscription, and the answer carries what Razorpay Checkout needs. Payment and activation arrive
+//! by webhook (Story 10.3); `GET` on the same path says where the subscription stands. `POST` is
+//! gated by `billing_enabled`, like the wizard's paid tiers.
 
 use std::sync::Arc;
 
-use arena_proto::{AppError, CreateSubscription, ErrorCode, SubscriptionCheckout};
+use arena_proto::{
+    AppError, CreateSubscription, ErrorCode, SubscriptionCheckout, SubscriptionState,
+    SubscriptionStatus,
+};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
@@ -64,8 +68,32 @@ async fn create(
     Ok((StatusCode::CREATED, Json(checkout)))
 }
 
+/// `GET /v1/branches/{id}/subscription`: where the branch's subscription stands. 404 when the
+/// branch has none that is not over. A first payment held for review says so in plain words.
+async fn status(
+    State(st): State<Arc<AuthState>>,
+    owned: OwnedBranch,
+) -> Result<Json<SubscriptionStatus>, ApiError> {
+    let sub = st
+        .db
+        .subscription_of_branch(&owned.branch.id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(ApiError::not_found)?;
+    Ok(Json(SubscriptionStatus {
+        message: (sub.state == SubscriptionState::PendingReview)
+            .then(|| crate::webhook::REVIEW_MESSAGE.to_owned()),
+        subscription_id: sub.id,
+        state: sub.state,
+        tier: sub.tier,
+        cycle: sub.cycle,
+        band: sub.band,
+        current_period_end: sub.current_period_end,
+    }))
+}
+
 pub(super) fn router(st: Arc<AuthState>) -> Router {
     Router::new()
-        .route("/branches/{id}/subscription", post(create))
+        .route("/branches/{id}/subscription", post(create).get(status))
         .with_state(st)
 }

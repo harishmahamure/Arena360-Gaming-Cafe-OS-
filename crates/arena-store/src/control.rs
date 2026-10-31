@@ -18,6 +18,7 @@
 
 mod admin_audit;
 mod ads;
+mod billing;
 mod branch_watch;
 mod builder_jobs;
 mod catalog;
@@ -49,6 +50,10 @@ mod tunnels;
 
 pub use admin_audit::{AdminAuditRow, NewAdminAudit};
 pub use ads::{AdFillRow, AdMetric};
+pub use billing::{
+    BillingEvent, EntitlementWrite, EventOutcome, EventRecord, HistoryRow, NewOpsAudit,
+    SubscriptionChange,
+};
 pub use branch_watch::{WatchRow, WatchState};
 pub use builder_jobs::BuilderJob;
 pub use catalog::{
@@ -253,6 +258,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 35,
         sql: include_str!("../control-migrations/0035_subscriptions.sql"),
+    },
+    ControlMigration {
+        version: 36,
+        sql: include_str!("../control-migrations/0036_billing_events.sql"),
     },
 ];
 

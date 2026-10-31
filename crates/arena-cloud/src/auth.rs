@@ -41,6 +41,11 @@ pub struct AuthState {
     /// Creates and cancels Razorpay subscriptions (Story 10.2); set once by `auth_state`. Unset:
     /// the subscription route answers 503.
     pub billing: std::sync::OnceLock<crate::billing::BillingProvider>,
+    /// Verifies Razorpay webhook signatures (Story 10.3); set once by `auth_state`. Unset: the
+    /// webhook route answers 503.
+    pub webhook_secret: std::sync::OnceLock<crate::webhook::WebhookSecret>,
+    /// Webhook failures, repeats and handling time (Story 10.3).
+    pub webhook_metrics: crate::webhook::WebhookMetrics,
     pub clock: Clock,
     pepper: Vec<u8>,
     /// Exact browser origins allowed with credentials.
@@ -93,6 +98,8 @@ impl AuthState {
             push: std::sync::OnceLock::new(),
             tunnels: std::sync::OnceLock::new(),
             billing: std::sync::OnceLock::new(),
+            webhook_secret: std::sync::OnceLock::new(),
+            webhook_metrics: crate::webhook::WebhookMetrics::default(),
             clock,
             pepper: cfg.pepper.clone(),
             web_origins: cfg.web_origins.clone(),
@@ -227,7 +234,7 @@ pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn unhex(s: &str) -> Option<Vec<u8>> {
+pub fn unhex(s: &str) -> Option<Vec<u8>> {
     if !s.len().is_multiple_of(2) {
         return None;
     }

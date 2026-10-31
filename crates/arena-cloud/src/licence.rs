@@ -143,6 +143,23 @@ impl LicenceSigner {
     }
 }
 
+/// Adds what a paid entitlement's add-ons give (Story 10.3): `devices_20:<n>` raises the device
+/// limit by 20 a pack and `tunnel` adds the tunnel flag. Names it does not know change nothing.
+fn apply_addons(claims: &mut LicenceClaims, addons: &[String]) {
+    for addon in addons {
+        match addon.split_once(':') {
+            Some(("devices_20", n)) => {
+                let packs = n.parse::<u32>().unwrap_or(0).min(10);
+                claims.limits.devices = claims.limits.devices.saturating_add(20 * packs);
+            }
+            None if addon == "tunnel" && !claims.flags.iter().any(|f| f == "tunnel") => {
+                claims.flags.push("tunnel".to_owned());
+            }
+            _ => {}
+        }
+    }
+}
+
 pub fn claims_for(
     tenant_id: &str,
     branch_id: &str,
@@ -151,6 +168,11 @@ pub fn claims_for(
 ) -> LicenceClaims {
     let tier = entitlement.map_or(Tier::Free, |e| e.tier_at(now_ms));
     let mut claims = LicenceClaims::for_tier(tenant_id, branch_id, tier, now_ms.div_euclid(1000));
+    if tier != Tier::Free
+        && let Some(e) = entitlement
+    {
+        apply_addons(&mut claims, &e.addons);
+    }
     if tier != Tier::Free
         && let Some(until) = entitlement.and_then(|e| e.until)
     {

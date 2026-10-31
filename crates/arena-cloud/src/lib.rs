@@ -43,6 +43,7 @@ pub mod passwords;
 pub mod presign;
 pub mod price_book;
 pub mod push;
+pub mod reconcile;
 pub mod retention;
 pub mod rollups;
 pub mod store;
@@ -51,6 +52,7 @@ pub mod templates;
 pub mod totp;
 pub mod tunnel;
 pub mod useragent;
+pub mod webhook;
 
 use std::future::Future;
 use std::sync::Arc;
@@ -68,6 +70,7 @@ use crate::health::{CHECK_TIMEOUT, Reachability};
 use crate::messaging::{FakeNotifier, FakeSms, GupshupSms, Messenger, Notifier};
 use crate::push::{FakePush, WebPush};
 use crate::tunnel::{FakeTunnels, TunnelProvider};
+use crate::webhook::FAKE_WEBHOOK_SECRET;
 
 /// A source of Unix milliseconds (tests move it by hand).
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
@@ -253,9 +256,24 @@ pub fn auth_state(
             }
         },
     };
+    let webhook_secret = match &cfg.sms {
+        SmsProviderConfig::Fake => crate::webhook::WebhookSecret::new(FAKE_WEBHOOK_SECRET).ok(),
+        SmsProviderConfig::Gupshup(_) => {
+            match crate::webhook::WebhookSecret::from_env(&|k| std::env::var_os(k)) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(error = %e, "no webhook secret: the Razorpay webhook answers 503");
+                    None
+                }
+            }
+        }
+    };
     let st = Arc::new(AuthState::new(db, sms, clock, cfg));
     if let Some(b) = billing {
         let _ = st.billing.set(b);
+    }
+    if let Some(s) = webhook_secret {
+        let _ = st.webhook_secret.set(s);
     }
     if let Some(t) = tunnels {
         let _ = st.tunnels.set(t);

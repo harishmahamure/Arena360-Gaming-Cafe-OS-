@@ -34,6 +34,8 @@ pub struct Subscription {
     pub cancel_at_period_end: bool,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Where the first payment came from (a country code, or `INTL`), once there is one.
+    pub payment_country: Option<String>,
 }
 
 /// A subscription to create (always `pending`, with no Razorpay id yet).
@@ -60,17 +62,17 @@ pub enum ReserveOutcome {
     Exists(SubscriptionState),
 }
 
-const COLUMNS: &str = "id, tenant_id, branch_id, state, tier, cycle, band, currency, \
+pub(super) const COLUMNS: &str = "id, tenant_id, branch_id, state, tier, cycle, band, currency, \
      price_book_id, addon_devices_20, addon_tunnel, addon_owner_login, mandate_method, \
      razorpay_subscription_id, rev, current_period_end, grace_until, first_paid_at, \
-     cancel_at_period_end, created_at, updated_at";
+     cancel_at_period_end, created_at, updated_at, payment_country";
 
 fn count(r: &[SqlValue], i: usize) -> Result<u32, ControlError> {
     u32::try_from(col_int(r, i)?)
         .map_err(|_| ControlError::Db(format!("column {i}: quantity out of range")))
 }
 
-fn subscription_from(r: &[SqlValue]) -> Result<Subscription, ControlError> {
+pub(super) fn subscription_from(r: &[SqlValue]) -> Result<Subscription, ControlError> {
     let bad = |what: &str, v: &str| ControlError::Db(format!("unknown subscription {what} {v:?}"));
     let state = col_text(r, 3)?;
     let tier = col_text(r, 4)?;
@@ -101,6 +103,7 @@ fn subscription_from(r: &[SqlValue]) -> Result<Subscription, ControlError> {
         cancel_at_period_end: col_int(r, 18)? == 1,
         created_at: col_int(r, 19)?,
         updated_at: col_int(r, 20)?,
+        payment_country: col_opt_text(r, 21)?,
     })
 }
 

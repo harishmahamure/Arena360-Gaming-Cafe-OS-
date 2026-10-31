@@ -362,6 +362,20 @@ failure leaves it for the next run, and under `manual` it opens a `razorpay_canc
 ops task). The job needs the same `ARENA_BILLING_PROVIDER` and `ARENA_RAZORPAY_KEY_*` variables as
 the `control` role, plus the database variables.
 
+Webhooks and reconcile (Story 10.3): point Razorpay's webhook at `POST /v1/webhooks/razorpay` on
+the `control` role and set `ARENA_RAZORPAY_WEBHOOK_SECRET` (a SOPS secret) to the secret you gave
+Razorpay; without it the route answers 503. The signature is checked over the raw body before
+anything is parsed (a bad one answers 400 and is counted as `webhook_failures`), every event is
+applied once by its `X-Razorpay-Event-Id`, and an activation writes the branch's `paid`
+entitlement in the same transaction; the Hub learns of it from its next heartbeat's licence. A
+first payment whose country does not match the band is held as `pending_review` with an open
+`subscription_review` ops task (and a post to `ARENA_ALERT_WEBHOOK` when set); clear it with
+`arena-cloud ops subscription review --id <id> --approve --reason <text> [--operator <name>]`.
+Schedule `arena-cloud --role jobs --task billing-reconcile` every 10 minutes: it reads each
+`pending`, `renewal_needs_approval` and `grace` subscription from Razorpay and applies what a
+missed webhook left, through the same code path. It needs the billing keys and the database
+variables, like the sweep.
+
 `GET /v1/pricing?band=IN` (public, cached 5 minutes) serves the live book's lines for a band. The
 web apps read `packages/ui/src/pricing.snapshot.ts`, generated from the seed book; regenerate it
 with `UPDATE_PRICING_SNAPSHOT=1 cargo test -p arena-cloud --test pricing_snapshot` (CI fails when

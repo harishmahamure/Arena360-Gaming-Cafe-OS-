@@ -20,6 +20,7 @@ const ALL_TABLES: &[&str] = &[
     "ad_request_daily",
     "admin_audit",
     "billing_bands",
+    "billing_events",
     "branch_fence",
     "branch_opening",
     "branch_retention",
@@ -61,6 +62,7 @@ const ALL_TABLES: &[&str] = &[
     "send_ledger",
     "signin_challenges",
     "staff_invites",
+    "subscription_history",
     "subscriptions",
     "tenants",
 ];

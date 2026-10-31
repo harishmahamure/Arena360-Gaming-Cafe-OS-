@@ -143,6 +143,25 @@ pub struct SubscriptionCheckout {
     pub total_minor: i64,
 }
 
+/// What `GET /v1/branches/:id/subscription` tells the owner about the branch's subscription: its
+/// state, the end of the paid period and, while the state needs explaining, a sentence for them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SubscriptionStatus {
+    pub subscription_id: String,
+    pub state: SubscriptionState,
+    pub tier: Tier,
+    pub cycle: BillingCycle,
+    pub band: Band,
+    /// The end of the paid period, in epoch milliseconds, once Razorpay has reported one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub current_period_end: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub message: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

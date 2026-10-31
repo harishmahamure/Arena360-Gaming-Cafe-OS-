@@ -107,6 +107,30 @@ async fn main() -> ExitCode {
                 }
             };
         }
+        Ok(Command::SubscriptionReview(review)) => {
+            return match arena_cloud::ops::subscription_review(
+                &review,
+                |k| std::env::var_os(k),
+                arena_cloud::now_ms(),
+            )
+            .await
+            {
+                Ok(lines) => {
+                    for line in lines {
+                        println!("{line}");
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e @ arena_cloud::ops::OpsError::Config(_)) => {
+                    eprintln!("arena-cloud: subscription review: {e}");
+                    ExitCode::from(EXIT_USAGE)
+                }
+                Err(e) => {
+                    eprintln!("arena-cloud: subscription review failed: {e}");
+                    ExitCode::from(EXIT_FAILURE)
+                }
+            };
+        }
         Ok(Command::CatalogImport(import)) => {
             return match arena_cloud::ops::catalog_import(
                 &import,

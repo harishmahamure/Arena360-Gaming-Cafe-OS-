@@ -9,6 +9,7 @@ use crate::config::{
 };
 use crate::price_book::{self, BookError};
 use crate::templates::TemplateStore;
+use crate::webhook::ReviewError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrantSummary {
@@ -29,8 +30,16 @@ pub enum OpsError {
     Db(String),
     UnknownBranch(String),
     PastDate(String),
-    PaidPlan { branch_id: String, tier: Tier },
+    PaidPlan {
+        branch_id: String,
+        tier: Tier,
+    },
     Book(BookError),
+    UnknownSubscription(String),
+    NotInReview {
+        subscription_id: String,
+        state: &'static str,
+    },
 }
 
 impl std::fmt::Display for OpsError {
@@ -45,6 +54,19 @@ impl std::fmt::Display for OpsError {
                 tier.as_str()
             ),
             Self::Book(e) => e.fmt(f),
+            Self::UnknownSubscription(id) => {
+                write!(
+                    f,
+                    "UNKNOWN_SUBSCRIPTION: no subscription {id:?} in gz_control"
+                )
+            }
+            Self::NotInReview {
+                subscription_id,
+                state,
+            } => write!(
+                f,
+                "NOT_IN_REVIEW: subscription {subscription_id:?} is {state}, not pending_review"
+            ),
             Self::PastDate(d) => write!(
                 f,
                 "PAST_DATE: --until {d} has already ended in Asia/Kolkata"
@@ -303,4 +325,61 @@ pub async fn price_book(
             )])
         }
     }
+}
+
+/// `subscription review …` (Story 10.3): the lines to print.
+pub async fn subscription_review(
+    cfg: &crate::config::SubscriptionReviewConfig,
+    env: impl Fn(&str) -> Option<OsString>,
+    now_ms: i64,
+) -> Result<Vec<String>, OpsError> {
+    let database = match &cfg.dev_data_dir {
+        Some(dir) => Database::Local {
+            data_dir: dir.clone(),
+        },
+        None => crate::config::remote_database(&env).map_err(OpsError::Config)?,
+    };
+    let operator = cfg
+        .operator
+        .clone()
+        .or_else(|| {
+            ["ARENA_OPS_OPERATOR", "USER", "USERNAME"]
+                .into_iter()
+                .filter_map(|k| crate::config::get_env(&env, k))
+                .find(|v| {
+                    !v.is_empty() && v.chars().count() <= 200 && !v.chars().any(char::is_control)
+                })
+        })
+        .ok_or_else(|| {
+            OpsError::Config(
+                "subscription review needs --operator (or ARENA_OPS_OPERATOR in the environment)"
+                    .to_owned(),
+            )
+        })?;
+    let db = open_migrated(&database, now_ms).await?;
+    let sub =
+        crate::webhook::approve_review(&db, &cfg.subscription_id, &operator, &cfg.reason, now_ms)
+            .await
+            .map_err(|e| match e {
+                ReviewError::Unknown(id) => OpsError::UnknownSubscription(id),
+                ReviewError::NotInReview(state) => OpsError::NotInReview {
+                    subscription_id: cfg.subscription_id.clone(),
+                    state: state.as_str(),
+                },
+                ReviewError::Busy => {
+                    OpsError::Db("the subscription kept changing; run it again".to_owned())
+                }
+                ReviewError::Db(m) => OpsError::Db(m),
+            })?;
+    Ok(vec![
+        format!(
+            "subscription {} of branch {} is {}: {} {} entitled",
+            sub.id,
+            sub.branch_id,
+            sub.state.as_str(),
+            sub.tier.as_str(),
+            sub.cycle.as_str()
+        ),
+        format!("ops_audit written for {} by {operator}", sub.id),
+    ])
 }

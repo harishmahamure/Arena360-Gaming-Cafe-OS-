@@ -384,6 +384,110 @@ fn the_subscription_sweep_is_a_jobs_task() {
 }
 
 #[test]
+fn billing_reconcile_is_a_jobs_task() {
+    assert_eq!(
+        parse(
+            args(&["--role", "jobs", "--task", "billing-reconcile"]),
+            env_of(&[])
+        ),
+        Ok(Command::Job(JobConfig {
+            task: Task::BillingReconcile,
+            dev_data_dir: None,
+        }))
+    );
+    assert_eq!(Task::BillingReconcile.as_str(), "billing-reconcile");
+}
+
+#[test]
+fn ops_subscription_review_needs_an_id_a_reason_and_an_explicit_approve() {
+    let ops = |a: &[&str]| {
+        parse(
+            std::iter::once("ops")
+                .chain(a.iter().copied())
+                .map(std::ffi::OsString::from),
+            |_: &str| None,
+        )
+    };
+    let Ok(Command::SubscriptionReview(r)) = ops(&[
+        "subscription",
+        "review",
+        "--id",
+        "01SUB",
+        "--approve",
+        "--reason",
+        "card confirmed Indian",
+        "--operator",
+        "asha",
+    ]) else {
+        panic!("not a subscription review");
+    };
+    assert_eq!(
+        (
+            r.subscription_id.as_str(),
+            r.reason.as_str(),
+            r.operator.as_deref()
+        ),
+        ("01SUB", "card confirmed Indian", Some("asha"))
+    );
+    assert_eq!(r.dev_data_dir, None);
+    let Ok(Command::SubscriptionReview(dev)) = ops(&[
+        "subscription",
+        "review",
+        "--id",
+        "s",
+        "--approve",
+        "--reason",
+        "r",
+        "--dev",
+    ]) else {
+        panic!("not a subscription review");
+    };
+    assert!(dev.dev_data_dir.is_some() && dev.operator.is_none());
+    for bad in [
+        &["subscription", "review", "--id", "s", "--reason", "r"][..],
+        &["subscription", "review", "--approve", "--reason", "r"],
+        &["subscription", "review", "--id", "s", "--approve"],
+        &[
+            "subscription",
+            "review",
+            "--id",
+            "s",
+            "--approve",
+            "--reason",
+            " ",
+        ],
+        &[
+            "subscription",
+            "review",
+            "--id",
+            "s",
+            "--approve=yes",
+            "--reason",
+            "r",
+        ],
+        &[
+            "subscription",
+            "review",
+            "--id",
+            "s",
+            "--approve",
+            "--reason",
+            "r",
+            "--data-dir",
+            "x",
+        ],
+        &["subscription", "refund"],
+        &["subscription"],
+    ] {
+        assert!(ops(bad).is_err(), "{bad:?}");
+    }
+    assert!(matches!(
+        ops(&["subscription", "--help"]),
+        Ok(Command::Help)
+    ));
+}
+
+#[test]
 fn jobs_run_one_task_and_read_no_env_at_parse_time() {
     assert_eq!(
         parse(

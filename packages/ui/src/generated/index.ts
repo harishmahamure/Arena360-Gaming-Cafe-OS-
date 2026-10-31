@@ -716,6 +716,7 @@ export type { StockWasteReverted } from "./StockWasteReverted";
 export type { StockWriteOff } from "./StockWriteOff";
 export type { SubscriptionCheckout } from "./SubscriptionCheckout";
 export type { SubscriptionState } from "./SubscriptionState";
+export type { SubscriptionStatus } from "./SubscriptionStatus";
 export type { SummaryAttention } from "./SummaryAttention";
 export type { SummaryCatalogue } from "./SummaryCatalogue";
 export type { SummaryPublish } from "./SummaryPublish";

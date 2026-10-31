@@ -46,6 +46,7 @@ pub mod signin;
 pub mod signup;
 pub mod stepup;
 mod subscription;
+mod webhook;
 pub mod wizard;
 pub mod wizard_devices;
 mod wizard_events;
@@ -91,6 +92,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>, commands_only: bool) -> Router {
             .merge(wizard_golive::router(Arc::clone(st)))
             .merge(branches::router(Arc::clone(st)))
             .merge(subscription::router(Arc::clone(st)))
+            .merge(webhook::router(Arc::clone(st)))
             .merge(owner_read::router(Arc::clone(st)))
             .merge(audit::router(Arc::clone(st)))
             .merge(live::router(Arc::clone(st)))

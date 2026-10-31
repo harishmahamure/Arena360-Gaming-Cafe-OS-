@@ -109,6 +109,38 @@ fn claims_follow_the_tier_table_for_each_tier_and_source() {
 }
 
 #[test]
+fn a_paid_entitlements_add_ons_raise_the_device_limit_and_add_the_tunnel() {
+    let paid = |tier: Tier, addons: &[&str]| {
+        let mut e = entitlement(tier, EntitlementSource::Paid, None);
+        e.addons = addons.iter().map(|a| (*a).to_owned()).collect();
+        claims_for("t1", "b1", Some(&e), NOW)
+    };
+    let plain = paid(Tier::Basic, &[]);
+    assert_eq!(plain.limits.devices, 60);
+    assert!(!plain.flags.iter().any(|f| f == "tunnel"));
+    let with = paid(Tier::Basic, &["devices_20:3", "tunnel"]);
+    assert_eq!(with.limits.devices, 120);
+    assert!(with.flags.iter().any(|f| f == "tunnel"));
+    assert_eq!(with.flags.iter().filter(|f| *f == "tunnel").count(), 1);
+    // Premium already has the tunnel; unknown, malformed and oversized add-ons change nothing
+    // beyond the ten-pack ceiling.
+    let premium = paid(
+        Tier::Premium,
+        &["tunnel", "owner_login:1", "devices_20:x", "mystery"],
+    );
+    assert_eq!(premium.limits.devices, 200);
+    assert_eq!(premium.flags.iter().filter(|f| *f == "tunnel").count(), 1);
+    assert_eq!(
+        paid(Tier::Basic, &["devices_20:99"]).limits.devices,
+        60 + 200
+    );
+    // Free never takes add-ons.
+    let mut free = entitlement(Tier::Free, EntitlementSource::Free, None);
+    free.addons = vec!["devices_20:5".to_owned()];
+    assert_eq!(claims_for("t1", "b1", Some(&free), NOW).limits.devices, 20);
+}
+
+#[test]
 fn a_dev_licence_verifies_and_its_header_names_the_kid() {
     let claims = claims_for("t1", "b1", None, NOW);
     let token = LicenceSigner::dev().sign(&claims).unwrap();

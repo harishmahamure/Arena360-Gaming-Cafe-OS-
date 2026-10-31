@@ -120,6 +120,109 @@ pub enum CancelResult {
 /// The key id the fake hands to Checkout.
 pub const FAKE_KEY_ID: &str = "rzp_test_fake";
 
+/// Where a payment came from, as far as Razorpay says.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum PaymentOrigin {
+    /// The card issuer's or the bank's country (ISO 3166-1 alpha-2).
+    Country(String),
+    /// A card issued outside India; Razorpay does not say where.
+    International,
+    #[default]
+    Unknown,
+}
+
+impl PaymentOrigin {
+    /// How the origin is stored on the subscription.
+    pub fn as_text(&self) -> Option<String> {
+        match self {
+            Self::Country(c) => Some(c.clone()),
+            Self::International => Some("INTL".to_owned()),
+            Self::Unknown => None,
+        }
+    }
+
+    pub fn parse(text: &str) -> Self {
+        match text {
+            "INTL" => Self::International,
+            c if c.len() == 2 && c.bytes().all(|b| b.is_ascii_uppercase()) => {
+                Self::Country(c.to_owned())
+            }
+            _ => Self::Unknown,
+        }
+    }
+
+    /// Whether a payment from here is what a subscription at `band` expects. What Razorpay does
+    /// not say counts as a match: only a payment known to come from elsewhere is held for review.
+    pub fn fits(&self, band: Band) -> bool {
+        match self {
+            Self::Unknown => true,
+            Self::Country(c) => c == band.as_str(),
+            Self::International => band != Band::In,
+        }
+    }
+}
+
+/// How a payment was made.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PaymentInfo {
+    pub method: Option<MandateMethod>,
+    pub origin: PaymentOrigin,
+}
+
+/// A subscription as the provider holds it now (what the reconcile job reads).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteSubscription {
+    /// Razorpay's status: `created`, `authenticated`, `active`, `pending`, `halted`, ...
+    pub status: String,
+    /// The end of the current period in epoch milliseconds.
+    pub current_end_ms: Option<i64>,
+    /// How many charges have succeeded.
+    pub paid_count: u32,
+    /// How the latest charge was paid, once there is one.
+    pub payment: Option<PaymentInfo>,
+}
+
+/// A Razorpay id is letters, digits and underscores: the only shape put into a request path.
+fn plain_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// How a Razorpay payment entity was paid. UPI, bank mandates and net banking exist only in
+/// India; a card carries its issuer's country when Razorpay sends one, else whether it is
+/// international.
+pub fn payment_info_from(payment: &Value) -> PaymentInfo {
+    let method = payment.get("method").and_then(Value::as_str);
+    let card = payment.get("card").filter(|c| c.is_object());
+    let origin = match method {
+        Some("upi" | "emandate" | "netbanking") => PaymentOrigin::Country("IN".to_owned()),
+        _ => match card {
+            Some(card) => {
+                let country = card
+                    .get("country")
+                    .and_then(Value::as_str)
+                    .map(str::to_ascii_uppercase)
+                    .filter(|c| c.len() == 2 && c.bytes().all(|b| b.is_ascii_uppercase()));
+                match (country, card.get("international").and_then(Value::as_bool)) {
+                    (Some(c), _) => PaymentOrigin::Country(c),
+                    (None, Some(false)) => PaymentOrigin::Country("IN".to_owned()),
+                    (None, Some(true)) => PaymentOrigin::International,
+                    (None, None) => PaymentOrigin::Unknown,
+                }
+            }
+            None => PaymentOrigin::Unknown,
+        },
+    };
+    PaymentInfo {
+        method: match method {
+            Some("upi") => Some(MandateMethod::Upi),
+            Some("card") => Some(MandateMethod::Card),
+            Some("emandate") => Some(MandateMethod::Emandate),
+            _ => None,
+        },
+        origin,
+    }
+}
+
 /// Why a provider call failed: a stable code and no secret.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BillingError(pub String);
@@ -143,6 +246,8 @@ struct FakeState {
     subscription_specs: Vec<SubscriptionSpec>,
     cancelled: Vec<String>,
     fail_subscriptions: bool,
+    /// Razorpay subscription id -> what a test says Razorpay holds for it.
+    remote: BTreeMap<String, RemoteSubscription>,
 }
 
 /// The recorded fake: keeps the plans it "created" in memory, answers a repeat of the same row
@@ -209,6 +314,26 @@ impl FakeRazorpay {
                 .insert(spec.subscription_id.clone(), id.clone());
             s.subscription_specs.push(spec.clone());
             Ok(id)
+        })
+    }
+
+    /// Says what Razorpay holds for `razorpay_subscription_id` from now on (what the reconcile
+    /// job reads).
+    pub fn set_remote(&self, razorpay_subscription_id: &str, remote: RemoteSubscription) {
+        self.with(|s| {
+            s.remote.insert(razorpay_subscription_id.to_owned(), remote);
+        });
+    }
+
+    fn fetch_subscription(
+        &self,
+        razorpay_subscription_id: &str,
+    ) -> Result<Option<RemoteSubscription>, BillingError> {
+        self.with(|s| {
+            if s.fail_subscriptions {
+                return Err(BillingError("FAKE_SUBSCRIPTION_FAILED".to_owned()));
+            }
+            Ok(s.remote.get(razorpay_subscription_id).cloned())
         })
     }
 
@@ -343,11 +468,7 @@ impl RazorpayClient {
         &self,
         razorpay_subscription_id: &str,
     ) -> Result<(), BillingError> {
-        let plain = !razorpay_subscription_id.is_empty()
-            && razorpay_subscription_id
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_');
-        if !plain {
+        if !plain_id(razorpay_subscription_id) {
             return Err(BillingError("RAZORPAY_BAD_ID".to_owned()));
         }
         self.post(
@@ -356,6 +477,64 @@ impl RazorpayClient {
         )
         .await
         .map(|_| ())
+    }
+
+    /// The subscription as Razorpay holds it now, with how its latest payment was made when it
+    /// has been paid. A failed payment lookup leaves the payment unknown rather than failing.
+    async fn fetch_subscription(
+        &self,
+        razorpay_subscription_id: &str,
+    ) -> Result<RemoteSubscription, BillingError> {
+        if !plain_id(razorpay_subscription_id) {
+            return Err(BillingError("RAZORPAY_BAD_ID".to_owned()));
+        }
+        let sub = self
+            .get(&format!("/subscriptions/{razorpay_subscription_id}"))
+            .await?;
+        let status = sub
+            .get("status")
+            .and_then(Value::as_str)
+            .ok_or_else(|| BillingError("RAZORPAY_BAD_ANSWER".to_owned()))?
+            .to_owned();
+        let paid_count = sub
+            .get("paid_count")
+            .and_then(Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+            .unwrap_or(0);
+        let current_end_ms = sub
+            .get("current_end")
+            .and_then(Value::as_i64)
+            .and_then(|s| s.checked_mul(1000));
+        let payment = if paid_count > 0 {
+            self.latest_payment(razorpay_subscription_id).await
+        } else {
+            None
+        };
+        Ok(RemoteSubscription {
+            status,
+            current_end_ms,
+            paid_count,
+            payment,
+        })
+    }
+
+    async fn latest_payment(&self, razorpay_subscription_id: &str) -> Option<PaymentInfo> {
+        let invoices = self
+            .get(&format!(
+                "/invoices?subscription_id={razorpay_subscription_id}&count=1"
+            ))
+            .await
+            .ok()?;
+        let payment_id = invoices
+            .get("items")?
+            .as_array()?
+            .first()?
+            .get("payment_id")?
+            .as_str()
+            .filter(|id| plain_id(id))?
+            .to_owned();
+        let payment = self.get(&format!("/payments/{payment_id}")).await.ok()?;
+        Some(payment_info_from(&payment))
     }
 
     fn id_of(json: &Value) -> Result<String, BillingError> {
@@ -369,12 +548,24 @@ impl RazorpayClient {
     /// POSTs `body` to `path` and answers the JSON reply. The error is a stable code: never the
     /// key, a secret or the response body.
     async fn post(&self, path: &str, body: &Value) -> Result<Value, BillingError> {
-        let res = self
-            .client
-            .post(format!("{}{path}", self.base))
+        self.send(
+            self.client
+                .post(format!("{}{path}", self.base))
+                .header("content-type", "application/json")
+                .body(body.to_string()),
+        )
+        .await
+    }
+
+    /// GETs `path` and answers the JSON reply, with the same stable error codes as [`Self::post`].
+    async fn get(&self, path: &str) -> Result<Value, BillingError> {
+        self.send(self.client.get(format!("{}{path}", self.base)))
+            .await
+    }
+
+    async fn send(&self, req: reqwest::RequestBuilder) -> Result<Value, BillingError> {
+        let res = req
             .basic_auth(&self.key_id, Some(&self.key_secret))
-            .header("content-type", "application/json")
-            .body(body.to_string())
             .send()
             .await
             .map_err(|e| {
@@ -440,6 +631,22 @@ impl BillingProvider {
                 .await
                 .map(SubscriptionResult::Created),
             Self::Manual => Ok(SubscriptionResult::Deferred),
+        }
+    }
+
+    /// Reads a Razorpay subscription as the provider holds it now; `None` when the provider is
+    /// `manual` (or, for the fake, when no test said what it holds).
+    pub async fn fetch_subscription(
+        &self,
+        razorpay_subscription_id: &str,
+    ) -> Result<Option<RemoteSubscription>, BillingError> {
+        match self {
+            Self::Fake(f) => f.fetch_subscription(razorpay_subscription_id),
+            Self::Razorpay(r) => r
+                .fetch_subscription(razorpay_subscription_id)
+                .await
+                .map(Some),
+            Self::Manual => Ok(None),
         }
     }
 
@@ -648,6 +855,84 @@ mod tests {
         let err = c.cancel_subscription("sub_1/../x").await.unwrap_err();
         assert_eq!(err.0, "RAZORPAY_BAD_ID");
         assert_eq!(BillingProvider::Razorpay(c).key_id(), Some("rzp_test_1"));
+    }
+
+    #[test]
+    fn a_payment_says_where_it_came_from_as_far_as_razorpay_does() {
+        let of = |v: Value| payment_info_from(&v);
+        let upi = of(json!({"method": "upi"}));
+        assert_eq!(upi.method, Some(MandateMethod::Upi));
+        assert_eq!(upi.origin, PaymentOrigin::Country("IN".to_owned()));
+        assert_eq!(
+            of(json!({"method": "emandate"})).method,
+            Some(MandateMethod::Emandate)
+        );
+        assert_eq!(
+            of(json!({"method": "netbanking"})).origin,
+            PaymentOrigin::Country("IN".to_owned())
+        );
+        let card = |c: Value| of(json!({"method": "card", "card": c})).origin;
+        assert_eq!(
+            card(json!({"international": false})),
+            PaymentOrigin::Country("IN".to_owned())
+        );
+        assert_eq!(
+            card(json!({"international": true})),
+            PaymentOrigin::International
+        );
+        assert_eq!(
+            card(json!({"international": true, "country": "us"})),
+            PaymentOrigin::Country("US".to_owned())
+        );
+        assert_eq!(card(json!({"country": "usa"})), PaymentOrigin::Unknown);
+        assert_eq!(card(json!({})), PaymentOrigin::Unknown);
+        assert_eq!(
+            of(json!({"method": "wallet"})).origin,
+            PaymentOrigin::Unknown
+        );
+        assert_eq!(of(json!({})).method, None);
+    }
+
+    #[test]
+    fn an_origin_fits_its_band_unless_it_is_known_to_be_elsewhere() {
+        let india = PaymentOrigin::Country("IN".to_owned());
+        let us = PaymentOrigin::Country("US".to_owned());
+        assert!(india.fits(Band::In) && !india.fits(Band::Us));
+        assert!(us.fits(Band::Us) && !us.fits(Band::In));
+        assert!(PaymentOrigin::International.fits(Band::Sg));
+        assert!(!PaymentOrigin::International.fits(Band::In));
+        assert!(PaymentOrigin::Unknown.fits(Band::In) && PaymentOrigin::Unknown.fits(Band::My));
+        for o in [india, us, PaymentOrigin::International] {
+            assert_eq!(PaymentOrigin::parse(&o.as_text().unwrap()), o);
+        }
+        assert_eq!(PaymentOrigin::Unknown.as_text(), None);
+        assert_eq!(PaymentOrigin::parse("india"), PaymentOrigin::Unknown);
+    }
+
+    #[tokio::test]
+    async fn the_fake_reads_back_what_a_test_says_razorpay_holds() {
+        let p = BillingProvider::Fake(FakeRazorpay::new());
+        assert_eq!(p.fetch_subscription("sub_1").await, Ok(None));
+        let BillingProvider::Fake(f) = &p else {
+            unreachable!()
+        };
+        let remote = RemoteSubscription {
+            status: "active".to_owned(),
+            current_end_ms: Some(9_000),
+            paid_count: 1,
+            payment: None,
+        };
+        f.set_remote("sub_1", remote.clone());
+        assert_eq!(p.fetch_subscription("sub_1").await, Ok(Some(remote)));
+        f.fail_subscriptions(true);
+        assert!(p.fetch_subscription("sub_1").await.is_err());
+        assert_eq!(
+            BillingProvider::Manual.fetch_subscription("sub_1").await,
+            Ok(None)
+        );
+        let c = RazorpayClient::new("rzp_test_1", "s3cret", Some("http://127.0.0.1:1")).unwrap();
+        let err = c.fetch_subscription("sub_1/../x").await.unwrap_err();
+        assert_eq!(err.0, "RAZORPAY_BAD_ID");
     }
 
     #[tokio::test]

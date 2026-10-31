@@ -9,7 +9,7 @@ use std::time::Duration;
 pub const USAGE: &str =
     "usage: arena-cloud --role control|command|builder|all [--listen <addr:port>] [--help] [--version]
        arena-cloud --role control|command|builder|all --dev [--data-dir <dir>] [--listen <loopback addr:port>]
-       arena-cloud --role jobs --task control-backup|command-sweep|offline-watch|retention-sweep|subscription-sweep [--dev [--data-dir <dir>]]
+       arena-cloud --role jobs --task control-backup|command-sweep|offline-watch|retention-sweep|subscription-sweep|billing-reconcile [--dev [--data-dir <dir>]]
        arena-cloud ops restore-control (--from-key <key> | --from-file <path|->)
                                        (--identity <file> | --plaintext) [--dev [--data-dir <dir>]]
        arena-cloud ops grant-comp --branch <id> --tier basic|premium --until <YYYY-MM-DD>
@@ -22,6 +22,8 @@ pub const USAGE: &str =
                                       [--dev [--data-dir <dir>]]
        arena-cloud ops price-book band --band MY|SG|US|IN --enabled true|false --reason <text>
                                       [--operator <name>] [--dev [--data-dir <dir>]]
+       arena-cloud ops subscription review --id <id> --approve --reason <text> [--operator <name>]
+                                           [--dev [--data-dir <dir>]]
        arena-cloud ops licence-keygen [--kid <kid>]
        arena-cloud catalog import <file.json|file.csv> --operator <name> [--media-dir <dir>]
                                   [--dev [--data-dir <dir>]]
@@ -41,6 +43,8 @@ pub const USAGE: &str =
                after their financial year (run daily)
                subscription-sweep: cancel at Razorpay and abandon subscriptions left unpaid for 24 hours
                (run every 15 minutes; needs the billing keys)
+               billing-reconcile: read every pending, renewal_needs_approval or grace subscription from
+               Razorpay and apply what the webhooks missed (run every 10 minutes; needs the billing keys)
   --dev        local dev mode: gz_control is <data-dir>/gz_control.db (SQLite), no env or
                token needed, loopback only (default 127.0.0.1:8080), dev routes under /v1/dev
   --data-dir   dev data directory, created if missing (default ./.arena-cloud-dev)
@@ -57,6 +61,9 @@ pub const USAGE: &str =
                live and retires the old book (a published book is immutable: PRICE_BOOK_IMMUTABLE),
                band switches a country band on or off; every change writes an ops_audit row, the
                operator defaults to ARENA_OPS_OPERATOR, USER or USERNAME
+  ops subscription review  clear a first payment held because its country did not match the price
+               band: the subscription becomes active and the branch is entitled, with an ops_audit row
+               (needs --approve, --id, --reason; the operator defaults as for price-book)
   ops licence-keygen  print a new Ed25519 PKCS#8 private key PEM on stdout (for SOPS) and, on
                stderr, its kid and the VerifyKey line for arena_proto::licence::LICENCE_VERIFY_KEYS
   catalog import  upsert the game catalogue from a JSON or CSV list by name + launcher, upload
@@ -187,6 +194,8 @@ pub enum Task {
     RetentionSweep,
     /// Abandons subscriptions left unpaid for 24 hours (Story 10.2).
     SubscriptionSweep,
+    /// Reads unsettled subscriptions from Razorpay and applies what the webhooks missed (Story 10.3).
+    BillingReconcile,
 }
 
 impl Task {
@@ -197,6 +206,7 @@ impl Task {
             Self::OfflineWatch => "offline-watch",
             Self::RetentionSweep => "retention-sweep",
             Self::SubscriptionSweep => "subscription-sweep",
+            Self::BillingReconcile => "billing-reconcile",
         }
     }
 }
@@ -317,6 +327,7 @@ pub enum Command {
     RestoreControl(RestoreConfig),
     GrantComp(GrantCompConfig),
     PriceBook(PriceBookConfig),
+    SubscriptionReview(SubscriptionReviewConfig),
     CatalogImport(CatalogImportConfig),
     LicenceKeygen { kid: Option<String> },
     Help,
@@ -748,7 +759,7 @@ pub fn parse(
         let task = match task.as_deref() {
             None => {
                 return Err(
-                    "--role jobs needs --task (control-backup, command-sweep, offline-watch, retention-sweep or subscription-sweep)"
+                    "--role jobs needs --task (control-backup, command-sweep, offline-watch, retention-sweep, subscription-sweep or billing-reconcile)"
                         .to_owned(),
                 );
             }
@@ -757,6 +768,7 @@ pub fn parse(
             Some("offline-watch") => Task::OfflineWatch,
             Some("retention-sweep") => Task::RetentionSweep,
             Some("subscription-sweep") => Task::SubscriptionSweep,
+            Some("billing-reconcile") => Task::BillingReconcile,
             Some(other) => return Err(format!("unknown --task {other}")),
         };
         if listen.is_some() {
@@ -818,18 +830,86 @@ pub fn parse(
     }))
 }
 
+/// `ops subscription review …` (Story 10.3): an operator clears a first payment that was held
+/// because its country did not match the subscription's price band.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubscriptionReviewConfig {
+    pub subscription_id: String,
+    /// `None`: the operator named by `ARENA_OPS_OPERATOR`, `USER` or `USERNAME`.
+    pub operator: Option<String>,
+    pub reason: String,
+    pub dev_data_dir: Option<PathBuf>,
+}
+
+fn parse_subscription(mut args: impl Iterator<Item = OsString>) -> Result<Command, String> {
+    match args.next().and_then(|a| a.into_string().ok()).as_deref() {
+        Some("review") => {}
+        Some("--help" | "-h") => return Ok(Command::Help),
+        Some(other) => return Err(format!("unknown subscription command {other}")),
+        None => return Err("subscription needs a command (review)".to_owned()),
+    }
+    let mut id: Option<String> = None;
+    let mut approve = false;
+    let mut operator: Option<String> = None;
+    let mut reason: Option<String> = None;
+    let mut dev = false;
+    let mut data_dir: Option<PathBuf> = None;
+    let early = walk_flags(args, |flag, inline, value| {
+        match flag {
+            "--help" | "-h" => return Ok(Some(Command::Help)),
+            "--id" => id = Some(value()?),
+            "--approve" if !inline => approve = true,
+            "--operator" => operator = Some(value()?),
+            "--reason" => reason = Some(value()?),
+            "--dev" if !inline => dev = true,
+            "--data-dir" => data_dir = Some(PathBuf::from(value()?)),
+            other => return Err(format!("unknown argument {other}")),
+        }
+        Ok(None)
+    })?;
+    if let Some(cmd) = early {
+        return Ok(cmd);
+    }
+    if !approve {
+        return Err("subscription review needs --approve".to_owned());
+    }
+    let text = |flag: &str, v: Option<String>| -> Result<String, String> {
+        let v = v.ok_or_else(|| format!("subscription review needs {flag}"))?;
+        let v = v.trim().to_owned();
+        if v.is_empty() || v.chars().count() > OPS_TEXT_MAX || v.chars().any(char::is_control) {
+            return Err(format!(
+                "{flag} must be 1 to {OPS_TEXT_MAX} characters of plain text"
+            ));
+        }
+        Ok(v)
+    };
+    let subscription_id = text("--id", id)?;
+    let reason = text("--reason", reason)?;
+    let operator = operator.map(|o| text("--operator", Some(o))).transpose()?;
+    if data_dir.is_some() && !dev {
+        return Err("--data-dir needs --dev".to_owned());
+    }
+    Ok(Command::SubscriptionReview(SubscriptionReviewConfig {
+        subscription_id,
+        operator,
+        reason,
+        dev_data_dir: dev.then(|| data_dir.unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_DIR))),
+    }))
+}
+
 /// `ops <subcommand> …`.
 fn parse_ops(mut args: impl Iterator<Item = OsString>) -> Result<Command, String> {
     match args.next().and_then(|a| a.into_string().ok()).as_deref() {
         Some("restore-control") => {}
         Some("grant-comp") => return parse_grant_comp(args),
         Some("price-book") => return parse_price_book(args),
+        Some("subscription") => return parse_subscription(args),
         Some("licence-keygen") => return parse_keygen(args),
         Some("--help" | "-h") => return Ok(Command::Help),
         Some(other) => return Err(format!("unknown ops command {other}")),
         None => {
             return Err(
-                "ops needs a command (restore-control, grant-comp, price-book or licence-keygen)"
+                "ops needs a command (restore-control, grant-comp, price-book, subscription or licence-keygen)"
                     .to_owned(),
             );
         }

@@ -2,7 +2,7 @@
 title: 'Story 11.6: Help centre with setup guides, troubleshooting and compatibility lists'
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 review_loop_iteration: 0
 baseline_revision: '55e54aea'
 context:
@@ -74,6 +74,8 @@ deferred:
 ## Spec Change Log
 
 ## Review Triage Log
+
+- Review (2026-10-31): no blocking findings. Hardened `parseHardware` to reject a duplicate row (the table keys rows by those fields); test added in `scripts/marketing-site.test.mjs`.
 
 ## Verification
 

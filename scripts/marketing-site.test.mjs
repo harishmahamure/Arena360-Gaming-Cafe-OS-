@@ -253,6 +253,7 @@ test("the hardware data file is versioned, has a category field and rejects a ba
     () => parseHardware({ version: 1, rows: [{ ...row, checked: "yesterday" }] }),
     /checked/,
   );
+  assert.throws(() => parseHardware({ version: 1, rows: [row, { ...row }] }), /duplicate/);
   assert.deepEqual(HARDWARE_CATEGORIES, ["printer", "drawer"]);
   const shipped = JSON.parse(
     readFileSync(new URL("../apps/marketing/src/data/hardware.json", import.meta.url), "utf8"),

@@ -166,7 +166,15 @@ export function parseHardware(value: unknown): HardwareFile {
   const file = (value ?? {}) as { version?: unknown; rows?: unknown };
   if (file.version !== 1) throw new Error("hardware.json: version must be 1"); // i18n-ignore
   if (!Array.isArray(file.rows)) throw new Error("hardware.json: rows must be a list"); // i18n-ignore
-  return { version: 1, rows: file.rows.map((row, i) => parseHardwareRow(row, i)) };
+  const rows = file.rows.map((row, i) => parseHardwareRow(row, i));
+  // The table keys each row by these fields, so a repeat would break it in the browser.
+  const seen = new Set<string>();
+  rows.forEach((r, i) => {
+    const id = [r.category, r.brand, r.model, r.connection, r.paper_mm].join("|");
+    if (seen.has(id)) throw new Error(`hardware.json row ${i}: duplicate of an earlier row`); // i18n-ignore
+    seen.add(id);
+  });
+  return { version: 1, rows };
 }
 
 /** "Tested device": printed from on reference hardware with both a Windows and an Android Hub. */

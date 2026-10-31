@@ -21,13 +21,25 @@
   } from "./api";
   import AddOnsPanel from "./AddOnsPanel.svelte";
   import CheckoutSummary from "./CheckoutSummary.svelte";
-  import { CONFIRM_SLOW_MS, checkoutOptions, loadRazorpay } from "./razorpay";
+  import { CONFIRM_POLL_MS, CONFIRM_SLOW_MS, checkoutOptions, loadRazorpay } from "./razorpay";
   import { money, snapshotPrice, type Cycle } from "./tierPrice";
   import { STEP_NAMES, advance, setWizard, stepPath, wizard } from "./wizard.svelte";
 
   type Plan = (typeof PRICING)[number];
   type Phase = "pick" | "summary" | "confirming";
   type Period = Cycle;
+  /**
+   * Upgrade mode (Story 10.5): the same picker and Checkout for a branch whose wizard is over or
+   * running elsewhere. `tier` is what the lock named; `onDone` runs once the entitlement is written.
+   */
+  type Upgrade = {
+    tier: Tier | null;
+    onDone: () => void;
+    onExists: () => void;
+    onBack: () => void;
+  };
+
+  let { upgrade = null }: { upgrade?: Upgrade | null } = $props();
 
   const id = $props.id();
   const PERIODS: { id: Period; label: MessageKey }[] = [
@@ -56,15 +68,18 @@
   let summaryHeading: HTMLElement | null = $state(null);
   let leaving = false;
 
+  const plans = $derived(upgrade ? PRICING.filter((p) => p.key !== "free") : PRICING);
   const optionOf = (key: Tier) => choices?.tiers.find((o) => o.key === key) ?? null;
   const canContinue = $derived(selected !== null && optionOf(selected)?.available === true);
   const cycle: Cycle = $derived(period === "yearly" ? "yearly" : "monthly");
   const band: Band = $derived.by(() => choices?.band ?? "IN");
-  const buyable = $derived(choices?.billing_enabled === true);
+  // A function body, so the flow analysis does not narrow `choices` to its initial `null`.
+  const billingOn = (): boolean => choices?.billing_enabled === true;
+  const buyable = $derived(billingOn());
   /** A paid plan is picked and can be bought: Continue goes to the summary, not to the API. */
   const buying = $derived.by(
     () =>
-      choices?.billing_enabled === true &&
+      billingOn() &&
       (selected === "basic" || selected === "premium") &&
       optionOf(selected)?.available === true,
   );
@@ -73,7 +88,13 @@
     return f.offline ? "onboarding.error.offline" : "onboarding.error.generic";
   }
 
-  async function leaveForCurrentStep(): Promise<boolean> {
+  /** The wizard moved on, or (upgrade mode) the branch already has a subscription. */
+  async function leaveForCurrentStep(code?: string): Promise<boolean> {
+    if (upgrade) {
+      if (code !== "SUBSCRIPTION_EXISTS") return false;
+      upgrade.onExists();
+      return true;
+    }
     const fresh = await getWizard();
     if (!fresh.ok) return false;
     setWizard(fresh.data);
@@ -88,15 +109,21 @@
     if (!res.ok) {
       selected = null;
       choices = null;
-      if (res.error.code === "FORBIDDEN" && (await leaveForCurrentStep())) return;
-      loadError = failure(res);
+      if (res.error.code === "FORBIDDEN" && (await leaveForCurrentStep("FORBIDDEN"))) return;
+      loadError =
+        upgrade && res.error.code === "FORBIDDEN" ? "onboarding.upgrade.forbidden" : failure(res);
       return;
     }
     choices = res.data;
     const current = res.data.current;
     const usable = (key: Tier | null | undefined) =>
       key ? res.data.tiers.some((o) => o.key === key && o.available) : false;
-    if (usable(current)) selected = current ?? null;
+    if (upgrade) {
+      const paid = (key: Tier | null | undefined) => key !== "free" && usable(key);
+      if (!paid(selected)) {
+        selected = paid(upgrade.tier) ? upgrade.tier : paid("basic") ? "basic" : null;
+      }
+    } else if (usable(current)) selected = current ?? null;
     else if (!usable(selected)) selected = res.data.tiers.find((o) => o.available)?.key ?? null;
   }
 
@@ -177,7 +204,7 @@
         return;
       case "SUBSCRIPTION_EXISTS":
       case "FORBIDDEN":
-        if (await leaveForCurrentStep()) return;
+        if (await leaveForCurrentStep(res.error.code)) return;
         formError = failure(res);
         return;
       default:
@@ -206,8 +233,12 @@
     if (!res.ok) {
       paying = false;
       if (res.error.code === "BAND_NOT_AVAILABLE") payError = "pricing.band_unavailable";
-      else if (res.error.code === "SUBSCRIPTION_EXISTS" && (await leaveForCurrentStep())) return;
-      else payError = failure(res);
+      else if (
+        res.error.code === "SUBSCRIPTION_EXISTS" &&
+        (await leaveForCurrentStep("SUBSCRIPTION_EXISTS"))
+      ) {
+        return;
+      } else payError = failure(res);
       return;
     }
     let Razorpay;
@@ -270,6 +301,20 @@
     }
   });
 
+  // Upgrade mode has no wizard to watch: the plan itself is polled until the entitlement shows.
+  $effect(() => {
+    if (!upgrade || phase !== "confirming") return;
+    const timer = setInterval(async () => {
+      if (leaving) return;
+      const res = await getTierChoices();
+      const now = res.ok ? res.data.current : null;
+      if (leaving || (now !== "basic" && now !== "premium")) return;
+      leaving = true;
+      upgrade.onDone();
+    }, CONFIRM_POLL_MS);
+    return () => clearInterval(timer);
+  });
+
   $effect(() => {
     if (phase !== "confirming") return;
     slow = false;
@@ -310,7 +355,7 @@
         await load();
         return;
       case "FORBIDDEN":
-        if (await leaveForCurrentStep()) return;
+        if (await leaveForCurrentStep("FORBIDDEN")) return;
         formError = failure(res);
         return;
       case "ALREADY_SET":
@@ -323,9 +368,13 @@
   }
 </script>
 
-<h1 tabindex="-1">{t(STEP_NAMES.tier)}</h1>
+<h1 tabindex="-1">{upgrade ? t("onboarding.upgrade.title") : t(STEP_NAMES.tier)}</h1>
 {#if phase === "pick"}
-  <p class="intro">{t("onboarding.tier.intro")}</p>
+  <p class="intro">
+    {upgrade
+      ? t("onboarding.upgrade.intro", { branch: wizard.state?.branch?.name ?? "" })
+      : t("onboarding.tier.intro")}
+  </p>
 {/if}
 
 {#if loadError}
@@ -352,13 +401,18 @@
     onchange={change}
     bind:heading={summaryHeading}
   />
+  {#if upgrade}
+    <div class="actions">
+      <Button label="onboarding.upgrade.back" variant="secondary" onclick={upgrade.onBack} />
+    </div>
+  {/if}
 {:else}
   <form class="form" novalidate onsubmit={submit}>
     <TabControl items={PERIODS} label="onboarding.tier.period" bind:selected={period} />
     <fieldset class="plans">
       <legend class="visually-hidden">{t("onboarding.tier.plans")}</legend>
-      <div class="grid">
-        {#each PRICING as plan (plan.key)}
+      <div class="grid" class:two={upgrade !== null}>
+        {#each plans as plan (plan.key)}
           {@const option = optionOf(plan.key)}
           {@const available = option?.available ?? false}
           {@const inputId = `${id}-plan-${plan.key}`}
@@ -431,6 +485,9 @@
         disabled={saving || !canContinue}
         disabledReason={saving ? "onboarding.tier.saving" : "onboarding.tier.choose_first"}
       />
+      {#if upgrade}
+        <Button label="onboarding.upgrade.back" variant="secondary" onclick={upgrade.onBack} />
+      {/if}
     </div>
   </form>
 {/if}
@@ -464,6 +521,10 @@
   @media (min-width: 840px) {
     .grid {
       grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .grid.two {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
 

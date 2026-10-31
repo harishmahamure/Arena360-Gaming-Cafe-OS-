@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Button, Card, t } from "@arena/ui";
+  import { page } from "$app/state";
   import { refresh, shell } from "../../../lib/shell.svelte";
 
   const TIER = {
@@ -7,6 +8,12 @@
     basic: "owner.tier.basic",
     premium: "owner.tier.premium",
   } as const;
+
+  // An Upgrade link for a branch that already has a plan lands here on that branch (Story 10.5).
+  const wanted = $derived(page.url.searchParams.get("branch"));
+  const branches = $derived(
+    [...(shell.branches ?? [])].sort((a, b) => Number(b.id === wanted) - Number(a.id === wanted)),
+  );
 </script>
 
 <svelte:head
@@ -16,8 +23,8 @@
 <h1 class="type-web-display">{t("owner.account.subscription")}</h1>
 {#if shell.branches}
   <ul class="list">
-    {#each shell.branches as b (b.id)}
-      <li>
+    {#each branches as b (b.id)}
+      <li data-testid="subscription-{b.id}" aria-current={b.id === wanted ? "true" : undefined}>
         <Card>
           <h2 class="type-hub-title">{b.name}</h2>
           <p>{t("owner.subscription.tier")}: {t(TIER[b.tier])}</p>

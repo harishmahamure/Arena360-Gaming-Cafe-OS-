@@ -129,6 +129,7 @@ jobs:
       - run: pnpm run check:hex
       - run: pnpm run check:no-blur
       - run: pnpm run check:ads
+      - run: pnpm run check:tier-lock
       - run: pnpm run check:secrets
       - run: pnpm run check:deploy
       - run: pnpm run test:scripts

@@ -100,7 +100,11 @@ test("a refused invite says it couldn't apply and why, and a full licence shows 
   await expect(full.locator('[data-component="tier-lock"]')).toContainText(
     t("staff.tier.available_on", { tier: "Basic" }),
   );
-  await expect(full.getByRole("link")).toHaveCount(0);
+  // Billing is on: the lock links to the upgrade picker for this branch and comes back here.
+  await expect(full.getByRole("link", { name: t("staff.tier.upgrade") })).toHaveAttribute(
+    "href",
+    /^\/upgrade\?tier=basic&branch=01JBRANCH0000000000000000000&return=/,
+  );
 });
 
 test("New code shows a fresh code once", async ({ page }) => {

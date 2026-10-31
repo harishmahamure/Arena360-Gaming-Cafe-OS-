@@ -319,7 +319,7 @@
 {#each locked as b (b.id)}
   <section aria-label={b.name}>
     <h2 class="type-hub-label">{b.name}</h2>
-    <TierLock tier="Basic" />
+    <TierLock tier="Basic" branch={b.id} />
   </section>
 {/each}
 {#each pending as b (b.id)}

@@ -1,10 +1,13 @@
 <script lang="ts">
   import "@arena/ui/base.css";
-  import { ThemeToggle, t } from "@arena/ui";
+  import { ThemeToggle, provideUpgrade, t } from "@arena/ui";
   import { page } from "$app/state";
   import type { Snippet } from "svelte";
 
   let { children }: { children: Snippet } = $props();
+
+  // Every `tier-lock` in the wizard opens the upgrade picker here and comes back to this page.
+  provideUpgrade("", true);
 </script>
 
 <div class="shell">

@@ -170,7 +170,7 @@
           <SetupCard branch={b} />
         {:else if b.tier === "free"}
           <h2 class="type-hub-label">{b.name}</h2>
-          <TierLock tier="Basic" />
+          <TierLock tier="Basic" branch={b.id} />
         {:else}
           <TodayCard branch={b} {now} />
         {/if}

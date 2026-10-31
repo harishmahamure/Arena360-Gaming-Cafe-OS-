@@ -12,7 +12,7 @@
     type ApiFailure,
   } from "./api";
   import { digitsOf, minSec, validPhone, validText } from "./validate";
-  import { advance, setWizard, STEP_NAMES } from "./wizard.svelte";
+  import { advance, setWizard, STEP_NAMES, wizard } from "./wizard.svelte";
 
   const ROLES: Record<InviteRole, MessageKey> = {
     manager: "onboarding.staff.role.manager",
@@ -225,7 +225,10 @@
           </p>
           {#if i.status === "failed"}
             <p class="login">{t(reason(i))}</p>
-            {#if i.error?.code === "USER_LIMIT"}<TierLock tier="Basic" />{/if}
+            {#if i.error?.code === "USER_LIMIT"}<TierLock
+                tier="Basic"
+                branch={wizard.state?.branch?.id}
+              />{/if}
           {:else}
             <Button
               label="onboarding.staff.new_code"

@@ -23,6 +23,7 @@
     "check:no-blur": "node scripts/check-no-blur.mjs",
     "check:no-manifest": "node scripts/check-no-manifest.mjs",
     "check:ads": "node scripts/check-ads.mjs source",
+    "check:tier-lock": "node scripts/check-tier-lock.mjs",
     "check:secrets": "node scripts/check-secrets.mjs",
     "check:deploy": "node scripts/check-deploy.mjs",
     "check:play": "node scripts/play-release.mjs check",
@@ -30,7 +31,7 @@
     "test:scripts": "node --test scripts/*.test.mjs",
     "format:check": "prettier --check .",
     "check:rust": "cargo fmt --check && cargo clippy --locked --workspace --all-targets -- -D warnings",
-    "check": "pnpm run check:rust && pnpm run check:generated && pnpm run format:check && pnpm run check:layers && pnpm run check:pins && pnpm run check:protocol && pnpm run check:strings && pnpm run check:tokens-fresh && pnpm run check:contrast && pnpm run check:tokens-used && pnpm run check:hex && pnpm run check:no-blur && pnpm run check:no-manifest && pnpm run check:ads && pnpm run check:secrets && pnpm run check:deploy && pnpm run check:play && pnpm run check:farm && pnpm run test:scripts"
+    "check": "pnpm run check:rust && pnpm run check:generated && pnpm run format:check && pnpm run check:layers && pnpm run check:pins && pnpm run check:protocol && pnpm run check:strings && pnpm run check:tokens-fresh && pnpm run check:contrast && pnpm run check:tokens-used && pnpm run check:hex && pnpm run check:no-blur && pnpm run check:no-manifest && pnpm run check:ads && pnpm run check:tier-lock && pnpm run check:secrets && pnpm run check:deploy && pnpm run check:play && pnpm run check:farm && pnpm run test:scripts"
   },
   "devDependencies": {
     "prettier": "3.9.10",

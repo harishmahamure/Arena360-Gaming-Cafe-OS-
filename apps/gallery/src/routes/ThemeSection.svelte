@@ -260,7 +260,7 @@
     <h4>{t("gallery.section.tier_lock")}</h4>
     <div class="row">
       <TierLock tier="Basic" />
-      <TierLock tier="Premium" billing />
+      <TierLock tier="Premium" />
     </div>
   </section>
 

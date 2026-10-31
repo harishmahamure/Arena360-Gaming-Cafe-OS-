@@ -1,12 +1,24 @@
 <script lang="ts">
-  import { billingEnabled } from "../billing.js";
   import { t } from "../messages/index.js";
+  import { upgradeContext, upgradeUrl } from "../upgrade.js";
 
+  // `branch` is the cloud id of the branch the lock is about; `href` overrides the picker link.
   let {
     tier,
-    billing = billingEnabled,
-    href = "/account/subscription",
-  }: { tier: "Basic" | "Premium"; billing?: boolean; href?: string } = $props();
+    branch = undefined,
+    href = undefined,
+  }: { tier: "Basic" | "Premium"; branch?: string; href?: string } = $props();
+
+  const ctx = upgradeContext();
+  const link = $derived(
+    href ??
+      upgradeUrl(
+        ctx.base,
+        tier,
+        branch,
+        ctx.returnHere && typeof location !== "undefined" ? location.href : undefined,
+      ),
+  );
 </script>
 
 <p class="lock type-hub-label" data-component="tier-lock">
@@ -14,11 +26,7 @@
     <path d="M5 7V5a3 3 0 0 1 6 0v2h1v7H4V7zm1.5 0h3V5a1.5 1.5 0 0 0-3 0z" />
   </svg>
   <span>{t("staff.tier.available_on", { tier })}</span>
-  {#if billing}
-    <a class="upgrade" {href}>{t("staff.tier.upgrade")}</a>
-  {:else}
-    <span>{t("staff.tier.soon")}</span>
-  {/if}
+  <a class="upgrade" href={link}>{t("staff.tier.upgrade")}</a>
 </p>
 
 <style>

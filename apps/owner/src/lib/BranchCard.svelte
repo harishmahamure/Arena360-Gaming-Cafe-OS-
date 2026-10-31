@@ -320,7 +320,7 @@
             : "owner.branches.backup.waiting"}
         />
       {:else}
-        <TierLock tier="Basic" />
+        <TierLock tier="Basic" branch={branch.id} />
       {/if}
       {#if branch.hub.paired && !replacing}
         <Button label="owner.branches.replace" variant="secondary" onclick={askReplace} />
@@ -347,7 +347,7 @@
     <div class="standby" data-testid="standby">
       <p class="type-hub-label">{t("owner.branches.standby")}</p>
       {#if !standbyOn}
-        <TierLock tier="Premium" />
+        <TierLock tier="Premium" branch={branch.id} />
       {:else if branch.hub.platform === "android"}
         <p>{t("owner.branches.standby.needs_windows")}</p>
       {:else if standbyPaired}

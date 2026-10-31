@@ -43,7 +43,10 @@
 {#if shell.branches?.length}
   {#if isFree()}
     <p class="type-hub-label">{t("owner.branches.add")}</p>
-    <TierLock tier="Basic" />
+    <TierLock
+      tier="Basic"
+      branch={shell.branches.length === 1 ? shell.branches[0]?.id : undefined}
+    />
   {:else}
     <form onsubmit={add}>
       <TextField label="owner.branches.add_name" bind:value={name} required />

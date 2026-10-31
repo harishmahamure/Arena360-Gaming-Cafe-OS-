@@ -5,6 +5,7 @@ import type {
   Band,
   CafeDetails,
   Country,
+  OwnerBranch,
   SessionOwner,
   SetupCommandView,
   GoLiveView,
@@ -15,6 +16,7 @@ import type {
   StaffInviteView,
   SubscriptionCheckout,
   SubscriptionQuote,
+  SubscriptionStatus,
   Tier,
   TierChoices,
   TotpStarted,
@@ -269,6 +271,12 @@ export type Cloud = {
   cancelled: string[];
   nextQuote: Reply[];
   nextSubscribe: Reply[];
+  /** Story 10.5: what `GET /branches/:id/subscription` answers (`null`: 404). */
+  existing: SubscriptionStatus | null;
+  /** The owner's branches, as `GET /branches` lists them. */
+  branchList: OwnerBranch[];
+  /** A branch id the signed-in owner does not own: every request naming it is `FORBIDDEN`. */
+  forbiddenBranch: string | null;
   /** Serve `/v1/wizard/events` as a stream that wakes the wizard on every (re)connect. */
   sse: boolean;
 };
@@ -397,6 +405,9 @@ export async function stubCloud(
     cancelled: [],
     nextQuote: [],
     nextSubscribe: [],
+    existing: null,
+    branchList: [],
+    forbiddenBranch: null,
     sse: false,
   };
   await page.route("**/v1/**", async (route) => {
@@ -499,7 +510,19 @@ export async function stubCloud(
       case "/v1/meta/timezones":
         return fulfil(route, { status: 200, body: TIMEZONES });
       default: {
-        if (url.pathname.startsWith("/v1/wizard") || url.pathname.startsWith("/v1/branches/")) {
+        const named = url.searchParams.get("branch_id");
+        if (
+          cloud.forbiddenBranch &&
+          (named === cloud.forbiddenBranch ||
+            url.pathname.startsWith(`/v1/branches/${cloud.forbiddenBranch}/`))
+        ) {
+          return fulfil(route, { status: 403, body: err("FORBIDDEN") });
+        }
+        if (
+          url.pathname.startsWith("/v1/wizard") ||
+          url.pathname.startsWith("/v1/branches/") ||
+          url.pathname === "/v1/branches"
+        ) {
           if (url.pathname === "/v1/wizard") cloud.wizardLoads += 1;
           const next = cloud.nextWizard.shift();
           if (next) return fulfil(route, next);
@@ -676,6 +699,12 @@ function wizardRoute(cloud: Cloud, path: string, body: unknown, method: string):
   }
   const buying = /^\/v1\/branches\/([^/]+)\/subscription(\/quote)?$/.exec(path);
   if (buying && method === "POST") return subscription(cloud, buying[2] !== undefined, body);
+  if (path === "/v1/branches" && method === "GET") return { status: 200, body: cloud.branchList };
+  if (path.startsWith("/v1/branches/") && path.endsWith("/subscription") && method === "GET") {
+    return cloud.existing
+      ? { status: 200, body: cloud.existing }
+      : { status: 404, body: err("NOT_FOUND") };
+  }
   const starting = /^\/v1\/branches\/([^/]+)\/setup-start(\/retry)?$/.exec(path);
   if (starting) {
     const v = cloud.setupStart;

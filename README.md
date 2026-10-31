@@ -1485,8 +1485,8 @@ state, completed_at)`, which keeps completion times for the sign-up-to-go-live m
   - `GET /v1/wizard/tier[?branch_id=]` → `{tiers: [{key, available, reason?, limits}],
 billing_enabled, current?}`. Free is available unless another branch of the tenant already
     has a Free entitlement (`reason: "one_free_branch"`); Basic and Premium answer
-    `reason: "billing_disabled"` while `ARENA_BILLING_ENABLED` is not `true` (off by default,
-    and never on in Epic 2). `limits` and `current` come from the tier table and the branch's
+    `reason: "billing_disabled"` while `ARENA_BILLING_ENABLED` is not `true` (off by default;
+    `true` is accepted from Story 10.5 and turns paid plans on). `limits` and `current` come from the tier table and the branch's
     entitlement.
   - `PUT /v1/wizard/tier {tier, branch_id?}` → the `GET /v1/wizard` body. Free writes the
     entitlement (tier and source `free`) and marks `tier` done in one transaction; picking it
@@ -1943,7 +1943,7 @@ name}`. **Failures:** every print goes through one dispatch; a failed job is kep
   consent tick is recorded every banner and interstitial request carries `npa=1` (non-personalised); a
   consent change re-requests the banner. The Ads screen also lists what is always excluded and shows the
   consent's time and staff id; it has no control to turn ads off, only "Ads keep Arena 360 free." with an
-  "Upgrade" link (shown as "Available soon" until billing ships, the shared `billingEnabled` flag).
+  "Upgrade" link (the shared `billingEnabled` flag is on from Story 10.5; see the upgrade entry below).
 - **Interstitial (Story 4.13).** One standard AdMob interstitial, and one trigger: a PIN unlock after the
   idle lock. `apps/hub/src/lib/interstitial.ts` (`InterstitialPolicy`) preloads one while the lock
   screen is up (only when no ad-exclusion surface was open at lock time and 15 minutes have passed since
@@ -2089,3 +2089,23 @@ scripts/protect-main.sh owner/repo branch # and the branch
 ```
 
 This needs the GitHub CLI (`gh`) authenticated with admin rights on the repository.
+
+## Upgrade links and Add branch (Story 10.5)
+
+Every `tier-lock` shows a live "Upgrade" link (`packages/ui/src/billing.js` `billingEnabled = true`;
+`pnpm run check:tier-lock` fails if the flag is off, if `staff.tier.soon` ("Available soon") is used again, or if
+`TierLock` stops rendering the link). The link is `<base>/upgrade?tier=<basic|premium>[&branch=<id>][&return=<url>]`,
+built by `upgradeUrl` in `@arena/ui`; each app says where the picker lives with `provideUpgrade(base, returnHere)`
+(the Owner app: `PUBLIC_ONBOARDING_URL`; the sign-up app: itself; the Hub: `https://start.arena360.cloud`, no return).
+
+- **`/upgrade` (sign-up app).** Loads the branch (a branch the session doesn't own is `FORBIDDEN` and no checkout opens),
+  sends a branch that already has a live subscription to the Owner app's Account -> Subscription (`?branch=<id>`),
+  and otherwise opens the Story 10.4 picker (`TierStep` in upgrade mode: Free is not offered, the lock's tier is
+  preselected) and Checkout. Without `branch` the owner's Free branches are offered. After payment the page polls the
+  plan every 5 s and returns to `return` once the entitlement is written; a closed or failed Checkout leaves the owner
+  on the summary with the 10.4 text and "Go back without paying" returns with nothing changed. `return` is followed
+  only on the Owner app or the sign-up app's own origin; anything else lands on the Owner app's home.
+- **Add branch** (a tenant with a paid branch) already creates the branch with the café step done, so the wizard opens at
+  step 2, the same picker and Checkout; Free is refused there while the tenant has a Free branch.
+- **`ARENA_BILLING_ENABLED=true`** is now accepted by `arena-cloud` (it needs the billing provider; without one the
+  subscription endpoints answer 503).

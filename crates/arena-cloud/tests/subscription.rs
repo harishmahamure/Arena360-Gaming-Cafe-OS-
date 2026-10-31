@@ -463,6 +463,55 @@ async fn another_owners_branch_is_forbidden_and_the_provider_untouched() {
     assert!(h.fake().subscriptions().is_empty());
 }
 
+/// Story 10.5: an Upgrade link on a branch already on Free uses the same checkout; the picker's
+/// own reads (`GET /wizard/tier?branch_id=`, the quote) work for that branch and say where it is.
+#[tokio::test]
+async fn a_branch_on_free_upgrades_through_the_same_checkout() {
+    let (h, a, branch) = Harness::owner_with_branch().await;
+    let r = h
+        .call(
+            "PUT",
+            "/v1/wizard/tier",
+            Some(json!({ "tier": "free", "branch_id": branch })),
+            &a,
+        )
+        .await;
+    assert_eq!(r.status, 200);
+    let r = h
+        .call(
+            "GET",
+            &format!("/v1/wizard/tier?branch_id={branch}"),
+            None,
+            &a,
+        )
+        .await;
+    assert_eq!((r.status, r.body["current"].as_str()), (200, Some("free")));
+    assert_eq!(r.body["billing_enabled"], true);
+    let r = h
+        .call(
+            "GET",
+            &format!("/v1/branches/{branch}/subscription"),
+            None,
+            &a,
+        )
+        .await;
+    assert_eq!(r.status, 404);
+    let r = h
+        .subscribe(&branch, &a, request("premium", "yearly", "IN"))
+        .await;
+    assert_eq!((r.status, r.body["state"].as_str()), (201, Some("pending")));
+    // Following the link again for the unpaid subscription repeats the same checkout.
+    let again = h
+        .subscribe(&branch, &a, request("premium", "yearly", "IN"))
+        .await;
+    assert_eq!(again.status, 201);
+    assert_eq!(
+        again.body["razorpay_subscription_id"],
+        r.body["razorpay_subscription_id"]
+    );
+    assert_eq!(h.rows(&branch).await.len(), 1);
+}
+
 #[tokio::test]
 async fn free_and_bad_add_ons_are_refused_before_the_provider() {
     let (h, a, branch) = Harness::owner_with_branch().await;

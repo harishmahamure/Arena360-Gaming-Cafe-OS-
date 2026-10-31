@@ -133,6 +133,9 @@ test("a console is added with a TV number and a full licence shows the tier-lock
   await expect(page.locator("[data-component=tier-lock]")).toContainText(
     t("staff.tier.available_on", { tier: "Basic" }),
   );
+  await expect(
+    page.locator("[data-component=tier-lock]").getByRole("link", { name: t("staff.tier.upgrade") }),
+  ).toHaveAttribute("href", /^\/upgrade\?tier=basic&branch=01JBRANCH0000000000000000000&return=/);
 });
 
 test("bad device details are refused on the page and nothing is sent", async ({ page }) => {

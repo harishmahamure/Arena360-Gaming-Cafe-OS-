@@ -592,9 +592,12 @@ test("Ads lists what is always excluded and offers only G, PG and T, with PG cho
   await expect(ratingRadio(page, en["hub.settings.ads.rating.pg"])).toBeChecked();
   await expect(ratingRadio(page, en["hub.settings.ads.rating.t"])).not.toBeChecked();
   await expect(page.getByText(/MA/)).toHaveCount(0);
-  // Nothing turns ads off: only the plain line, with "Available soon" while billing is off.
-  await expect(page.getByTestId("ads-keep-free")).toHaveText(
-    `${en["hub.settings.ads.keep_free"]} ${en["staff.tier.soon"]}`,
+  // Nothing turns ads off: only the plain line, with an Upgrade link to the picker (Story 10.5).
+  const keepFree = page.getByTestId("ads-keep-free");
+  await expect(keepFree).toContainText(en["hub.settings.ads.keep_free"]);
+  await expect(keepFree.getByRole("link", { name: en["staff.tier.upgrade"] })).toHaveAttribute(
+    "href",
+    /\/upgrade\?tier=basic$/,
   );
   await expect(page.getByRole("switch")).toHaveCount(0);
   await expectNoSeriousAxe(page);

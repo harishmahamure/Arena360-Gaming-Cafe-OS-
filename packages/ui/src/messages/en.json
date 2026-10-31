@@ -1599,7 +1599,6 @@
 
   "staff.tier.available_on": "Available on {tier}",
   "staff.tier.upgrade": "Upgrade",
-  "staff.tier.soon": "Available soon",
   "staff.shift.variance_short": "Counted {counted}. Expected {expected}. Difference {difference} short.",
   "staff.shift.variance_over": "Counted {counted}. Expected {expected}. Difference {difference} over.",
   "staff.shift.variance_even": "Counted {counted}. Expected {expected}. No difference.",
@@ -2468,6 +2467,14 @@
   "onboarding.pay.no_script": "Couldn't open the payment window. Check your connection and try again.",
   "onboarding.pay.confirming": "Confirming your payment…",
   "onboarding.pay.slow": "Your payment is still being confirmed. We'll move you on as soon as it lands.",
+  "onboarding.upgrade.title": "Upgrade your plan",
+  "onboarding.upgrade.intro": "Choose a paid plan for {branch}. You pay with Razorpay and come straight back.",
+  "onboarding.upgrade.back": "Go back without paying",
+  "onboarding.upgrade.forbidden": "You don’t have access to this branch.",
+  "onboarding.upgrade.pick_branch": "Which branch do you want to upgrade?",
+  "onboarding.upgrade.pick_button": "Upgrade {branch}",
+  "onboarding.upgrade.none": "There is no branch on the Free plan to upgrade.",
+  "onboarding.upgrade.done": "Your plan is active. Taking you back…",
 
   "ui.pairing_code.label": "Hub pairing code",
   "ui.pairing_code.single_use": "Single use",

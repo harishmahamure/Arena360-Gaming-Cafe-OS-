@@ -1,5 +1,12 @@
 <script lang="ts">
-  import { Button, InlinePin, billingEnabled, formatDateTime, t } from "@arena/ui";
+  import {
+    Button,
+    DEFAULT_UPGRADE_BASE,
+    InlinePin,
+    formatDateTime,
+    t,
+    upgradeUrl,
+  } from "@arena/ui";
   import type { AdRating, AdsConsent } from "@arena/ui/generated";
   import type { MessageKey } from "@arena/ui/messages";
   import { onMount, untrack } from "svelte";
@@ -407,12 +414,10 @@
     </form>
     <p class="keep-free type-hub-body" data-testid="ads-keep-free">
       <span>{t("hub.settings.ads.keep_free")}</span>
-      {#if billingEnabled}
-        <a class="link ui-interactive" href="/account/subscription">{t("staff.tier.upgrade")}</a>
-        <span>{t("hub.settings.ads.remove_them")}</span>
-      {:else}
-        <span>{t("staff.tier.soon")}</span>
-      {/if}
+      <a class="link ui-interactive" href={upgradeUrl(DEFAULT_UPGRADE_BASE, "Basic")}>
+        {t("staff.tier.upgrade")}
+      </a>
+      <span>{t("hub.settings.ads.remove_them")}</span>
     </p>
   {/if}
 </section>

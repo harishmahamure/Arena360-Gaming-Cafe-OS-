@@ -115,7 +115,7 @@ environment (not with --dev):
                           (--dev: the recorded fake)
   ARENA_RAZORPAY_KEY_ID, ARENA_RAZORPAY_KEY_SECRET  the Razorpay API keys; ARENA_RAZORPAY_API_BASE
                           (optional) the API base
-  ARENA_BILLING_ENABLED   unset or false: billing is not available in this build (true exits 64)
+  ARENA_BILLING_ENABLED   true: paid plans can be bought (needs the billing provider); unset or false: Free only
   ARENA_KEK_ESCROW_KEY    the AGE-SECRET-KEY-1... private half of the branch key escrow (a SOPS secret):
                           opens the escrowed branch key to release it to a replacement Hub. Unset: the
                           owner's Approve of a key release answers STEP_NOT_READY
@@ -1143,9 +1143,7 @@ impl AuthConfig {
 fn billing_enabled(env: &impl Fn(&str) -> Option<OsString>) -> Result<bool, String> {
     match get_env(env, BILLING_ENABLED_ENV).as_deref() {
         None | Some("") | Some("false") => Ok(false),
-        Some("true") => Err(format!(
-            "{BILLING_ENABLED_ENV}=true: billing is not available in this build"
-        )),
+        Some("true") => Ok(true),
         Some(_) => Err(format!("{BILLING_ENABLED_ENV} must be true or false")),
     }
 }
@@ -1564,10 +1562,9 @@ mod auth_tests {
         assert!(!e.contains("MC4C"), "{e}");
         let mut on = licence_pairs();
         on.push(("ARENA_BILLING_ENABLED", "true"));
-        let e = with(on).unwrap_err();
-        assert!(e.contains("billing is not available in this build"), "{e}");
-        let e = auth_from_env(true, &env_of(&[("ARENA_BILLING_ENABLED", "true")])).unwrap_err();
-        assert!(e.contains("billing is not available in this build"), "{e}");
+        assert!(with(on).unwrap().billing_enabled);
+        let dev_on = auth_from_env(true, &env_of(&[("ARENA_BILLING_ENABLED", "true")])).unwrap();
+        assert!(dev_on.billing_enabled);
         let mut off = licence_pairs();
         off.push(("ARENA_BILLING_ENABLED", "false"));
         assert!(!with(off).unwrap().billing_enabled);

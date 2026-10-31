@@ -128,7 +128,7 @@
     {#if entry === "platform" || platform}
       <p>{t("owner.live.needs_windows")}</p>
     {:else if entry === "tier" || tier}
-      <TierLock tier="Premium" />
+      <TierLock tier="Premium" branch={picked?.id} />
     {:else if view === "offline"}
       <Card>
         <div class="offline" role="status">

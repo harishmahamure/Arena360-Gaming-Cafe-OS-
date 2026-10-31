@@ -61,7 +61,7 @@
           {#if !isLive(b)}
             <SetupGate branch={b} />
           {:else}
-            <TierLock tier="Basic" />
+            <TierLock tier="Basic" branch={b.id} />
           {/if}
         </li>
       {/each}

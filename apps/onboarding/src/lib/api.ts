@@ -13,6 +13,7 @@ import type {
   CreateSubscription,
   ErrorCode,
   InstallHubState,
+  OwnerBranch,
   PairingCodeIssued,
   QuoteSubscription,
   SessionInfo,
@@ -27,6 +28,7 @@ import type {
   StaffInvites,
   SubscriptionCheckout,
   SubscriptionQuote,
+  SubscriptionStatus,
   SignupChallenge,
   SignupStart,
   SignupVerified,
@@ -245,6 +247,11 @@ const subscriptionPath = (branchId: string) =>
 /** The cloud's price for a choice (Story 10.4): the band is the branch country's. */
 export const quoteSubscription = (branchId: string, choice: QuoteSubscription) =>
   withRefresh(() => call<SubscriptionQuote>("POST", subscriptionPath(branchId) + "/quote", choice));
+/** Where the branch’s subscription stands; 404 when it has none (Story 10.5). */
+export const getSubscriptionStatus = (branchId: string) =>
+  withRefresh(() => call<SubscriptionStatus>("GET", subscriptionPath(branchId)));
+/** The owner’s branches, for the upgrade page when a link names none. */
+export const listBranches = () => withRefresh(() => call<OwnerBranch[]>("GET", "/branches"));
 /** Starts (or, for the same unpaid choice, repeats) the branch's subscription and answers Checkout's parameters. */
 export const createSubscription = (branchId: string, body: CreateSubscription) =>
   withRefresh(() => call<SubscriptionCheckout>("POST", subscriptionPath(branchId), body));

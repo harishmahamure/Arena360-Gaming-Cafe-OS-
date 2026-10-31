@@ -161,8 +161,10 @@ test("the list shows name, role and status with the used count, and a full Free 
   );
   const lock = page.getByTestId("staff-limit").locator("[data-component=tier-lock]");
   await expect(lock).toContainText("Available on Basic");
-  await expect(lock).toContainText(en["staff.tier.soon"]);
-  await expect(lock.getByRole("link", { name: en["staff.tier.upgrade"] })).toHaveCount(0);
+  await expect(lock.getByRole("link", { name: en["staff.tier.upgrade"] })).toHaveAttribute(
+    "href",
+    /\/upgrade\?tier=basic$/,
+  );
   await expectNoSeriousAxe(page);
 });
 

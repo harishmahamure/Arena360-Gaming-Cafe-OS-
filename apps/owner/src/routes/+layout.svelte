@@ -1,6 +1,7 @@
 <script lang="ts">
   import "@arena/ui/base.css";
-  import { StatusBadge, t } from "@arena/ui";
+  import { StatusBadge, provideUpgrade, t } from "@arena/ui";
+  import { PUBLIC_ONBOARDING_URL } from "$app/env/public";
   import type { MessageKey } from "@arena/ui/messages";
   import { page } from "$app/state";
   import { onMount, type Snippet } from "svelte";
@@ -9,6 +10,9 @@
   import { age, refresh, shell } from "../lib/shell.svelte";
 
   let { children }: { children: Snippet } = $props();
+
+  // Every `tier-lock` opens the upgrade picker on the sign-up app and comes back to the page it was on.
+  provideUpgrade(PUBLIC_ONBOARDING_URL, true);
 
   const NAV = [
     {

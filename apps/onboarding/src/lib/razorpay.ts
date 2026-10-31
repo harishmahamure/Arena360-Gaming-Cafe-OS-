@@ -10,6 +10,9 @@ export const CHECKOUT_SRC = "https://checkout.razorpay.com/v1/checkout.js";
 /** How long a paid owner waits before being told the confirmation is slow. */
 export const CONFIRM_SLOW_MS = 120_000;
 
+/** How often an upgrade (which has no wizard to watch) asks whether the plan has landed. */
+export const CONFIRM_POLL_MS = 5000;
+
 export type RazorpayOptions = {
   key: string;
   subscription_id: string;

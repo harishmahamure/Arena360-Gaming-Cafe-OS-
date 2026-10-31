@@ -60,6 +60,11 @@ test("on Free, Add branch and Standby are locked; on paid, Add branch is a form"
   await expect(page.getByText(t("staff.tier.available_on", { tier: "Basic" }))).toHaveCount(2);
   await expect(page.getByText(t("staff.tier.available_on", { tier: "Premium" }))).toHaveCount(1);
   await expect(page.getByRole("button", { name: t("owner.branches.add") })).toHaveCount(0);
+  // Every lock links to the picker for the one Free branch; the Standby lock asks for Premium.
+  const links = page.getByRole("link", { name: t("staff.tier.upgrade") });
+  await expect(links).toHaveCount(3);
+  await expect(links.first()).toHaveAttribute("href", /tier=basic&branch=b1&return=/);
+  await expect(links.nth(1)).toHaveAttribute("href", /tier=premium&branch=b1&return=/);
   await page.unroute("**/v1/**");
   await stubCloud(page, PAID);
   await page.reload();

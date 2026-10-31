@@ -85,14 +85,29 @@ test("Support shows a mailto link and calls no API", async ({ page }) => {
   );
 });
 
-test("on Free the four data sections show only the tier-lock, with no Upgrade link", async ({
+test("Account -> Subscription opens on the branch an Upgrade link named", async ({ page }) => {
+  await stubCloud(page);
+  await page.goto("/account/subscription?branch=b2");
+  const rows = page.locator("[data-testid^=subscription-]");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.first()).toHaveAttribute("data-testid", "subscription-b2");
+  await expect(rows.first()).toHaveAttribute("aria-current", "true");
+  await expect(rows.last()).not.toHaveAttribute("aria-current", "true");
+});
+
+test("on Free the four data sections show only the tier-lock, with an Upgrade link to the picker", async ({
   page,
 }) => {
   const calls = await stubCloud(page, FREE);
   for (const k of ["today", "reports", "alerts", "manage"] as const) {
     await page.goto(k === "today" ? "/" : `/${k}`);
     await expect(page.getByText(t("staff.tier.available_on", { tier: "Basic" }))).toBeVisible();
-    await expect(page.getByRole("link", { name: /upgrade/i })).toHaveCount(0);
+    const upgrade = page.getByRole("link", { name: t("staff.tier.upgrade") });
+    await expect(upgrade).toHaveCount(1);
+    await expect(upgrade).toHaveAttribute(
+      "href",
+      /^https:\/\/start\.arena360\.cloud\/upgrade\?tier=basic&branch=b1&return=/,
+    );
     await expect(page.getByText(t("owner.section.soon"))).toHaveCount(0);
   }
   await page.goto("/account/subscription");
@@ -132,7 +147,11 @@ test("a mixed tenant locks the Free branch and leaves the paid branch working", 
     await expect(free.getByText(t("staff.tier.available_on", { tier: "Basic" }))).toBeVisible();
     await expect(free.getByText(t("owner.section.soon"))).toHaveCount(0);
     await expect(free.getByText(t("owner.today.revenue"))).toHaveCount(0);
-    await expect(page.getByRole("link", { name: /upgrade/i })).toHaveCount(0);
+    // Only the Free branch is locked, and its Upgrade link names it.
+    await expect(page.getByRole("link", { name: t("staff.tier.upgrade") })).toHaveAttribute(
+      "href",
+      /tier=basic&branch=b2&return=/,
+    );
   }
   // Reports picks from the paid branches and locks the Free one beside it.
   await page.goto("/reports");

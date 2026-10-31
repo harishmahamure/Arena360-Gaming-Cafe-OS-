@@ -153,7 +153,10 @@ test("without the tunnel flag Live view is the tier lock, and so is the cloud's 
   const calls = await stubCloud(page, [NO_FLAG]);
   await page.goto("/live");
   await expect(page.getByText(t("staff.tier.available_on", { tier: "Premium" }))).toBeVisible();
-  await expect(page.getByRole("link", { name: t("staff.tier.upgrade") })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: t("staff.tier.upgrade") })).toHaveAttribute(
+    "href",
+    /tier=premium&branch=/,
+  );
   expect(calls.bodies["live"]).toBeUndefined();
 
   // The licence moved on since the branch list was read: the cloud says so.

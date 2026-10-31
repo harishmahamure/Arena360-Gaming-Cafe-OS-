@@ -278,7 +278,10 @@
   <h2 id="devices-add">{t("hub.devices.title")}</h2>
   {#each formRefusals("device.register") as r (r.key)}
     <p class="form-error" role="alert">⚠ {t(reason(r))}</p>
-    {#if r.error.code === "DEVICE_LIMIT"}<TierLock tier="Basic" />{/if}
+    {#if r.error.code === "DEVICE_LIMIT"}<TierLock
+        tier="Basic"
+        branch={wizard.state?.branch?.id}
+      />{/if}
   {/each}
   <form bind:this={deviceForm} onsubmit={addDevice} novalidate data-testid="device-form">
     <label class="field">

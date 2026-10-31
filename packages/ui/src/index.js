@@ -9,6 +9,7 @@ export { default as Card } from "./components/Card.svelte";
 export { default as BillBreakdown } from "./components/BillBreakdown.svelte";
 export { default as TierLock } from "./components/TierLock.svelte";
 export { billingEnabled } from "./billing.js";
+export { DEFAULT_UPGRADE_BASE, provideUpgrade, upgradeUrl } from "./upgrade.js";
 export { default as TabControl } from "./components/TabControl.svelte";
 export { default as InlinePin } from "./components/InlinePin.svelte";
 export { default as ReasonPicker } from "./components/ReasonPicker.svelte";

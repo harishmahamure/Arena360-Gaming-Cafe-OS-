@@ -32,7 +32,7 @@
   <p>{t("owner.unavailable")}</p>
   <Button label="common.retry" variant="secondary" onclick={refresh} />
 {:else if locked}
-  <TierLock tier="Basic" />
+  <TierLock tier="Basic" branch={shell.branches.length === 1 ? shell.branches[0]?.id : undefined} />
 {:else if mixed && scope === "branch"}
   <ul class="branches">
     {#each shell.branches as b (b.id)}
@@ -41,7 +41,7 @@
         {#if !isLive(b)}
           <SetupGate branch={b} />
         {:else if b.tier === "free"}
-          <TierLock tier="Basic" />
+          <TierLock tier="Basic" branch={b.id} />
         {:else}
           {@render body()}
         {/if}

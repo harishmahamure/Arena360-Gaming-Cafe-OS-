@@ -55,8 +55,7 @@ test("tier-lock reads in text in every theme and its Upgrade link is a 44 px tar
     const locks = page.locator(`[data-theme="${theme}"] [data-component="tier-lock"]`);
     await expect(locks).toHaveCount(2);
     await expect(locks.first()).toContainText("Available on Basic");
-    await expect(locks.first()).toContainText("Available soon");
-    await expect(locks.first().getByRole("link")).toHaveCount(0);
+    await expect(locks.first().getByRole("link", { name: "Upgrade" })).toHaveCount(1);
     const upgrade = locks.last().getByRole("link", { name: "Upgrade" });
     const box = await upgrade.boundingBox();
     expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);

@@ -4346,3 +4346,501 @@ async fn a_credit_note_gets_a_pdf_but_no_invoice_ready_alert() {
     let out = render_once(&h.st, &store).await.unwrap();
     assert_eq!((out.rendered, out.notified, out.failed), (0, 0, 0));
 }
+
+// ---- Story 10.20: the whole subscription life cycle, walked in every price band ----
+
+/// Writes a proof's figures to `$ARENA_PROOF_OUT/<name>.json` when the release bench asks for it
+/// (Story 10.20); the report fails the release when a file is missing.
+fn record_proof(name: &str, value: &Value) {
+    if let Ok(dir) = std::env::var("ARENA_PROOF_OUT") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(format!("{dir}/{name}.json"), value.to_string()).unwrap();
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Band {
+    country: &'static str,
+    currency: &'static str,
+}
+
+const BANDS: [Band; 4] = [
+    Band {
+        country: "IN",
+        currency: "INR",
+    },
+    Band {
+        country: "MY",
+        currency: "MYR",
+    },
+    Band {
+        country: "SG",
+        currency: "SGD",
+    },
+    Band {
+        country: "US",
+        currency: "USD",
+    },
+];
+
+impl Band {
+    fn gst(self) -> bool {
+        self.country == "IN"
+    }
+
+    /// A card of the band's own country, as Razorpay describes it.
+    fn card(self, last4: &str, amount: Option<i64>) -> Value {
+        let mut c = json!({
+            "id": "pay_1", "method": "card",
+            "card": {"international": !self.gst(), "last4": last4},
+        });
+        if let Some(a) = amount {
+            c["amount"] = json!(a);
+        }
+        c
+    }
+}
+
+/// The figures every invoice must satisfy: parts add up, GST only on band IN, at 18% half-up.
+fn assert_invoice_totals(inv: &Invoice, band: Band) {
+    let tax = inv.cgst_minor + inv.sgst_minor + inv.igst_minor;
+    assert_eq!(inv.subtotal_minor + tax, inv.total_minor, "{}", inv.number);
+    assert_eq!(inv.currency, band.currency, "{}", inv.number);
+    if band.gst() {
+        assert_eq!(tax, (inv.subtotal_minor * 18 + 50) / 100, "{}", inv.number);
+    } else {
+        assert_eq!(tax, 0, "{}: an export is zero-rated", inv.number);
+    }
+}
+
+impl Harness {
+    /// A branch of `band` with a `pending` subscription (`sub_fake_001`) and a paired Free hub.
+    async fn banded(band: Band, tier: &str, cycle: &str) -> (Self, String, String, String, String) {
+        let h = Self::with_billing(true).await;
+        let a = h.owner(PHONE_A, "Pixel Arena Gaming").await;
+        let branch = h.cafe_done(&a).await;
+        h.sql(&format!(
+            "UPDATE billing_bands SET enabled = 1 WHERE band = '{0}'; \
+             UPDATE branches SET country = '{0}'",
+            band.country
+        ));
+        h.choose_free(&a).await;
+        let token = h.hub_token(&a).await;
+        let r = h
+            .subscribe(
+                &branch,
+                &a,
+                json!({"tier": tier, "cycle": cycle, "billing_country": band.country}),
+            )
+            .await;
+        assert_eq!(r.status, 201, "{}: {}", band.country, r.body);
+        assert_eq!(r.body["band"], band.country);
+        assert_eq!(r.body["currency"], band.currency);
+        assert_eq!(r.body["tax_minor"].as_i64() == Some(0), !band.gst());
+        let id = r.body["subscription_id"].as_str().unwrap().to_owned();
+        (h, a, branch, id, token)
+    }
+
+    /// `banded`, then the first payment: `active`, entitled, with the paid licence delivered.
+    async fn banded_paid(
+        band: Band,
+        tier: &str,
+        cycle: &str,
+    ) -> (Self, String, String, String, String) {
+        let (h, a, branch, id, token) = Self::banded(band, tier, cycle).await;
+        let r = h
+            .send(
+                "evt_first",
+                &paid_event("sub_fake_001", PERIOD_END, band.card("4242", None)),
+            )
+            .await;
+        assert_eq!(r.body["status"], "applied", "{}: {}", band.country, r.body);
+        let want = if tier == "premium" {
+            arena_proto::Tier::Premium
+        } else {
+            arena_proto::Tier::Basic
+        };
+        assert_eq!(h.licence_tier(&token).await, want);
+        (h, a, branch, id, token)
+    }
+
+    async fn entitled(&self, branch: &str) -> (arena_proto::Tier, arena_proto::EntitlementSource) {
+        let e = self.db.entitlement(branch).await.unwrap().unwrap();
+        (e.tier, e.source)
+    }
+}
+
+async fn walk_the_billing_life_cycle(band: Band) {
+    use arena_proto::{EntitlementSource::Paid, Tier::*};
+    let c = band.country;
+    let (h, a, branch, id, token) = Harness::banded(band, "basic", "monthly").await;
+    assert_eq!(
+        h.only(&branch).await.state,
+        SubscriptionState::Pending,
+        "{c}"
+    );
+
+    // Activate: the first charge entitles Basic; a repeat and an older `activated` change nothing.
+    let first = paid_event("sub_fake_001", PERIOD_END, band.card("4242", None));
+    assert_eq!(h.send("evt_first", &first).await.body["status"], "applied");
+    assert_eq!(
+        h.send("evt_first", &first).await.body["status"],
+        "duplicate"
+    );
+    let older = event(
+        "subscription.activated",
+        "sub_fake_001",
+        PERIOD_END - 86_400,
+        None,
+    );
+    assert_ne!(
+        h.send("evt_older", &older).await.body["status"],
+        "applied",
+        "{c}"
+    );
+    let s = h.only(&branch).await;
+    assert_eq!(
+        (s.state, s.current_period_end),
+        (SubscriptionState::Active, Some(END_MS))
+    );
+    assert_eq!(h.entitled(&branch).await, (Basic, Paid), "{c}");
+    assert_eq!(h.licence_tier(&token).await, Basic, "{c}");
+    let invoices = h.invoices().await;
+    assert_eq!(invoices.len(), 1, "{c}");
+    assert_invoice_totals(&invoices[0], band);
+
+    // Upgrade to Premium with proration: previewed, charged, applied on Razorpay's confirmation.
+    let rev = h.rev(&branch).await;
+    let r = h
+        .change(
+            &branch,
+            &a,
+            "/preview",
+            json!({"tier": "premium", "rev": rev}),
+        )
+        .await;
+    assert_eq!(r.status, 200, "{c}: {}", r.body);
+    let charge = r.body["charge_total_minor"].as_i64().unwrap();
+    let subtotal = r.body["charge_amount_minor"].as_i64().unwrap();
+    assert!(
+        charge > 0 && subtotal > 0 && r.body["days_left"].as_i64().unwrap() > 0,
+        "{c}"
+    );
+    let r = h
+        .change(&branch, &a, "", json!({"tier": "premium", "rev": rev}))
+        .await;
+    assert_eq!(r.status, 200, "{c}: {}", r.body);
+    assert_eq!(
+        h.entitled(&branch).await,
+        (Basic, Paid),
+        "nothing is entitled before the charge"
+    );
+    let up = paid_event("sub_fake_001", PERIOD_END, band.card("4242", Some(charge)));
+    assert_eq!(h.send("evt_up", &up).await.body["status"], "applied", "{c}");
+    assert_eq!(
+        h.send("evt_up", &up).await.body["status"],
+        "duplicate",
+        "{c}"
+    );
+    let s = h.only(&branch).await;
+    assert_eq!(
+        (s.tier, s.state),
+        (Premium, SubscriptionState::Active),
+        "{c}"
+    );
+    assert_eq!(
+        s.current_period_end,
+        Some(END_MS),
+        "{c}: the period did not move"
+    );
+    assert_eq!(h.entitled(&branch).await, (Premium, Paid), "{c}");
+    assert_eq!(h.licence_tier(&token).await, Premium, "{c}");
+    let inv = &h.db.invoices_for_event("evt_up").await.unwrap()[0];
+    assert_eq!(
+        (inv.subtotal_minor, inv.total_minor),
+        (subtotal, charge),
+        "{c}"
+    );
+    assert_invoice_totals(inv, band);
+    assert_eq!(
+        h.invoices().await.len(),
+        2,
+        "{c}: the repeat invoiced nothing"
+    );
+
+    // Switch to yearly: the same row, a new Razorpay subscription, Premium yearly never on UPI.
+    let rev = h.rev(&branch).await;
+    let r = h
+        .cycle(
+            &branch,
+            &a,
+            "/preview",
+            json!({"cycle": "yearly", "rev": rev}),
+        )
+        .await;
+    assert_eq!(r.status, 200, "{c}: {}", r.body);
+    let charge = r.body["charge_total_minor"].as_i64().unwrap();
+    let r = h
+        .cycle(&branch, &a, "", json!({"cycle": "yearly", "rev": rev}))
+        .await;
+    assert_eq!(r.status, 200, "{c}: {}", r.body);
+    let methods = r.body["checkout"]["methods"].as_array().unwrap().clone();
+    assert!(
+        !methods.iter().any(|m| m == "upi"),
+        "{c}: UPI offered for Premium yearly: {methods:?}"
+    );
+    let year = paid_event("sub_fake_m001", YEAR_OUT, band.card("1111", Some(charge)));
+    assert_eq!(
+        h.send("evt_year", &year).await.body["status"],
+        "applied",
+        "{c}"
+    );
+    let late_old = paid_event(
+        "sub_fake_001",
+        PERIOD_END + 31 * 86_400,
+        band.card("4242", None),
+    );
+    assert_ne!(
+        h.send("evt_old", &late_old).await.body["status"],
+        "applied",
+        "{c}"
+    );
+    let s = h.only(&branch).await;
+    assert_eq!(s.id, id, "{c}: the same subscription row");
+    assert_eq!(
+        (s.cycle, s.tier, s.current_period_end),
+        (
+            arena_proto::BillingCycle::Yearly,
+            Premium,
+            Some(YEAR_OUT * 1000)
+        ),
+        "{c}"
+    );
+    assert_invoice_totals(&h.db.invoices_for_event("evt_year").await.unwrap()[0], band);
+    assert_eq!(h.licence_tier(&token).await, Premium, "{c}");
+    let yearly_end = YEAR_OUT * 1000;
+
+    // Renewal needs approval: nothing is taken away; the period end moves it to grace.
+    let ask = sub_event("subscription.renewal_needs_approval", "sub_fake_m001");
+    assert_eq!(
+        h.send("evt_ask", &ask).await.body["status"],
+        "applied",
+        "{c}"
+    );
+    assert_eq!(
+        h.send("evt_ask", &ask).await.body["status"],
+        "duplicate",
+        "{c}"
+    );
+    assert_eq!(
+        h.state_of(&branch).await,
+        SubscriptionState::RenewalNeedsApproval,
+        "{c}"
+    );
+    assert_eq!(h.entitled(&branch).await, (Premium, Paid), "{c}");
+    h.set_now(yearly_end - 1);
+    assert_eq!(sweep_once(&h.st).await.unwrap().graced, 0, "{c}");
+    h.set_now(yearly_end);
+    let out = sweep_once(&h.st).await.unwrap();
+    assert_eq!((out.graced, out.lapsed, out.failed), (1, 0, 0), "{c}");
+    let s = h.only(&branch).await;
+    assert_eq!(s.state, SubscriptionState::Grace, "{c}");
+    assert_eq!(s.grace_until, Some(yearly_end + GRACE_DAYS * DAY_MS), "{c}");
+    assert_eq!(
+        h.entitled(&branch).await,
+        (Premium, Paid),
+        "{c}: the licence stays through grace"
+    );
+
+    // Recovery: the retried charge returns it to Active from the original renewal date, once.
+    h.set_now(yearly_end + 3 * DAY_MS);
+    let next_end = YEAR_OUT + 365 * 86_400;
+    let retry = paid_event("sub_fake_m001", next_end, band.card("1111", None));
+    assert_eq!(
+        h.send("evt_retry", &retry).await.body["status"],
+        "applied",
+        "{c}"
+    );
+    let stale = paid_event("sub_fake_m001", YEAR_OUT, band.card("1111", None));
+    assert_eq!(
+        h.send("evt_stale", &stale).await.body["status"],
+        "recorded",
+        "{c}"
+    );
+    let s = h.only(&branch).await;
+    assert_eq!(
+        (s.state, s.grace_until, s.current_period_end),
+        (SubscriptionState::Active, None, Some(next_end * 1000)),
+        "{c}"
+    );
+    assert_eq!(h.entitled(&branch).await, (Premium, Paid), "{c}");
+    assert_eq!(sweep_once(&h.st).await.unwrap().lapsed, 0, "{c}");
+    assert_invoice_totals(
+        &h.db.invoices_for_event("evt_retry").await.unwrap()[0],
+        band,
+    );
+
+    // Grace to lapse: the next renewal is not approved or paid.
+    let ask2 = sub_event("subscription.renewal_needs_approval", "sub_fake_m001");
+    assert_eq!(
+        h.send("evt_ask2", &ask2).await.body["status"],
+        "applied",
+        "{c}"
+    );
+    h.set_now(next_end * 1000);
+    assert_eq!(sweep_once(&h.st).await.unwrap().graced, 1, "{c}");
+    let until = next_end * 1000 + GRACE_DAYS * DAY_MS;
+    h.set_now(until - 1);
+    assert_eq!(sweep_once(&h.st).await.unwrap().lapsed, 0, "{c}");
+    h.set_now(until);
+    let out = sweep_once(&h.st).await.unwrap();
+    assert_eq!((out.graced, out.lapsed, out.failed), (0, 1, 0), "{c}");
+    assert_eq!(h.state_of(&branch).await, SubscriptionState::Lapsed, "{c}");
+    assert_eq!(
+        h.entitled(&branch).await,
+        (Free, arena_proto::EntitlementSource::Free),
+        "{c}"
+    );
+    assert_eq!(h.licence_tier(&token).await, Free, "{c}");
+    let late = paid_event(
+        "sub_fake_m001",
+        next_end + 400 * 86_400,
+        band.card("1111", None),
+    );
+    assert_eq!(
+        h.send("evt_late", &late).await.body["status"],
+        "recorded",
+        "{c}"
+    );
+    assert_eq!(h.state_of(&branch).await, SubscriptionState::Lapsed, "{c}");
+
+    // The audit trail names every step, in order.
+    let states: Vec<_> =
+        h.db.subscription_history(&id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.new_state)
+            .collect();
+    assert_eq!(
+        states,
+        [
+            "active", // the first charge
+            "active", // the upgrade
+            "active", // the cycle switch
+            "renewal_needs_approval",
+            "grace",
+            "active",
+            "renewal_needs_approval",
+            "grace",
+            "lapsed"
+        ],
+        "{c}"
+    );
+}
+
+#[tokio::test]
+async fn each_band_walks_create_activate_upgrade_cycle_approval_grace_recovery_and_lapse() {
+    for band in BANDS {
+        walk_the_billing_life_cycle(band).await;
+    }
+    record_proof(
+        "billing-walk",
+        &json!({
+            "bands": BANDS.map(|b| b.country),
+            "steps": [
+                "create", "activate", "upgrade", "cycle", "approval", "grace", "recovery", "lapse"
+            ],
+        }),
+    );
+}
+
+#[tokio::test]
+async fn each_band_cancels_to_the_period_end_and_then_drops_to_free() {
+    use arena_proto::Tier::{Basic, Free};
+    for band in BANDS {
+        let c = band.country;
+        let (h, a, branch, _id, token) = Harness::banded_paid(band, "basic", "monthly").await;
+        h.stepped_up();
+        let rev = h.only(&branch).await.rev;
+        assert_eq!(h.cancel_call(&branch, &a, "", rev).await.status, 204, "{c}");
+        assert_eq!(
+            h.entitled(&branch).await.0,
+            Basic,
+            "{c}: the plan runs to the end"
+        );
+        h.set_now(END_MS - 1);
+        assert_eq!(sweep_once(&h.st).await.unwrap().ended, 0, "{c}");
+        assert_eq!(h.licence_tier(&token).await, Basic, "{c}");
+        h.set_now(END_MS);
+        let out = sweep_once(&h.st).await.unwrap();
+        assert_eq!(
+            (out.graced, out.lapsed, out.ended),
+            (0, 0, 1),
+            "{c}: no grace after a cancel"
+        );
+        assert_eq!(h.state_of(&branch).await, SubscriptionState::Ended, "{c}");
+        assert_eq!(h.entitled(&branch).await.0, Free, "{c}");
+        assert_eq!(h.licence_tier(&token).await, Free, "{c}");
+    }
+    record_proof(
+        "billing-cancel",
+        &json!({"bands": BANDS.map(|b| b.country)}),
+    );
+}
+
+#[tokio::test]
+async fn each_band_refunds_within_seven_days_and_issues_a_credit_note_for_the_whole_invoice() {
+    use arena_proto::Tier::Free;
+    for band in BANDS {
+        let c = band.country;
+        let (h, a, branch, _id, token) = Harness::banded_paid(band, "basic", "monthly").await;
+        h.stepped_up();
+        let total = h.paid_total(&branch).await;
+        let original = h.invoices().await.pop().unwrap();
+        assert_eq!(total, original.total_minor, "{c}");
+        let rev = h.only(&branch).await.rev;
+        let r = h.refund_call(&branch, &a, json!({ "rev": rev })).await;
+        assert_eq!(r.status, 204, "{c}: {}", r.body);
+        let req = h.refund_of(&branch).await;
+        h.approve(&req.id).await.unwrap();
+        assert_eq!(h.fake().refunded(), [("pay_1".to_owned(), total)], "{c}");
+        let r = h.refund_processed("evt_refund", "pay_1", total).await;
+        assert_eq!(r.body["status"], "refunded", "{c}: {}", r.body);
+        assert_eq!(
+            h.state_of(&branch).await,
+            SubscriptionState::Refunded,
+            "{c}"
+        );
+        assert_eq!(h.entitled(&branch).await.0, Free, "{c}");
+        assert_eq!(h.licence_tier(&token).await, Free, "{c}");
+        let all = h.invoices().await;
+        let note = all
+            .iter()
+            .find(|i| i.kind == "credit_note")
+            .expect("a credit note");
+        assert_eq!(
+            note.original_number.as_deref(),
+            Some(original.number.as_str()),
+            "{c}"
+        );
+        assert_eq!(
+            (note.subtotal_minor, note.total_minor),
+            (original.subtotal_minor, original.total_minor),
+            "{c}"
+        );
+        assert_invoice_totals(note, band);
+        // A repeat of the event adds no second note.
+        let again = h.refund_processed("evt_refund", "pay_1", total).await;
+        assert_eq!(again.body["status"], "duplicate", "{c}");
+        assert_eq!(
+            h.count("SELECT COUNT(*) FROM billing_invoices WHERE kind = 'credit_note'"),
+            1,
+            "{c}"
+        );
+    }
+    record_proof(
+        "billing-refund",
+        &json!({"bands": BANDS.map(|b| b.country)}),
+    );
+}

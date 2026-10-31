@@ -30,6 +30,12 @@ name: Release benchmark
 # artefact and the logs for the seeded names, phones and emails, times the export of a 1 GB
 # database and merges the results (scripts/restore-drill-report.mjs); any failure or missing result
 # fails the job and so the release. See docs/runbooks/restore-drill.md.
+# `billing-proof` (Story 10.20) walks every price band through the subscription life cycle on the
+# Razorpay fake and a movable cloud clock (create to lapse, cancel, 7-day refund and credit note),
+# runs the Premium to Basic to Free downgrade of the 10-session café, and moves a Free Android Hub
+# with 30 days of history, 5 live sessions and 20 kiosks to a Windows Hub over the LAN and by file.
+# `billing-report` merges the results (scripts/billing-report.mjs); any failed test or missing result
+# fails the job and so the release. See docs/runbooks/billing-bench.md.
 # The `soak` input adds the 8-hour WAN-down soak (Story 1.22) and spreads the kitchen soak over 8 h.
 
 on:
@@ -624,6 +630,45 @@ jobs:
         with:
           name: remote-report
           path: target/remote/report.md
+          if-no-files-found: ignore
+
+  billing-proof:
+    name: billing life cycle, plan downgrade and Hub move proofs
+    # Story 10.20: the suites run at their full size and each writes its figures to
+    # ARENA_PROOF_OUT; the report fails the release on any failure or missing result. The nightly
+    # Razorpay test-mode run on staging is a separate scheduled job (see the runbook) and is only
+    # "not run" here unless this job is dispatched with --strict.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ARENA_PROOF_OUT: ${{ github.workspace }}/target/billing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: billing-proof
+      - name: Clear earlier results
+        run: rm -rf "$ARENA_PROOF_OUT"
+      - name: Every band, create to lapse, cancel, and the 7-day refund
+        run: cargo test --locked -p arena-cloud --test billing_events -- each_band
+      - name: Premium to Basic to Free keeps every session and ticket
+        run: cargo test --locked -p arena-core --lib plan_change_proof
+      - name: The Hub move over the LAN and by file
+        run: cargo test --locked -p arena-api --test handover -- a_free_tablet_with_thirty_days the_same_cafe
+      - name: Check every result; a missing one fails
+        if: ${{ always() }}
+        run: node scripts/billing-report.mjs --dir target/billing
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: billing-report
+          path: |
+            target/billing/*.json
+            target/billing/report.md
           if-no-files-found: ignore
 
   restore-drill:

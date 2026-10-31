@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use arena_api::lan::{HubCert, HubInfoSource, LanHub, bind_lan, serve_lan};
+use arena_core::Clock;
 use arena_core::handover::{Handover, HandoverJoinControl};
 use arena_core::{
     DeviceDirectory, HubStatus, LeaseInfo, ManualClock, Role, SnapshotReader, Writer, WriterHandle,
@@ -62,6 +63,7 @@ struct Tablet {
     writer: WriterHandle,
     handover: Arc<Handover>,
     status: watch::Sender<HubStatus>,
+    clock: Arc<ManualClock>,
     branch_id: String,
     _stop: oneshot::Sender<()>,
 }
@@ -134,6 +136,7 @@ async fn tablet() -> Tablet {
             target_hub_name: PC.into(),
         });
     });
+    let tablet_clock = Arc::clone(&clock);
     let handover = Arc::new(
         Handover::open(
             writer.clone(),
@@ -180,6 +183,7 @@ async fn tablet() -> Tablet {
         writer,
         handover,
         status: status_tx,
+        clock: tablet_clock,
         branch_id,
         _stop: stop_tx,
     }
@@ -502,6 +506,17 @@ async fn importing(status_code: u16, reply: &'static str) -> Importing {
     let (pc, status) = pc_with_status(&t.branch_id).await;
     let code = t.code().await;
     pc.puller.join(join(&t, &code)).await.unwrap();
+    importing_with(t, pc, status, status_code, reply).await
+}
+
+/// The importer of a PC that already holds the snapshot (by pull or by file).
+async fn importing_with(
+    t: Tablet,
+    pc: Pc,
+    status: watch::Sender<HubStatus>,
+    status_code: u16,
+    reply: &'static str,
+) -> Importing {
     let (port, seen) = cloud(status_code, reply).await;
     let cloud = arena_tasks::CloudClient::new(
         &arena_tasks::CloudEndpoint::parse(&format!("http://127.0.0.1:{port}"), true).unwrap(),
@@ -696,4 +711,490 @@ async fn a_pc_that_names_no_address_leaves_the_kiosks_to_pair_again() {
     {
         assert!(!matches!(ev, HubEvent::Successor(_)), "{ev:?}");
     }
+}
+
+// ---- Story 10.20: the whole move, proven end to end ----
+
+/// Writes a proof's figures to `$ARENA_PROOF_OUT/<name>.json` when the release bench asks for it.
+fn record_proof(name: &str, value: &serde_json::Value) {
+    if let Ok(dir) = std::env::var("ARENA_PROOF_OUT") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(format!("{dir}/{name}.json"), value.to_string()).unwrap();
+    }
+}
+
+const DAY_MS: i64 = 86_400_000;
+const KIOSKS: usize = 20;
+const LIVE_SESSIONS: usize = 5;
+const HISTORY_DAYS: i64 = 30;
+/// The epic's budget: every online kiosk is on the new Hub this long after the import.
+const FOLLOW_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// A kiosk registered on the tablet, in a group, with the token it keeps.
+struct Seat {
+    device_id: String,
+    token: String,
+}
+
+async fn seat(t: &Tablet, n: usize, group: &str) -> Seat {
+    use arena_core::devices::{format_token, hash_token_secret, new_token_secret};
+    use arena_proto::{ClientClass, DeviceRegister};
+    let secret = new_token_secret().unwrap();
+    let applied = submit_at(
+        t,
+        IntentPayload::DeviceRegister(DeviceRegister {
+            device_id: None,
+            device_kind: Default::default(),
+            class: ClientClass::Paired,
+            label: format!("PC {n}"),
+            token_hash: hash_token_secret(&secret).unwrap(),
+            tv_number: None,
+            group_id: Some(group.into()),
+        }),
+    )
+    .await;
+    let device_id = applied.changes[0].row_id.clone();
+    Seat {
+        token: format_token(&device_id, &secret),
+        device_id,
+    }
+}
+
+async fn connect(
+    address: &str,
+    fingerprint: &str,
+    token: &str,
+) -> Result<arena_kiosk_core::HubClient, arena_kiosk_core::ClientError> {
+    use arena_proto::{ClientClass, Hello, Versions};
+    arena_kiosk_core::HubClient::connect(
+        &format!("wss://{address}/"),
+        fingerprint,
+        Hello {
+            credential: token.into(),
+            class: ClientClass::Paired,
+            versions: Versions {
+                app: "0.1.0".into(),
+            },
+            capabilities: Vec::new(),
+        },
+    )
+    .await
+}
+
+async fn submit_at(t: &Tablet, payload: IntentPayload) -> arena_core::Applied {
+    let mut i = intent(owner(), payload);
+    i.issued_at = t.clock.now_ms();
+    t.writer.submit_intent(i).await.unwrap()
+}
+
+/// A café with 20 kiosks connected, 30 days of history and 5 sessions running.
+struct Cafe {
+    seats: Vec<Seat>,
+    kiosks: Vec<arena_kiosk_core::HubClient>,
+}
+
+async fn seed_cafe(t: &Tablet) -> Cafe {
+    use arena_proto::{GroupUpsert, RateUpsert, SessionMode, SessionStart};
+    let group = submit_at(
+        t,
+        IntentPayload::GroupUpsert(GroupUpsert {
+            id: None,
+            name: "Gaming PCs".into(),
+            group_kind: "pc".into(),
+            colour: "teal".into(),
+            sort_order: 1,
+        }),
+    )
+    .await
+    .changes[0]
+        .row_id
+        .clone();
+    submit_at(
+        t,
+        IntentPayload::RateUpsert(RateUpsert {
+            group_id: group.clone(),
+            price_per_hour_minor: 6_000,
+        }),
+    )
+    .await;
+    let mut seats = Vec::new();
+    let mut kiosks = Vec::new();
+    for n in 0..KIOSKS {
+        let s = seat(t, n + 1, &group).await;
+        kiosks.push(
+            connect(&t.lan.to_string(), &t.fingerprint, &s.token)
+                .await
+                .unwrap(),
+        );
+        seats.push(s);
+    }
+    // Thirty days of trading: a new product every morning.
+    for day in 0..HISTORY_DAYS {
+        t.clock.set(T0 + day * DAY_MS);
+        submit_at(
+            t,
+            IntentPayload::ProductUpsert(ProductUpsert {
+                id: None,
+                name: format!("Item of day {day}"),
+                category: String::new(),
+                price_minor: 1_000 + day,
+                tax_rate_bp: None,
+                hsn: String::new(),
+                track_stock: true,
+                image: String::new(),
+                barcode: String::new(),
+                kitchen: false,
+                favourite: false,
+                active: true,
+                bundle: false,
+                components: Vec::new(),
+                kitchen_notes: None,
+            }),
+        )
+        .await;
+    }
+    t.clock.set(T0 + HISTORY_DAYS * DAY_MS);
+    for s in seats.iter().take(LIVE_SESSIONS) {
+        submit_at(
+            t,
+            IntentPayload::SessionStart(SessionStart {
+                group_with: None,
+                pay_from_wallet: false,
+                device_id: s.device_id.clone(),
+                mode: SessionMode::Postpaid,
+                player_id: None,
+                pack_id: None,
+                plan_id: None,
+            }),
+        )
+        .await;
+    }
+    Cafe { seats, kiosks }
+}
+
+/// A digest per change-log table, to name the tables that differ.
+fn digests(path: &std::path::Path) -> Vec<(String, String)> {
+    arena_store::Table::ALL
+        .into_iter()
+        .map(|t| (t.name().to_owned(), format!("{:?}", rows_of(path, t))))
+        .collect()
+}
+
+fn rows_of(path: &std::path::Path, table: arena_store::Table) -> Vec<arena_store::Row> {
+    Store::open_reader(path).unwrap().rows(table).unwrap()
+}
+
+/// Every session and its segments, in a stable order: what "every session continues" compares.
+fn sessions_of(path: &std::path::Path) -> Vec<String> {
+    use arena_store::Table::{SessionSegments, Sessions};
+    let mut v: Vec<String> = [Sessions, SessionSegments]
+        .into_iter()
+        .flat_map(|t| rows_of(path, t))
+        .map(|r| format!("{r:?}"))
+        .collect();
+    v.sort();
+    v
+}
+
+/// The imported PC, serving under the claimed epoch.
+struct Serving {
+    lan: SocketAddr,
+    _stop: oneshot::Sender<()>,
+}
+
+async fn serve_imported(
+    db: &std::path::Path,
+    cert: HubCert,
+    listeners: arena_api::lan::LanListeners,
+    now: i64,
+) -> Serving {
+    let lan = listeners.lan_addr().unwrap();
+    let listeners_web = listeners.web_addr().unwrap().port();
+    let mut store = Store::open(db, now).unwrap();
+    let mut lease = store.lease().unwrap().expect("the import wrote a lease");
+    lease.expires_at = i64::MAX;
+    store.write_tx(|tx| write_lease(tx, &lease)).unwrap();
+    let mut status = HubStatus::opened(store.schema_version().unwrap(), &lease.hub_instance_id);
+    status.role = Role::Primary;
+    status.lease = Some(LeaseInfo::from(&lease));
+    let (_status_tx, status_rx) = status_channel(status);
+    let clock = Arc::new(ManualClock::new(now));
+    let writer = Writer::spawn(store, clock.clone(), status_rx.clone()).unwrap();
+    let hub = Arc::new(
+        LanHub::new(
+            Some(writer),
+            status_rx,
+            clock,
+            Arc::new(DeviceDirectory::open(db).unwrap()),
+            cert.server_config().unwrap(),
+            "0.1.0",
+        )
+        .with_info(HubInfoSource {
+            reader: Arc::new(SnapshotReader::open(db).unwrap()),
+            hub_name: PC.into(),
+            lan_port: lan.port(),
+            web_port: listeners_web,
+        }),
+    );
+    let (stop, stop_rx) = oneshot::channel::<()>();
+    tokio::spawn(serve_lan(listeners, hub, async {
+        let _ = stop_rx.await;
+    }));
+    Serving { lan, _stop: stop }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Route {
+    Lan,
+    File,
+}
+
+/// Moves the seeded café and checks everything the epic promises about the move.
+async fn prove_the_move(route: Route) {
+    use arena_core::handover::MigrationImportControl;
+    use arena_proto::{HandoverFileRequest, HubEvent};
+
+    let t = tablet().await;
+    let cafe = seed_cafe(&t).await;
+    assert!(sessions_of(&t.path).len() >= 2 * LIVE_SESSIONS);
+
+    // The PC has its own certificate and ports, so the kiosks can be told where it will be.
+    let pc_cert = HubCert::generate(None).unwrap();
+    let listeners = bind_lan(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, 0)
+        .await
+        .unwrap();
+    let (lan_port, web_port) = (
+        listeners.lan_addr().unwrap().port(),
+        listeners.web_addr().unwrap().port(),
+    );
+    let (pc, status) = pc_with_status(&t.branch_id).await;
+    status.send_modify(|s| {
+        s.tls_fingerprint = Some(pc_cert.fingerprint.clone());
+        s.lan_addresses = vec![Ipv4Addr::LOCALHOST];
+        s.lan_ports = Some((lan_port, web_port));
+        s.restore_key_released = true;
+    });
+    let mut streams: Vec<_> = cafe.kiosks.iter().map(|k| k.events().unwrap()).collect();
+
+    // The snapshot reaches the PC: pulled over the LAN, or copied as a file.
+    let last_seq;
+    let importer = match route {
+        Route::Lan => {
+            let code = t.code().await;
+            pc.puller.join(join(&t, &code)).await.unwrap();
+            last_seq = pc.handover.received().await.unwrap().1.last_seq;
+            importing_with(
+                t,
+                pc,
+                status,
+                200,
+                r#"{"epoch":"9:01JHUBBBBBBBBBBBBBBBBBBBBB"}"#,
+            )
+            .await
+        }
+        Route::File => {
+            let folder = tempfile::tempdir().unwrap();
+            let dir = folder.path().to_string_lossy().into_owned();
+            t.writer
+                .submit(move |tx| {
+                    tx.execute(
+                        "UPDATE settings SET value = ?1 WHERE key = ?2",
+                        (dir, arena_proto::KEY_BACKUP_DIR),
+                    )
+                    .map(|_| ())
+                    .map_err(arena_store::db_error)
+                })
+                .await
+                .unwrap();
+            t.handover.begin().await.unwrap();
+            let view = t.handover.use_file().await.unwrap();
+            let file = folder.path().join(view.file_name.unwrap());
+            let i = importing_with(
+                t,
+                pc,
+                status,
+                200,
+                r#"{"epoch":"9:01JHUBBBBBBBBBBBBBBBBBBBBB"}"#,
+            )
+            .await;
+            i.importer
+                .use_file(HandoverFileRequest {
+                    path: file.to_string_lossy().into_owned(),
+                })
+                .await
+                .unwrap();
+            last_seq = i.pc.handover.received().await.unwrap().1.last_seq;
+            std::mem::forget(folder);
+            i
+        }
+    };
+    // What the tablet held when it stopped: the file, or the pull, is a copy of exactly this.
+    let sessions_before = sessions_of(&importer._t.path);
+    let digests_before = digests(&importer._t.path);
+    let checksum_before =
+        arena_replay::state_checksum(&Store::open_reader(&importer._t.path).unwrap()).unwrap();
+    let (tablet_path, tablet_fp, tablet_branch) = (
+        importer._t.path.clone(),
+        importer._t.fingerprint.clone(),
+        importer._t.branch_id.clone(),
+    );
+    let tablet_last = Store::open_reader(&tablet_path)
+        .unwrap()
+        .changes()
+        .unwrap()
+        .last()
+        .unwrap()
+        .seq;
+    assert_eq!(
+        last_seq, tablet_last,
+        "the snapshot ends at the tablet's last change"
+    );
+
+    // The tablet serves nothing more.
+    assert!(!importer._t.serves().await);
+
+    // The import: claim, stage, and at the next start the snapshot becomes the database.
+    let done = importer.importer.import().await.unwrap();
+    assert!(done.restarting);
+    let db = importer.db();
+    assert!(arena_store::has_pending(&db));
+    // The restart: this PC's old process lets go of its database, and the new one sets its
+    // instance id before the staged snapshot is applied.
+    let Importing {
+        _t: _tablet,
+        pc,
+        importer,
+        ..
+    } = importer;
+    drop(importer);
+    drop(pc);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    {
+        let mut store = Store::open(&db, T0).unwrap();
+        store
+            .write_tx(|tx| {
+                arena_store::set_meta(
+                    tx,
+                    arena_store::META_HUB_INSTANCE_ID,
+                    "01JHUBBBBBBBBBBBBBBBBBBBBB",
+                )
+            })
+            .unwrap();
+    }
+    let now = T0 + HISTORY_DAYS * DAY_MS + 60_000;
+    let outcome = arena_store::apply_pending(&db, now)
+        .unwrap()
+        .expect("a staged import");
+    assert_eq!(outcome.restore.header.last_seq, tablet_last);
+
+    // Checksums are equal at the final seq, and every session is as it was.
+    let differing: Vec<_> = digests_before
+        .iter()
+        .zip(digests(&db))
+        .filter(|(a, b)| **a != *b)
+        .map(|(a, _)| a.0.clone())
+        .collect();
+    assert!(differing.is_empty(), "tables that differ: {differing:?}");
+    let imported = Store::open_reader(&db).unwrap();
+    assert_eq!(
+        arena_replay::state_checksum(&imported).unwrap(),
+        checksum_before,
+        "the PC holds the tablet's rows"
+    );
+    assert_eq!(
+        sessions_of(&db),
+        sessions_before,
+        "every session continues as it was"
+    );
+    drop(imported);
+
+    // The PC serves; each kiosk that was told where the branch went follows with its old token.
+    let serving = serve_imported(&db, pc_cert.clone(), listeners, now).await;
+    let began = std::time::Instant::now();
+    let mut followed = 0;
+    for (n, (seat, events)) in cafe.seats.iter().zip(streams.iter_mut()).enumerate() {
+        let mut offer = None;
+        while route == Route::Lan
+            && let Ok(Some(ev)) =
+                tokio::time::timeout(std::time::Duration::from_secs(5), events.next_event()).await
+        {
+            if let HubEvent::Successor(s) = ev {
+                offer = Some(s);
+                break;
+            }
+        }
+        match route {
+            Route::Lan => {
+                let signed = offer.unwrap_or_else(|| panic!("kiosk {n} was told where to go"));
+                // Checked against the pin the kiosk holds (the tablet's), as the kiosk does.
+                assert_eq!(
+                    arena_kiosk_core::successor::verify(
+                        &signed,
+                        &tablet_fp,
+                        Some(&tablet_branch),
+                        now
+                    ),
+                    Ok(())
+                );
+                let s = &signed.successor;
+                assert_eq!(s.address, serving.lan.to_string());
+                let client = connect(&s.address, &s.fingerprint, &seat.token)
+                    .await
+                    .unwrap_or_else(|e| panic!("kiosk {n} could not follow: {e:?}"));
+                assert_eq!(
+                    client.hello_ok().branch_id.as_deref(),
+                    Some(tablet_branch.as_str())
+                );
+                followed += 1;
+            }
+            Route::File => {
+                // No successor is pushed by a move by file: the kiosk is pointed at the new Hub
+                // (typed address) and its pin is re-trusted; the token it holds is accepted as
+                // it is, so no new pairing code is needed.
+                assert!(
+                    offer.is_none(),
+                    "kiosk {n}: a file move pushes no successor"
+                );
+                let client = connect(&serving.lan.to_string(), &pc_cert.fingerprint, &seat.token)
+                    .await
+                    .unwrap_or_else(|e| panic!("kiosk {n}'s token was not accepted: {e:?}"));
+                assert!(client.hello_ok().branch_id.is_some());
+                followed += 1;
+            }
+        }
+    }
+    assert_eq!(followed, KIOSKS);
+    assert!(
+        began.elapsed() < FOLLOW_BUDGET,
+        "{KIOSKS} kiosks took {:?} to reach the new Hub",
+        began.elapsed()
+    );
+    record_proof(
+        if route == Route::Lan {
+            "move-lan"
+        } else {
+            "move-file"
+        },
+        &serde_json::json!({
+            "history_days": HISTORY_DAYS,
+            "sessions": LIVE_SESSIONS,
+            "kiosks": KIOSKS,
+            "last_seq": tablet_last,
+            "checksums_equal": true,
+            "sessions_continue": true,
+            "follow_ms": began.elapsed().as_millis() as u64,
+            "budget_ms": FOLLOW_BUDGET.as_millis() as u64,
+            "successor_pushed": route == Route::Lan,
+        }),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_free_tablet_with_thirty_days_and_five_sessions_moves_to_a_pc_over_the_lan() {
+    prove_the_move(Route::Lan).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_same_cafe_moves_by_file_with_the_same_rows_sessions_and_tokens() {
+    prove_the_move(Route::File).await;
 }

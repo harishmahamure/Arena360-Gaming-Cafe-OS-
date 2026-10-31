@@ -63,6 +63,7 @@ mod owner_alert;
 mod owner_commands;
 mod pc_settings;
 mod people_reports;
+mod plan_change_proof;
 mod plans;
 mod player_account_page;
 mod player_erase;

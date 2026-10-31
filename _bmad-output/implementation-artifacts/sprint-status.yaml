@@ -316,7 +316,7 @@ development_status:
   10-17-the-android-hub-hands-over-a-final-snapshot-and-steps-down: done
   10-18-the-windows-hub-imports-the-snapshot-as-the-next-epoch: done
   10-19-kiosks-follow-the-new-windows-hub-without-pairing-again: done
-  10-20-billing-tier-changes-and-the-hub-move-proven-end-to-end: backlog
+  10-20-billing-tier-changes-and-the-hub-move-proven-end-to-end: review
   epic-10-retrospective: optional
 
   epic-11: backlog

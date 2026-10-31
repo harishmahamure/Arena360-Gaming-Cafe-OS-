@@ -149,6 +149,7 @@ dependencies = [
  "arena-core",
  "arena-kiosk-core",
  "arena-proto",
+ "arena-replay",
  "arena-store",
  "arena-tasks",
  "axum",

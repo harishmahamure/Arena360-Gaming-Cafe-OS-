@@ -138,7 +138,11 @@ struct Facts {
 }
 
 /// `VACUUM INTO` a scratch file, then strip it and read its facts.
-fn copy_and_strip(db_path: &Path, scratch: &Path) -> Result<Facts, AppError> {
+fn copy_and_strip(
+    db_path: &Path,
+    scratch: &Path,
+    keep_device_tokens: bool,
+) -> Result<Facts, AppError> {
     let source = Connection::open_with_flags(
         db_path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -161,7 +165,9 @@ fn copy_and_strip(db_path: &Path, scratch: &Path) -> Result<Facts, AppError> {
         copy.execute_batch("DELETE FROM licence_cache;")
             .map_err(db_error)?;
     }
-    if table_exists(&copy, "devices")? {
+    // A handover snapshot keeps the kiosks' token hashes, so the Windows Hub accepts the kiosks
+    // that follow it (Story 10.19); every other export blanks them.
+    if !keep_device_tokens && table_exists(&copy, "devices")? {
         copy.execute_batch("UPDATE devices SET token_hash = '';")
             .map_err(db_error)?;
     }
@@ -304,7 +310,8 @@ pub fn write_export_for(
     if !fs::metadata(folder).is_ok_and(|m| m.is_dir()) {
         return Err(target_problem(folder));
     }
-    let facts = copy_and_strip(db_path, &scratch)?;
+    let keep_device_tokens = purpose == Some(arena_proto::HANDOVER_PURPOSE);
+    let facts = copy_and_strip(db_path, &scratch, keep_device_tokens)?;
     let (sha256, body_bytes) = compress(&scratch, &packed)?;
     let _ = fs::remove_file(&scratch);
 
@@ -498,6 +505,37 @@ mod tests {
             .query_row("PRAGMA integrity_check", [], |r| r.get(0))
             .unwrap();
         assert_eq!(integrity, "ok");
+    }
+
+    #[test]
+    fn a_migrate_snapshot_keeps_the_kiosks_token_hashes_but_not_the_displays() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = database(dir.path());
+        let out = tempfile::tempdir().unwrap();
+        let done = write_export_for(
+            &db,
+            out.path(),
+            "m.a360",
+            1,
+            Some(arena_proto::HANDOVER_PURPOSE),
+        )
+        .unwrap();
+        let (_, copy) = open(&done.path, out.path());
+        let count =
+            |c: &Connection, sql: &str| -> i64 { c.query_row(sql, [], |r| r.get(0)).unwrap() };
+        assert_eq!(
+            count(&copy, "SELECT COUNT(*) FROM devices WHERE token_hash <> ''"),
+            2,
+            "the kiosks keep their tokens"
+        );
+        assert_eq!(count(&copy, "SELECT COUNT(*) FROM licence_cache"), 0);
+        assert_eq!(
+            count(
+                &copy,
+                "SELECT COUNT(*) FROM kitchen_displays WHERE token_hash <> ''"
+            ),
+            0
+        );
     }
 
     #[test]

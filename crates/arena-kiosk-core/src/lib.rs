@@ -16,6 +16,7 @@ pub mod monitors;
 pub mod pair;
 pub mod procpolicy;
 pub mod queue;
+pub mod successor;
 pub mod watchdog;
 
 pub use backoff::Backoff;

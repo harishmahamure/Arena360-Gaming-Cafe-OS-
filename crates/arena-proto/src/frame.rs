@@ -385,6 +385,11 @@ pub struct HelloOk {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub epoch: Option<String>,
+    /// The branch this Hub serves (Story 10.19). A kiosk keeps it to check a `hub.successor`
+    /// against; absent from a Hub that is not paired with the cloud.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub branch_id: Option<String>,
 }
 
 /// Asks the Hub to apply an intent. The Hub overwrites `intent.actor` with the session's.
@@ -517,6 +522,10 @@ pub enum HubEvent {
     /// change and at least every second.
     #[serde(rename = "live.floor")]
     LiveFloor(Box<LiveFloor>),
+    /// The Hub is handing the branch to another Hub: where to go next (paired sessions only;
+    /// Story 10.19). Signed with the sending Hub's own TLS key.
+    #[serde(rename = "hub.successor")]
+    Successor(crate::SignedSuccessor),
 }
 
 /// The body of an `event` frame.
@@ -703,6 +712,7 @@ mod tests {
                     },
                     primary: true,
                     epoch: epoch.map(str::to_owned),
+                    branch_id: None,
                 }),
             )
         };

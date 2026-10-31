@@ -5,7 +5,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use arena_api::lan::{HubCert, LanHub, bind_lan, serve_lan};
+use arena_api::lan::{HubCert, HubInfoSource, LanHub, bind_lan, serve_lan};
 use arena_core::handover::{Handover, HandoverJoinControl};
 use arena_core::{
     DeviceDirectory, HubStatus, LeaseInfo, ManualClock, Role, SnapshotReader, Writer, WriterHandle,
@@ -57,6 +57,8 @@ struct Tablet {
     _dir: tempfile::TempDir,
     path: PathBuf,
     web: SocketAddr,
+    lan: SocketAddr,
+    fingerprint: String,
     writer: WriterHandle,
     handover: Arc<Handover>,
     status: watch::Sender<HubStatus>,
@@ -98,6 +100,31 @@ async fn tablet() -> Tablet {
         ))
         .await
         .unwrap();
+    // The branch id the snapshot header states, which is also the tablet's cloud identity.
+    let probe = tempfile::tempdir().unwrap();
+    let branch_id = arena_store::write_export(&path, probe.path(), "probe.a360", T0)
+        .unwrap()
+        .header
+        .branch_id;
+    {
+        let branch_id = branch_id.clone();
+        writer
+            .submit(move |tx| {
+                arena_store::insert_hub_identity(
+                    tx,
+                    &HubIdentity {
+                        tenant_id: "T".into(),
+                        branch_id,
+                        hub_id: "H1".into(),
+                        tier: arena_proto::Tier::Free,
+                        paired_at: T0,
+                    },
+                )
+                .map(|_| ())
+            })
+            .await
+            .unwrap();
+    }
     let reader = Arc::new(SnapshotReader::open(&path).unwrap());
     let cert = HubCert::generate(None).unwrap();
     status_tx.send_modify(|s| {
@@ -126,26 +153,30 @@ async fn tablet() -> Tablet {
             cert.server_config().unwrap(),
             "0.1.0",
         )
-        .with_handover(Arc::clone(&handover), dir.path().to_path_buf()),
+        .with_handover(Arc::clone(&handover), dir.path().to_path_buf())
+        .with_signer(cert.clone())
+        .with_info(HubInfoSource {
+            reader: Arc::clone(&reader),
+            hub_name: "Tablet".into(),
+            lan_port: 7400,
+            web_port: 7401,
+        }),
     );
     let listeners = bind_lan(IpAddr::V4(Ipv4Addr::LOCALHOST), 0, 0)
         .await
         .unwrap();
     let web = listeners.web_addr().unwrap();
+    let lan = listeners.lan_addr().unwrap();
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
     tokio::spawn(serve_lan(listeners, hub, async {
         let _ = stop_rx.await;
     }));
-    // The branch id the snapshot header states.
-    let probe = tempfile::tempdir().unwrap();
-    let branch_id = arena_store::write_export(&path, probe.path(), "probe.a360", T0)
-        .unwrap()
-        .header
-        .branch_id;
     Tablet {
         _dir: dir,
         path,
         web,
+        lan,
+        fingerprint: cert.fingerprint.clone(),
         writer,
         handover,
         status: status_tx,
@@ -231,6 +262,9 @@ async fn pc_with_status(branch_id: &str) -> (Pc, watch::Sender<HubStatus>) {
         .write_tx(|tx| arena_store::set_meta(tx, arena_store::MIGRATION_WAIT_KEY, "Dev Branch"))
         .unwrap();
     let mut initial = HubStatus::opened(LATEST_SCHEMA_VERSION, "01JHUBBBBBBBBBBBBBBBBBBBBB");
+    initial.tls_fingerprint = Some("cd".repeat(32));
+    initial.lan_addresses = vec![Ipv4Addr::new(192, 168, 1, 20)];
+    initial.lan_ports = Some((7400, 7401));
     initial.role = Role::Primary;
     initial.lease = Some(LeaseInfo::from(&lease("01JHUBBBBBBBBBBBBBBBBBBBBB")));
     initial.migration_wait = Some("Dev Branch".into());
@@ -555,4 +589,111 @@ async fn a_pc_that_is_not_waiting_for_a_move_imports_nothing() {
     let e = i.importer.import().await.unwrap_err();
     assert_eq!(e.code, ErrorCode::StepNotReady);
     assert!(i.seen.lock().unwrap().is_empty());
+}
+
+/// A paired kiosk registered on the tablet and connected to it over pinned TLS.
+async fn kiosk_on(t: &Tablet) -> arena_kiosk_core::HubClient {
+    use arena_core::devices::{format_token, hash_token_secret, new_token_secret};
+    use arena_proto::{ClientClass, DeviceRegister, Hello, Versions};
+    let secret = new_token_secret().unwrap();
+    let applied = t
+        .writer
+        .submit_intent(intent(
+            owner(),
+            IntentPayload::DeviceRegister(DeviceRegister {
+                device_id: None,
+                device_kind: Default::default(),
+                class: ClientClass::Paired,
+                label: "PC 1".into(),
+                token_hash: hash_token_secret(&secret).unwrap(),
+                tv_number: None,
+                group_id: None,
+            }),
+        ))
+        .await
+        .unwrap();
+    let token = format_token(&applied.changes[0].row_id, &secret);
+    arena_kiosk_core::HubClient::connect(
+        &format!("wss://{}/", t.lan),
+        &t.fingerprint,
+        Hello {
+            credential: token,
+            class: ClientClass::Paired,
+            versions: Versions {
+                app: "0.1.0".into(),
+            },
+            capabilities: Vec::new(),
+        },
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn the_tablet_tells_each_kiosk_where_the_branch_goes_and_closes_it_at_the_acknowledgement() {
+    use arena_proto::HubEvent;
+    let t = tablet().await;
+    let pc = pc(&t.branch_id).await;
+    let kiosk = kiosk_on(&t).await;
+    assert_eq!(
+        kiosk.hello_ok().branch_id.as_deref(),
+        Some(t.branch_id.as_str()),
+        "the kiosk learns the branch at hello"
+    );
+    let mut events = kiosk.events().unwrap();
+    let code = t.code().await;
+    pc.puller.join(join(&t, &code)).await.unwrap();
+
+    let signed = loop {
+        match tokio::time::timeout(std::time::Duration::from_secs(5), events.next_event())
+            .await
+            .expect("the successor arrives")
+        {
+            Some(HubEvent::Successor(s)) => break s,
+            Some(_) => {}
+            None => panic!("the link closed before the successor"),
+        }
+    };
+    assert_eq!(signed.successor.address, "192.168.1.20:7400");
+    assert_eq!(signed.successor.fingerprint, "cd".repeat(32));
+    assert_eq!(signed.successor.branch_id, t.branch_id);
+    assert_eq!(
+        signed.successor.expires_at,
+        T0 + arena_proto::SUCCESSOR_TTL_MS
+    );
+    // It checks out for the kiosk that pins the tablet, and for nobody else.
+    assert_eq!(
+        arena_kiosk_core::successor::verify(&signed, &t.fingerprint, Some(&t.branch_id), T0),
+        Ok(())
+    );
+    assert_eq!(
+        arena_kiosk_core::successor::verify(&signed, &"ef".repeat(32), Some(&t.branch_id), T0),
+        Err(arena_kiosk_core::successor::Rejection::Certificate)
+    );
+
+    // The acknowledgement has happened: the tablet ends the link with HUB_HANDING_OVER.
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(5), kiosk.closed())
+        .await
+        .expect("the tablet closes the link");
+    assert_eq!(closed.error.unwrap().code, ErrorCode::HubHandingOver);
+}
+
+#[tokio::test]
+async fn a_pc_that_names_no_address_leaves_the_kiosks_to_pair_again() {
+    use arena_proto::HubEvent;
+    let t = tablet().await;
+    let (pc, status) = pc_with_status(&t.branch_id).await;
+    status.send_modify(|s| s.lan_addresses.clear());
+    let kiosk = kiosk_on(&t).await;
+    let mut events = kiosk.events().unwrap();
+    let code = t.code().await;
+    pc.puller.join(join(&t, &code)).await.unwrap();
+    // Still closed at the acknowledgement, but nothing was ever pushed.
+    while let Some(ev) =
+        tokio::time::timeout(std::time::Duration::from_secs(5), events.next_event())
+            .await
+            .expect("the link ends")
+    {
+        assert!(!matches!(ev, HubEvent::Successor(_)), "{ev:?}");
+    }
 }

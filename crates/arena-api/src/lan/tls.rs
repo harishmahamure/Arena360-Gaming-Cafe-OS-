@@ -96,6 +96,23 @@ impl HubCert {
         })
     }
 
+    /// The certificate's DER bytes.
+    pub fn cert_der(&self) -> Result<Vec<u8>, AppError> {
+        CertificateDer::from_pem_slice(self.cert_pem.as_bytes())
+            .map(|d| d.as_ref().to_vec())
+            .map_err(|e| internal(format!("hub certificate: {e}")))
+    }
+
+    /// Signs `msg` with the certificate's own key (ECDSA P-256 / SHA-256, ASN.1), so a device that
+    /// pins this certificate can tell the Hub itself said it (Story 10.19).
+    pub fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, AppError> {
+        use rcgen::SigningKey as _;
+        let key = rcgen::KeyPair::from_pem(&self.key_pem)
+            .map_err(|e| internal(format!("hub key: {e}")))?;
+        key.sign(msg)
+            .map_err(|e| internal(format!("sign with the hub key: {e}")))
+    }
+
     /// The rustls server configuration serving this certificate (ring provider, TLS 1.2+).
     pub fn server_config(&self) -> Result<Arc<ServerConfig>, AppError> {
         let cert = CertificateDer::from_pem_slice(self.cert_pem.as_bytes())

@@ -537,6 +537,21 @@ impl Registry {
         self.push_paired(&msg, Some(device_id))
     }
 
+    /// Pushes `hub.successor` to every paired session (Story 10.19). Returns how many got it.
+    pub(crate) fn push_successor(&self, signed: arena_proto::SignedSuccessor) -> usize {
+        let msg = event_frame(self.next_rid(), HubEvent::Successor(signed));
+        self.push_paired(&msg, None)
+    }
+
+    /// Closes every session after `error` (the branch has moved to another Hub).
+    pub(crate) fn close_all_with(&self, error: &AppError) {
+        if let Ok(map) = self.sessions.lock() {
+            for entry in map.values() {
+                set_kill(&entry.kill, Kill::Error(error.clone()));
+            }
+        }
+    }
+
     pub(crate) fn push_test_session(&self, device_id: &str) -> usize {
         let msg = event_frame(
             self.next_rid(),

@@ -121,6 +121,59 @@ pub struct HandoverClaim {
     pub hub_name: String,
     /// `handover_proof(code, certificate fingerprint the Windows Hub saw, "claim", hub_name)`.
     pub proof: String,
+    /// Where the kiosks should go once the tablet has stepped down (Story 10.19). Absent from a
+    /// Windows Hub that does not say; the kiosks then pair again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub successor: Option<SuccessorOffer>,
+}
+
+/// The Windows Hub's LAN address and certificate, as the tablet passes them to its kiosks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SuccessorOffer {
+    /// `host:port` of the Windows Hub's paired-app listener (`:7400`).
+    pub address: String,
+    /// SHA-256 of its TLS certificate, 64 hex digits.
+    pub fingerprint: String,
+}
+
+/// How long a `hub.successor` stays good.
+pub const SUCCESSOR_TTL_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// `hub.successor`'s claim: the next Hub of the branch (Story 10.19).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct HubSuccessor {
+    pub address: String,
+    pub fingerprint: String,
+    pub branch_id: String,
+    /// Unix milliseconds.
+    #[ts(type = "number")]
+    pub expires_at: i64,
+}
+
+impl HubSuccessor {
+    /// The bytes the sending Hub signs.
+    pub fn signing_bytes(&self) -> Vec<u8> {
+        format!(
+            "arena360-hub-successor-v1\n{}\n{}\n{}\n{}",
+            self.address, self.fingerprint, self.branch_id, self.expires_at
+        )
+        .into_bytes()
+    }
+}
+
+/// A [`HubSuccessor`] and the proof it came from the Hub the kiosk pins.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SignedSuccessor {
+    pub successor: HubSuccessor,
+    /// The signing Hub's certificate, DER as lower-case hex. Its SHA-256 must be the kiosk's pin.
+    pub cert: String,
+    /// ECDSA P-256 / SHA-256 signature (ASN.1) over [`HubSuccessor::signing_bytes`], hex.
+    pub signature: String,
 }
 
 /// The answer to a good claim.

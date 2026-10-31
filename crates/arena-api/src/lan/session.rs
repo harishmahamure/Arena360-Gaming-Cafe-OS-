@@ -575,6 +575,11 @@ pub(crate) async fn run<S>(
         };
         return reject(&mut sink, Frame::error(rid, e)).await;
     }
+    let branch_id = if authed.class == ClientClass::Paired {
+        hub.branch_id().await
+    } else {
+        None
+    };
     let ok = Frame::new(
         rid,
         FrameBody::HelloOk(HelloOk {
@@ -590,6 +595,7 @@ pub(crate) async fn run<S>(
                 .lease
                 .as_ref()
                 .map(|l| l.epoch().to_string()),
+            branch_id,
         }),
     );
     if sink.send(text(&ok)).await.is_err() {

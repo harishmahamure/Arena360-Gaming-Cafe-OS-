@@ -104,13 +104,13 @@ pub(crate) async fn run(ctx: Arc<Ctx>, mut stop: watch::Receiver<bool>) {
             Ended::Closed => {
                 rejected = false;
                 ctx.set_hub_state(KioskHubState::Reconnecting);
-                backoff.next_delay()
+                retry_wait(&ctx, &mut backoff)
             }
             // A rejected token stays rejected (and slow) until a hello succeeds.
             Ended::Failed if rejected => t.rejected_retry,
             Ended::Failed => {
                 ctx.set_hub_state(KioskHubState::Reconnecting);
-                backoff.next_delay()
+                retry_wait(&ctx, &mut backoff)
             }
         };
         tracing::debug!(wait_ms = wait.as_millis() as u64, "next hub connect");
@@ -118,6 +118,17 @@ pub(crate) async fn run(ctx: Arc<Ctx>, mut stop: watch::Receiver<bool>) {
             () = tokio::time::sleep(wait) => {}
             _ = stop.changed() => return,
         }
+    }
+}
+
+/// How long to wait before the next try: a branch that is moving to a successor is followed at the
+/// minimum back-off until the successor serves or runs out.
+fn retry_wait(ctx: &Ctx, backoff: &mut Backoff) -> std::time::Duration {
+    let wait = backoff.next_delay();
+    if crate::successor::pending(ctx) {
+        ctx.timings.backoff_min.min(wait)
+    } else {
+        wait
     }
 }
 
@@ -152,15 +163,20 @@ async fn attempt(ctx: &Arc<Ctx>, backoff: &mut Backoff, stop: &mut watch::Receiv
     let client = tokio::select! {
         r = async {
             if remote {
-                HubClient::connect_remote(&url, hello).await
+                HubClient::connect_remote(&url, hello.clone()).await
             } else {
-                HubClient::connect(&url, &cfg.hub_fingerprint, hello).await
+                HubClient::connect(&url, &cfg.hub_fingerprint, hello.clone()).await
             }
         } => r,
         _ = stop.changed() => return Ended::Shutdown,
     };
     let client = match client {
-        Ok(c) => c,
+        Ok(c) => {
+            // This Hub serves: a successor stored earlier (a move that was cancelled) is moot.
+            crate::successor::remember_branch(ctx, c.hello_ok().branch_id.as_deref());
+            crate::successor::clear(ctx);
+            c
+        }
         Err(ClientError::PinMismatch {
             expected,
             presented,
@@ -183,7 +199,14 @@ async fn attempt(ctx: &Arc<Ctx>, backoff: &mut Backoff, stop: &mut watch::Receiv
         }
         Err(e) => {
             tracing::warn!(hub = %cfg.hub_addr, error = %e, "hub unreachable");
-            return Ended::Failed;
+            if remote {
+                return Ended::Failed;
+            }
+            match follow_successor(ctx, &cfg, hello, stop).await {
+                Some(Ok(client)) => client,
+                Some(Err(ended)) => return ended,
+                None => return Ended::Failed,
+            }
         }
     };
     backoff.reset();
@@ -192,6 +215,40 @@ async fn attempt(ctx: &Arc<Ctx>, backoff: &mut Backoff, stop: &mut watch::Receiv
     let ended = serve(ctx, &client, stop).await;
     *ctx.admin.hub.lock().unwrap_or_else(|p| p.into_inner()) = None;
     ended
+}
+
+/// Tries the successor the Hub gave this kiosk (Story 10.19) once its own Hub has failed. `None`:
+/// there is none, or it is not serving yet (it stays stored and is tried again).
+async fn follow_successor(
+    ctx: &Arc<Ctx>,
+    cfg: &crate::config::KioskConfig,
+    hello: Hello,
+    stop: &mut watch::Receiver<bool>,
+) -> Option<Result<HubClient, Ended>> {
+    let signed = crate::successor::current(ctx, cfg)?;
+    let url = format!("wss://{}/", signed.successor.address);
+    let connected = tokio::select! {
+        r = HubClient::connect(&url, &signed.successor.fingerprint, hello) => r,
+        _ = stop.changed() => return Some(Err(Ended::Shutdown)),
+    };
+    match connected {
+        Ok(client) => {
+            crate::successor::adopt(ctx, cfg, &signed);
+            Some(Ok(client))
+        }
+        Err(ClientError::PinMismatch { .. }) => {
+            crate::successor::refused(ctx, "fingerprint mismatch at connect");
+            None
+        }
+        Err(ClientError::Hub(e)) if is_token_refusal(e.code) => {
+            crate::successor::refused(ctx, "the new hub refused the device token");
+            Some(Err(Ended::Rejected))
+        }
+        Err(e) => {
+            tracing::debug!(hub = %signed.successor.address, error = %e, "successor not serving yet");
+            None
+        }
+    }
 }
 
 /// While connected: replay the queue, then wait for new events, the close or shutdown.
@@ -338,6 +395,9 @@ async fn serve(ctx: &Arc<Ctx>, client: &HubClient, stop: &mut watch::Receiver<bo
                         crate::test_session::begin(ctx, lock_after_ms);
                     }
                     Some(HubEvent::Attract(view)) => crate::attract::push(ctx, *view),
+                    Some(HubEvent::Successor(signed)) => {
+                        crate::successor::receive(ctx, client.hello_ok().branch_id.as_deref(), signed)
+                    }
                     // Kitchen boards and the live floor go to other classes; a kiosk never gets them.
                     Some(
                         HubEvent::Applied(_)

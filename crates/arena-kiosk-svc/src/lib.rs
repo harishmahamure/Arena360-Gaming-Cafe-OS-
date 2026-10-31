@@ -53,6 +53,7 @@ pub mod secret;
 #[cfg(windows)]
 pub mod service;
 pub mod session;
+pub mod successor;
 pub mod test_session;
 pub mod theme;
 pub mod volume;

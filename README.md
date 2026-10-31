@@ -2377,10 +2377,31 @@ built by `upgradeUrl` in `@arena/ui`; each app says where the picker lives with 
   revokes the Android Hub's token, makes the PC the branch's `main` Hub (`migration_id` cleared) and marks the move `done`.
   The tablet's next heartbeat is `TOKEN_REVOKED` and it keeps showing "This branch has moved". The report is a dedicated call
   rather than a heartbeat field because the cloud refuses a standby token at `/v1/heartbeat`.
-- Not done here: kiosks following the new Hub without pairing again (Story 10.19; they show "Pair again" until then), the
+- Not done here: kiosks following the new Hub without pairing again (Story 10.19, below), the
   end-to-end move proof (Story 10.20), the row-count/checksum comparison of the two databases, and the owner app's later move
   phases (it still reads the move as "awaiting handover" until `done`).
 
+## Kiosks follow the new Windows Hub without pairing again (Story 10.19)
+
+- **The claim names the PC.** `HandoverClaim.successor` carries the Windows Hub's first LAN address on `:7400` and its
+  certificate fingerprint (absent from an older PC; the kiosks then pair again). After a good claim the tablet signs
+  `hub.successor {address, fingerprint, branch_id, expires_at = now + 24 h}` with its own TLS key (`HubCert::sign`) and pushes
+  it, with its certificate, to every connected paired kiosk (`HubEvent::Successor`). `HelloOk.branch_id` is how a kiosk learns
+  the branch.
+- **The kiosk checks it** (`arena_kiosk_core::successor::verify`): the certificate hashes to the pin, the signature verifies
+  against the key inside it, the branch is the one its Hub named, and it has not expired. A good one is kept in `queue.db`
+  beside the pin; a bad one is ignored, the pin stays, and `kiosk.log` code `successor_rejected` is queued for the next Hub
+  the kiosk reaches.
+- **Following.** At the acknowledgement the tablet ends every session with `HUB_HANDING_OVER`. A kiosk whose own Hub refuses,
+  closes or is unreachable connects to the successor (pinned to the named fingerprint only), sends its existing token and, on
+  a good hello, rewrites `config.json` (new address and pin, same device id and token) and drops the successor. While the
+  Windows Hub is still importing (`RESTORE_PENDING`) the kiosk retries at its minimum back-off; a Hub that serves again
+  (cancelled move) drops the successor; a pin mismatch or a refused token drops it and is reported.
+- **Tokens survive the move.** A `purpose: migrate` export keeps `devices.token_hash` (every other export blanks it), so the
+  Windows Hub accepts the kiosks under the paired-device class. Kitchen displays are still blanked.
+- Not done here: kiosks offline during the handover (they show "Pair again"), the 20-kiosk 30 s LAN proof and the end-to-end
+  move proof (Story 10.20). The `arena-kiosk-svc` runtime tests for following are `#![cfg(unix)]` and were not run on the
+  Windows development machine.
 ## Renewals that need approval, grace and lapse (Story 10.11)
 
 - **States** (AD-20): `active -> renewal_needs_approval -> grace -> lapsed`, every move in `subscription_history`. The

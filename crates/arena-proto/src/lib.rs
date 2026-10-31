@@ -237,9 +237,10 @@ pub use handover::{
     HANDOVER_PURPOSE, HANDOVER_RECEIVED_KEY, HANDOVER_SNAPSHOT_PATH, HANDOVER_SNAPSHOT_TYPE,
     HANDOVER_STATE_KEY, HandedOver, HandoverAck, HandoverClaim, HandoverClaimed,
     HandoverFileRequest, HandoverJoinRequest, HandoverPhase, HandoverPinRequest, HandoverRefused,
-    HandoverSnapshotFacts, HandoverView, MIGRATION_CLAIM_PATH, MIGRATION_IMPORTED_PATH,
-    MIGRATION_REPORT_KEY, MigrationClaimRequest, MigrationClaimResponse, MigrationImportedRequest,
-    MigrationImporting, valid_handover_code,
+    HandoverSnapshotFacts, HandoverView, HubSuccessor, MIGRATION_CLAIM_PATH,
+    MIGRATION_IMPORTED_PATH, MIGRATION_REPORT_KEY, MigrationClaimRequest, MigrationClaimResponse,
+    MigrationImportedRequest, MigrationImporting, SUCCESSOR_TTL_MS, SignedSuccessor,
+    SuccessorOffer, valid_handover_code,
 };
 pub use import::{
     IMPORT_CHUNK_ROWS, IMPORT_CREDIT_REMINDER_DAYS, IMPORT_MAX_BYTES, IMPORT_MAX_FAILURES,

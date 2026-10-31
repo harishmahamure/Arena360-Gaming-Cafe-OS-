@@ -269,6 +269,10 @@ pub struct LanHub {
     /// in (Story 10.17); without it the Hub serves no handover.
     pub handover: Option<(Arc<arena_core::handover::Handover>, std::path::PathBuf)>,
     handover_attempts: handover::Attempts,
+    /// The Hub certificate and key, which sign the `hub.successor` pushed to kiosks (Story 10.19).
+    signer: Option<HubCert>,
+    /// The branch this Hub serves, read once (Story 10.19).
+    branch_id: std::sync::OnceLock<String>,
     /// Opens a player's sealed name for `player.authenticate`; without it that frame is
     /// `UNSUPPORTED` (Story 6.8).
     pub player_kek: Option<Arc<dyn arena_core::players::Kek>>,
@@ -316,6 +320,8 @@ impl LanHub {
             replication: None,
             handover: None,
             handover_attempts: handover::Attempts::default(),
+            signer: None,
+            branch_id: std::sync::OnceLock::new(),
             player_kek: None,
             live_keys: Vec::new(),
             registry: Arc::new(registry::Registry::default()),
@@ -387,6 +393,12 @@ impl LanHub {
         self
     }
 
+    /// Signs the successor a stepping-down Hub gives its kiosks with `cert` (Story 10.19).
+    pub fn with_signer(mut self, cert: HubCert) -> Self {
+        self.signer = Some(cert);
+        self
+    }
+
     /// Serves `GET /media/<sha256>` on `:7401` from `cache` (Story 6.2).
     pub fn with_media(mut self, cache: Arc<arena_core::media_cache::MediaCache>) -> Self {
         self.media = Some(cache);
@@ -426,6 +438,20 @@ impl LanHub {
             source.lan_port,
             source.web_port,
         ))
+    }
+
+    /// The branch this Hub serves, when it is paired with the cloud (Story 10.19). Read once.
+    pub(crate) async fn branch_id(&self) -> Option<String> {
+        if let Some(id) = self.branch_id.get() {
+            return Some(id.clone());
+        }
+        let reader = Arc::clone(&self.info.as_ref()?.reader);
+        let id = tokio::task::spawn_blocking(move || reader.hub_branch_id())
+            .await
+            .ok()?
+            .ok()??;
+        let _ = self.branch_id.set(id.clone());
+        Some(id)
     }
 
     /// How many sessions are connected.

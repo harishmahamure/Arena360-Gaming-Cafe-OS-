@@ -20,7 +20,8 @@ use arena_core::{HubStatus, SnapshotReader};
 use arena_proto::{
     DEFAULT_WEB_PORT, ErrorCode, ExportHeader, HANDOVER_ACK_PATH, HANDOVER_CLAIM_PATH,
     HANDOVER_PURPOSE, HANDOVER_SNAPSHOT_PATH, HandoverAck, HandoverClaim, HandoverClaimed,
-    HandoverJoinRequest, HandoverRefused, HandoverSnapshotFacts, HandoverView, UiError,
+    HandoverJoinRequest, HandoverRefused, HandoverSnapshotFacts, HandoverView, SuccessorOffer,
+    UiError,
 };
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{CryptoProvider, verify_tls12_signature, verify_tls13_signature};
@@ -370,6 +371,18 @@ impl HandoverPuller {
         }
     }
 
+    /// Where the tablet should send the kiosks: this PC's first LAN address on the paired-app
+    /// port and its certificate (Story 10.19). `None` while either is not known yet.
+    fn successor_offer(&self) -> Option<SuccessorOffer> {
+        let status = self.status.borrow();
+        let (lan_port, _) = status.lan_ports?;
+        let address = status.lan_addresses.first()?;
+        Some(SuccessorOffer {
+            address: format!("{address}:{lan_port}"),
+            fingerprint: status.tls_fingerprint.clone()?,
+        })
+    }
+
     async fn run(&self, req: HandoverJoinRequest) -> Result<HandoverView, UiError> {
         let branch_name = self.status.borrow().migration_wait.clone().ok_or_else(|| {
             err(
@@ -396,6 +409,7 @@ impl HandoverPuller {
         let claim = HandoverClaim {
             hub_name: self.hub_name.clone(),
             proof: handover_proof(&code, &fingerprint, PROOF_CLAIM, &self.hub_name),
+            successor: self.successor_offer(),
         };
         let body = serde_json::to_vec(&claim).unwrap_or_default();
         let mut reply = exchange(

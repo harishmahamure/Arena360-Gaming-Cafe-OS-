@@ -54,6 +54,7 @@ fn claim_with(code: &str) -> HandoverClaim {
     HandoverClaim {
         hub_name: PC.into(),
         proof: handover_proof(code, FP, PROOF_CLAIM, PC),
+        successor: None,
     }
 }
 
@@ -155,6 +156,7 @@ async fn a_claim_with_another_certificate_or_name_is_refused_and_counted() {
     let wrong_name = HandoverClaim {
         hub_name: "Other PC".into(),
         proof: handover_proof(&code, FP, PROOF_CLAIM, "Other PC"),
+        successor: None,
     };
     assert!(
         m.handover

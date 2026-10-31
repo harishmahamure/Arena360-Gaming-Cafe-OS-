@@ -480,6 +480,7 @@ async fn run(
         server_tls,
         env!("CARGO_PKG_VERSION"),
     )
+    .with_signer(cert.clone())
     .with_staff(Arc::clone(&staff))
     .with_live_view(verify_keys.clone())
     .with_player_kek(Arc::clone(&player_kek))

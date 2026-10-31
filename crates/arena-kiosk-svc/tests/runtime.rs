@@ -3073,3 +3073,117 @@ async fn with_the_hub_down_the_same_steps_run_and_the_result_replays_once() {
     eventually("the result delivered", || kiosk.rt().ctx().queue_len() == 0).await;
     assert_eq!(hub.logged_of(&["cleanup.done"]), ["cleanup.done"]);
 }
+
+// ---- following the branch to a new Hub (Story 10.19) ----
+
+/// A successor `signer` gives out, good for an hour.
+fn successor_from(
+    signer: &Hub,
+    next: &Hub,
+    branch_id: &str,
+    expires_at: i64,
+) -> arena_proto::SignedSuccessor {
+    let successor = arena_proto::HubSuccessor {
+        address: next.addr(),
+        fingerprint: next.cert.fingerprint.clone(),
+        branch_id: branch_id.into(),
+        expires_at,
+    };
+    let signature = signer.cert.sign(&successor.signing_bytes()).unwrap();
+    arena_proto::SignedSuccessor {
+        successor,
+        cert: arena_kiosk_core::hex_lower(&signer.cert.cert_der().unwrap()),
+        signature: arena_kiosk_core::hex_lower(&signature),
+    }
+}
+
+/// A kiosk with `next`'s device and token, pinned to `old` (which is not listening), holding
+/// `signed` as its successor on branch `BR1`.
+fn kiosk_holding(old: &Hub, next: &Hub, signed: &arena_proto::SignedSuccessor) -> Kiosk {
+    let kiosk = Kiosk::new(next);
+    KioskConfig {
+        hub_addr: old.addr(),
+        hub_fingerprint: old.cert.fingerprint.clone(),
+        device_id: next.device_id.clone(),
+        player_user: "player".into(),
+        app_path: None,
+    }
+    .save(&kiosk.data.config())
+    .unwrap();
+    let q = arena_kiosk_svc::queue::QueueDb::open(&kiosk.data.queue()).unwrap();
+    q.kv_set("hub.branch_id", "BR1", 0).unwrap();
+    q.kv_set("hub.successor", &serde_json::to_string(signed).unwrap(), 0)
+        .unwrap();
+    kiosk
+}
+
+fn successor_gone(kiosk: &Kiosk) -> bool {
+    let ctx = kiosk.rt().ctx();
+    let q = ctx.queue.lock().unwrap();
+    q.kv_get("hub.successor")
+        .unwrap()
+        .is_none_or(|(v, _)| v.is_empty())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_kiosk_whose_hub_is_gone_follows_the_successor_and_replaces_its_pin() {
+    let old = Hub::seeded().await;
+    let mut next = Hub::seeded().await;
+    let signed = successor_from(&old, &next, "BR1", now_ms() + 3_600_000);
+    let mut kiosk = kiosk_holding(&old, &next, &signed);
+    kiosk.start();
+    // The successor is not serving yet: the kiosk keeps trying at the minimum back-off.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        *kiosk.rt().hub_state().borrow(),
+        KioskHubState::Reconnecting
+    );
+    next.up().await;
+    kiosk.wait_state(KioskHubState::Connected).await;
+    eventually("the device online at the new hub", || next.online()).await;
+
+    let cfg = kiosk.rt().ctx().config().unwrap();
+    assert_eq!(cfg.hub_addr, next.addr());
+    assert_eq!(cfg.hub_fingerprint, next.cert.fingerprint);
+    assert_eq!(cfg.device_id, next.device_id, "the same device");
+    assert!(successor_gone(&kiosk), "the successor is spent");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_successor_that_does_not_check_out_is_ignored_and_reported_to_the_hub_reached_next() {
+    let mut old = Hub::seeded().await;
+    let other = Hub::seeded().await;
+    let stranger = Hub::seeded().await;
+    // Signed by a Hub the kiosk does not pin, pointing at another Hub.
+    let bad = successor_from(&stranger, &other, "BR1", now_ms() + 3_600_000);
+    let mut kiosk = kiosk_holding(&old, &old, &bad);
+    kiosk.start();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    old.up().await;
+    kiosk.wait_state(KioskHubState::Connected).await;
+    eventually("the rejection recorded", || {
+        old.logged_of(&["successor_rejected"]).len() == 1
+    })
+    .await;
+    let cfg = kiosk.rt().ctx().config().unwrap();
+    assert_eq!(cfg.hub_addr, old.addr(), "the old pin stays");
+    assert_eq!(cfg.hub_fingerprint, old.cert.fingerprint);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_successor_presenting_another_fingerprint_is_dropped_and_the_old_pin_kept() {
+    let old = Hub::seeded().await;
+    let mut next = Hub::seeded().await;
+    // The signature is good, but the Hub at the address has another certificate.
+    let mut signed = successor_from(&old, &next, "BR1", now_ms() + 3_600_000);
+    signed.successor.fingerprint = HubCert::generate(None).unwrap().fingerprint;
+    signed.signature =
+        arena_kiosk_core::hex_lower(&old.cert.sign(&signed.successor.signing_bytes()).unwrap());
+    let mut kiosk = kiosk_holding(&old, &next, &signed);
+    next.up().await;
+    kiosk.start();
+    eventually("the successor is dropped", || successor_gone(&kiosk)).await;
+    assert!(!next.online());
+    let cfg = kiosk.rt().ctx().config().unwrap();
+    assert_eq!(cfg.hub_addr, old.addr(), "the old pin stays");
+}

@@ -86,6 +86,7 @@ async fn fake_hub() -> FakeHub {
                                 },
                                 primary: true,
                                 epoch: None,
+                                branch_id: None,
                             }),
                         );
                         let ev = Frame::new(

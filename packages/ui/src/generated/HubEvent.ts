@@ -9,6 +9,7 @@ import type { ManagerVerifier } from "./ManagerVerifier";
 import type { PcAction } from "./PcAction";
 import type { SessionScreen } from "./SessionScreen";
 import type { SettingsValues } from "./SettingsValues";
+import type { SignedSuccessor } from "./SignedSuccessor";
 
 /**
  * A state change pushed by the Hub. Clients never poll.
@@ -27,4 +28,5 @@ export type HubEvent =
   | { kind: "test_session"; lock_after_ms: number }
   | ({ kind: "attract" } & AttractView)
   | ({ kind: "kitchen.board" } & KitchenBoard)
-  | ({ kind: "live.floor" } & LiveFloor);
+  | ({ kind: "live.floor" } & LiveFloor)
+  | ({ kind: "hub.successor" } & SignedSuccessor);

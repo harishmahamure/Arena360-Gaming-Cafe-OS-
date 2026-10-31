@@ -302,6 +302,7 @@ dependencies = [
  "arena-proto",
  "futures-util",
  "rcgen",
+ "ring",
  "rustls 0.23.46",
  "serde",
  "serde_json",

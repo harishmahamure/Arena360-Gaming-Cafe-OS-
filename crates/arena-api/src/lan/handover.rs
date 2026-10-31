@@ -13,6 +13,7 @@ use std::time::Duration;
 use arena_core::handover::Handover;
 use arena_proto::{
     AppError, ErrorCode, HANDOVER_SNAPSHOT_TYPE, HandoverAck, HandoverClaim, HandoverRefused,
+    HubSuccessor, SUCCESSOR_TTL_MS, SignedSuccessor, SuccessorOffer,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time::{Instant, timeout};
@@ -132,7 +133,10 @@ pub(crate) async fn claim(hub: &LanHub, peer: SocketAddr, body: &[u8]) -> Answer
         .map(|h| h.1.clone())
         .unwrap_or_default();
     match handover.claim(&request, &fingerprint, &scratch).await {
-        Ok(done) => json("200 OK", &done),
+        Ok(done) => {
+            announce_successor(hub, request.successor.as_ref()).await;
+            json("200 OK", &done)
+        }
         Err(r) => {
             if matches!(
                 r.code,
@@ -181,10 +185,74 @@ pub(crate) async fn ack(hub: &LanHub, token: Option<String>, body: &[u8]) -> Ans
                 last_seq = ack.last_seq,
                 "the branch moved to the Windows Hub"
             );
+            // The branch lives elsewhere now: end every session, so each kiosk goes to the
+            // successor it was given.
+            hub.registry.close_all_with(&AppError::new(
+                ErrorCode::HubHandingOver,
+                "this branch has moved to another hub",
+            ));
             json("200 OK", &serde_json::json!({}))
         }
         Err(r) => refusal(&r),
     }
+}
+
+/// Gives every connected kiosk the Windows Hub's address, signed with this Hub's own key
+/// (Story 10.19). Nothing happens when the Windows Hub sent no address, when it is malformed, or
+/// when this Hub has no key or branch to sign for: the kiosks then pair again.
+async fn announce_successor(hub: &LanHub, offer: Option<&SuccessorOffer>) {
+    let (Some(offer), Some(signer)) = (offer, hub.signer.as_ref()) else {
+        return;
+    };
+    if !valid_address(&offer.address) || !valid_fingerprint(&offer.fingerprint) {
+        tracing::warn!("handover: the successor address or fingerprint is malformed; not sent");
+        return;
+    }
+    let Some(branch_id) = hub.branch_id().await else {
+        tracing::warn!("handover: this hub has no branch id; the successor is not sent");
+        return;
+    };
+    let successor = HubSuccessor {
+        address: offer.address.clone(),
+        fingerprint: offer.fingerprint.to_ascii_lowercase(),
+        branch_id,
+        expires_at: hub.clock.now_ms() + SUCCESSOR_TTL_MS,
+    };
+    let (Ok(cert), Ok(signature)) = (signer.cert_der(), signer.sign(&successor.signing_bytes()))
+    else {
+        tracing::error!("handover: the successor could not be signed");
+        return;
+    };
+    let sent = hub.registry.push_successor(SignedSuccessor {
+        successor,
+        cert: hex(&cert),
+        signature: hex(&signature),
+    });
+    tracing::info!(
+        kiosks = sent,
+        "handover: kiosks told where the branch moves"
+    );
+}
+
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::new(), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    })
+}
+
+fn valid_fingerprint(f: &str) -> bool {
+    f.len() == 64 && f.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// `host:port` with a non-zero port.
+fn valid_address(a: &str) -> bool {
+    a.rsplit_once(':').is_some_and(|(host, port)| {
+        !host.is_empty()
+            && port.parse::<u16>().is_ok_and(|p| p != 0)
+            && (!host.contains(':') || (host.starts_with('[') && host.ends_with(']')))
+    })
 }
 
 /// Answers `GET /v1/handover/snapshot` read from `stream` as `head`.

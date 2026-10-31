@@ -25,4 +25,9 @@ export type HelloOk = {
    * it has seen and refuses a Hub with a lower one. Absent from a Hub with no lease yet.
    */
   epoch?: string;
+  /**
+   * The branch this Hub serves (Story 10.19). A kiosk keeps it to check a `hub.successor`
+   * against; absent from a Hub that is not paired with the cloud.
+   */
+  branch_id?: string;
 };

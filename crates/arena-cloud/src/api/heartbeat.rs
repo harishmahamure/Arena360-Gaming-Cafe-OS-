@@ -190,8 +190,15 @@ async fn heartbeat(
         .entitlement(&branch.id)
         .await
         .map_err(ApiError::internal)?;
-    let claims =
-        crate::licence::claims_for(&branch.tenant_id, &branch.id, entitlement.as_ref(), now);
+    let claims = crate::licence::claims_with_plan(
+        &st.db,
+        &branch.tenant_id,
+        &branch.id,
+        entitlement.as_ref(),
+        now,
+    )
+    .await
+    .map_err(ApiError::internal)?;
     let licence = st.licence.sign(&claims).map_err(ApiError::internal)?;
     // The opening hours of a paid branch, for the offline watch (Story 8.35). A block that does
     // not parse is ignored and never fails the heartbeat.
@@ -651,8 +658,15 @@ async fn standby_licence(
         .entitlement(&branch.id)
         .await
         .map_err(ApiError::internal)?;
-    let claims =
-        crate::licence::claims_for(&branch.tenant_id, &branch.id, entitlement.as_ref(), now);
+    let claims = crate::licence::claims_with_plan(
+        &st.db,
+        &branch.tenant_id,
+        &branch.id,
+        entitlement.as_ref(),
+        now,
+    )
+    .await
+    .map_err(ApiError::internal)?;
     let licence = st.licence.sign(&claims).map_err(ApiError::internal)?;
     Ok(Json(StandbyLicenceResponse {
         licence,

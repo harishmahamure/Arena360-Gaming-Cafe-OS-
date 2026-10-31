@@ -93,6 +93,14 @@ pub struct HubSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub tier: Option<crate::Tier>,
+    /// How the branch is billed, from a verified paid licence (Story 10.6): System shows it beside the tier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub plan_cycle: Option<crate::BillingCycle>,
+    /// When the paid licence ends (UTC ms), shown in branch time on System.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "number", optional)]
+    pub licence_exp: Option<i64>,
 }
 
 fn paired_default() -> bool {
@@ -473,6 +481,8 @@ mod tests {
             clock_wrong: None,
             device_cap: None,
             tier: None,
+            plan_cycle: None,
+            licence_exp: None,
         };
         assert_eq!(
             serde_json::to_value(&s).unwrap(),

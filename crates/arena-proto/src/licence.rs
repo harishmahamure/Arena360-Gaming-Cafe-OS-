@@ -4,6 +4,7 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::price_book::BillingCycle;
 use crate::tier::{Tier, TierLimits};
 
 pub const LICENCE_TTL_S: i64 = 7 * 24 * 60 * 60;
@@ -22,6 +23,11 @@ pub struct LicenceClaims {
     pub rollup_schema: u32,
     pub retention_days: u32,
     pub limits: TierLimits,
+    /// How the branch is billed, on a paid licence from a subscription (Story 10.6); absent on Free
+    /// and comp licences.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cycle: Option<BillingCycle>,
     #[ts(type = "number")]
     pub iat: i64,
     #[ts(type = "number")]
@@ -42,6 +48,7 @@ impl LicenceClaims {
             rollup_schema: d.rollup_schema,
             retention_days: d.retention_days,
             limits: d.limits,
+            cycle: None,
             iat: iat_s,
             exp: iat_s + LICENCE_TTL_S,
         }

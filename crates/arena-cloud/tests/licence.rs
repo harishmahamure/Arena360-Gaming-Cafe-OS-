@@ -117,11 +117,18 @@ fn a_paid_entitlements_add_ons_raise_the_device_limit_and_add_the_tunnel() {
     };
     let plain = paid(Tier::Basic, &[]);
     assert_eq!(plain.limits.devices, 60);
-    assert!(!plain.flags.iter().any(|f| f == "tunnel"));
+    assert!(
+        !plain
+            .flags
+            .iter()
+            .any(|f| f == "tunnel" || f == "live_view")
+    );
     let with = paid(Tier::Basic, &["devices_20:3", "tunnel"]);
     assert_eq!(with.limits.devices, 120);
     assert!(with.flags.iter().any(|f| f == "tunnel"));
+    assert!(with.flags.iter().any(|f| f == "live_view"));
     assert_eq!(with.flags.iter().filter(|f| *f == "tunnel").count(), 1);
+    assert_eq!(with.flags.iter().filter(|f| *f == "live_view").count(), 1);
     // Premium already has the tunnel; unknown, malformed and oversized add-ons change nothing
     // beyond the ten-pack ceiling.
     let premium = paid(
@@ -131,6 +138,10 @@ fn a_paid_entitlements_add_ons_raise_the_device_limit_and_add_the_tunnel() {
     assert_eq!(premium.limits.devices, 200);
     assert_eq!(premium.flags.iter().filter(|f| *f == "tunnel").count(), 1);
     assert_eq!(
+        premium.flags.iter().filter(|f| *f == "live_view").count(),
+        1
+    );
+    assert_eq!(
         paid(Tier::Basic, &["devices_20:99"]).limits.devices,
         60 + 200
     );
@@ -138,6 +149,75 @@ fn a_paid_entitlements_add_ons_raise_the_device_limit_and_add_the_tunnel() {
     let mut free = entitlement(Tier::Free, EntitlementSource::Free, None);
     free.addons = vec!["devices_20:5".to_owned()];
     assert_eq!(claims_for("t1", "b1", Some(&free), NOW).limits.devices, 20);
+}
+
+#[test]
+fn paid_claims_follow_the_tier_table_of_story_10_6() {
+    use arena_proto::UNLIMITED;
+    let paid = |tier: Tier, addons: &[&str]| {
+        let mut e = entitlement(tier, EntitlementSource::Paid, None);
+        e.addons = addons.iter().map(|a| (*a).to_owned()).collect();
+        claims_for("t1", "b1", Some(&e), NOW)
+    };
+    let basic = paid(Tier::Basic, &["devices_20:2"]);
+    assert_eq!(basic.limits.devices, 60 + 40);
+    assert_eq!(
+        (basic.limits.users, basic.limits.branches),
+        (UNLIMITED, UNLIMITED)
+    );
+    assert_eq!(
+        (basic.upload_interval_s, basic.summary_interval_s),
+        (900, 900)
+    );
+    assert_eq!(basic.retention_days, 365);
+    assert_eq!(
+        basic.flags,
+        ["owner_app", "kiosk_orders", "kitchen", "standby"]
+    );
+    let premium = paid(Tier::Premium, &["devices_20:1"]);
+    assert_eq!(premium.limits.devices, 200 + 20);
+    assert_eq!(
+        (premium.upload_interval_s, premium.summary_interval_s),
+        (300, 300)
+    );
+    assert_eq!(premium.retention_days, 1095);
+    assert_eq!(
+        premium.flags,
+        [
+            "owner_app",
+            "kiosk_orders",
+            "kitchen",
+            "standby",
+            "tunnel",
+            "live_view"
+        ]
+    );
+}
+
+#[test]
+fn the_billing_cycle_rides_a_paid_subscription_licence_only() {
+    use arena_cloud::licence::with_cycle;
+    use arena_proto::BillingCycle;
+    let paid = entitlement(Tier::Basic, EntitlementSource::Paid, None);
+    let c = with_cycle(
+        claims_for("t1", "b1", Some(&paid), NOW),
+        Some(&paid),
+        Some(BillingCycle::Yearly),
+    );
+    assert_eq!(c.cycle, Some(BillingCycle::Yearly));
+    let comp = entitlement(Tier::Premium, EntitlementSource::Comp, None);
+    let c = with_cycle(
+        claims_for("t1", "b1", Some(&comp), NOW),
+        Some(&comp),
+        Some(BillingCycle::Monthly),
+    );
+    assert_eq!(c.cycle, None);
+    let c = with_cycle(
+        claims_for("t1", "b1", None, NOW),
+        None,
+        Some(BillingCycle::Monthly),
+    );
+    assert_eq!(c.cycle, None);
 }
 
 #[test]
@@ -315,7 +395,10 @@ async fn grant_comp_writes_the_entitlement_the_audit_and_the_step() {
     assert_eq!(o.status.code(), Some(0), "{}", text(&o));
     let out = String::from_utf8_lossy(&o.stdout);
     assert!(out.contains("granted comp premium to branch b1"), "{out}");
-    assert!(out.contains("devices 200, users 50, branches 1"), "{out}");
+    assert!(
+        out.contains("devices 200, users unlimited, branches unlimited"),
+        "{out}"
+    );
     assert!(out.contains("wizard step tier: done"), "{out}");
 
     let e = db.entitlement("b1").await.unwrap().unwrap();

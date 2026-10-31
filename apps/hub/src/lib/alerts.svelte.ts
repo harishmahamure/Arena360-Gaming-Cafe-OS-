@@ -4,10 +4,11 @@
 // with no sound.
 
 import { t } from "@arena/ui";
-import type { AlertKind, HubSnapshot, SnapshotAlert } from "@arena/ui/generated";
+import type { AlertKind, HubSnapshot, SnapshotAlert, Tier } from "@arena/ui/generated";
 import type { MessageKey } from "@arena/ui/messages";
 import { SvelteMap } from "svelte/reactivity";
 import { newIdempotencyKey, submitIntent } from "./auth";
+import { TIER_LABELS } from "./plan";
 
 /** The bundled sound (a file in `static/sounds`, never fetched from anywhere else). */
 export const SOUND_URL = "/sounds/alert.wav";
@@ -29,6 +30,7 @@ export const KIND_LABELS: Record<AlertKind, MessageKey> = {
   kiosk_order: "hub.alerts.kind.kiosk_order",
   order_ready: "hub.alerts.kind.order_ready",
   backup_disk: "hub.alerts.kind.backup_disk",
+  plan_updated: "hub.alerts.kind.plan_updated",
 };
 
 /** The tags a device alert puts on its tile (the tile badge's `AlertTag` subset). */
@@ -49,6 +51,7 @@ export const KIND_TAGS: Record<AlertKind, TileTag | null> = {
   kiosk_order: "order",
   order_ready: "ready",
   backup_disk: null,
+  plan_updated: null,
 };
 
 /** Branch-level kinds that also sound, and the screen a pick on them opens. */
@@ -59,13 +62,19 @@ const KIND_HREFS: Partial<Record<AlertKind, string>> = {
   order_ready: "/pos",
 };
 
+/** The plan the Hub runs now: the "Plan updated" notice names it (Story 10.6). */
+const plan: { tier: Tier | null } = $state({ tier: null });
+
 /** The values a kind's label shows (the low-stock text names the product and what is left). */
+// The plan-updated text names the plan now in force, read from the snapshot.
 const labelParams = (a: SnapshotAlert): Record<string, string | number> | undefined =>
-  a.kind === "stock_low"
-    ? { product: a.product ?? "", qty: a.qty ?? 0 }
-    : a.kind === "order_ready" && a.ticket_number != null
-      ? { number: a.ticket_number }
-      : undefined;
+  a.kind === "plan_updated"
+    ? { tier: plan.tier ? t(TIER_LABELS[plan.tier]) : "" }
+    : a.kind === "stock_low"
+      ? { product: a.product ?? "", qty: a.qty ?? 0 }
+      : a.kind === "order_ready" && a.ticket_number != null
+        ? { number: a.ticket_number }
+        : undefined;
 
 /** The label of an alert: a walk-up order-ready alert names its ticket. */
 const labelOf = (a: SnapshotAlert): MessageKey =>
@@ -272,6 +281,7 @@ export function syncAlerts(snapshot: HubSnapshot | null) {
     ...(usable?.licence_unverified ? (["licence"] as const) : []),
     ...(usable?.clock_wrong ? (["clock"] as const) : []),
   ];
+  plan.tier = usable?.tier ?? null;
   takeTicketTags(usable);
   settleSound();
   if (usable) announce(usable);

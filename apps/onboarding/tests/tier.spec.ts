@@ -83,6 +83,19 @@ test("paid plans are disabled with their reason inline", async ({ page }) => {
   await expect(proceed(page)).not.toHaveAttribute("aria-disabled", "true");
 });
 
+test("a paid plan with no cap on staff logins says unlimited, never the sentinel number", async ({
+  page,
+}) => {
+  await stubCloud(page, created);
+  await page.goto("/setup/tier");
+  for (const key of ["basic", "premium"] as const) {
+    const card = page.getByTestId(`plan-${key}`);
+    await expect(card).toContainText(t("onboarding.tier.users_unlimited"));
+    await expect(card).not.toContainText("4294967295");
+  }
+  await expect(page.getByTestId("plan-free")).toContainText(t("onboarding.tier.users", { n: 3 }));
+});
+
 test("one Free branch per account: free is disabled and continue says why", async ({ page }) => {
   const cloud = await stubCloud(page, { ...created, wizard: { branch: {}, otherFree: true } });
   await page.goto("/setup/tier");

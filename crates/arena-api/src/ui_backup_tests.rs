@@ -565,7 +565,7 @@ async fn a_paid_hub_reads_its_bookkeeping_for_any_signed_in_member() {
     let (status, body) = call(&hub, "GET", STATUS_URL, Some(&token), None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["cloud"], true);
-    assert_eq!(body["upload_interval_s"], 300);
+    assert_eq!(body["upload_interval_s"], 900);
     assert_eq!(body["last_upload_at"], json!(T0));
     assert_eq!(body["as_of"], json!(T0));
     assert_eq!(body["first_backup_pending"], false);

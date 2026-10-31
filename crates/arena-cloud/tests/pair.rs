@@ -2886,7 +2886,7 @@ async fn a_new_standby_code_replaces_the_unused_one_and_leaves_the_hub_code_alon
 }
 
 #[tokio::test]
-async fn a_standby_code_is_refused_below_premium_and_on_an_android_main_hub() {
+async fn a_standby_code_is_refused_on_free_and_on_an_android_main_hub() {
     let h = Harness::new().await;
     // Free: the Android Hub is paired; the standby is tier-locked.
     let (a, branch) = h.ready().await;
@@ -2895,10 +2895,10 @@ async fn a_standby_code_is_refused_below_premium_and_on_an_android_main_hub() {
     let free = h.standby_code(&a, &branch).await;
     assert_eq!((free.status, free.code()), (403, "TIER_LOCKED"));
 
-    // Basic has no standby flag either.
+    // Basic carries the standby flag (Story 10.6), so the refusal is the platform's.
     h.comp(&branch, Tier::Basic).await;
     let basic = h.standby_code(&a, &branch).await;
-    assert_eq!((basic.status, basic.code()), (403, "TIER_LOCKED"));
+    assert_eq!((basic.status, basic.code()), (409, "PLATFORM_UNSUPPORTED"));
     assert_eq!(h.db.pairing_codes_of(&branch).await.unwrap().len(), 1);
 
     // Premium on an Android Hub: standby needs the Windows Hub.
@@ -3001,7 +3001,19 @@ async fn a_standby_code_is_refused_once_the_plan_loses_the_standby_flag() {
     let h = Harness::new().await;
     let (a, branch, _main) = h.premium_with_main().await;
     let code = code_of(&h.standby_code(&a, &branch).await);
-    h.comp(&branch, Tier::Basic).await;
+    // Basic keeps the standby flag (Story 10.6); a plan that has run out takes it away.
+    h.db.grant_comp(&CompGrant {
+        branch_id: &branch,
+        tier: Tier::Premium,
+        until: T0 - 1,
+        audit_id: &ulid::Ulid::generate().to_string(),
+        operator: "ops",
+        reason: "plan ran out",
+        details_json: "{}",
+        now: T0,
+    })
+    .await
+    .unwrap();
     let r = h.pair_as(&code, "windows", "SECOND", Some("standby")).await;
     assert_eq!((r.status, r.code()), (403, "TIER_LOCKED"), "{}", r.body);
     assert!(h.db.standby_hub(&branch).await.unwrap().is_none());

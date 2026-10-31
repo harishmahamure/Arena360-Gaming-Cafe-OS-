@@ -593,7 +593,7 @@ pub use test_session::{
     DEFAULT_TEST_SESSION, DeviceTestSessionCompleted, DeviceTestSessionStart, KEY_TEST_SESSION,
     TEST_SESSION_CONFIRM_MS, TEST_SESSION_MS, TestSessionOutcome, TestSessionStatus,
 };
-pub use tier::{EntitlementSource, TIERS, Tier, TierDefaults, TierLimits};
+pub use tier::{EntitlementSource, TIERS, Tier, TierDefaults, TierLimits, UNLIMITED};
 pub use tunnel::{
     TUNNEL_DOMAIN, TUNNEL_FLAG, TUNNEL_ORIGIN, TUNNEL_PORT, TunnelAnswer, TunnelLine, TunnelReport,
     TunnelState, parse_tunnel_host, tunnel_hostname,

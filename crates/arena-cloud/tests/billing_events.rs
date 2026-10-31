@@ -1084,6 +1084,7 @@ async fn the_next_heartbeat_carries_the_paid_licence_and_no_command_is_posted() 
     let before = h.heartbeat(&token).await;
     assert_eq!(before.status, 200, "{}", before.body);
     assert_eq!(claims(&before).tier, arena_proto::Tier::Free);
+    assert_eq!(claims(&before).cycle, None);
 
     h.send(
         "evt_1",
@@ -1102,8 +1103,24 @@ async fn the_next_heartbeat_carries_the_paid_licence_and_no_command_is_posted() 
     let c = claims(&after);
     assert_eq!(c.tier, arena_proto::Tier::Basic);
     assert_eq!(c.limits.devices, 60 + 40);
-    assert!(c.flags.iter().any(|f| f == "tunnel"));
-    assert!(c.flags.iter().any(|f| f == "uploads"));
+    // Basic with the Tunnel add-on: the Basic flags plus the tunnel and live view (Story 10.6).
+    for flag in [
+        "owner_app",
+        "kiosk_orders",
+        "kitchen",
+        "standby",
+        "tunnel",
+        "live_view",
+    ] {
+        assert!(c.flags.iter().any(|f| f == flag), "{flag}");
+    }
+    assert_eq!(c.cycle, Some(arena_proto::BillingCycle::Monthly));
+    assert_eq!(
+        (c.limits.users, c.limits.branches),
+        (arena_proto::UNLIMITED, arena_proto::UNLIMITED)
+    );
+    assert_eq!((c.upload_interval_s, c.summary_interval_s), (900, 900));
+    assert_eq!(c.retention_days, 365);
     assert_eq!(
         h.count(&format!(
             "SELECT COUNT(*) FROM commands WHERE branch_id = '{branch}'"

@@ -46,11 +46,15 @@ pub enum AlertKind {
     /// free (raised by the Hub's snapshot task; Story 8.8). A branch-level alert, one open at a
     /// time; it does not sound.
     BackupDisk,
+    /// A paid licence moved the branch to another plan (raised by `licence.apply`; Story 10.6). A
+    /// branch-level notice, one open at a time; it does not sound and clears when staff
+    /// acknowledge it. Its text names the plan the Hub runs now.
+    PlanUpdated,
 }
 
 impl AlertKind {
     /// Every kind.
-    pub const ALL: [AlertKind; 12] = [
+    pub const ALL: [AlertKind; 13] = [
         Self::Fixture,
         Self::TimeUp,
         Self::ControllerMissing,
@@ -63,6 +67,7 @@ impl AlertKind {
         Self::KioskOrder,
         Self::OrderReady,
         Self::BackupDisk,
+        Self::PlanUpdated,
     ];
 
     /// The stored and wire form, e.g. `time_up`.
@@ -80,6 +85,7 @@ impl AlertKind {
             Self::KioskOrder => "kiosk_order",
             Self::OrderReady => "order_ready",
             Self::BackupDisk => "backup_disk",
+            Self::PlanUpdated => "plan_updated",
         }
     }
 
@@ -103,6 +109,7 @@ impl AlertKind {
             Self::KioskOrder => "order",
             Self::OrderReady => "ready",
             Self::BackupDisk => "backup",
+            Self::PlanUpdated => "plan",
         }
     }
 }

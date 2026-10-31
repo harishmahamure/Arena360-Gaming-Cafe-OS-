@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::licence::{self, LicenceError, VerifyKey};
+use crate::price_book::BillingCycle;
 use crate::tier::{Tier, TierLimits};
 
 pub const CLOCK_SKEW_LIMIT_MS: i64 = 5 * 60 * 1000;
@@ -42,6 +43,10 @@ pub struct Entitlement {
     pub tier: Tier,
     pub flags: Vec<String>,
     pub limits: TierLimits,
+    /// How a verified paid licence is billed (Story 10.6).
+    pub cycle: Option<BillingCycle>,
+    /// When a verified paid licence ends (Unix seconds); `None` for Free.
+    pub exp: Option<i64>,
 }
 
 impl Entitlement {
@@ -52,6 +57,8 @@ impl Entitlement {
             tier: Tier::Free,
             flags: d.flags.iter().map(|f| (*f).to_owned()).collect(),
             limits: d.limits,
+            cycle: None,
+            exp: None,
         }
     }
 
@@ -80,6 +87,8 @@ impl Entitlement {
             Ok(()) => Self {
                 standing: LicenceStanding::Verified,
                 tier: claims.tier,
+                cycle: claims.cycle.filter(|_| claims.tier != Tier::Free),
+                exp: (claims.tier != Tier::Free).then_some(claims.exp),
                 flags: claims.flags,
                 limits: claims.limits,
             },
@@ -224,6 +233,22 @@ mod tests {
             (free.standing, free.tier),
             (LicenceStanding::Verified, Tier::Free)
         );
+    }
+
+    #[test]
+    fn a_verified_paid_licence_carries_its_cycle_and_end_and_free_carries_neither() {
+        let mut c = LicenceClaims::for_tier("T", "B", Tier::Basic, T0);
+        c.cycle = Some(BillingCycle::Yearly);
+        let e = eval(Some(&dev_sign(&c).unwrap()), T0 * 1000);
+        assert_eq!(e.cycle, Some(BillingCycle::Yearly));
+        assert_eq!(e.exp, Some(T0 + licence::LICENCE_TTL_S));
+        let mut free = LicenceClaims::for_tier("T", "B", Tier::Free, T0);
+        free.cycle = Some(BillingCycle::Monthly);
+        let e = eval(Some(&dev_sign(&free).unwrap()), T0 * 1000);
+        assert_eq!((e.cycle, e.exp), (None, None));
+        let after = (T0 + licence::LICENCE_TTL_S + 1) * 1000;
+        let lapsed = eval(Some(&dev_sign(&c).unwrap()), after);
+        assert_eq!((lapsed.cycle, lapsed.exp), (None, None));
     }
 
     #[test]

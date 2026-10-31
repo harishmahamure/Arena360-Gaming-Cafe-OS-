@@ -16,4 +16,5 @@ export type AlertKind =
   | "call_staff"
   | "kiosk_order"
   | "order_ready"
-  | "backup_disk";
+  | "backup_disk"
+  | "plan_updated";

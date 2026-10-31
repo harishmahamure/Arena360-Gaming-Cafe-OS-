@@ -263,6 +263,8 @@ async fn ui_snapshot(State(state): State<SnapshotState>) -> axum::response::Resp
                     .then_some(true);
                     snapshot.clock_wrong = status.clock_wrong.then_some(true);
                     snapshot.tier = status.tier;
+                    snapshot.plan_cycle = status.cycle;
+                    snapshot.licence_exp = status.licence_exp;
                 }
             }
             Json(snapshot).into_response()

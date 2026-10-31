@@ -181,8 +181,8 @@ export const PAIR_TTL_MS = 15 * 60 * 1000;
 
 export const TIER_LIMITS: Record<Tier, { devices: number; users: number; branches: number }> = {
   free: { devices: 20, users: 3, branches: 1 },
-  basic: { devices: 60, users: 10, branches: 1 },
-  premium: { devices: 200, users: 50, branches: 1 },
+  basic: { devices: 60, users: 4294967295, branches: 4294967295 },
+  premium: { devices: 200, users: 4294967295, branches: 4294967295 },
 };
 
 export const err = (code: AppError["code"], extra: Partial<AppError> = {}): AppError => ({

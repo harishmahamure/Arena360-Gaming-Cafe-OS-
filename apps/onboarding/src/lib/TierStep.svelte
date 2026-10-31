@@ -25,6 +25,9 @@
   import { money, snapshotPrice, type Cycle } from "./tierPrice";
   import { STEP_NAMES, advance, setWizard, stepPath, wizard } from "./wizard.svelte";
 
+  /** A limit a paid tier does not cap (`arena_proto::UNLIMITED`, `u32::MAX`). */
+  const UNLIMITED = 4_294_967_295;
+
   type Plan = (typeof PRICING)[number];
   type Phase = "pick" | "summary" | "confirming";
   type Period = Cycle;
@@ -457,7 +460,11 @@
               {/each}
               {#if option}
                 <li>{t("onboarding.tier.devices", { n: option.limits.devices })}</li>
-                <li>{t("onboarding.tier.users", { n: option.limits.users })}</li>
+                <li>
+                  {option.limits.users >= UNLIMITED
+                    ? t("onboarding.tier.users_unlimited")
+                    : t("onboarding.tier.users", { n: option.limits.users })}
+                </li>
               {/if}
             </ul>
             {#if choices.current === plan.key}

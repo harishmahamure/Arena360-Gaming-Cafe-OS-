@@ -2114,7 +2114,7 @@ mod tests {
         assert_eq!(
             next,
             Next {
-                wait: Duration::from_secs(300),
+                wait: Duration::from_secs(900),
                 active: true,
                 early: true
             }
@@ -2637,7 +2637,7 @@ mod tests {
         let f = fx(port, Tier::Basic).await;
         assert_eq!(
             f.task.interval(&f.writer, Tier::Basic).await,
-            Duration::from_secs(300)
+            Duration::from_secs(900)
         );
         let mut claims = LicenceClaims::for_tier("T", "B", Tier::Basic, T0 / 1000);
         claims.upload_interval_s = 45;
@@ -3337,7 +3337,7 @@ mod tests {
             ["2027-01-11", "2027-01-12", "2027-01-13", "2027-01-14"]
         );
         assert_eq!(logged_schemas(&f), vec![2; 14]);
-        assert_eq!(next.wait, Duration::from_secs(300));
+        assert_eq!(next.wait, Duration::from_secs(900));
         f.task.cycle().await;
         assert_eq!(rollup_asks(&seen).len(), before + 14);
     }

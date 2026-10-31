@@ -1495,10 +1495,10 @@ billing_enabled, current?}`. Free is available unless another branch of the tena
     paid plan is 409 `ALREADY_SET`. With no branch yet (before step 1), or a `branch_id` the
     session's tenant doesn't own, it is 403 `FORBIDDEN` and nothing is written.
   - **Tier table** `arena_proto::TIERS` (shared by the cloud and the Hub): Free has no flags,
-    no uploads (intervals 0), retention 0 and limits 20 devices, 3 users, 1 branch; Basic adds
-    `uploads` and `owner_reports`, 300 s uploads, 900 s summaries, 365 days and 60/10/1;
-    Premium adds `kiosk_orders`, `kitchen_display` and `standby`, 1095 days and 200/50/1. The
-    paid values other than the device limits are provisional until Epic 10.
+    no uploads (intervals 0), retention 0 and limits 20 devices, 3 users, 1 branch. Basic (Story 10.6)
+    has `owner_app`, `kiosk_orders`, `kitchen` and `standby`, 900 s uploads and summaries, 365 days and
+    60 devices with users and branches `UNLIMITED` (`u32::MAX`); Premium adds `tunnel` and `live_view`,
+    300 s intervals, 1095 days and 200 devices.
   - **Licence.** `arena-cloud`'s `licence` module signs an EdDSA JWT (kid header) with claims
     `{tenant_id, branch_id, tier, flags, features, upload_interval_s, summary_interval_s,
 rollup_schema, retention_days, limits, iat, exp}` from the tier table and the entitlement
@@ -2109,3 +2109,22 @@ built by `upgradeUrl` in `@arena/ui`; each app says where the picker lives with 
   step 2, the same picker and Checkout; Free is refused there while the tenant has a Free branch.
 - **`ARENA_BILLING_ENABLED=true`** is now accepted by `arena-cloud` (it needs the billing provider; without one the
   subscription endpoints answer 503).
+
+## A paid licence reaches the Hub (Story 10.6)
+
+- **Claims follow the tier table.** The licence of a branch whose entitlement source is paid carries the
+  tier's flags, intervals, retention and limits from `arena_proto::TIERS`; `devices_20:<n>` adds 20 devices a
+  pack (at most 10) and the Tunnel add-on adds `tunnel` and `live_view` to Basic. A paid-subscription licence
+  also carries `cycle` (`monthly` or `yearly`, from the branch's subscription; absent on Free and comp),
+  added by `arena_cloud::licence::claims_with_plan` for the heartbeat, pairing and the standby licence.
+- **The Hub swaps it without a restart.** The heartbeat (60 s when live, so well inside 70 s) verifies the
+  licence against trusted time and submits `licence.apply` (system actor `hub-licence`); every gate reads
+  `licence.flags`, `licence.device_cap` and `licence.user_cap` for the next intent. The tier row's change
+  record is the audit row (old and new image). Offline, paid claims hold until `exp` on `trusted_now`.
+- **What staff see.** The snapshot carries `plan_cycle` and `licence_exp` (from the verified licence, never
+  from a setting, so the heartbeat writes nothing). System shows "Plan: Basic · Monthly" and "Licence valid
+  until <date>" in branch time. A move onto a different verified paid plan raises one silent branch-level
+  `plan_updated` alert ("Plan updated to <tier>") in the same transaction; a first licence, a Free or
+  unverified one and a repeat raise none, and an open notice is not doubled.
+- **Windows pairing** is refused only for Free (`FEATURE_NOT_ENTITLED`); Basic and Premium pair. The standby
+  flag is on both paid tiers, so a standby code is `TIER_LOCKED` only on Free.

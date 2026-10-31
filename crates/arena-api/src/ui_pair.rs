@@ -58,6 +58,8 @@ pub fn unpaired_snapshot(full: HubSnapshot) -> HubSnapshot {
         clock_wrong: None,
         device_cap: None,
         tier: None,
+        plan_cycle: None,
+        licence_exp: None,
     }
 }
 
@@ -276,6 +278,8 @@ mod tests {
             clock_wrong: None,
             device_cap: None,
             tier: None,
+            plan_cycle: None,
+            licence_exp: None,
         };
         let min = unpaired_snapshot(full);
         assert!(!min.paired);

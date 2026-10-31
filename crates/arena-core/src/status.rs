@@ -99,6 +99,10 @@ pub struct HubStatus {
     pub lan_network: Option<String>,
     pub lan_ports: Option<(u16, u16)>,
     pub tier: Option<arena_proto::Tier>,
+    /// How a verified paid licence is billed (Story 10.6).
+    pub cycle: Option<arena_proto::BillingCycle>,
+    /// When a verified paid licence ends (UTC ms).
+    pub licence_exp: Option<i64>,
     pub pairing: PairingState,
     /// The branch name while this Hub replaces another and waits to be restored (Story 9.9): it
     /// writes nothing and serves no device until a restore completes.
@@ -171,6 +175,8 @@ impl HubStatus {
             lan_network: None,
             lan_ports: None,
             tier: None,
+            cycle: None,
+            licence_exp: None,
             pairing: PairingState::Active,
             restore_pending: None,
             restore_key_released: false,

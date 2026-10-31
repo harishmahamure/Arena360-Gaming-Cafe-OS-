@@ -203,7 +203,7 @@ pub(super) fn mutate(
             _ => Err(mismatch()),
         },
         IntentPayload::LicenceApply(p) => match target {
-            Target::Branch(b) => super::licence::mutate(tx, p, b.as_ref()),
+            Target::Branch(b) => super::licence::mutate(tx, p, b.as_ref(), now_ms),
             _ => Err(mismatch()),
         },
         IntentPayload::AdImpressionRecorded(_) | IntentPayload::AdRequestRecorded(_) => {

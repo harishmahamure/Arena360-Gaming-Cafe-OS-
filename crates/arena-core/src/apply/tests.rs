@@ -8075,7 +8075,8 @@ mod licence {
     }
 
     /// Story 4.15: a gate change is one system change record of `licence.tier`, with the time and
-    /// the previous row image (the audit viewer shows old and new from the two images).
+    /// the previous row image (the audit viewer shows old and new from the two images). A move onto
+    /// a paid plan also raises the one-time "Plan updated" notice (Story 10.6), a second change row.
     #[tokio::test]
     async fn a_tier_change_is_one_system_change_row_and_a_repeat_writes_nothing() {
         let f = bootstrapped().await;
@@ -8089,7 +8090,7 @@ mod licence {
         let upgraded = send(&f, ActorKind::System, at(arena_proto::Tier::Basic))
             .await
             .unwrap();
-        assert_eq!(upgraded.changes.len(), 1);
+        assert_eq!(upgraded.changes.len(), 2);
         assert_eq!(text(&f, "licence.tier").as_deref(), Some("basic"));
         assert!(
             f.writer
@@ -8124,6 +8125,98 @@ mod licence {
             ]
         );
         assert!(rows.iter().all(|c| c.at > 0));
+    }
+
+    /// Story 10.6: a Hub that moves onto a different verified paid plan raises one "Plan updated"
+    /// notice, in the same transaction as the tier row; a first licence, a Free or unverified one
+    /// and a repeat raise none, and an unacknowledged notice is not doubled.
+    #[tokio::test]
+    async fn moving_onto_a_paid_plan_raises_one_plan_updated_notice() {
+        use arena_proto::Tier;
+        let f = bootstrapped().await;
+        let at = |tier, standing| LicenceApply {
+            tier,
+            standing,
+            ..body("kitchen", 60)
+        };
+        let plan_notices = |f: &Fixture| {
+            reopen(f)
+                .alerts()
+                .unwrap()
+                .into_iter()
+                .filter(|a| a.kind == "plan_updated")
+                .collect::<Vec<_>>()
+        };
+        // The first licence a Hub applies (pairing) is not a change.
+        send(
+            &f,
+            ActorKind::System,
+            at(Tier::Basic, LicenceStanding::Verified),
+        )
+        .await
+        .unwrap();
+        assert!(plan_notices(&f).is_empty());
+        // Basic to Premium: the tier row and the notice, one transaction, system actor.
+        let up = send(
+            &f,
+            ActorKind::System,
+            at(Tier::Premium, LicenceStanding::Verified),
+        )
+        .await
+        .unwrap();
+        assert_eq!(up.changes.len(), 2);
+        let notices = plan_notices(&f);
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].device_id.is_none());
+        let tier_rows: Vec<_> = reopen(&f)
+            .changes()
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.row_id.ends_with("/licence.tier"))
+            .map(|c| (c.actor_kind, c.actor_id, c.op))
+            .collect();
+        assert_eq!(
+            tier_rows.last().unwrap(),
+            &(
+                "system".to_owned(),
+                "hub-licence".to_owned(),
+                arena_store::ChangeOp::Update
+            )
+        );
+        assert_eq!(text(&f, "licence.tier").as_deref(), Some("premium"));
+        // A repeat writes nothing; a further move does not double an open notice.
+        assert!(
+            f.writer
+                .apply_licence(at(Tier::Premium, LicenceStanding::Verified))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        send(
+            &f,
+            ActorKind::System,
+            at(Tier::Basic, LicenceStanding::Verified),
+        )
+        .await
+        .unwrap();
+        assert_eq!(plan_notices(&f).len(), 1);
+        // Dropping to Free (a lapse, a failed check) is no "Plan updated"; neither is coming back
+        // from an unverified licence.
+        send(
+            &f,
+            ActorKind::System,
+            at(Tier::Free, LicenceStanding::Unverified),
+        )
+        .await
+        .unwrap();
+        send(
+            &f,
+            ActorKind::System,
+            at(Tier::Premium, LicenceStanding::Verified),
+        )
+        .await
+        .unwrap();
+        assert_eq!(plan_notices(&f).len(), 1);
     }
 
     #[tokio::test]
@@ -8249,6 +8342,8 @@ mod licence {
                 .map(|f| (*f).to_owned())
                 .collect(),
             limits: arena_proto::Tier::Premium.defaults().limits,
+            cycle: None,
+            exp: None,
         };
         send(&f, ActorKind::System, premium.apply_payload(false))
             .await
@@ -8312,6 +8407,8 @@ mod licence {
             tier: arena_proto::Tier::Basic,
             flags: Vec::new(),
             limits: arena_proto::Tier::Basic.defaults().limits,
+            cycle: None,
+            exp: None,
         };
         send(&f, ActorKind::System, basic.apply_payload(false))
             .await

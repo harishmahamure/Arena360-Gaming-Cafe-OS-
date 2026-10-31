@@ -125,7 +125,7 @@ async fn post_standby_code(
     if !tier.defaults().flags.contains(&"standby") {
         return Err(AppError::new(
             ErrorCode::TierLocked,
-            "A standby PC is available on Premium.",
+            "A standby PC is available on Basic and Premium.",
         )
         .into());
     }

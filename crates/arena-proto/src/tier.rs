@@ -61,6 +61,9 @@ impl EntitlementSource {
     }
 }
 
+/// A limit a paid tier does not cap (users, branches). It rides the licence as a plain number.
+pub const UNLIMITED: u32 = u32::MAX;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct TierLimits {
@@ -98,28 +101,27 @@ pub const TIERS: &[TierDefaults] = &[
     },
     TierDefaults {
         tier: Tier::Basic,
-        flags: &["uploads", "owner_reports", "kitchen"],
+        flags: &["owner_app", "kiosk_orders", "kitchen", "standby"],
         features: &[],
-        upload_interval_s: 300,
+        upload_interval_s: 900,
         summary_interval_s: 900,
         rollup_schema: 1,
         retention_days: 365,
         limits: TierLimits {
             devices: 60,
-            users: 10,
-            branches: 1,
+            users: UNLIMITED,
+            branches: UNLIMITED,
         },
     },
     TierDefaults {
         tier: Tier::Premium,
         flags: &[
-            "uploads",
-            "owner_reports",
+            "owner_app",
             "kiosk_orders",
             "kitchen",
-            "kitchen_display",
             "standby",
             "tunnel",
+            "live_view",
         ],
         features: &[],
         upload_interval_s: 300,
@@ -128,8 +130,8 @@ pub const TIERS: &[TierDefaults] = &[
         retention_days: 1095,
         limits: TierLimits {
             devices: 200,
-            users: 50,
-            branches: 1,
+            users: UNLIMITED,
+            branches: UNLIMITED,
         },
     },
 ];
@@ -164,7 +166,10 @@ mod tests {
             }
         );
         let basic = Tier::Basic.defaults();
-        assert_eq!(basic.flags, ["uploads", "owner_reports", "kitchen"]);
+        assert_eq!(
+            basic.flags,
+            ["owner_app", "kiosk_orders", "kitchen", "standby"]
+        );
         assert!(basic.features.is_empty());
         assert_eq!(
             (
@@ -173,27 +178,26 @@ mod tests {
                 basic.rollup_schema,
                 basic.retention_days
             ),
-            (300, 900, 1, 365)
+            (900, 900, 1, 365)
         );
         assert_eq!(
             basic.limits,
             TierLimits {
                 devices: 60,
-                users: 10,
-                branches: 1
+                users: UNLIMITED,
+                branches: UNLIMITED
             }
         );
         let premium = Tier::Premium.defaults();
         assert_eq!(
             premium.flags,
             [
-                "uploads",
-                "owner_reports",
+                "owner_app",
                 "kiosk_orders",
                 "kitchen",
-                "kitchen_display",
                 "standby",
-                "tunnel"
+                "tunnel",
+                "live_view"
             ]
         );
         assert!(premium.features.is_empty());
@@ -210,8 +214,8 @@ mod tests {
             premium.limits,
             TierLimits {
                 devices: 200,
-                users: 50,
-                branches: 1
+                users: UNLIMITED,
+                branches: UNLIMITED
             }
         );
     }

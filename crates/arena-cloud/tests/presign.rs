@@ -647,7 +647,7 @@ async fn a_branch_over_its_hourly_limit_is_refused_with_retry_after_and_counted(
     let a = h.paid_cafe(Some("1:HUBA")).await;
     let interval = LicenceClaims::for_tier("t", "b", Tier::Basic, 0).upload_interval_s;
     let limit = 4 * 3600 / u64::from(interval).max(30);
-    assert_eq!(limit, 48);
+    assert_eq!(limit, 16);
     let body = json!({"epoch": "1:HUBA", "summary": true});
     for i in 0..limit {
         let r = h.presign(&a.token, body.clone()).await;

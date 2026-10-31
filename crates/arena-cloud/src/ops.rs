@@ -202,6 +202,15 @@ pub async fn grant_comp(
     })
 }
 
+/// A limit as the operator reads it: a number, or `unlimited` for a tier that does not cap it.
+fn limit_text(limit: u32) -> String {
+    if limit == arena_proto::UNLIMITED {
+        "unlimited".to_owned()
+    } else {
+        limit.to_string()
+    }
+}
+
 impl GrantSummary {
     pub fn lines(&self) -> Vec<String> {
         vec![
@@ -215,7 +224,9 @@ impl GrantSummary {
             ),
             format!(
                 "licence limits: devices {}, users {}, branches {}",
-                self.limits.devices, self.limits.users, self.limits.branches
+                limit_text(self.limits.devices),
+                limit_text(self.limits.users),
+                limit_text(self.limits.branches)
             ),
             format!(
                 "ops_audit {} by {}; wizard step tier: done",

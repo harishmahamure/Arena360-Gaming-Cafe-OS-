@@ -190,6 +190,8 @@ impl HeartbeatTask {
         let clock_wrong = cloud.is_some() && arena_proto::clock_wrong(wall, trusted);
         self.status.send_modify(|s| {
             s.tier = Some(e.tier);
+            s.cycle = e.cycle;
+            s.licence_exp = e.exp.map(|exp| exp.saturating_mul(1000));
             s.licence = Some(e.standing);
             s.clock_wrong = clock_wrong;
         });
@@ -501,6 +503,17 @@ mod tests {
         let body = serde_json::json!({
             "licence": dev_sign(&claims).unwrap(),
             "fence": {"epoch": format!("1:{OWN}"), "confirmed": confirmed},
+            "cloud_time": cloud_ms,
+        });
+        (200, body.to_string())
+    }
+
+    fn answer_paid(tier: Tier, cycle: arena_proto::BillingCycle, cloud_ms: i64) -> (u16, String) {
+        let mut claims = LicenceClaims::for_tier("T", "B", tier, T0 / 1000);
+        claims.cycle = Some(cycle);
+        let body = serde_json::json!({
+            "licence": dev_sign(&claims).unwrap(),
+            "fence": {"epoch": format!("1:{OWN}"), "confirmed": true},
             "cloud_time": cloud_ms,
         });
         (200, body.to_string())
@@ -972,7 +985,10 @@ mod tests {
             setting(&f.path, "licence.device_cap").as_deref(),
             Some("60")
         );
-        assert_eq!(setting(&f.path, "licence.user_cap").as_deref(), Some("10"));
+        assert_eq!(
+            setting(&f.path, "licence.user_cap").as_deref(),
+            Some(arena_proto::UNLIMITED.to_string().as_str())
+        );
         assert_eq!(
             setting(&f.path, "licence.status").as_deref(),
             Some("verified")
@@ -1106,6 +1122,75 @@ mod tests {
             .into_iter()
             .filter(|c| c.row_id == "B/licence.tier")
             .map(|c| (c.intent_kind, c.actor_kind, c.at))
+            .collect()
+    }
+
+    /// Story 10.6: the heartbeat that returns the paid licence swaps it in without a restart; the
+    /// Hub then reports its plan (tier, cycle, end), raises one "Plan updated" notice and the next
+    /// gate reads the new limits. The live heartbeat interval keeps that inside 70 s.
+    #[tokio::test]
+    async fn a_paid_licence_swaps_in_at_the_next_heartbeat_and_the_hub_shows_the_plan() {
+        use arena_proto::BillingCycle;
+        const { assert!(HEARTBEAT_LIVE_INTERVAL_S + 10 <= 70) };
+        let port = serve(
+            vec![
+                answer(true, Tier::Free),
+                answer_paid(Tier::Basic, BillingCycle::Monthly, T0 + 8),
+                answer_paid(Tier::Premium, BillingCycle::Yearly, T0 + 9),
+            ],
+            false,
+        )
+        .await;
+        let mut f = fx(port).await;
+        f.task.beat().await;
+        assert_eq!(f.status.borrow().tier, Some(Tier::Free));
+        assert_eq!(
+            setting(&f.path, "licence.device_cap").as_deref(),
+            Some("20")
+        );
+        assert_eq!(f.status.borrow().cycle, None);
+        assert!(notices(&f.path).is_empty());
+        f.task.beat().await;
+        {
+            let s = f.status.borrow();
+            assert_eq!(s.tier, Some(Tier::Basic));
+            assert_eq!(s.cycle, Some(BillingCycle::Monthly));
+            assert_eq!(
+                s.licence_exp,
+                Some((T0 / 1000 + arena_proto::licence::LICENCE_TTL_S) * 1000)
+            );
+        }
+        assert_eq!(
+            setting(&f.path, "licence.device_cap").as_deref(),
+            Some("60")
+        );
+        assert!(
+            setting(&f.path, "licence.flags")
+                .unwrap()
+                .contains("owner_app")
+        );
+        assert_eq!(notices(&f.path).len(), 1);
+        let rows = tier_rows(&f.path);
+        assert!(rows.iter().all(|(_, actor, _)| actor == "system"));
+        // Basic to Premium and monthly to yearly: the plan follows; the open notice is not doubled.
+        f.task.beat().await;
+        assert_eq!(f.status.borrow().tier, Some(Tier::Premium));
+        assert_eq!(f.status.borrow().cycle, Some(BillingCycle::Yearly));
+        assert_eq!(
+            setting(&f.path, "licence.device_cap").as_deref(),
+            Some("200")
+        );
+        assert_eq!(notices(&f.path).len(), 1);
+    }
+
+    fn notices(path: &std::path::Path) -> Vec<String> {
+        Store::open(path, T0)
+            .unwrap()
+            .alerts()
+            .unwrap()
+            .into_iter()
+            .filter(|a| a.kind == "plan_updated")
+            .map(|a| a.id)
             .collect()
     }
 

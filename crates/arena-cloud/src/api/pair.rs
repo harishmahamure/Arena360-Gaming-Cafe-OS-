@@ -198,7 +198,7 @@ async fn classify(
         if !tier.defaults().flags.contains(&"standby") {
             return Err(AppError::new(
                 ErrorCode::TierLocked,
-                "A standby Hub is available on Premium.",
+                "A standby Hub is available on Basic and Premium.",
             )
             .into());
         }
@@ -308,12 +308,15 @@ async fn pair(
     let secret = URL_SAFE_NO_PAD.encode(random_bytes::<32>().map_err(ApiError::internal)?);
     let token = format!("{HUB_TOKEN_PREFIX}{hub_id}.{secret}");
     let token_hash = blocking(move || hash_secret(&secret)).await?;
-    let claims = crate::licence::claims_for(
+    let claims = crate::licence::claims_with_plan(
+        &st.db,
         &c.branch.tenant_id,
         &c.branch.id,
         c.entitlement.as_ref(),
         now,
-    );
+    )
+    .await
+    .map_err(ApiError::internal)?;
     let licence = st.licence.sign(&claims).map_err(ApiError::internal)?;
 
     let standby = body.role == HubRole::Standby;

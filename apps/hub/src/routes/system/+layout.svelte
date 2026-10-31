@@ -1,9 +1,12 @@
 <script lang="ts">
-  import { t } from "@arena/ui";
+  import { formatDateTime, t } from "@arena/ui";
   import type { MessageKey } from "@arena/ui/messages";
   import type { Snippet } from "svelte";
   import { page } from "$app/state";
   import { onMount } from "svelte";
+  import { branchLocale } from "../../lib/locale.svelte";
+  import { snapshotOf } from "../../lib/operating";
+  import { CYCLE_LABELS, TIER_LABELS, planOf } from "../../lib/plan";
   import { refreshAccess, service } from "../../lib/service.svelte";
 
   let { children }: { children: Snippet } = $props();
@@ -18,6 +21,20 @@
       : []),
   ]);
   const section = $derived(sections.find((s) => page.url.pathname.startsWith(s.href)));
+  // The plan the licence gives (Story 10.6), with its end in branch time.
+  const plan = $derived(planOf(snapshotOf(page.data)));
+  const planText = $derived.by(() => {
+    if (!plan) return null;
+    const tier = t(TIER_LABELS[plan.tier]);
+    return plan.cycle
+      ? t("hub.system.plan_cycle", { tier, cycle: t(CYCLE_LABELS[plan.cycle]) })
+      : t("hub.system.plan", { tier });
+  });
+  const expiresText = $derived(
+    plan?.exp
+      ? t("hub.system.plan_expires", { when: formatDateTime(plan.exp, branchLocale.current?.tz) })
+      : null,
+  );
 
   onMount(refreshAccess);
 </script>
@@ -34,6 +51,14 @@
 
 <div class="system">
   <h1 class="type-hub-numeric">{t("hub.nav.system")}</h1>
+  {#if planText}
+    <p class="plan type-hub-body" data-testid="system-plan">
+      <span data-testid="system-plan-name">{planText}</span>
+      {#if expiresText}
+        <span class="muted" data-testid="system-plan-expires">{expiresText}</span>
+      {/if}
+    </p>
+  {/if}
   <nav class="sections" aria-label={t("hub.system.sections")}>
     <ul>
       {#each sections as s (s.href)}
@@ -61,6 +86,17 @@
 
   h1 {
     margin: 0;
+  }
+
+  .plan {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4);
+    margin: 0;
+  }
+
+  .plan .muted {
+    color: var(--text-muted);
   }
 
   .sections ul {

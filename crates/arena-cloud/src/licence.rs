@@ -1,5 +1,5 @@
 use arena_proto::licence::{encode_public_key, verify};
-use arena_proto::{LicenceClaims, Tier, VerifyKey};
+use arena_proto::{BillingCycle, EntitlementSource, LicenceClaims, Tier, VerifyKey};
 use arena_store::control::{Branch, Entitlement};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -143,8 +143,8 @@ impl LicenceSigner {
     }
 }
 
-/// Adds what a paid entitlement's add-ons give (Story 10.3): `devices_20:<n>` raises the device
-/// limit by 20 a pack and `tunnel` adds the tunnel flag. Names it does not know change nothing.
+/// Adds what a paid entitlement's add-ons give (Stories 10.3, 10.6): `devices_20:<n>` raises the
+/// device limit by 20 a pack and `tunnel` adds the tunnel and live view flags. Names it does not know change nothing.
 fn apply_addons(claims: &mut LicenceClaims, addons: &[String]) {
     for addon in addons {
         match addon.split_once(':') {
@@ -152,8 +152,12 @@ fn apply_addons(claims: &mut LicenceClaims, addons: &[String]) {
                 let packs = n.parse::<u32>().unwrap_or(0).min(10);
                 claims.limits.devices = claims.limits.devices.saturating_add(20 * packs);
             }
-            None if addon == "tunnel" && !claims.flags.iter().any(|f| f == "tunnel") => {
-                claims.flags.push("tunnel".to_owned());
+            None if addon == "tunnel" => {
+                for flag in ["tunnel", "live_view"] {
+                    if !claims.flags.iter().any(|f| f == flag) {
+                        claims.flags.push(flag.to_owned());
+                    }
+                }
             }
             _ => {}
         }
@@ -179,6 +183,35 @@ pub fn claims_for(
         claims.exp = claims.exp.min(until.div_euclid(1000)).max(claims.iat + 1);
     }
     claims
+}
+
+/// Records how a paid licence is billed (Story 10.6). Free, comp and unknown cycles stay absent.
+pub fn with_cycle(
+    mut claims: LicenceClaims,
+    entitlement: Option<&Entitlement>,
+    cycle: Option<BillingCycle>,
+) -> LicenceClaims {
+    let paid = claims.tier != Tier::Free
+        && entitlement.is_some_and(|e| e.source == EntitlementSource::Paid);
+    claims.cycle = cycle.filter(|_| paid);
+    claims
+}
+
+/// [`claims_for`] plus the billing cycle of the branch's subscription (Story 10.6), for the licences
+/// a Hub shows a plan from: the heartbeat, pairing and the standby's licence.
+pub async fn claims_with_plan(
+    db: &arena_store::control::ControlDb,
+    tenant_id: &str,
+    branch_id: &str,
+    entitlement: Option<&Entitlement>,
+    now_ms: i64,
+) -> Result<LicenceClaims, arena_store::control::ControlError> {
+    let claims = claims_for(tenant_id, branch_id, entitlement, now_ms);
+    if claims.tier == Tier::Free {
+        return Ok(claims);
+    }
+    let cycle = db.subscription_of_branch(branch_id).await?.map(|s| s.cycle);
+    Ok(with_cycle(claims, entitlement, cycle))
 }
 
 pub fn sign_branch(

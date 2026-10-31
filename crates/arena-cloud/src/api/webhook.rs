@@ -89,10 +89,11 @@ async fn razorpay(
                     branch_id,
                     review,
                     replaced_razorpay_id,
+                    retire_at_cycle_end,
                     ..
                 } => {
                     if let Some(old) = replaced_razorpay_id {
-                        retire(&st, subscription_id, old);
+                        retire(&st, subscription_id, old, *retire_at_cycle_end);
                     }
                     // Wakes the owner's wizard stream: the activation marked the plan step done.
                     let _ = st.wizard_tx.send(branch_id.clone());
@@ -117,9 +118,10 @@ pub(super) fn router(st: Arc<AuthState>) -> Router {
         .with_state(st)
 }
 
-/// Cancels the Razorpay subscription a completed plan change replaced, so it never bills beside the
-/// new one (Story 10.9). A failure leaves the operator task the event left open.
-fn retire(st: &Arc<AuthState>, subscription_id: &str, razorpay_id: &str) {
+/// Cancels the Razorpay subscription a completed change replaced, so it never bills beside the new
+/// one (Stories 10.9, 10.10): at once, or, for a switch to monthly the owner has authorised, with
+/// the cycle it has paid for. A failure leaves the operator task the event left open.
+fn retire(st: &Arc<AuthState>, subscription_id: &str, razorpay_id: &str, at_cycle_end: bool) {
     let (st, subscription_id, razorpay_id) = (
         st.clone(),
         subscription_id.to_owned(),
@@ -129,7 +131,12 @@ fn retire(st: &Arc<AuthState>, subscription_id: &str, razorpay_id: &str) {
         let Some(provider) = st.billing.get() else {
             return;
         };
-        match provider.cancel_subscription(&razorpay_id).await {
+        let ended = if at_cycle_end {
+            provider.cancel_at_cycle_end(&razorpay_id).await
+        } else {
+            provider.cancel_subscription(&razorpay_id).await
+        };
+        match ended {
             Ok(crate::billing::CancelResult::Cancelled) => {
                 if let Err(e) = st
                     .db

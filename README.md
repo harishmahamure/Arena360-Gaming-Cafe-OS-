@@ -2203,3 +2203,34 @@ built by `upgradeUrl` in `@arena/ui`; each app says where the picker lives with 
 - **Owner app.** Account -> Subscription cards get "Change plan" (disabled with its reason while a renewal is unsettled),
   the tier/add-ons form with the cloud's summary, and a pending-change block with "Keep current plan".
 - Prices come from the subscription's locked book; re-pricing only the changed items against the live book is not done here.
+
+## Switch billing cycle and payment method (Story 10.10)
+
+- **Routes** (owner of the branch, billing on, same `rev` and `STALE` rules as Story 10.9):
+  `POST /v1/branches/{id}/subscription/cycle/preview` (nothing is written), `POST .../cycle` (confirm) and
+  `POST .../payment-method`. "Keep current plan" is the Story 10.9 `.../change/withdraw`. Only an `active` subscription that is
+  not set to cancel changes, and one change is open at a time (`subscription_changes.subject` is `plan`, `cycle` or `method`).
+- **Razorpay cannot change a subscription's period**, so both are a new Razorpay subscription the owner authorises in
+  Checkout, on the **same `subscriptions` row**, band and entitlement. The change is stored `held`; nothing is charged or
+  changed, and the old subscription is untouched, until the owner authorises. Closing Checkout leaves the old cycle or
+  method in force (the Owner app withdraws the change and says "Payment method unchanged").
+- **To yearly** (`cycle_change::plan_cycle`): the locked book's yearly price (10x monthly, GST on band IN on top) less
+  the unused days of the paid month (`prorate(0, monthly, days_left, days)`, GST on the net), charged today as the new
+  subscription's upfront add-on, with the next renewal a year out. The first charge on the new subscription applies the
+  switch (cycle, Razorpay id, period end a year out), invoices the net (Story 10.7) and cancels the old monthly
+  subscription. The entitlement row is not written.
+- **To monthly** is scheduled for the end of the paid year ("Switches to monthly on <date>. No partial refunds."). The new
+  monthly subscription starts at the period end; its `subscription.authenticated` event moves the change to `charging`
+  (it can no longer be kept out) and ends the old yearly subscription **with its paid cycle**
+  (`cancel_at_cycle_end`), so the two never bill together; its first charge applies the switch as an ordinary renewal.
+- **Methods.** Checkout offers `allowed_methods` for the new renewal total: a renewal over Rs 15,000 incl. GST (Premium
+  yearly Rs 23,588.20) is card or eNACH only. **Change payment method** creates a subscription for the same plan that
+  starts at the period end and charges nothing; its authorisation (`authenticated`, `activated` or `charged`) replaces the
+  mandate and cancels the old subscription. A webhook for a replaced subscription is recorded in `billing_events` and
+  changes nothing (it no longer matches a `subscriptions` row).
+- **Owner app.** The card gets "Switch to yearly|monthly" (summary: price, credit for the unused days, charged today, next
+  renewal) and "Change payment method"; the pending block reads in words and offers "Keep current plan" only while the
+  mandate is unauthorised.
+- Not done here: changing the method while in `renewal_needs_approval` or `grace` (Story 10.11's "Update payment method");
+  the card/last-four of a new method is taken from the authorising event's payment when Razorpay sends one, else it shows
+  from the next charge. The real Razorpay `addons` upfront charge and `cancel_at_cycle_end` are exercised against the fake only.

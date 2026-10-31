@@ -9,11 +9,12 @@
 
 use arena_proto::{
     AddOns, Band, BillingCycle, ChangeConfirmed, ChangePlan, HubPlatform, MandateMethod,
-    PendingPlanChange, PlanChangeKind, PlanChangePreview, PriceItem, SubscriptionCheckout,
-    SubscriptionState, Tier,
+    PendingPlanChange, PlanChangeKind, PlanChangePreview, PlanChangeSubject, PriceItem,
+    SubscriptionCheckout, SubscriptionState, Tier,
 };
 use arena_store::control::{
-    ChangeKind, ChangeStatus, ControlDb, NewPlanChange, PlanChange, ProposeOutcome, Subscription,
+    ChangeKind, ChangeStatus, ChangeSubject, ControlDb, NewPlanChange, PlanChange, ProposeOutcome,
+    Subscription,
 };
 
 use crate::billing::{
@@ -45,18 +46,18 @@ pub enum ChangeError {
     Db(String),
 }
 
-fn db_err(e: arena_store::control::ControlError) -> ChangeError {
+pub(crate) fn db_err(e: arena_store::control::ControlError) -> ChangeError {
     ChangeError::Db(e.to_string())
 }
 
-fn priced(e: QuoteError) -> ChangeError {
+pub(crate) fn priced(e: QuoteError) -> ChangeError {
     match e {
         QuoteError::NoPrice(m) => ChangeError::Pricing(m),
         QuoteError::Db(m) => ChangeError::Db(m),
     }
 }
 
-fn item_of(tier: Tier) -> Option<PriceItem> {
+pub(crate) fn item_of(tier: Tier) -> Option<PriceItem> {
     match tier {
         Tier::Basic => Some(PriceItem::Basic),
         Tier::Premium => Some(PriceItem::Premium),
@@ -143,7 +144,7 @@ pub fn prorate(old_minor: i64, new_minor: i64, days_left: i64, period_days: i64)
     i64::try_from((num * 2 + den) / (den * 2)).unwrap_or(i64::MAX)
 }
 
-fn gst_on(amount: i64, band: Band) -> i64 {
+pub(crate) fn gst_on(amount: i64, band: Band) -> i64 {
     if band.gst_applicable() {
         (amount * GST_PERCENT + 50) / 100
     } else {
@@ -175,6 +176,19 @@ impl Plan {
     }
 }
 
+/// Whether `sub` can be changed at all: only an `active` subscription that is not set to cancel.
+pub(crate) fn gate_state(sub: &Subscription) -> Result<(), ChangeError> {
+    match sub.state {
+        SubscriptionState::Active if !sub.cancel_at_period_end => Ok(()),
+        SubscriptionState::PendingReview
+        | SubscriptionState::RenewalNeedsApproval
+        | SubscriptionState::Grace => Err(ChangeError::Blocked(SETTLE_FIRST)),
+        _ => Err(ChangeError::Blocked(
+            "This plan can't be changed right now.",
+        )),
+    }
+}
+
 /// Works out the change of `sub` to `req`. Only an `active` subscription that is not set to cancel
 /// can change; the paid period must be known.
 pub async fn plan(
@@ -184,17 +198,7 @@ pub async fn plan(
     req: &ChangePlan,
     now: i64,
 ) -> Result<Plan, ChangeError> {
-    match sub.state {
-        SubscriptionState::Active if !sub.cancel_at_period_end => {}
-        SubscriptionState::PendingReview
-        | SubscriptionState::RenewalNeedsApproval
-        | SubscriptionState::Grace => return Err(ChangeError::Blocked(SETTLE_FIRST)),
-        _ => {
-            return Err(ChangeError::Blocked(
-                "This plan can't be changed right now.",
-            ));
-        }
-    }
+    gate_state(sub)?;
     let item = validate(req.tier, &req.add_ons).map_err(ChangeError::Invalid)?;
     if db
         .open_plan_change(&sub.id)
@@ -282,14 +286,14 @@ pub async fn plan(
     })
 }
 
-fn kind_of(kind: ChangeKind) -> PlanChangeKind {
+pub(crate) fn kind_of(kind: ChangeKind) -> PlanChangeKind {
     match kind {
         ChangeKind::Now => PlanChangeKind::Now,
         ChangeKind::PeriodEnd => PlanChangeKind::PeriodEnd,
     }
 }
 
-fn gst_percent(band: Band) -> u32 {
+pub(crate) fn gst_percent(band: Band) -> u32 {
     if band.gst_applicable() {
         u32::try_from(GST_PERCENT).unwrap_or(0)
     } else {
@@ -324,6 +328,12 @@ pub fn preview_of(sub: &Subscription, p: &Plan) -> PlanChangePreview {
 pub fn pending_of(change: &PlanChange) -> PendingPlanChange {
     PendingPlanChange {
         kind: kind_of(change.kind),
+        subject: match change.subject {
+            ChangeSubject::Plan => PlanChangeSubject::Plan,
+            ChangeSubject::Cycle => PlanChangeSubject::Cycle,
+            ChangeSubject::Method => PlanChangeSubject::Method,
+        },
+        cycle: change.cycle,
         tier: change.tier,
         add_ons: AddOns {
             devices_20: change.addon_devices_20,
@@ -352,7 +362,7 @@ fn spec_of(sub: &Subscription, change_id: &str, p: &Plan, razorpay_id: &str) -> 
     }
 }
 
-fn new_id() -> String {
+pub(crate) fn new_id() -> String {
     format!("pc_{}", ulid::Ulid::generate().to_string().to_lowercase())
 }
 
@@ -397,6 +407,8 @@ pub async fn confirm(
             (ChangeKind::Now, false) => ChangeStatus::Charging,
             (ChangeKind::PeriodEnd, false) => ChangeStatus::Scheduled,
         },
+        subject: ChangeSubject::Plan,
+        cycle: None,
         tier: p.tier,
         addon_devices_20: p.add_ons.devices_20,
         addon_tunnel: p.add_ons.tunnel,
@@ -560,7 +572,7 @@ pub async fn withdraw(
     }
 }
 
-/// What a charge event completes for a subscription that has an open change.
+/// What a Razorpay event completes for a subscription that has an open change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Completion {
     /// The prorated charge of an upgrade, inside the paid period.
@@ -568,26 +580,55 @@ pub enum Completion {
     /// A renewal charge at the period end: a scheduled change (or an upgrade whose renewal landed
     /// first) takes effect with it.
     Renewal,
-    /// The first charge of the new subscription that authorises a held change's mandate.
+    /// The first charge, or for a new payment method the authorisation, of the new Razorpay
+    /// subscription that a held change waits on.
     Mandate,
+    /// The owner authorised the mandate of a switch that starts at the period end: the old
+    /// subscription may now end with its paid cycle, and the switch can no longer be kept out.
+    Authorised,
 }
 
-/// Whether the charge `ev_kind` (on the subscription's current Razorpay subscription, or on the
-/// held change's new one when `on_held`) completes `change`. `newer_period` says the charge moves
-/// the paid period forward.
+/// Whether the event `ev_kind` (on the subscription's current Razorpay subscription, or on the
+/// change's new one when `on_new`) completes `change`. `newer_period` says a charge moves the paid
+/// period forward.
 pub fn completion(
     change: &PlanChange,
-    charged: bool,
-    on_held: bool,
+    ev_kind: &str,
+    on_new: bool,
     newer_period: bool,
 ) -> Option<Completion> {
-    if !charged {
+    let charged = ev_kind == "subscription.charged";
+    let held = change.status == ChangeStatus::Held;
+    if on_new {
+        return match (change.subject, change.kind) {
+            (ChangeSubject::Plan, _) | (ChangeSubject::Cycle, ChangeKind::Now) => {
+                (held && charged).then_some(Completion::Mandate)
+            }
+            // The new monthly subscription bills for the first time when the paid year ends.
+            (ChangeSubject::Cycle, ChangeKind::PeriodEnd) => {
+                if held && ev_kind == "subscription.authenticated" {
+                    Some(Completion::Authorised)
+                } else {
+                    charged.then_some(Completion::Mandate)
+                }
+            }
+            // A new payment method has nothing to charge: authorising it is the whole change.
+            (ChangeSubject::Method, _) => (held
+                && matches!(
+                    ev_kind,
+                    "subscription.authenticated"
+                        | "subscription.activated"
+                        | "subscription.charged"
+                ))
+            .then_some(Completion::Mandate),
+        };
+    }
+    if !charged || change.subject != ChangeSubject::Plan {
         return None;
     }
-    match (change.status, on_held) {
-        (ChangeStatus::Held, true) => Some(Completion::Mandate),
-        (ChangeStatus::Charging, false) if !newer_period => Some(Completion::Prorated),
-        (ChangeStatus::Charging | ChangeStatus::Scheduled, false) if newer_period => {
+    match change.status {
+        ChangeStatus::Charging if !newer_period => Some(Completion::Prorated),
+        ChangeStatus::Charging | ChangeStatus::Scheduled if newer_period => {
             Some(Completion::Renewal)
         }
         _ => None,
@@ -598,6 +639,7 @@ pub fn completion(
 pub fn with_change(sub: &Subscription, change: &PlanChange) -> Subscription {
     Subscription {
         tier: change.tier,
+        cycle: change.cycle.unwrap_or(sub.cycle),
         addon_devices_20: change.addon_devices_20,
         addon_tunnel: change.addon_tunnel,
         addon_owner_login: change.addon_owner_login,
@@ -612,6 +654,15 @@ pub fn proration_line(tier: Tier) -> String {
         Tier::Basic | Tier::Free => "Basic",
     };
     format!("Arena 360 plan change to {name} (prorated for the rest of the period)")
+}
+
+/// The invoice line of the charge that switches a subscription to yearly billing.
+pub fn cycle_line(tier: Tier) -> String {
+    let name = match tier {
+        Tier::Premium => "Premium",
+        Tier::Basic | Tier::Free => "Basic",
+    };
+    format!("Arena 360 {name} yearly plan (less the unused days of the monthly period)")
 }
 
 /// The amount (GST excluded) and GST in a charge of `total_minor` on `band`, backing GST out of a
@@ -718,6 +769,8 @@ mod tests {
             subscription_id: "sb".to_owned(),
             kind: ChangeKind::Now,
             status,
+            subject: ChangeSubject::Plan,
+            cycle: None,
             tier: Tier::Premium,
             addon_devices_20: 0,
             addon_tunnel: 0,
@@ -731,19 +784,103 @@ mod tests {
         }
     }
 
+    const CHARGED: &str = "subscription.charged";
+
     #[test]
     fn only_the_right_charge_completes_each_kind_of_change() {
         use Completion::{Mandate, Prorated, Renewal};
-        let c = |s, charged, held, newer| completion(&change(s), charged, held, newer);
+        let c = |s, kind, held, newer| completion(&change(s), kind, held, newer);
         assert_eq!(
-            c(ChangeStatus::Charging, true, false, false),
+            c(ChangeStatus::Charging, CHARGED, false, false),
             Some(Prorated)
         );
-        assert_eq!(c(ChangeStatus::Charging, true, false, true), Some(Renewal));
-        assert_eq!(c(ChangeStatus::Scheduled, true, false, true), Some(Renewal));
-        assert_eq!(c(ChangeStatus::Scheduled, true, false, false), None);
-        assert_eq!(c(ChangeStatus::Held, true, true, false), Some(Mandate));
-        assert_eq!(c(ChangeStatus::Held, true, false, true), None);
-        assert_eq!(c(ChangeStatus::Charging, false, false, false), None);
+        assert_eq!(
+            c(ChangeStatus::Charging, CHARGED, false, true),
+            Some(Renewal)
+        );
+        assert_eq!(
+            c(ChangeStatus::Scheduled, CHARGED, false, true),
+            Some(Renewal)
+        );
+        assert_eq!(c(ChangeStatus::Scheduled, CHARGED, false, false), None);
+        assert_eq!(c(ChangeStatus::Held, CHARGED, true, false), Some(Mandate));
+        assert_eq!(c(ChangeStatus::Held, CHARGED, false, true), None);
+        assert_eq!(
+            c(
+                ChangeStatus::Charging,
+                "subscription.activated",
+                false,
+                false
+            ),
+            None
+        );
+        // Authorising a mandate alone completes a plan change by nothing.
+        assert_eq!(
+            c(
+                ChangeStatus::Held,
+                "subscription.authenticated",
+                true,
+                false
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_cycle_switch_and_a_new_method_complete_by_their_own_events() {
+        use Completion::{Authorised, Mandate};
+        let of = |subject, kind, status| PlanChange {
+            subject,
+            kind,
+            ..change(status)
+        };
+        // To yearly: the upfront charge of the new subscription.
+        let up = of(ChangeSubject::Cycle, ChangeKind::Now, ChangeStatus::Held);
+        assert_eq!(completion(&up, CHARGED, true, false), Some(Mandate));
+        assert_eq!(
+            completion(&up, "subscription.authenticated", true, false),
+            None
+        );
+        // To monthly: authorising it ends the old one with its cycle; its first charge applies it.
+        let down = of(
+            ChangeSubject::Cycle,
+            ChangeKind::PeriodEnd,
+            ChangeStatus::Held,
+        );
+        assert_eq!(
+            completion(&down, "subscription.authenticated", true, false),
+            Some(Authorised)
+        );
+        assert_eq!(completion(&down, CHARGED, true, false), Some(Mandate));
+        let authorised = of(
+            ChangeSubject::Cycle,
+            ChangeKind::PeriodEnd,
+            ChangeStatus::Charging,
+        );
+        assert_eq!(
+            completion(&authorised, "subscription.authenticated", true, false),
+            None
+        );
+        assert_eq!(completion(&authorised, CHARGED, true, true), Some(Mandate));
+        // A new method: authorised, activated or charged, whichever comes first.
+        let method = of(
+            ChangeSubject::Method,
+            ChangeKind::PeriodEnd,
+            ChangeStatus::Held,
+        );
+        for kind in [
+            "subscription.authenticated",
+            "subscription.activated",
+            CHARGED,
+        ] {
+            assert_eq!(completion(&method, kind, true, false), Some(Mandate));
+        }
+        assert_eq!(
+            completion(&method, "subscription.halted", true, false),
+            None
+        );
+        // The old subscription's own renewal completes neither.
+        assert_eq!(completion(&method, CHARGED, false, true), None);
+        assert_eq!(completion(&up, CHARGED, false, true), None);
     }
 }

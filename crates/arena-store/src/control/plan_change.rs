@@ -1,9 +1,10 @@
-//! Changes of tier and add-ons on a paid subscription (Story 10.9). A change is proposed against
+//! Changes of a paid subscription: tier and add-ons (Story 10.9), billing cycle and payment method
+//! (Story 10.10). A change is proposed against
 //! the subscription's `rev` (a second change from another device fails as stale), stays open until
 //! Razorpay confirms its charge, the period ends or the owner withdraws it, and is applied by the
 //! same transaction that records the event which completes it.
 
-use arena_proto::Tier;
+use arena_proto::{BillingCycle, Tier};
 
 use super::{ControlDb, ControlError, SqlValue, Stmt, col_int, col_opt_text, col_text, text};
 
@@ -30,6 +31,33 @@ impl ChangeKind {
             "period_end" => Some(Self::PeriodEnd),
             _ => None,
         }
+    }
+}
+
+/// What a change is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeSubject {
+    /// Tier and add-ons (Story 10.9).
+    Plan,
+    /// A switch between monthly and yearly billing, on a new Razorpay subscription (Story 10.10).
+    Cycle,
+    /// A new mandate for the same plan (Story 10.10).
+    Method,
+}
+
+impl ChangeSubject {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Plan => "plan",
+            Self::Cycle => "cycle",
+            Self::Method => "method",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        [Self::Plan, Self::Cycle, Self::Method]
+            .into_iter()
+            .find(|v| v.as_str() == s)
     }
 }
 
@@ -82,6 +110,9 @@ pub struct PlanChange {
     pub subscription_id: String,
     pub kind: ChangeKind,
     pub status: ChangeStatus,
+    pub subject: ChangeSubject,
+    /// The cycle a `cycle` change switches to.
+    pub cycle: Option<BillingCycle>,
     pub tier: Tier,
     pub addon_devices_20: u32,
     pub addon_tunnel: u32,
@@ -104,6 +135,8 @@ pub struct NewPlanChange {
     pub subscription_id: String,
     pub kind: ChangeKind,
     pub status: ChangeStatus,
+    pub subject: ChangeSubject,
+    pub cycle: Option<BillingCycle>,
     pub tier: Tier,
     pub addon_devices_20: u32,
     pub addon_tunnel: u32,
@@ -130,13 +163,17 @@ pub struct AppliedPlanChange<'a> {
     pub addon_devices_20: u32,
     pub addon_tunnel: u32,
     pub addon_owner_login: u32,
+    /// The cycle the subscription switches to (a cycle change).
+    pub cycle: Option<BillingCycle>,
+    /// Only record that the new mandate is authorised; the change applies with its first charge.
+    pub authorise_only: bool,
     /// The Razorpay subscription that replaces the current one (a held change).
     pub razorpay_subscription_id: Option<&'a str>,
 }
 
 const COLUMNS: &str = "id, subscription_id, kind, status, tier, addon_devices_20, addon_tunnel, \
      addon_owner_login, charge_minor, renewal_minor, effective_at, razorpay_subscription_id, \
-     created_at, updated_at";
+     created_at, updated_at, subject, cycle";
 
 fn count(r: &[SqlValue], i: usize) -> Result<u32, ControlError> {
     u32::try_from(col_int(r, i)?)
@@ -148,11 +185,16 @@ fn change_from(r: &[SqlValue]) -> Result<PlanChange, ControlError> {
     let kind = col_text(r, 2)?;
     let status = col_text(r, 3)?;
     let tier = col_text(r, 4)?;
+    let subject = col_text(r, 14)?;
     Ok(PlanChange {
         id: col_text(r, 0)?,
         subscription_id: col_text(r, 1)?,
         kind: ChangeKind::parse(&kind).ok_or_else(|| bad("kind", &kind))?,
         status: ChangeStatus::parse(&status).ok_or_else(|| bad("status", &status))?,
+        subject: ChangeSubject::parse(&subject).ok_or_else(|| bad("subject", &subject))?,
+        cycle: col_opt_text(r, 15)?
+            .map(|c| BillingCycle::parse(&c).ok_or_else(|| bad("cycle", &c)))
+            .transpose()?,
         tier: Tier::parse(&tier).ok_or_else(|| bad("tier", &tier))?,
         addon_devices_20: count(r, 5)?,
         addon_tunnel: count(r, 6)?,
@@ -170,16 +212,29 @@ fn change_from(r: &[SqlValue]) -> Result<PlanChange, ControlError> {
 /// new Razorpay subscription) and the change is marked applied.
 pub(super) fn apply_stmts(p: &AppliedPlanChange<'_>, subscription_id: &str, now: i64) -> Vec<Stmt> {
     let int = |n: u32| SqlValue::Integer(i64::from(n));
+    if p.authorise_only {
+        // The owner authorised the new mandate of a switch that starts later: it can no longer be
+        // kept out, and its first charge applies it.
+        return vec![
+            Stmt::new(
+                "UPDATE subscription_changes SET status = 'charging', updated_at = ? \
+                 WHERE id = ? AND status = 'held'",
+                vec![SqlValue::Integer(now), text(p.change_id)],
+            )
+            .expect(1),
+        ];
+    }
     vec![
         Stmt::new(
             "UPDATE subscriptions SET tier = ?, addon_devices_20 = ?, addon_tunnel = ?, \
-             addon_owner_login = ?, \
+             addon_owner_login = ?, cycle = COALESCE(?, cycle), \
              razorpay_subscription_id = COALESCE(?, razorpay_subscription_id) WHERE id = ?",
             vec![
                 text(p.tier.as_str()),
                 int(p.addon_devices_20),
                 int(p.addon_tunnel),
                 int(p.addon_owner_login),
+                p.cycle.map_or(SqlValue::Null, |c| text(c.as_str())),
                 p.razorpay_subscription_id.map_or(SqlValue::Null, text),
                 text(subscription_id),
             ],
@@ -207,14 +262,15 @@ impl ControlDb {
         rows.first().map(|r| change_from(r)).transpose()
     }
 
-    /// The open held change waiting on the Razorpay subscription `razorpay_subscription_id`.
+    /// The open change waiting on the Razorpay subscription `razorpay_subscription_id`: held for
+    /// its mandate, or (a switch to monthly) authorised and waiting for its first charge.
     pub async fn held_plan_change_by_razorpay_id(
         &self,
         razorpay_subscription_id: &str,
     ) -> Result<Option<PlanChange>, ControlError> {
         let sql = format!(
             "SELECT {COLUMNS} FROM subscription_changes WHERE razorpay_subscription_id = ? \
-             AND status = 'held'"
+             AND status IN ('held', 'charging')"
         );
         let rows = self
             .query(&sql, vec![text(razorpay_subscription_id)])
@@ -266,7 +322,8 @@ impl ControlDb {
                     "INSERT INTO subscription_changes (id, subscription_id, kind, status, tier, \
                      addon_devices_20, addon_tunnel, addon_owner_login, charge_minor, \
                      renewal_minor, effective_at, razorpay_subscription_id, created_at, \
-                     updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     updated_at, subject, cycle) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     vec![
                         text(&new.id),
                         text(&new.subscription_id),
@@ -284,6 +341,8 @@ impl ControlDb {
                             .map_or(SqlValue::Null, text),
                         SqlValue::Integer(now),
                         SqlValue::Integer(now),
+                        text(new.subject.as_str()),
+                        new.cycle.map_or(SqlValue::Null, |c| text(c.as_str())),
                     ],
                 )
                 .expect(1),

@@ -11,8 +11,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use arena_proto::{MandateMethod, SubscriptionState};
 use arena_store::control::{
-    AppliedPlanChange, ControlDb, ControlError, EntitlementWrite, EventOutcome, EventRecord,
-    NewOpsAudit, NewOpsTask, Subscription, SubscriptionChange,
+    AppliedPlanChange, ChangeKind, ChangeStatus, ChangeSubject, ControlDb, ControlError,
+    EntitlementWrite, EventOutcome, EventRecord, NewOpsAudit, NewOpsTask, Subscription,
+    SubscriptionChange,
 };
 use hmac::{Hmac, Mac};
 use serde_json::{Value, json};
@@ -386,6 +387,10 @@ pub enum Handled {
         /// The Razorpay subscription a completed plan change replaced: to be cancelled so it never
         /// bills beside the new one (Story 10.9).
         replaced_razorpay_id: Option<String>,
+        /// The replaced subscription is told to end with its paid cycle instead of at once: the
+        /// owner authorised the new monthly subscription of a switch that starts at the period end
+        /// (Story 10.10).
+        retire_at_cycle_end: bool,
     },
     /// Recorded, nothing to change (an older period, `authenticated`, a kind we do not act on).
     Recorded,
@@ -431,33 +436,61 @@ pub async fn handle(
             (Some(s), None) => decide(s, ev, now),
             _ => None,
         };
-        // A tier or add-on change this charge completes (Story 10.9).
-        let charged = ev.kind == "subscription.charged";
+        // A change of plan, billing cycle or payment method this event completes (Stories 10.9
+        // and 10.10).
         let newer = decision
             .as_ref()
             .is_some_and(|d| d.charged && d.period_end.is_some());
         let completes = match (&sub, &open_change) {
             (Some(s), Some(change)) if s.state == SubscriptionState::Active || newer => {
-                plan_change::completion(change, charged, held.is_some(), newer)
+                plan_change::completion(change, &ev.kind, held.is_some(), newer)
             }
             _ => None,
         };
+        let subject = open_change
+            .as_ref()
+            .filter(|_| completes.is_some())
+            .map(|c| c.subject);
         if completes.is_some()
             && let Some(s) = &sub
         {
             match &mut decision {
                 Some(d) => d.issue_entitlement = true,
                 None => {
+                    // The new period a switch of cycle starts: a year out to yearly, and the
+                    // period the first monthly charge reports to monthly.
+                    let period_end = match (&open_change, completes) {
+                        (Some(ch), Some(plan_change::Completion::Mandate))
+                            if ch.subject == ChangeSubject::Cycle =>
+                        {
+                            Some(if ch.kind == ChangeKind::Now {
+                                ch.effective_at
+                            } else {
+                                ev.current_end_ms
+                                    .filter(|e| s.current_period_end.is_none_or(|p| *e > p))
+                                    .unwrap_or_else(|| {
+                                        crate::cycle_change::months_after(
+                                            s.current_period_end.unwrap_or(now),
+                                            1,
+                                        )
+                                    })
+                            })
+                        }
+                        _ => None,
+                    };
                     decision = Some(Decision {
                         new_state: s.state,
-                        period_end: None,
+                        period_end,
                         first_paid_at: None,
                         payment_country: None,
                         mandate: ev.payment.as_ref().and_then(|p| p.method),
                         mandate_detail: ev.payment.as_ref().and_then(|p| p.detail.clone()),
-                        issue_entitlement: true,
+                        issue_entitlement: subject == Some(ChangeSubject::Plan),
                         review: false,
-                        charged: true,
+                        // Authorising a mandate, or replacing one, is not a charge to invoice.
+                        charged: ev.kind == "subscription.charged"
+                            && subject != Some(ChangeSubject::Method)
+                            && completes != Some(plan_change::Completion::Authorised),
                     });
                 }
             }
@@ -470,8 +503,19 @@ pub async fn handle(
         };
         // The old Razorpay subscription a completed mandate replaces: it is cancelled so it never
         // bills beside the new one, and left to an operator when that call fails.
+        // The old subscription of a switch to monthly was told to end with its cycle when the
+        // owner authorised the new one, so its first charge has nothing left to cancel.
+        let already_ending = open_change.as_ref().is_some_and(|c| {
+            c.subject == ChangeSubject::Cycle && c.status == ChangeStatus::Charging
+        });
+        let retire_at_cycle_end = completes == Some(plan_change::Completion::Authorised);
         let replaced = match (&sub, completes) {
-            (Some(s), Some(plan_change::Completion::Mandate)) => s.razorpay_subscription_id.clone(),
+            (Some(s), Some(plan_change::Completion::Mandate)) if !already_ending => {
+                s.razorpay_subscription_id.clone()
+            }
+            (Some(s), Some(plan_change::Completion::Authorised)) => {
+                s.razorpay_subscription_id.clone()
+            }
             _ => None,
         };
         let replaced_details = replaced.as_ref().zip(sub.as_ref()).map(|(rid, s)| {
@@ -486,7 +530,11 @@ pub async fn handle(
             (
                 Some(change),
                 Some(plan_change::Completion::Prorated | plan_change::Completion::Mandate),
-            ) => Some(ev.amount_minor.unwrap_or(change.charge_minor)),
+            ) if change.subject == ChangeSubject::Plan
+                || (change.subject == ChangeSubject::Cycle && change.kind == ChangeKind::Now) =>
+            {
+                Some(ev.amount_minor.unwrap_or(change.charge_minor))
+            }
             _ => None,
         };
         let mismatch = match (&open_change, charge_total) {
@@ -583,6 +631,8 @@ pub async fn handle(
                         addon_devices_20: ch.addon_devices_20,
                         addon_tunnel: ch.addon_tunnel,
                         addon_owner_login: ch.addon_owner_login,
+                        cycle: ch.cycle,
+                        authorise_only: retire_at_cycle_end,
                         razorpay_subscription_id: held
                             .as_ref()
                             .and_then(|h| h.razorpay_subscription_id.as_deref()),
@@ -604,15 +654,14 @@ pub async fn handle(
                     ) => {
                         if total > 0 {
                             let (amount, tax) = plan_change::split_total(total, s.band);
+                            let line = if subject == Some(ChangeSubject::Cycle) {
+                                plan_change::cycle_line(billed.tier)
+                            } else {
+                                plan_change::proration_line(billed.tier)
+                            };
                             Some(
                                 crate::invoice::for_proration(
-                                    db,
-                                    billed,
-                                    &plan_change::proration_line(billed.tier),
-                                    amount,
-                                    tax,
-                                    period_end,
-                                    now,
+                                    db, billed, &line, amount, tax, period_end, now,
                                 )
                                 .await?,
                             )
@@ -637,6 +686,7 @@ pub async fn handle(
                         state: d.new_state,
                         review: d.review,
                         replaced_razorpay_id: replaced.clone(),
+                        retire_at_cycle_end,
                     },
                     (Some(_), None) => Handled::Recorded,
                     (None, _) => Handled::Unmatched,

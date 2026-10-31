@@ -83,7 +83,8 @@ pub use pairing::{
     IssueOutcome, NewPairingCode, PAIRING_HISTORY_MS, PairingCodeRow, RedeemInvalid, Redeemed,
 };
 pub use plan_change::{
-    AppliedPlanChange, ChangeKind, ChangeStatus, NewPlanChange, PlanChange, ProposeOutcome,
+    AppliedPlanChange, ChangeKind, ChangeStatus, ChangeSubject, NewPlanChange, PlanChange,
+    ProposeOutcome,
 };
 pub use price_book::{
     BookAudit, DraftOutcome, MirroredPlan, NewOpsTask, OpsTaskRow, PriceBook, PriceBookItem,
@@ -280,6 +281,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 39,
         sql: include_str!("../control-migrations/0039_subscription_changes.sql"),
+    },
+    ControlMigration {
+        version: 40,
+        sql: include_str!("../control-migrations/0040_subscription_change_subject.sql"),
     },
 ];
 

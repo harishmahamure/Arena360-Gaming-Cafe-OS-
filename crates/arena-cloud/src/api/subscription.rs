@@ -7,9 +7,9 @@
 use std::sync::Arc;
 
 use arena_proto::{
-    AppError, ChangeConfirmed, ChangePlan, CreateSubscription, ErrorCode, HubPlatform,
-    PlanChangePreview, QuoteSubscription, SubscriptionCheckout, SubscriptionQuote,
-    SubscriptionState, SubscriptionStatus,
+    AppError, ChangeConfirmed, ChangeMethod, ChangePlan, CreateSubscription, CycleSwitchPreview,
+    ErrorCode, HubPlatform, PlanChangePreview, QuoteSubscription, SubscriptionCheckout,
+    SubscriptionQuote, SubscriptionState, SubscriptionStatus, SwitchCycle,
 };
 use arena_store::control::Subscription;
 use axum::extract::State;
@@ -21,6 +21,7 @@ use super::error::ApiError;
 use super::json::ApiJson;
 use super::owned::OwnedBranch;
 use crate::auth::AuthState;
+use crate::cycle_change;
 use crate::plan_change::{self, ChangeError};
 use crate::subscription::{self, SubscriptionError};
 
@@ -180,6 +181,56 @@ async fn confirm_change(
     Ok(Json(done))
 }
 
+/// `POST /v1/branches/{id}/subscription/cycle/preview` (Story 10.10): the yearly price less the
+/// unused days, or the day a switch to monthly starts. Nothing is written and no provider is called.
+async fn preview_cycle(
+    State(st): State<Arc<AuthState>>,
+    owned: OwnedBranch,
+    ApiJson(body): ApiJson<SwitchCycle>,
+) -> Result<Json<CycleSwitchPreview>, ApiError> {
+    let (sub, _) = changing(&st, &owned).await?;
+    let plan = cycle_change::plan_cycle(&st.db, &sub, &body, st.now())
+        .await
+        .map_err(change_error)?;
+    Ok(Json(cycle_change::preview_of(&sub, &plan)))
+}
+
+/// `POST /v1/branches/{id}/subscription/cycle`: confirms a switch of billing cycle against the `rev`
+/// the owner saw. The answer carries the Checkout that authorises the new subscription.
+async fn confirm_cycle(
+    State(st): State<Arc<AuthState>>,
+    owned: OwnedBranch,
+    ApiJson(body): ApiJson<SwitchCycle>,
+) -> Result<Json<ChangeConfirmed>, ApiError> {
+    let (sub, _) = changing(&st, &owned).await?;
+    let provider = st
+        .billing
+        .get()
+        .ok_or_else(|| ApiError::unavailable("no billing provider"))?;
+    let done = cycle_change::confirm_cycle(&st.db, provider, &sub, &body, st.now())
+        .await
+        .map_err(change_error)?;
+    Ok(Json(done))
+}
+
+/// `POST /v1/branches/{id}/subscription/payment-method` (Story 10.10): starts replacing the mandate;
+/// the answer carries the Checkout with the methods the current renewal amount allows.
+async fn change_method(
+    State(st): State<Arc<AuthState>>,
+    owned: OwnedBranch,
+    ApiJson(body): ApiJson<ChangeMethod>,
+) -> Result<Json<ChangeConfirmed>, ApiError> {
+    let (sub, _) = changing(&st, &owned).await?;
+    let provider = st
+        .billing
+        .get()
+        .ok_or_else(|| ApiError::unavailable("no billing provider"))?;
+    let done = cycle_change::confirm_method(&st.db, provider, &sub, body.rev, st.now())
+        .await
+        .map_err(change_error)?;
+    Ok(Json(done))
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct KeepPlan {
     rev: i64,
@@ -214,6 +265,15 @@ pub(super) fn router(st: Arc<AuthState>) -> Router {
         .route(
             "/branches/{id}/subscription/change/withdraw",
             post(withdraw_change),
+        )
+        .route(
+            "/branches/{id}/subscription/cycle/preview",
+            post(preview_cycle),
+        )
+        .route("/branches/{id}/subscription/cycle", post(confirm_cycle))
+        .route(
+            "/branches/{id}/subscription/payment-method",
+            post(change_method),
         )
         .with_state(st)
 }

@@ -2,12 +2,19 @@
   import { Button, Card, StatusBadge, formatDateTime, t, upgradeUrl } from "@arena/ui";
   import type { BranchPlan } from "@arena/ui/generated";
   import { PUBLIC_ONBOARDING_URL } from "$app/env/public";
+  import type { MessageKey } from "@arena/ui/messages";
   import ChangePlan from "./ChangePlan.svelte";
+  import SwitchCycle from "./SwitchCycle.svelte";
+  import { checkoutOptions, loadRazorpay } from "./razorpay";
   import { shell } from "./shell.svelte";
   import {
+    TIER_TEXT,
     addOnLines,
+    changeMethod,
     changeOffer,
     keepPlan,
+    keepable,
+    otherCycle,
     methodText,
     money,
     planName,
@@ -47,6 +54,9 @@
   } as const;
 
   let changing = $state(false);
+  let switching = $state(false);
+  let methodBusy = $state(false);
+  let methodFailed = $state<MessageKey | null>(null);
   let keeping = $state(false);
   let keepFailed = $state(false);
   const offer = $derived(changeOffer(plan));
@@ -54,12 +64,18 @@
 
   const pendingText = $derived.by(() => {
     if (!pending) return "";
+    const cycle = pending.cycle ?? plan.cycle;
     const params = {
-      plan: planName(pending.tier, plan.cycle),
+      plan: planName(pending.tier, cycle),
+      cycle: t(
+        cycle === "yearly" ? "owner.subscription.cycle.yearly" : "owner.subscription.cycle.monthly",
+      ).toLowerCase(),
       date: day(pending.effective_at),
       amount: money(pending.renewal_total_minor, plan.currency ?? "INR"),
     };
+    if (pending.subject === "method") return t("owner.subscription.pending.method");
     if (pending.needs_mandate) return t("owner.subscription.pending.mandate", params);
+    if (pending.subject === "cycle") return t("owner.subscription.pending.cycle_later", params);
     return t(
       pending.kind === "now"
         ? "owner.subscription.pending.now"
@@ -67,10 +83,45 @@
       params,
     );
   });
-  // A change that is being paid cannot be taken back; a scheduled or held one can.
-  const keepable = $derived(
-    pending ? pending.kind === "period_end" || pending.needs_mandate : false,
-  );
+  // A change that is being paid cannot be taken back; a scheduled or held one can, and a cycle
+  // switch or new method only until the owner has authorised it.
+  const canKeep = $derived(pending ? keepable(pending) : false);
+
+  // "Change payment method": a Checkout that offers the methods the renewal amount allows. Closing
+  // it, or a failed authorisation, leaves the previous method in force.
+  async function changePaymentMethod() {
+    methodBusy = true;
+    methodFailed = null;
+    const res = await changeMethod(plan);
+    if (!res.ok || !res.data.checkout) {
+      methodBusy = false;
+      if (res.ok === false && res.code === "STALE") onchanged(t("owner.subscription.change.stale"));
+      else methodFailed = "owner.subscription.method.failed";
+      return;
+    }
+    const abandon = async () => {
+      // Storing the change moved the subscription's `rev` on by one.
+      await keepPlan({ ...plan, rev: plan.rev + 1 });
+      methodBusy = false;
+      onchanged(t("owner.subscription.method.unchanged"));
+    };
+    try {
+      const Razorpay = await loadRazorpay();
+      const box = new Razorpay(
+        checkoutOptions(res.data.checkout, t(TIER_TEXT[plan.tier]), {
+          paid: () => {
+            methodBusy = false;
+            onchanged(t("owner.subscription.method.sent"));
+          },
+          dismissed: () => void abandon(),
+        }),
+      );
+      box.on("payment.failed", () => void abandon());
+      box.open();
+    } catch {
+      await abandon();
+    }
+  }
 
   async function keep() {
     keeping = true;
@@ -156,7 +207,7 @@
             </h3>
             <p data-testid="pending-change">{pendingText}</p>
             {#if keepFailed}<p role="alert">{t("owner.subscription.pending.keep_failed")}</p>{/if}
-            {#if keepable}
+            {#if canKeep}
               <Button
                 label="owner.subscription.pending.keep"
                 variant="secondary"
@@ -180,12 +231,42 @@
               onchanged(t("owner.subscription.change.stale"));
             }}
           />
-        {:else if offer === "open"}
-          <Button
-            label="owner.subscription.change.open"
-            variant="secondary"
-            onclick={() => (changing = true)}
+        {:else if switching}
+          <SwitchCycle
+            {plan}
+            oncancel={() => (switching = false)}
+            ondone={(message) => {
+              switching = false;
+              onchanged(message);
+            }}
+            onstale={() => {
+              switching = false;
+              onchanged(t("owner.subscription.change.stale"));
+            }}
           />
+        {:else if offer === "open"}
+          <div class="actions">
+            <Button
+              label="owner.subscription.change.open"
+              variant="secondary"
+              onclick={() => (changing = true)}
+            />
+            <Button
+              label={otherCycle(plan) === "yearly"
+                ? "owner.subscription.cycle.open_yearly"
+                : "owner.subscription.cycle.open_monthly"}
+              variant="secondary"
+              onclick={() => (switching = true)}
+            />
+            <Button
+              label="owner.subscription.method.open"
+              variant="secondary"
+              onclick={changePaymentMethod}
+              disabled={methodBusy}
+              disabledReason="owner.subscription.change.working"
+            />
+          </div>
+          {#if methodFailed}<p role="alert">{t(methodFailed)}</p>{/if}
         {:else if offer === "blocked"}
           <Button
             label="owner.subscription.change.open"
@@ -225,6 +306,11 @@
   h3,
   p {
     margin: 0;
+  }
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
   }
   .pending {
     display: flex;

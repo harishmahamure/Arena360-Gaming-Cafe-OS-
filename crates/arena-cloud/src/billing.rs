@@ -317,6 +317,8 @@ struct FakeState {
     subscriptions: BTreeMap<String, String>,
     subscription_specs: Vec<SubscriptionSpec>,
     cancelled: Vec<String>,
+    /// Subscriptions told to end with their paid cycle rather than at once (Story 10.10).
+    cancelled_at_cycle_end: Vec<String>,
     fail_subscriptions: bool,
     /// Razorpay subscription id -> what a test says Razorpay holds for it.
     remote: BTreeMap<String, RemoteSubscription>,
@@ -374,6 +376,11 @@ impl FakeRazorpay {
     /// The Razorpay subscription ids cancelled so far, in order.
     pub fn cancelled(&self) -> Vec<String> {
         self.with(|s| s.cancelled.clone())
+    }
+
+    /// The Razorpay subscription ids told to end with their paid cycle so far, in order.
+    pub fn cancelled_at_cycle_end(&self) -> Vec<String> {
+        self.with(|s| s.cancelled_at_cycle_end.clone())
     }
 
     /// Makes every plan change call fail with `FAKE_CHANGE_FAILED`, or succeed again.
@@ -455,6 +462,23 @@ impl FakeRazorpay {
             }
             if !s.cancelled.iter().any(|c| c == razorpay_subscription_id) {
                 s.cancelled.push(razorpay_subscription_id.to_owned());
+            }
+            Ok(())
+        })
+    }
+
+    fn cancel_at_cycle_end(&self, razorpay_subscription_id: &str) -> Result<(), BillingError> {
+        self.with(|s| {
+            if s.fail_subscriptions {
+                return Err(BillingError("FAKE_SUBSCRIPTION_FAILED".to_owned()));
+            }
+            if !s
+                .cancelled_at_cycle_end
+                .iter()
+                .any(|c| c == razorpay_subscription_id)
+            {
+                s.cancelled_at_cycle_end
+                    .push(razorpay_subscription_id.to_owned());
             }
             Ok(())
         })
@@ -662,6 +686,23 @@ impl RazorpayClient {
         .map(|_| ())
     }
 
+    /// Ends the subscription with the cycle it has paid for: it bills no more, and nothing already
+    /// paid is touched.
+    async fn cancel_at_cycle_end(
+        &self,
+        razorpay_subscription_id: &str,
+    ) -> Result<(), BillingError> {
+        if !plain_id(razorpay_subscription_id) {
+            return Err(BillingError("RAZORPAY_BAD_ID".to_owned()));
+        }
+        self.post(
+            &format!("/subscriptions/{razorpay_subscription_id}/cancel"),
+            &json!({ "cancel_at_cycle_end": 1 }),
+        )
+        .await
+        .map(|_| ())
+    }
+
     /// The subscription as Razorpay holds it now, with how its latest payment was made when it
     /// has been paid. A failed payment lookup leaves the payment unknown rather than failing.
     async fn fetch_subscription(
@@ -855,6 +896,24 @@ impl BillingProvider {
                 .map(|()| CancelResult::Cancelled),
             Self::Razorpay(r) => r
                 .cancel_subscription(razorpay_subscription_id)
+                .await
+                .map(|()| CancelResult::Cancelled),
+            Self::Manual => Ok(CancelResult::Deferred),
+        }
+    }
+
+    /// Ends a subscription with the cycle it has paid for, so it never bills beside its
+    /// replacement (Story 10.10).
+    pub async fn cancel_at_cycle_end(
+        &self,
+        razorpay_subscription_id: &str,
+    ) -> Result<CancelResult, BillingError> {
+        match self {
+            Self::Fake(f) => f
+                .cancel_at_cycle_end(razorpay_subscription_id)
+                .map(|()| CancelResult::Cancelled),
+            Self::Razorpay(r) => r
+                .cancel_at_cycle_end(razorpay_subscription_id)
                 .await
                 .map(|()| CancelResult::Cancelled),
             Self::Manual => Ok(CancelResult::Deferred),

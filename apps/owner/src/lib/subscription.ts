@@ -9,10 +9,12 @@ import type {
   AddOns,
   BranchPlan,
   ChangeConfirmed,
+  CycleSwitchPreview,
   InvoiceDownload,
   InvoiceList,
   InvoiceRow,
   PaymentMethodView,
+  PendingPlanChange,
   PlanChangePreview,
   PlanPrice,
   PlanState,
@@ -174,3 +176,37 @@ export const TIER_TEXT = {
   basic: "owner.tier.basic",
   premium: "owner.tier.premium",
 } as const satisfies Record<Tier, MessageKey>;
+
+const cyclePath = (branchId: string, step: string) =>
+  `/branches/${encodeURIComponent(branchId)}/subscription/cycle${step}`;
+
+/** What switching to `cycle` would cost and when it starts. Nothing is written. */
+export const previewCycle = (plan: BranchPlan, cycle: Cycle) =>
+  send<CycleSwitchPreview>("POST", cyclePath(plan.branch_id, "/preview"), {
+    cycle,
+    rev: plan.rev,
+  });
+
+/** Confirms the switch the owner saw; the answer carries the Checkout that authorises it. */
+export const confirmCycle = (plan: BranchPlan, cycle: Cycle) =>
+  send<ChangeConfirmed>("POST", cyclePath(plan.branch_id, ""), { cycle, rev: plan.rev });
+
+/** Starts replacing the payment method; the answer carries the Checkout for the new mandate. */
+export const changeMethod = (plan: BranchPlan) =>
+  send<ChangeConfirmed>(
+    "POST",
+    `/branches/${encodeURIComponent(plan.branch_id)}/subscription/payment-method`,
+    { rev: plan.rev },
+  );
+
+/** The cycle a branch can switch to: the one it is not on. */
+export const otherCycle = (plan: BranchPlan): Cycle =>
+  plan.cycle === "yearly" ? "monthly" : "yearly";
+
+/** Whether the owner can still take a pending change back ("Keep current plan"). A plan change
+ * can until it is being paid; a cycle switch or a new payment method only until the owner has
+ * authorised it. */
+export const keepable = (pending: PendingPlanChange): boolean =>
+  pending.subject === "plan"
+    ? pending.kind === "period_end" || pending.needs_mandate
+    : pending.needs_mandate;

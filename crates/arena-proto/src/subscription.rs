@@ -380,11 +380,94 @@ pub struct ChangeConfirmed {
     pub checkout: Option<SubscriptionCheckout>,
 }
 
+/// What a change waiting on a branch's card is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum PlanChangeSubject {
+    /// Tier and add-ons.
+    Plan,
+    /// Monthly to yearly or back.
+    Cycle,
+    /// A new card or bank mandate.
+    Method,
+}
+
+/// `POST /v1/branches/:id/subscription/cycle/preview` and `.../cycle` (Story 10.10): the billing
+/// cycle the owner wants and the `rev` of the subscription they were looking at.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct SwitchCycle {
+    pub cycle: BillingCycle,
+    #[ts(type = "number")]
+    pub rev: i64,
+}
+
+/// `POST /v1/branches/:id/subscription/payment-method` (Story 10.10): the `rev` the owner saw.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ChangeMethod {
+    #[ts(type = "number")]
+    pub rev: i64,
+}
+
+/// What switching the billing cycle comes to, made by the cloud from the subscription's own locked
+/// price book. To yearly: the yearly price (10x monthly, GST on band IN on top) less the unused
+/// days of the paid month, charged today, with the next renewal a year out. To monthly: nothing
+/// today; it starts when the paid year ends, with no partial refund.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct CycleSwitchPreview {
+    #[ts(type = "number")]
+    pub rev: i64,
+    pub kind: PlanChangeKind,
+    pub currency: String,
+    pub cycle: BillingCycle,
+    pub gst_percent: u32,
+    /// The new cycle's price, GST excluded.
+    #[ts(type = "number")]
+    pub cycle_amount_minor: i64,
+    #[ts(type = "number")]
+    pub cycle_tax_minor: i64,
+    #[ts(type = "number")]
+    pub cycle_total_minor: i64,
+    /// The credit for the unused days of the current period, GST included; 0 for a switch at the
+    /// period end.
+    #[ts(type = "number")]
+    pub credit_total_minor: i64,
+    /// The days of the paid period the credit covers.
+    pub days_left: u32,
+    /// Charged today: the new price less the credit.
+    #[ts(type = "number")]
+    pub charge_amount_minor: i64,
+    #[ts(type = "number")]
+    pub charge_tax_minor: i64,
+    #[ts(type = "number")]
+    pub charge_total_minor: i64,
+    /// When the switch starts: now to yearly, the end of the paid year to monthly.
+    #[ts(type = "number")]
+    pub effective_at: i64,
+    /// The next renewal: a year out to yearly, a month after the paid year ends to monthly.
+    #[ts(type = "number")]
+    pub renews_at: i64,
+    /// Checkout opens to authorise the new cycle's mandate before anything changes.
+    pub needs_mandate: bool,
+    pub methods: Vec<MandateMethod>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub notice: Option<String>,
+}
+
 /// A change waiting on a branch's card.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "export-ts", ts(export))]
 pub struct PendingPlanChange {
     pub kind: PlanChangeKind,
+    pub subject: PlanChangeSubject,
+    /// The cycle a `cycle` change switches to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cycle: Option<BillingCycle>,
     pub tier: Tier,
     pub add_ons: AddOns,
     #[ts(type = "number")]

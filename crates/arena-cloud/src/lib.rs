@@ -28,6 +28,7 @@ pub mod client_ip;
 pub mod command_sweep;
 pub mod config;
 pub mod crypto;
+pub mod cycle_change;
 pub mod data_age;
 pub mod gaps;
 pub mod gstin;

@@ -81,6 +81,7 @@ test("an upgrade shows the prorated charge with GST and the new renewal, then co
 
   pending = {
     kind: "now",
+    subject: "plan",
     tier: "premium",
     add_ons: { devices_20: 2, tunnel: 0, owner_login: 0 },
     effective_at: Date.now(),
@@ -136,6 +137,7 @@ test("a lower plan is scheduled for the period end with no partial refund, and K
       }
       pending = {
         kind: "period_end",
+        subject: "plan",
         tier: "basic",
         add_ons: { devices_20: 1, tunnel: 1, owner_login: 0 },
         effective_at: RENEWS,

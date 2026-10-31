@@ -2536,3 +2536,524 @@ async fn cancelling_checkout_leaves_a_held_change_inert_and_keep_current_plan_ca
     assert_ne!(r.body["status"], "applied", "{}", r.body);
     assert_eq!(h.only(&branch).await.tier, arena_proto::Tier::Basic);
 }
+
+// ---- Story 10.10: switch billing cycle and payment method ----
+
+impl Harness {
+    /// An owner with an `active` subscription on `body`, paid with `payment`, period end `PERIOD_END`.
+    async fn active_on(body: Value, payment: Value) -> (Self, String, String) {
+        let (h, a, branch, _id) = Harness::pending_with(body).await;
+        let r = h
+            .send(
+                "evt_first",
+                &paid_event("sub_fake_001", PERIOD_END, payment),
+            )
+            .await;
+        assert_eq!(r.body["status"], "applied", "{}", r.body);
+        (h, a, branch)
+    }
+
+    async fn cycle(&self, branch: &str, access: &str, step: &str, body: Value) -> Reply {
+        self.call(
+            "POST",
+            &format!("/v1/branches/{branch}/subscription/cycle{step}"),
+            Some(body),
+            access,
+        )
+        .await
+    }
+
+    async fn method(&self, branch: &str, access: &str, body: Value) -> Reply {
+        self.call(
+            "POST",
+            &format!("/v1/branches/{branch}/subscription/payment-method"),
+            Some(body),
+            access,
+        )
+        .await
+    }
+
+    /// Waits for the background cancel that follows an event.
+    async fn settle_cancels(&self, immediate: &[&str], at_cycle_end: &[&str]) {
+        let want = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        for _ in 0..100 {
+            if self.fake().cancelled() == want(immediate)
+                && self.fake().cancelled_at_cycle_end() == want(at_cycle_end)
+            {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert_eq!(self.fake().cancelled(), want(immediate));
+        assert_eq!(self.fake().cancelled_at_cycle_end(), want(at_cycle_end));
+    }
+}
+
+fn authenticated(rid: &str, end_s: i64, payment: Value) -> Value {
+    json!({
+        "event": "subscription.authenticated",
+        "created_at": 1_800_000_100,
+        "payload": {
+            "subscription": {"entity": {"id": rid, "status": "authenticated", "current_end": end_s}},
+            "payment": {"entity": payment},
+        },
+    })
+}
+
+// A year out from the harness clock (2027-01-15 08:00 UTC to 2028-01-15), in seconds.
+const YEAR_OUT: i64 = 1_800_000_000 + 365 * 86_400;
+// Basic monthly 20,000 to yearly 200,000 with 30 of the month's 31 days left.
+const YEAR_CREDIT: i64 = 19_355;
+const YEAR_NET: i64 = 200_000 - YEAR_CREDIT;
+const YEAR_TAX: i64 = 32_516;
+
+#[tokio::test]
+async fn monthly_to_yearly_shows_the_price_less_the_unused_days_and_applies_on_the_first_charge() {
+    let (h, a, branch) = Harness::active_with(json!({})).await;
+    let rev = h.rev(&branch).await;
+    let body = json!({"cycle": "yearly", "rev": rev});
+    let r = h.cycle(&branch, &a, "/preview", body.clone()).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let b = &r.body;
+    assert_eq!(b["kind"], "now");
+    // The yearly price is ten months: 200,000 + 18% GST.
+    assert_eq!(
+        (
+            b["cycle_amount_minor"].as_i64(),
+            b["cycle_tax_minor"].as_i64(),
+            b["cycle_total_minor"].as_i64()
+        ),
+        (Some(200_000), Some(36_000), Some(236_000))
+    );
+    // The credit is the unused days of the paid month; the net is what is charged today.
+    assert_eq!(b["days_left"], 30);
+    assert_eq!(
+        (
+            b["charge_amount_minor"].as_i64(),
+            b["charge_tax_minor"].as_i64(),
+            b["charge_total_minor"].as_i64(),
+            b["credit_total_minor"].as_i64()
+        ),
+        (
+            Some(YEAR_NET),
+            Some(YEAR_TAX),
+            Some(YEAR_NET + YEAR_TAX),
+            Some(236_000 - (YEAR_NET + YEAR_TAX))
+        )
+    );
+    assert_eq!(b["renews_at"], YEAR_OUT * 1000);
+    assert_eq!(b["needs_mandate"], true);
+    // A preview writes nothing and calls no provider.
+    assert!(h.fake().mandates().is_empty());
+    assert_eq!(h.rev(&branch).await, rev);
+
+    let r = h.cycle(&branch, &a, "", body).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(
+        r.body["checkout"]["razorpay_subscription_id"],
+        "sub_fake_m001"
+    );
+    assert_eq!(r.body["checkout"]["cycle"], "yearly");
+    let mandates = h.fake().mandates();
+    assert_eq!(mandates.len(), 1);
+    // The new subscription renews a year out and carries today's net as its upfront charge.
+    assert_eq!(mandates[0].start_at_ms, YEAR_OUT * 1000);
+    assert_eq!(
+        (
+            mandates[0].change.charge_minor,
+            mandates[0].change.renewal_minor
+        ),
+        (YEAR_NET + YEAR_TAX, 236_000)
+    );
+    // Nothing changed yet: the cycle and the Razorpay subscription are as they were.
+    let sub = h.only(&branch).await;
+    assert_eq!(sub.cycle, arena_proto::BillingCycle::Monthly);
+    assert_eq!(
+        sub.razorpay_subscription_id.as_deref(),
+        Some("sub_fake_001")
+    );
+    let plans = h.plans(&a, "").await;
+    let pending = &plans.body["branches"][0]["pending_change"];
+    assert_eq!(
+        (pending["subject"].as_str(), pending["cycle"].as_str()),
+        (Some("cycle"), Some("yearly"))
+    );
+    assert_eq!(pending["needs_mandate"], true);
+
+    // The owner authorises it: the upfront charge confirms the switch on the same row.
+    let mut payment = card("1111");
+    payment["amount"] = json!(YEAR_NET + YEAR_TAX);
+    let r = h
+        .send("evt_year", &paid_event("sub_fake_m001", YEAR_OUT, payment))
+        .await;
+    assert_eq!(r.body["status"], "applied", "{}", r.body);
+    let after = h.only(&branch).await;
+    assert_eq!(after.id, sub.id);
+    assert_eq!(after.cycle, arena_proto::BillingCycle::Yearly);
+    assert_eq!(after.band, sub.band);
+    assert_eq!(after.state, SubscriptionState::Active);
+    assert_eq!(
+        after.razorpay_subscription_id.as_deref(),
+        Some("sub_fake_m001")
+    );
+    assert_eq!(after.current_period_end, Some(YEAR_OUT * 1000));
+    assert_eq!(after.mandate_detail.as_deref(), Some("1111"));
+    // The entitlement never lapsed: still Basic, still paid.
+    let ent = h.db.entitlement(&branch).await.unwrap().unwrap();
+    assert_eq!(ent.tier, arena_proto::Tier::Basic);
+    let inv = &h.db.invoices_for_event("evt_year").await.unwrap()[0];
+    assert_eq!(
+        (inv.subtotal_minor, inv.total_minor),
+        (YEAR_NET, YEAR_NET + YEAR_TAX)
+    );
+    assert!(inv.lines_json.contains("yearly plan"), "{}", inv.lines_json);
+    assert_eq!(
+        h.count("SELECT COUNT(*) FROM ops_tasks WHERE kind = 'proration_mismatch'"),
+        0
+    );
+    assert!(h.db.open_plan_change(&sub.id).await.unwrap().is_none());
+    // The old monthly subscription is cancelled once the new one is paid.
+    h.settle_cancels(&["sub_fake_001"], &[]).await;
+    let plans = h.plans(&a, "").await;
+    assert!(plans.body["branches"][0].get("pending_change").is_none());
+    assert_eq!(plans.body["branches"][0]["cycle"], "yearly");
+
+    // A late webhook for the replaced subscription is recorded and changes nothing.
+    let r = h
+        .send(
+            "evt_old",
+            &paid_event("sub_fake_001", PERIOD_END + 31 * 86_400, card("4242")),
+        )
+        .await;
+    assert_ne!(r.body["status"], "applied", "{}", r.body);
+    assert!(h.db.billing_event("evt_old").await.unwrap().is_some());
+    let still = h.only(&branch).await;
+    assert_eq!(still.cycle, arena_proto::BillingCycle::Yearly);
+    assert_eq!(still.current_period_end, Some(YEAR_OUT * 1000));
+    assert_eq!(
+        still.razorpay_subscription_id.as_deref(),
+        Some("sub_fake_m001")
+    );
+}
+
+#[tokio::test]
+async fn yearly_to_monthly_waits_for_the_paid_year_and_the_old_one_ends_only_once_authorised() {
+    let (h, a, branch) = Harness::active_on(
+        json!({"tier": "basic", "cycle": "yearly", "billing_country": "IN"}),
+        card("4242"),
+    )
+    .await;
+    let rev = h.rev(&branch).await;
+    let body = json!({"cycle": "monthly", "rev": rev});
+    let r = h.cycle(&branch, &a, "/preview", body.clone()).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["kind"], "period_end");
+    assert_eq!(r.body["charge_total_minor"], 0);
+    assert_eq!(r.body["effective_at"], PERIOD_END * 1000);
+    assert_eq!(r.body["cycle_total_minor"], 23_600);
+    let r = h.cycle(&branch, &a, "", body).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["kind"], "period_end");
+    assert_eq!(r.body["charge_total_minor"], 0);
+    let mandates = h.fake().mandates();
+    assert_eq!(mandates[0].start_at_ms, PERIOD_END * 1000);
+    assert_eq!(mandates[0].change.cycle, arena_proto::BillingCycle::Monthly);
+    assert_eq!(mandates[0].change.charge_minor, 0);
+    // Nothing is cancelled and nothing changed while the owner has not authorised.
+    h.settle_cancels(&[], &[]).await;
+    assert_eq!(
+        h.only(&branch).await.cycle,
+        arena_proto::BillingCycle::Yearly
+    );
+
+    // Authorising the new subscription ends the old one with its paid year, and cannot be undone.
+    let r = h
+        .send(
+            "evt_auth",
+            &authenticated("sub_fake_m001", PERIOD_END, card("1111")),
+        )
+        .await;
+    assert_eq!(r.body["status"], "applied", "{}", r.body);
+    h.settle_cancels(&[], &["sub_fake_001"]).await;
+    let sub = h.only(&branch).await;
+    assert_eq!(sub.cycle, arena_proto::BillingCycle::Yearly);
+    assert_eq!(
+        sub.razorpay_subscription_id.as_deref(),
+        Some("sub_fake_001")
+    );
+    let plans = h.plans(&a, "").await;
+    let pending = &plans.body["branches"][0]["pending_change"];
+    assert_eq!(pending["subject"], "cycle");
+    assert_eq!(pending["needs_mandate"], false);
+    let rev = h.rev(&branch).await;
+    let r = h
+        .change(&branch, &a, "/withdraw", json!({"rev": rev}))
+        .await;
+    assert_ne!(r.status, 204, "{}", r.body);
+    // A repeat of the authorisation ends nothing twice.
+    let r = h
+        .send(
+            "evt_auth",
+            &authenticated("sub_fake_m001", PERIOD_END, card("1111")),
+        )
+        .await;
+    assert_eq!(r.body["status"], "duplicate");
+
+    // The new monthly subscription's first charge, when the paid year ends, applies the switch.
+    let month_end = PERIOD_END + 28 * 86_400;
+    let r = h
+        .send(
+            "evt_month",
+            &paid_event("sub_fake_m001", month_end, card("1111")),
+        )
+        .await;
+    assert_eq!(r.body["status"], "applied", "{}", r.body);
+    let sub = h.only(&branch).await;
+    assert_eq!(sub.cycle, arena_proto::BillingCycle::Monthly);
+    assert_eq!(sub.state, SubscriptionState::Active);
+    assert_eq!(
+        sub.razorpay_subscription_id.as_deref(),
+        Some("sub_fake_m001")
+    );
+    assert_eq!(sub.current_period_end, Some(month_end * 1000));
+    assert_eq!(sub.mandate_detail.as_deref(), Some("1111"));
+    assert_eq!(
+        h.db.entitlement(&branch).await.unwrap().unwrap().tier,
+        arena_proto::Tier::Basic
+    );
+    // It is an ordinary renewal: invoiced at the monthly price, and nothing is cancelled again.
+    let inv = &h.db.invoices_for_event("evt_month").await.unwrap()[0];
+    assert_eq!(inv.total_minor, 23_600);
+    h.settle_cancels(&[], &["sub_fake_001"]).await;
+    assert!(h.db.open_plan_change(&sub.id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_yearly_switch_over_the_upi_limit_opens_checkout_with_card_and_enach_only() {
+    let upi = json!({"id": "pay_1", "method": "upi", "vpa": "someone@upi"});
+    let (h, a, branch) = Harness::active_on(
+        json!({"tier": "premium", "cycle": "monthly", "billing_country": "IN"}),
+        upi,
+    )
+    .await;
+    assert_eq!(
+        h.only(&branch).await.mandate_method,
+        Some(arena_proto::MandateMethod::Upi)
+    );
+    let rev = h.rev(&branch).await;
+    // Premium yearly Rs 19,990 + GST = Rs 23,588.20: no UPI.
+    let r = h
+        .cycle(
+            &branch,
+            &a,
+            "/preview",
+            json!({"cycle": "yearly", "rev": rev}),
+        )
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["cycle_total_minor"], 2_358_820);
+    assert_eq!(r.body["methods"], json!(["card", "emandate"]));
+    assert!(r.body["notice"].is_string());
+    let r = h
+        .cycle(&branch, &a, "", json!({"cycle": "yearly", "rev": rev}))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["checkout"]["methods"], json!(["card", "emandate"]));
+    assert_eq!(
+        h.fake().mandates()[0].methods,
+        vec![
+            arena_proto::MandateMethod::Card,
+            arena_proto::MandateMethod::Emandate
+        ]
+    );
+
+    // Cancelling Checkout leaves the old cycle in force; keeping the plan cancels the unused mandate.
+    assert_eq!(
+        h.only(&branch).await.cycle,
+        arena_proto::BillingCycle::Monthly
+    );
+    let rev = h.rev(&branch).await;
+    let r = h
+        .change(&branch, &a, "/withdraw", json!({"rev": rev}))
+        .await;
+    assert_eq!(r.status, 204, "{}", r.body);
+    assert_eq!(h.fake().cancelled(), vec!["sub_fake_m001".to_owned()]);
+    let r = h
+        .send(
+            "evt_late",
+            &paid_event("sub_fake_m001", YEAR_OUT, card("1111")),
+        )
+        .await;
+    assert_ne!(r.body["status"], "applied", "{}", r.body);
+    let sub = h.only(&branch).await;
+    assert_eq!(sub.cycle, arena_proto::BillingCycle::Monthly);
+    assert_eq!(
+        sub.razorpay_subscription_id.as_deref(),
+        Some("sub_fake_001")
+    );
+}
+
+#[tokio::test]
+async fn a_cycle_switch_is_refused_for_the_same_cycle_a_stale_rev_a_pending_change_or_a_failing_provider()
+ {
+    let (h, a, branch) = Harness::active_with(json!({})).await;
+    let rev = h.rev(&branch).await;
+    let r = h
+        .cycle(
+            &branch,
+            &a,
+            "/preview",
+            json!({"cycle": "monthly", "rev": rev}),
+        )
+        .await;
+    assert_eq!(
+        (r.status, r.code()),
+        (422, "VALIDATION_FAILED"),
+        "{}",
+        r.body
+    );
+    // Another device moved the subscription first.
+    let r = h
+        .cycle(&branch, &a, "", json!({"cycle": "yearly", "rev": rev - 1}))
+        .await;
+    assert_eq!((r.status, r.code()), (409, "STALE"), "{}", r.body);
+    assert!(h.fake().mandates().is_empty());
+    // A provider that fails leaves no change open.
+    h.fake().fail_changes(true);
+    let r = h
+        .cycle(&branch, &a, "", json!({"cycle": "yearly", "rev": rev}))
+        .await;
+    assert_eq!(r.status, 503, "{}", r.body);
+    h.fake().fail_changes(false);
+    let sub = h.only(&branch).await;
+    assert!(h.db.open_plan_change(&sub.id).await.unwrap().is_none());
+    // One open change at a time.
+    let rev = h.rev(&branch).await;
+    let r = h
+        .cycle(&branch, &a, "", json!({"cycle": "yearly", "rev": rev}))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let rev = h.rev(&branch).await;
+    for r in [
+        h.cycle(&branch, &a, "", json!({"cycle": "yearly", "rev": rev}))
+            .await,
+        h.method(&branch, &a, json!({"rev": rev})).await,
+        h.change(&branch, &a, "", json!({"tier": "premium", "rev": rev}))
+            .await,
+    ] {
+        assert_eq!(
+            (r.status, r.code()),
+            (422, "VALIDATION_FAILED"),
+            "{}",
+            r.body
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_new_payment_method_replaces_the_mandate_only_once_it_is_authorised() {
+    let upi = json!({"id": "pay_1", "method": "upi", "vpa": "someone@upi"});
+    let (h, a, branch) = Harness::active_on(
+        json!({"tier": "basic", "cycle": "monthly", "billing_country": "IN"}),
+        upi,
+    )
+    .await;
+    let invoices_before = h.invoices().await.len();
+    let rev = h.rev(&branch).await;
+    let r = h.method(&branch, &a, json!({"rev": rev})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    // The renewal is Rs 236, so every method is allowed; nothing is charged.
+    assert_eq!(
+        r.body["checkout"]["methods"],
+        json!(["upi", "card", "emandate"])
+    );
+    assert_eq!(r.body["charge_total_minor"], 0);
+    assert_eq!(
+        r.body["checkout"]["razorpay_subscription_id"],
+        "sub_fake_m001"
+    );
+    let mandates = h.fake().mandates();
+    assert_eq!(mandates[0].start_at_ms, PERIOD_END * 1000);
+    assert_eq!(mandates[0].change.charge_minor, 0);
+    assert_eq!(mandates[0].change.renewal_minor, 23_600);
+    // Until it is authorised the old mandate is in force and the card says so.
+    let sub = h.only(&branch).await;
+    assert_eq!(sub.mandate_method, Some(arena_proto::MandateMethod::Upi));
+    assert_eq!(
+        sub.razorpay_subscription_id.as_deref(),
+        Some("sub_fake_001")
+    );
+    h.settle_cancels(&[], &[]).await;
+    let plans = h.plans(&a, "").await;
+    assert_eq!(
+        plans.body["branches"][0]["pending_change"]["subject"],
+        "method"
+    );
+
+    let r = h
+        .send(
+            "evt_method",
+            &authenticated("sub_fake_m001", PERIOD_END, card("5678")),
+        )
+        .await;
+    assert_eq!(r.body["status"], "applied", "{}", r.body);
+    let after = h.only(&branch).await;
+    assert_eq!(after.mandate_method, Some(arena_proto::MandateMethod::Card));
+    assert_eq!(after.mandate_detail.as_deref(), Some("5678"));
+    assert_eq!(
+        after.razorpay_subscription_id.as_deref(),
+        Some("sub_fake_m001")
+    );
+    // The plan, the period and the entitlement are untouched, and nothing was invoiced.
+    assert_eq!(after.tier, sub.tier);
+    assert_eq!(after.cycle, sub.cycle);
+    assert_eq!(after.current_period_end, sub.current_period_end);
+    assert_eq!(h.invoices().await.len(), invoices_before);
+    h.settle_cancels(&["sub_fake_001"], &[]).await;
+    let plans = h.plans(&a, "").await;
+    assert!(plans.body["branches"][0].get("pending_change").is_none());
+    assert_eq!(
+        plans.body["branches"][0]["payment_method"]["detail"],
+        "5678"
+    );
+}
+
+#[tokio::test]
+async fn an_abandoned_method_change_keeps_the_previous_method_and_a_big_renewal_offers_no_upi() {
+    let upi = json!({"id": "pay_1", "method": "upi", "vpa": "someone@upi"});
+    let (h, a, branch) = Harness::active_on(
+        json!({"tier": "premium", "cycle": "yearly", "billing_country": "IN"}),
+        upi,
+    )
+    .await;
+    let rev = h.rev(&branch).await;
+    let r = h.method(&branch, &a, json!({"rev": rev})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    // Premium yearly renews at Rs 23,588.20: card or eNACH only.
+    assert_eq!(r.body["checkout"]["methods"], json!(["card", "emandate"]));
+    // The owner closes Checkout: the card goes back to the previous method.
+    let rev = h.rev(&branch).await;
+    let r = h
+        .change(&branch, &a, "/withdraw", json!({"rev": rev}))
+        .await;
+    assert_eq!(r.status, 204, "{}", r.body);
+    assert_eq!(h.fake().cancelled(), vec!["sub_fake_m001".to_owned()]);
+    // A failed or late authorisation of the abandoned mandate applies nothing.
+    let r = h
+        .send(
+            "evt_late",
+            &authenticated("sub_fake_m001", PERIOD_END, card("5678")),
+        )
+        .await;
+    assert_ne!(r.body["status"], "applied", "{}", r.body);
+    let sub = h.only(&branch).await;
+    assert_eq!(sub.mandate_method, Some(arena_proto::MandateMethod::Upi));
+    assert_eq!(
+        sub.razorpay_subscription_id.as_deref(),
+        Some("sub_fake_001")
+    );
+    // A stale rev is refused before any provider call.
+    let r = h.method(&branch, &a, json!({"rev": rev - 5})).await;
+    assert_eq!((r.status, r.code()), (409, "STALE"), "{}", r.body);
+    assert_eq!(h.fake().mandates().len(), 1);
+}

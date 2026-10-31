@@ -2,7 +2,7 @@
 title: 'Story 10.3: Razorpay webhooks are verified, applied once, and issue the entitlement'
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: '58ad36dc7104aeadd41a2021501995dcfd3564d2'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -83,6 +83,8 @@ deferred: []
 ## Spec Change Log
 
 ## Review Triage Log
+
+Code review (2026-10-31): no blocking findings. Webhook verification, atomic event+change write, duplicate handling, country review, reconcile and add-on claims match the ACs. fmt, clippy and tests green. Noted, not blocking: `backup.rs::a_hung_run_times_out_with_its_own_code` (Duration::ZERO timeout) is flaky and fails intermittently on the pre-story commit too.
 
 ## Design Notes
 

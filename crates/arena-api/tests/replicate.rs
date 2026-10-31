@@ -16,7 +16,7 @@ use arena_proto::{
     Actor, ActorKind, BranchBootstrap, ClientClass, DeviceRegister, ErrorCode, Intent,
     IntentPayload, REPLICATE_PATH, REPLICATE_SNAPSHOT_PATH, ReplicateFrame, SettingsSet,
 };
-use arena_store::{LeaseRow, Store, link_standby, write_lease};
+use arena_store::{LATEST_SCHEMA_VERSION, LeaseRow, Store, link_standby, write_lease};
 use arena_tasks::{FollowStatus, Follower, FollowerConfig, LinkError, ReplicationLink};
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -431,7 +431,7 @@ async fn only_the_linked_standby_may_replicate() {
         matches!(err, LinkError::Refused(ErrorCode::Forbidden, _)),
         "{err:?}"
     );
-    let err = kiosk.open(None, 90).await.unwrap_err();
+    let err = kiosk.open(None, LATEST_SCHEMA_VERSION).await.unwrap_err();
     assert!(
         matches!(err, LinkError::Refused(ErrorCode::Forbidden, _)),
         "{err:?}"
@@ -440,7 +440,10 @@ async fn only_the_linked_standby_may_replicate() {
     // A token no one holds.
     let mut stranger =
         main.link("nobody.0000000000000000000000000000000000000000000000000000000000000000");
-    let err = stranger.open(None, 90).await.unwrap_err();
+    let err = stranger
+        .open(None, LATEST_SCHEMA_VERSION)
+        .await
+        .unwrap_err();
     assert!(
         matches!(err, LinkError::Refused(ErrorCode::TokenInvalid, _)),
         "{err:?}"
@@ -453,7 +456,7 @@ async fn a_schema_behind_standby_is_refused_and_stops() {
     let main = start(true).await;
     let mut behind = main.link(&main.standby_token);
     behind.schema_override = Some(1);
-    let err = behind.open(None, 90).await.unwrap_err();
+    let err = behind.open(None, LATEST_SCHEMA_VERSION).await.unwrap_err();
     assert!(
         matches!(err, LinkError::Refused(ErrorCode::SchemaBehind, _)),
         "{err:?}"
@@ -483,7 +486,7 @@ async fn a_position_the_main_hub_does_not_hold_is_a_gap() {
     let main = start(true).await;
     let mut link = main.link(&main.standby_token);
     let err = link
-        .open(Some(("9:elsewhere".into(), 5)), 90)
+        .open(Some(("9:elsewhere".into(), 5)), LATEST_SCHEMA_VERSION)
         .await
         .unwrap_err();
     assert!(
@@ -496,7 +499,7 @@ async fn a_position_the_main_hub_does_not_hold_is_a_gap() {
 async fn a_hub_that_is_not_primary_serves_no_standby() {
     let main = start(false).await;
     let mut link = main.link(&main.standby_token);
-    let err = link.open(None, 90).await.unwrap_err();
+    let err = link.open(None, LATEST_SCHEMA_VERSION).await.unwrap_err();
     assert!(
         matches!(err, LinkError::Refused(ErrorCode::NotPrimary, _)),
         "{err:?}"

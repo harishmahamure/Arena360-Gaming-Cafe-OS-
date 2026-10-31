@@ -50,6 +50,8 @@ pub enum OwnerAlertKind {
     BranchNotUploading,
     /// The branch's Hub reports again after an offline alert (Story 8.35).
     BranchOnline,
+    /// A Manager forced the standby Hub to main (Story 9.22).
+    StandbyForced,
 }
 
 /// Why a set of parameters does not fit its kind: the offending name.
@@ -61,7 +63,7 @@ pub struct OwnerAlertParamError {
 
 impl OwnerAlertKind {
     /// Every kind.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Test,
         Self::CashVariance,
         Self::LowStock,
@@ -71,15 +73,17 @@ impl OwnerAlertKind {
         Self::BranchOffline,
         Self::BranchNotUploading,
         Self::BranchOnline,
+        Self::StandbyForced,
     ];
 
     /// The kinds a Hub raises through `POST /v1/notify` (Story 8.34).
-    pub const HUB_SOURCED: [Self; 5] = [
+    pub const HUB_SOURCED: [Self; 6] = [
         Self::CashVariance,
         Self::LowStock,
         Self::CreditOverdue,
         Self::LargeRefund,
         Self::LargeDiscount,
+        Self::StandbyForced,
     ];
 
     /// Whether a Hub may raise this kind.
@@ -99,6 +103,7 @@ impl OwnerAlertKind {
             Self::BranchOffline => "branch_offline",
             Self::BranchNotUploading => "branch_not_uploading",
             Self::BranchOnline => "branch_online",
+            Self::StandbyForced => "standby_forced",
         }
     }
 
@@ -115,6 +120,7 @@ impl OwnerAlertKind {
             Self::CreditOverdue => &["amount", "days"],
             Self::LargeRefund | Self::LargeDiscount => &["amount"],
             Self::BranchOffline | Self::BranchNotUploading | Self::BranchOnline => &["minutes"],
+            Self::StandbyForced => &["manager"],
         }
     }
 
@@ -203,6 +209,10 @@ impl OwnerAlertKind {
                 let unit = if minutes == "1" { "minute" } else { "minutes" };
                 format!("The branch is back online after {minutes} {unit}.")
             }
+            Self::StandbyForced => format!(
+                "The standby Hub was forced to main by {}. Data since its last sync may be lost.",
+                p("manager")
+            ),
         }
     }
 
@@ -210,7 +220,10 @@ impl OwnerAlertKind {
     pub fn url(self, branch_id: &str) -> String {
         match self {
             Self::Test => "/alerts".to_owned(),
-            Self::BranchOffline | Self::BranchNotUploading | Self::BranchOnline => {
+            Self::BranchOffline
+            | Self::BranchNotUploading
+            | Self::BranchOnline
+            | Self::StandbyForced => {
                 format!("/#today-{branch_id}")
             }
             Self::CashVariance => format!("/reports?tab=cash&branch={branch_id}"),
@@ -410,6 +423,7 @@ mod tests {
             ("qty", "3"),
             ("days", "9"),
             ("minutes", "20"),
+            ("manager", "Asha"),
         ];
         params(
             &values
@@ -481,6 +495,7 @@ mod tests {
         assert_eq!(url(OwnerAlertKind::BranchOffline), "/#today-B1");
         assert_eq!(url(OwnerAlertKind::BranchNotUploading), "/#today-B1");
         assert_eq!(url(OwnerAlertKind::BranchOnline), "/#today-B1");
+        assert_eq!(url(OwnerAlertKind::StandbyForced), "/#today-B1");
         assert_eq!(
             url(OwnerAlertKind::CashVariance),
             "/reports?tab=cash&branch=B1"
@@ -537,6 +552,14 @@ mod tests {
     }
 
     #[test]
+    fn a_forced_standby_line_names_the_manager() {
+        assert_eq!(
+            OwnerAlertKind::StandbyForced.text(&sample(OwnerAlertKind::StandbyForced)),
+            "The standby Hub was forced to main by Asha. Data since its last sync may be lost."
+        );
+    }
+
+    #[test]
     fn a_cash_variance_line_carries_its_reason() {
         let mut p = sample(OwnerAlertKind::CashVariance);
         p.insert("reason".into(), "counting error".into());
@@ -548,8 +571,9 @@ mod tests {
     }
 
     #[test]
-    fn the_hub_raises_five_kinds() {
-        assert_eq!(OwnerAlertKind::HUB_SOURCED.len(), 5);
+    fn the_hub_raises_six_kinds() {
+        assert_eq!(OwnerAlertKind::HUB_SOURCED.len(), 6);
+        assert!(OwnerAlertKind::StandbyForced.hub_sourced());
         assert!(OwnerAlertKind::LowStock.hub_sourced());
         assert!(!OwnerAlertKind::Test.hub_sourced());
         assert!(!OwnerAlertKind::BranchOffline.hub_sourced());

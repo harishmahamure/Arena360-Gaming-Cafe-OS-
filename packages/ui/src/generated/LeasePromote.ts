@@ -30,6 +30,11 @@ export type LeasePromote = {
    */
   force: boolean;
   /**
+   * What the force went past: `LEASE_FRESH`, the code of the cloud's refusal (comma-separated)
+   * or [`FORCE_REASON_PLAIN`]. Set exactly when `force` is.
+   */
+  force_reason?: string;
+  /**
    * Players erased before the promote and erased again on the standby.
    */
   erasures_reapplied: number;

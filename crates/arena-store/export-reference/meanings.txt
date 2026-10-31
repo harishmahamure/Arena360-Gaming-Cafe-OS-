@@ -243,7 +243,7 @@ licence_cache.jwt: The signed licence token the Hub last received from the cloud
 notify_outbox: Messages waiting to be sent to players or alerts for the owner, and how each one went.
 notify_outbox.id: Unique id of the message.
 notify_outbox.purpose: What the message is for: transactional (a service message to a player) or owner_alert (an alert for the owner).
-notify_outbox.kind: The type of message: receipt, low_balance, session_ending, console_5min, credit_reminder, cash_variance, low_stock, credit_overdue, large_refund or large_discount.
+notify_outbox.kind: The type of message: receipt, low_balance, session_ending, console_5min, credit_reminder, cash_variance, low_stock, credit_overdue, large_refund, large_discount or standby_forced.
 notify_outbox.order_id: The bill the message is about, if any.
 notify_outbox.consent_policy_version: The version of the privacy policy the player had agreed to when the message was queued.
 notify_outbox.not_before: The earliest time the message may be sent.

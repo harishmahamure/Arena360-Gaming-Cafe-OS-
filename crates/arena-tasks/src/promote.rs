@@ -3,8 +3,8 @@
 //! A [`Promoter`] runs the steps of `lease.promote` on the standby Hub, in this order, so that
 //! nothing is changed before it is known to be allowed:
 //!
-//! 1. the main Hub's lease must have run out (no frame for 15 s), else `LEASE_FRESH`;
-//! 2. this build's schema must not be below the main Hub's, else `SCHEMA_BEHIND`;
+//! 1. this build's schema must not be below the main Hub's, else `SCHEMA_BEHIND`;
+//! 2. the main Hub's lease must have run out (no frame for 15 s), else `LEASE_FRESH`;
 //! 3. the follower stops, so no late row of the old epoch lands after the fork point;
 //! 4. the new epoch is claimed from the cloud with `fork = {old epoch, last replicated seq}`,
 //!    waiting 3 s; no answer makes the epoch provisional (the first heartbeat settles it), a
@@ -16,6 +16,11 @@
 //! ([`Promotion::publish`]; the lease change is what `epoch.changed` announces), starts the lease
 //! and heartbeat tasks and records `lease.promote` with [`Promotion::record`]. Promotion is
 //! manual only; nothing here runs on its own.
+//!
+//! Force promote (Story 9.22): [`Promoter::promote_forced`] runs the same steps without the
+//! freshness check, and with a provisional epoch when the cloud refuses the claim. A refusal that
+//! force could get past (`LEASE_FRESH`, the cloud's no) carries a [`ForceOffer`] with the lag;
+//! `SCHEMA_BEHIND` and `FENCED` never do. The reasons force went past are on the [`Promotion`].
 
 use std::future::Future;
 use std::sync::{Arc, Mutex};
@@ -23,8 +28,8 @@ use std::time::Duration;
 
 use arena_core::{Clock, HubStatus, LeaseInfo, Role};
 use arena_proto::{
-    AppError, ErrorCode, FenceClaimReason, FenceClaimRequest, FenceFork, LEASE_FRESH_MESSAGE,
-    LeasePromote, PROMOTE_CLAIM_WAIT_MS, main_lease_fresh,
+    AppError, ErrorCode, FORCE_REASON_PLAIN, FenceClaimReason, FenceClaimRequest, FenceFork,
+    ForceOffer, LEASE_FRESH_MESSAGE, LeasePromote, PROMOTE_CLAIM_WAIT_MS, main_lease_fresh,
 };
 use arena_store::{PromoteInput, PromoteOutcome, Store};
 use tokio::sync::watch;
@@ -74,6 +79,8 @@ pub struct PromoteError {
     pub error: AppError,
     /// The follower was stopped before the failure; the caller starts it again.
     pub follower_stopped: bool,
+    /// A forced promote could get past this refusal (Story 9.22): the warning and the lag.
+    pub force_offer: Option<ForceOffer>,
 }
 
 impl PromoteError {
@@ -81,6 +88,7 @@ impl PromoteError {
         Self {
             error,
             follower_stopped: false,
+            force_offer: None,
         }
     }
 
@@ -88,6 +96,20 @@ impl PromoteError {
         Self {
             error,
             follower_stopped: true,
+            force_offer: None,
+        }
+    }
+
+    fn offering(mut self, lag_rows: i64) -> Self {
+        self.force_offer = Some(ForceOffer::new(lag_rows));
+        self
+    }
+
+    /// What the route sends back: the error and the offer.
+    pub fn failure(&self) -> arena_proto::PromoteFailure {
+        arena_proto::PromoteFailure {
+            error: self.error.clone(),
+            force_offer: self.force_offer.clone(),
         }
     }
 }
@@ -100,6 +122,9 @@ pub struct Promotion {
     pub lag_rows: i64,
     /// When the database part finished (Hub clock, ms).
     pub promoted_at: i64,
+    /// Set by a forced promote: what force went past (`LEASE_FRESH`, the cloud's refusal, or
+    /// `FORCED` when nothing stood in the way).
+    pub force_reason: Option<String>,
 }
 
 impl Promotion {
@@ -112,7 +137,8 @@ impl Promotion {
             new_epoch: self.outcome.new_epoch.clone(),
             provisional: self.outcome.provisional,
             lag_rows: self.lag_rows,
-            force: false,
+            force: self.force_reason.is_some(),
+            force_reason: self.force_reason.clone(),
             erasures_reapplied: self.outcome.erasures_reapplied,
             kitchen_displays_to_repair: self.outcome.kitchen_displays_to_repair,
             promoted_at: self.promoted_at,
@@ -222,18 +248,26 @@ impl<C: EpochClaimer> Promoter<C> {
 
     /// Promotes this standby to main. See the module notes for the order.
     pub async fn promote(&self) -> Result<Promotion, PromoteError> {
+        self.run(false).await
+    }
+
+    /// Promotes although the main Hub's lease is fresh or the cloud refuses the claim (Story 9.22).
+    /// The caller has the manager's PIN and the data-loss acknowledgement. A standby behind the
+    /// main Hub's schema, or one a newer Hub has fenced out, is still refused.
+    pub async fn promote_forced(&self) -> Result<Promotion, PromoteError> {
+        self.run(true).await
+    }
+
+    async fn run(&self, force: bool) -> Result<Promotion, PromoteError> {
         let now = self.clock.now_ms();
-        let silent = self
-            .progress
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .silent_ms(now);
-        if main_lease_fresh(Some(silent)) {
-            return Err(PromoteError::before_stop(AppError::new(
-                ErrorCode::LeaseFresh,
-                LEASE_FRESH_MESSAGE,
-            )));
-        }
+        let (silent, report) = {
+            let progress = self
+                .progress
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (progress.silent_ms(now), progress.report(now))
+        };
+        // The schema check comes first: force is never offered to a standby that is behind.
         let basis = self
             .blocking(|s| s.promote_basis())
             .await
@@ -244,11 +278,18 @@ impl<C: EpochClaimer> Promoter<C> {
                 "Update this PC before it can take over from the main hub.",
             )));
         }
-        let report = self
-            .progress
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .report(now);
+        // What force went past, for the record and the owner's alert.
+        let mut went_past: Vec<&'static str> = Vec::new();
+        if main_lease_fresh(Some(silent)) {
+            if !force {
+                return Err(PromoteError::before_stop(AppError::new(
+                    ErrorCode::LeaseFresh,
+                    LEASE_FRESH_MESSAGE,
+                ))
+                .offering(report.lag_rows));
+            }
+            went_past.push("LEASE_FRESH");
+        }
 
         // From here the log of the old epoch must not move. The basis is read again once the stop
         // is sent (it waits for a batch the follower is applying), so the fork the cloud is given
@@ -262,17 +303,34 @@ impl<C: EpochClaimer> Promoter<C> {
             // Nothing was ever replicated, so there is no fence to move from.
             None
         } else {
-            self.claim(FenceClaimRequest {
-                expected: basis.old_epoch.clone(),
-                instance_id: basis.instance_id.clone(),
-                reason: FenceClaimReason::Promote,
-                fork: FenceFork {
-                    parent_epoch: basis.old_epoch.clone(),
-                    parent_seq: basis.fork_seq,
-                },
-            })
-            .await
-            .map_err(PromoteError::after_stop)?
+            let claim = self
+                .claim(FenceClaimRequest {
+                    expected: basis.old_epoch.clone(),
+                    instance_id: basis.instance_id.clone(),
+                    reason: FenceClaimReason::Promote,
+                    fork: FenceFork {
+                        parent_epoch: basis.old_epoch.clone(),
+                        parent_seq: basis.fork_seq,
+                    },
+                })
+                .await;
+            match claim {
+                Ok(claimed) => claimed,
+                // The cloud said no for a reason other than a newer Hub: force takes the lease
+                // on a provisional epoch and the first heartbeat settles it.
+                Err(e) if force && e.code != ErrorCode::Fenced => {
+                    tracing::warn!(
+                        code = e.code.as_str(),
+                        "forced promote past a refused claim"
+                    );
+                    went_past.push(e.code.as_str());
+                    None
+                }
+                Err(e) if e.code != ErrorCode::Fenced => {
+                    return Err(PromoteError::after_stop(e).offering(report.lag_rows));
+                }
+                Err(e) => return Err(PromoteError::after_stop(e)),
+            }
         };
 
         let promoted_at = self.clock.now_ms();
@@ -286,10 +344,18 @@ impl<C: EpochClaimer> Promoter<C> {
             })
             .await
             .map_err(PromoteError::after_stop)?;
+        let force_reason = force.then(|| {
+            if went_past.is_empty() {
+                FORCE_REASON_PLAIN.to_owned()
+            } else {
+                went_past.join(",")
+            }
+        });
         Ok(Promotion {
             outcome,
             lag_rows: report.lag_rows,
             promoted_at,
+            force_reason,
         })
     }
 }

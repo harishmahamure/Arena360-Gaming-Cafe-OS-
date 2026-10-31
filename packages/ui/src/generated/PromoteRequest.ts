@@ -9,4 +9,13 @@ export type PromoteRequest = {
    * holder's when a Counter is signed in. The route refuses a request without one.
    */
   pin?: string;
+  /**
+   * Promote although the lease is fresh or the cloud did not confirm the claim (Story 9.22).
+   * Needs `data_loss_acknowledged`.
+   */
+  force: boolean;
+  /**
+   * The manager has read [`FORCE_PROMOTE_MESSAGE`] and the lag.
+   */
+  data_loss_acknowledged: boolean;
 };

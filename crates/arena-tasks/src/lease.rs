@@ -16,7 +16,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use arena_core::{Clock, HubStatus, LeaseInfo, LeaseRenewal, Role, Writer, WriterHandle};
+use arena_core::{Clock, Epoch, HubStatus, LeaseInfo, LeaseRenewal, Role, Writer, WriterHandle};
 use arena_proto::{AppError, ErrorCode};
 use arena_store::{LeaseRow, Store, read_lease, read_max_seen_counter, write_lease};
 use tokio::sync::watch;
@@ -75,12 +75,55 @@ fn decide(existing: Option<LeaseRow>, max_seen: i64, own_id: &str, now: i64) -> 
     }
 }
 
+/// The highest epoch this Hub has been told of by somebody else (Story 9.22): the new main Hub's
+/// `epoch.changed` announcement, its mDNS record or a device that has seen it. The lease task reads
+/// it at every tick, so an old main Hub that is still running stops writing within one renewal
+/// once a higher epoch exists, without waiting for the cloud.
+#[derive(Debug, Clone, Default)]
+pub struct SeenEpochs(Arc<std::sync::Mutex<Option<Epoch>>>);
+
+impl SeenEpochs {
+    /// Remembers `epoch` when it is higher than the one held.
+    pub fn note(&self, epoch: Epoch) {
+        let mut held = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if held.as_ref().is_none_or(|h| epoch > *h) {
+            *held = Some(epoch);
+        }
+    }
+
+    /// Remembers an epoch written `<counter>:<instance>`; text that is not one changes nothing.
+    pub fn note_text(&self, epoch: &str) -> bool {
+        match arena_proto::epoch_parts(epoch) {
+            Some((counter, instance)) => {
+                self.note(Epoch {
+                    counter,
+                    hub_instance_id: instance.to_owned(),
+                });
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn get(&self) -> Option<Epoch> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
 /// The lease task for one Hub process.
 pub struct LeaseTask {
     clock: Arc<dyn Clock>,
     status: watch::Sender<HubStatus>,
     writer: Option<WriterHandle>,
     held: Option<LeaseRow>,
+    /// Higher epochs other Hubs announced (Story 9.22).
+    seen: SeenEpochs,
     /// Test hook: make every renewal job fail.
     #[cfg(test)]
     fail_renewals: bool,
@@ -126,6 +169,7 @@ impl LeaseTask {
             status,
             writer: None,
             held: None,
+            seen: SeenEpochs::default(),
             #[cfg(test)]
             fail_renewals: false,
         };
@@ -166,6 +210,11 @@ impl LeaseTask {
         });
     }
 
+    /// Where other parts of the Hub (the LAN listener, mDNS) report a higher epoch they have seen.
+    pub fn seen_epochs(&self) -> SeenEpochs {
+        self.seen.clone()
+    }
+
     /// The writer handle while primary.
     pub fn writer(&self) -> Option<WriterHandle> {
         self.writer.clone()
@@ -187,6 +236,26 @@ impl LeaseTask {
         let (Some(writer), Some(held)) = (self.writer.clone(), self.held.clone()) else {
             return Ok(Tick::Idle);
         };
+        // A higher epoch announced on the LAN ends this Hub's writing at once: the new main Hub
+        // owns the branch, whatever this Hub's own lease row still says. The counter is kept so a
+        // later start mints above it.
+        if let Some(seen) = self.seen.get()
+            && seen > LeaseInfo::from(&held).epoch()
+        {
+            if let Err(e) = writer.note_epoch_seen(seen.counter).await {
+                tracing::warn!(code = e.code.as_str(), "could not keep the epoch seen");
+            }
+            let now = self.clock.now_ms();
+            let row = LeaseRow {
+                counter: seen.counter,
+                hub_instance_id: seen.hub_instance_id,
+                provisional: false,
+                renewed_at: now,
+                expires_at: now + LEASE_TTL_MS,
+            };
+            self.demote(Some(row), "a higher epoch was announced").await;
+            return Ok(Tick::Demoted);
+        }
         let held_expires_at = held.expires_at;
         #[cfg(test)]
         let fail = self.fail_renewals;
@@ -483,6 +552,41 @@ mod tests {
         assert_eq!(row_in(&f.path), Some(higher));
         assert_eq!(f.rx.borrow().role, Role::Follower);
         assert_eq!(task.tick().await.unwrap(), Tick::Idle);
+    }
+
+    #[tokio::test]
+    async fn a_higher_epoch_announced_on_the_lan_stops_the_old_main_within_one_tick() {
+        let f = fixture();
+        let mut task = start(&f).await;
+        let writer = task.writer().unwrap();
+        let seen = task.seen_epochs();
+        // Our own epoch, a lower one and text that is no epoch change nothing.
+        assert!(seen.note_text(&format!("1:{OWN}")));
+        assert!(seen.note_text("0:ZZZ"));
+        assert!(!seen.note_text("nonsense"));
+        f.clock.advance(3_000);
+        assert_eq!(task.tick().await.unwrap(), Tick::Renewed);
+
+        // The new main announces epoch 2; the next tick (one renewal) closes the writer.
+        assert!(seen.note_text(&format!("2:{OTHER}")));
+        f.clock.advance(3_000);
+        assert_eq!(task.tick().await.unwrap(), Tick::Demoted);
+        assert_eq!(task.role(), Role::Follower);
+        assert!(writer.is_closed());
+        let err = writer.submit(|_| Ok(())).await.unwrap_err();
+        assert_eq!(err.code, ErrorCode::NotPrimary);
+        let s = f.rx.borrow();
+        assert_eq!(s.role, Role::Follower);
+        assert_eq!(
+            s.lease.as_ref().unwrap().epoch().to_string(),
+            format!("2:{OTHER}")
+        );
+        drop(s);
+        assert_eq!(task.tick().await.unwrap(), Tick::Idle);
+        // The counter was kept, so a restart mints above it; the Hub's own row is untouched.
+        assert_eq!(row_in(&f.path).unwrap().hub_instance_id, OWN);
+        let mut store = Store::open(&f.path, T0).unwrap();
+        assert_eq!(store.write_tx(|tx| read_max_seen_counter(tx)).unwrap(), 2);
     }
 
     #[tokio::test]

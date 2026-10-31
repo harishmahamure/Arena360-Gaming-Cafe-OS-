@@ -433,13 +433,19 @@ pub struct UiAuth {
 /// Asks the host process to stop and start again.
 pub type RestartHook = Arc<dyn Fn() + Send + Sync>;
 
-/// What the standby runs when a Manager promotes it (Story 9.21): given the Manager's staff id,
-/// it makes this Hub the main Hub and answers the new epoch, or why it could not.
+/// What the standby runs when a Manager promotes it (Story 9.21): given the Manager's staff id and
+/// whether the promote is forced (Story 9.22), it makes this Hub the main Hub and answers the new
+/// epoch, or why it could not (with the force offer when a forced promote could get past it).
 pub type PromoteHook = Arc<
     dyn Fn(
             String,
+            bool,
         ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<arena_proto::Promoted, AppError>> + Send>,
+            Box<
+                dyn std::future::Future<
+                        Output = Result<arena_proto::Promoted, arena_proto::PromoteFailure>,
+                    > + Send,
+            >,
         > + Send
         + Sync,
 >;

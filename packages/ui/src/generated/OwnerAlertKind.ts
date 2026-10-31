@@ -12,4 +12,5 @@ export type OwnerAlertKind =
   | "large_discount"
   | "branch_offline"
   | "branch_not_uploading"
-  | "branch_online";
+  | "branch_online"
+  | "standby_forced";

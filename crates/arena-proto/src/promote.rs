@@ -6,6 +6,13 @@
 //! the fork `{old epoch, last replicated seq}` (provisional when the cloud does not answer in
 //! 3 s), re-applies every erasure, opens the writer and announces the epoch. The Hub then records
 //! `lease.promote` ([`LeasePromote`]), which also sets `ops.last_promote`.
+//!
+//! Force promote (Story 9.22): when the lease is still fresh, or the cloud's claim was refused, the
+//! refusal carries a [`ForceOffer`] ("Data since the last sync may be lost. Promote anyway?" and
+//! the lag). A Manager who types their PIN and acknowledges the data loss sends the request again
+//! with `force`; the same steps run without the freshness check and without a confirmed claim, the
+//! record says `force: true` and why, and the Hub raises the owner alert `standby_forced`. A
+//! standby that is behind the main Hub's schema is never offered force.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -26,7 +33,21 @@ pub const PROMOTE_BUDGET_MS: u64 = 10_000;
 /// What `LEASE_FRESH` tells the manager.
 pub const LEASE_FRESH_MESSAGE: &str = "The main Hub is still running. Check it before promoting.";
 
+/// What the standby screen asks before a forced promote (Story 9.22).
+pub const FORCE_PROMOTE_MESSAGE: &str = "Data since the last sync may be lost. Promote anyway?";
+/// The reason a forced promote records when no check stood in the way.
+pub const FORCE_REASON_PLAIN: &str = "FORCED";
+
 const MAX_TEXT_CHARS: usize = 100;
+
+/// "12 changes not yet copied": the lag shown beside the force-promote warning.
+pub fn lag_text(lag_rows: i64) -> String {
+    match lag_rows {
+        ..=0 => "All changes copied".to_owned(),
+        1 => "1 change not yet copied".to_owned(),
+        n => format!("{n} changes not yet copied"),
+    }
+}
 
 /// Whether the main Hub's lease still stands, given how long ago the standby last heard from it
 /// (`None`: it never has, which counts as stale).
@@ -44,6 +65,64 @@ pub struct PromoteRequest {
     #[serde(default)]
     #[ts(optional)]
     pub pin: Option<String>,
+    /// Promote although the lease is fresh or the cloud did not confirm the claim (Story 9.22).
+    /// Needs `data_loss_acknowledged`.
+    #[serde(default)]
+    pub force: bool,
+    /// The manager has read [`FORCE_PROMOTE_MESSAGE`] and the lag.
+    #[serde(default)]
+    pub data_loss_acknowledged: bool,
+}
+
+/// What a refused promote offers (Story 9.22): the warning and how far behind the standby is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ForceOffer {
+    /// [`FORCE_PROMOTE_MESSAGE`].
+    pub message: String,
+    /// Change rows of the main Hub the standby had not copied.
+    #[ts(type = "number")]
+    pub lag_rows: i64,
+    /// [`lag_text`] of `lag_rows`.
+    pub lag_text: String,
+}
+
+impl ForceOffer {
+    pub fn new(lag_rows: i64) -> Self {
+        Self {
+            message: FORCE_PROMOTE_MESSAGE.to_owned(),
+            lag_rows,
+            lag_text: lag_text(lag_rows),
+        }
+    }
+}
+
+/// The body of a refused `POST /ui/standby/promote`: the usual error and, when a forced promote
+/// is possible, the offer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PromoteRefused {
+    #[serde(flatten)]
+    pub error: crate::UiError,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub force_offer: Option<ForceOffer>,
+}
+
+/// Why a promote did not happen, with the force offer when there is one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromoteFailure {
+    pub error: crate::AppError,
+    pub force_offer: Option<ForceOffer>,
+}
+
+impl From<crate::AppError> for PromoteFailure {
+    fn from(error: crate::AppError) -> Self {
+        Self {
+            error,
+            force_offer: None,
+        }
+    }
 }
 
 /// The answer of `POST /ui/standby/promote`: this Hub is the main Hub now.
@@ -80,6 +159,11 @@ pub struct LeasePromote {
     /// A forced promote (Story 9.22).
     #[serde(default)]
     pub force: bool,
+    /// What the force went past: `LEASE_FRESH`, the code of the cloud's refusal (comma-separated)
+    /// or [`FORCE_REASON_PLAIN`]. Set exactly when `force` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub force_reason: Option<String>,
     /// Players erased before the promote and erased again on the standby.
     #[ts(type = "number")]
     pub erasures_reapplied: i64,
@@ -110,6 +194,11 @@ impl LeasePromote {
             && self.erasures_reapplied >= 0
             && self.kitchen_displays_to_repair >= 0
             && self.promoted_at > 0
+            && match (&self.force_reason, self.force) {
+                (Some(r), true) => !r.is_empty() && text_ok(r),
+                (None, false) => true,
+                _ => false,
+            }
             && self.by.as_ref().is_none_or(|b| !b.is_empty() && text_ok(b))
     }
 
@@ -137,6 +226,7 @@ mod tests {
             provisional: false,
             lag_rows: 2,
             force: false,
+            force_reason: None,
             erasures_reapplied: 1,
             kitchen_displays_to_repair: 2,
             promoted_at: 1_800_000_000_000,
@@ -178,6 +268,19 @@ mod tests {
                 ..facts()
             },
             LeasePromote {
+                force: true,
+                ..facts()
+            },
+            LeasePromote {
+                force_reason: Some("LEASE_FRESH".into()),
+                ..facts()
+            },
+            LeasePromote {
+                force: true,
+                force_reason: Some(String::new()),
+                ..facts()
+            },
+            LeasePromote {
                 by: Some("a\nb".into()),
                 ..facts()
             },
@@ -191,7 +294,32 @@ mod tests {
         assert!(serde_json::from_str::<PromoteRequest>(r#"{"pin":"1","x":1}"#).is_err());
         assert_eq!(
             serde_json::from_str::<PromoteRequest>("{}").unwrap(),
-            PromoteRequest { pin: None }
+            PromoteRequest {
+                pin: None,
+                force: false,
+                data_loss_acknowledged: false
+            }
         );
+    }
+
+    #[test]
+    fn a_forced_record_names_what_it_went_past() {
+        let f = LeasePromote {
+            force: true,
+            force_reason: Some("LEASE_FRESH".into()),
+            ..facts()
+        };
+        assert!(f.is_consistent());
+        assert_eq!(LeasePromote::parse(&f.to_json()), Some(f.clone()));
+    }
+
+    #[test]
+    fn the_lag_reads_in_words() {
+        assert_eq!(lag_text(12), "12 changes not yet copied");
+        assert_eq!(lag_text(1), "1 change not yet copied");
+        assert_eq!(lag_text(0), "All changes copied");
+        let offer = ForceOffer::new(12);
+        assert_eq!(offer.message, FORCE_PROMOTE_MESSAGE);
+        assert_eq!(offer.lag_text, "12 changes not yet copied");
     }
 }

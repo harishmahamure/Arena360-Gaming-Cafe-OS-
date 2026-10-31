@@ -328,3 +328,104 @@ async fn a_standby_that_copied_nothing_promotes_without_a_fence_to_move_from() {
     assert_eq!(got.outcome.old_epoch, "");
     assert!(cloud.asked().is_empty());
 }
+
+// Story 9.22: force promote.
+
+#[tokio::test]
+async fn a_fresh_lease_offers_force_with_the_lag() {
+    let f = fixture(14_000);
+    let cloud = Scripted::new(vec![won("4:STBY")]);
+    let err = promoter(&f, &cloud).promote().await.unwrap_err();
+    assert_eq!(err.error.code, ErrorCode::LeaseFresh);
+    let offer = err.force_offer.clone().expect("force is offered");
+    assert_eq!(offer.message, arena_proto::FORCE_PROMOTE_MESSAGE);
+    assert_eq!(
+        (offer.lag_rows, offer.lag_text.as_str()),
+        (2, "2 changes not yet copied")
+    );
+    assert_eq!(err.failure().force_offer, Some(offer));
+}
+
+#[tokio::test]
+async fn force_takes_the_lease_although_the_main_hub_was_heard_a_moment_ago() {
+    let f = fixture(2_000);
+    let cloud = Scripted::new(vec![won("4:STBY")]);
+    let got = promoter(&f, &cloud).promote_forced().await.unwrap();
+    assert_eq!(got.outcome.new_epoch, "4:STBY");
+    assert!(!got.outcome.provisional, "the cloud still issued the epoch");
+    assert_eq!(got.force_reason.as_deref(), Some("LEASE_FRESH"));
+    assert!(lease_held(&f));
+
+    // The record says it was forced, by what, and how far behind the standby was.
+    let record = got.record();
+    assert!(record.force && record.is_consistent());
+    assert_eq!(
+        (
+            record.force_reason.as_deref(),
+            record.lag_rows,
+            record.fork_seq
+        ),
+        (Some("LEASE_FRESH"), 2, 7)
+    );
+}
+
+#[tokio::test]
+async fn a_refused_claim_offers_force_and_force_promotes_on_a_provisional_epoch() {
+    let f = fixture(60_000);
+    let cloud = Scripted::new(vec![refused(429, ErrorCode::RateLimited)]);
+    let err = promoter(&f, &cloud).promote().await.unwrap_err();
+    assert_eq!(err.error.code, ErrorCode::RateLimited);
+    assert!(err.follower_stopped);
+    assert_eq!(err.force_offer.as_ref().map(|o| o.lag_rows), Some(2));
+    assert!(!lease_held(&f));
+
+    let f = fixture(60_000);
+    let cloud = Scripted::new(vec![refused(429, ErrorCode::RateLimited)]);
+    let got = promoter(&f, &cloud).promote_forced().await.unwrap();
+    assert!(got.outcome.provisional);
+    assert_eq!(got.force_reason.as_deref(), Some("RATE_LIMITED"));
+    assert!(lease_held(&f));
+}
+
+#[tokio::test]
+async fn force_on_a_stale_lease_with_a_good_claim_is_recorded_as_plain_force() {
+    let f = fixture(60_000);
+    let cloud = Scripted::new(vec![won("4:STBY")]);
+    let got = promoter(&f, &cloud).promote_forced().await.unwrap();
+    assert_eq!(
+        got.force_reason.as_deref(),
+        Some(arena_proto::FORCE_REASON_PLAIN)
+    );
+    assert!(got.record().is_consistent());
+}
+
+#[tokio::test]
+async fn force_is_never_offered_or_accepted_past_a_schema_behind_or_a_newer_hub() {
+    let f = fixture(2_000);
+    {
+        let mut s = f.store.lock().unwrap();
+        let ours = s.schema_version().unwrap();
+        s.record_main_schema(ours + 1, false).unwrap();
+    }
+    let cloud = Scripted::new(vec![won("4:STBY")]);
+    for forced in [false, true] {
+        let p = promoter(&f, &cloud);
+        let err = if forced {
+            p.promote_forced().await
+        } else {
+            p.promote().await
+        }
+        .unwrap_err();
+        assert_eq!(err.error.code, ErrorCode::SchemaBehind);
+        assert!(err.force_offer.is_none() && !err.follower_stopped);
+    }
+    assert!(!lease_held(&f));
+
+    // A newer Hub won the fence: force does not get past that either.
+    let f = fixture(60_000);
+    let cloud = Scripted::new(vec![fenced(Some("5:OTHER")), fenced(Some("6:OTHER"))]);
+    let err = promoter(&f, &cloud).promote_forced().await.unwrap_err();
+    assert_eq!(err.error.code, ErrorCode::Fenced);
+    assert!(err.force_offer.is_none());
+    assert!(!lease_held(&f));
+}

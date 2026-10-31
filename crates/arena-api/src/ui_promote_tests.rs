@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use arena_proto::{AppError, ErrorCode, LEASE_FRESH_MESSAGE, Promoted};
+use arena_proto::{AppError, ErrorCode, ForceOffer, LEASE_FRESH_MESSAGE, PromoteFailure, Promoted};
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
@@ -11,11 +11,15 @@ use crate::ui_auth::tests::{Hub, call, hub, token_for};
 
 const PROMOTE: &str = "/ui/standby/promote";
 
-/// A hook that records who asked and answers `result`.
-fn hook(result: Result<Promoted, AppError>, asked: &Arc<Mutex<Vec<String>>>) -> PromoteHook {
+/// A hook that records who asked (and whether they forced it) and answers `result`.
+fn hook(result: Result<Promoted, PromoteFailure>, asked: &Arc<Mutex<Vec<String>>>) -> PromoteHook {
     let asked = Arc::clone(asked);
-    Arc::new(move |manager| {
-        asked.lock().unwrap().push(manager);
+    Arc::new(move |manager, force| {
+        asked.lock().unwrap().push(if force {
+            format!("{manager}!")
+        } else {
+            manager
+        });
         let result = result.clone();
         Box::pin(async move { result })
     })
@@ -96,7 +100,10 @@ async fn what_the_steps_refuse_comes_back_as_it_is() {
     let hub = hub().await;
     let asked = Arc::new(Mutex::new(Vec::new()));
     hub.auth.set_promote(hook(
-        Err(AppError::new(ErrorCode::LeaseFresh, LEASE_FRESH_MESSAGE)),
+        Err(PromoteFailure::from(AppError::new(
+            ErrorCode::LeaseFresh,
+            LEASE_FRESH_MESSAGE,
+        ))),
         &asked,
     ));
     let token = token_for(&hub, "manager", "m-pass").await;
@@ -117,6 +124,91 @@ async fn the_route_needs_a_session_and_refuses_unknown_fields() {
     let (status, _) = call(&hub, "POST", PROMOTE, None, Some(json!({"pin": "2222"}))).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     let token = token_for(&hub, "manager", "m-pass").await;
-    let (status, _) = post(&hub, &token, json!({"pin": "2222", "force": true})).await;
+    let (status, _) = post(&hub, &token, json!({"pin": "2222", "sudo": true})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+// Story 9.22: force promote.
+
+fn offer_failure() -> PromoteFailure {
+    PromoteFailure {
+        error: AppError::new(ErrorCode::LeaseFresh, LEASE_FRESH_MESSAGE),
+        force_offer: Some(ForceOffer::new(12)),
+    }
+}
+
+#[tokio::test]
+async fn a_refusal_force_could_get_past_carries_the_warning_and_the_lag() {
+    let hub = hub().await;
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    hub.auth.set_promote(hook(Err(offer_failure()), &asked));
+    let token = token_for(&hub, "manager", "m-pass").await;
+    let (status, body) = post(&hub, &token, json!({"pin": "2222"})).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["code"], "LEASE_FRESH");
+    assert_eq!(
+        body["force_offer"],
+        json!({
+            "message": "Data since the last sync may be lost. Promote anyway?",
+            "lag_rows": 12,
+            "lag_text": "12 changes not yet copied",
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_forced_promote_needs_the_pin_and_the_acknowledgement() {
+    let hub = hub().await;
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    hub.auth.set_promote(hook(Ok(done()), &asked));
+    let token = token_for(&hub, "manager", "m-pass").await;
+
+    // No acknowledgement: nothing starts.
+    let (status, body) = post(&hub, &token, json!({"pin": "2222", "force": true})).await;
+    assert_eq!(
+        (status, body["code"].as_str(), body["field"].as_str()),
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Some("VALIDATION_FAILED"),
+            Some("data_loss_acknowledged")
+        )
+    );
+    // No PIN: nothing starts.
+    let (status, body) = post(
+        &hub,
+        &token,
+        json!({"force": true, "data_loss_acknowledged": true}),
+    )
+    .await;
+    assert_eq!(
+        (status, body["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("PERMISSION_DENIED"))
+    );
+    assert!(asked.lock().unwrap().is_empty());
+
+    // Both: the hook is told it is forced, for the Manager who typed the PIN.
+    let (status, body) = post(
+        &hub,
+        &token,
+        json!({"pin": "2222", "force": true, "data_loss_acknowledged": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(*asked.lock().unwrap(), vec![format!("{}!", hub.manager_id)]);
+}
+
+#[tokio::test]
+async fn a_counter_forces_only_with_a_managers_pin() {
+    let hub = hub().await;
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    hub.auth.set_promote(hook(Ok(done()), &asked));
+    let token = token_for(&hub, "counter", "c-pass").await;
+    let (status, _) = post(
+        &hub,
+        &token,
+        json!({"pin": "3333", "force": true, "data_loss_acknowledged": true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(asked.lock().unwrap().is_empty());
 }

@@ -172,7 +172,9 @@ pub(super) fn mutate(
             _ => Err(mismatch()),
         },
         IntentPayload::LeasePromote(p) => match target {
-            Target::Setting(row) => super::lease_promote::mutate(tx, intent, p, row.as_ref()),
+            Target::Setting(row) => {
+                super::lease_promote::mutate(tx, intent, p, row.as_ref(), now_ms)
+            }
             _ => Err(mismatch()),
         },
         IntentPayload::OpsRestore(p) => match target {

@@ -6324,6 +6324,7 @@ b"
                 provisional: false,
                 lag_rows: if *bad { -1 } else { *lag },
                 force: false,
+                force_reason: None,
                 erasures_reapplied: 0,
                 kitchen_displays_to_repair: 0,
                 promoted_at: hub.clock_now(),

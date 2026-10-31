@@ -436,9 +436,10 @@ pub use process::{
     parse_process_rules, truncate_path_left,
 };
 pub use promote::{
-    DEFAULT_OPS_LAST_PROMOTE, KEY_OPS_LAST_PROMOTE, LEASE_FRESH_MESSAGE, LeasePromote,
-    MAIN_LEASE_STALE_MS, PROMOTE_BUDGET_MS, PROMOTE_CLAIM_WAIT_MS, PromoteRequest, Promoted,
-    main_lease_fresh,
+    DEFAULT_OPS_LAST_PROMOTE, FORCE_PROMOTE_MESSAGE, FORCE_REASON_PLAIN, ForceOffer,
+    KEY_OPS_LAST_PROMOTE, LEASE_FRESH_MESSAGE, LeasePromote, MAIN_LEASE_STALE_MS,
+    PROMOTE_BUDGET_MS, PROMOTE_CLAIM_WAIT_MS, PromoteFailure, PromoteRefused, PromoteRequest,
+    Promoted, lag_text, main_lease_fresh,
 };
 pub use receipt::{
     DEFAULT_NOTIFY, DEFAULT_RECEIPT_ADDRESS, DEFAULT_RECEIPT_DEFAULT, DEFAULT_RECEIPT_DRAWER,

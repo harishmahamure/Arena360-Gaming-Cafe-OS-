@@ -911,7 +911,7 @@ async fn a_hub_post_raises_one_alert_under_the_outbox_id_and_a_repeat_adds_none(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_hub_may_raise_only_its_five_kinds_with_the_right_parameters() {
+async fn a_hub_may_raise_only_its_six_kinds_with_the_right_parameters() {
     let h = Harness::new().await;
     let cafe = h.paid().await;
     let token = h.pair_hub(&cafe).await;
@@ -924,6 +924,7 @@ async fn a_hub_may_raise_only_its_five_kinds_with_the_right_parameters() {
         ),
         ("large_refund", json!({"amount": "Rs 5"})),
         ("large_discount", json!({"amount": "Rs 5"})),
+        ("standby_forced", json!({"manager": "Asha"})),
     ];
     for (n, (kind, params)) in kinds.iter().enumerate() {
         let r = h
@@ -931,7 +932,7 @@ async fn a_hub_may_raise_only_its_five_kinds_with_the_right_parameters() {
             .await;
         assert_eq!(r.status, 200, "{kind}: {}", r.body);
     }
-    assert_eq!(h.alert_rows(), 5);
+    assert_eq!(h.alert_rows(), 6);
 
     let bad = [
         // The cloud's own kinds, and ones nobody knows.
@@ -947,6 +948,7 @@ async fn a_hub_may_raise_only_its_five_kinds_with_the_right_parameters() {
         ),
         ("large_refund", json!({"amount": " "})),
         ("large_refund", json!({"amount": "x".repeat(41)})),
+        ("standby_forced", json!({})),
     ];
     for (n, (kind, params)) in bad.into_iter().enumerate() {
         let r = h
@@ -958,12 +960,12 @@ async fn a_hub_may_raise_only_its_five_kinds_with_the_right_parameters() {
             "{kind} {params}"
         );
     }
-    assert_eq!(h.alert_rows(), 5);
+    assert_eq!(h.alert_rows(), 6);
     let r = h
         .hub_alert(&token, "a/b", "large_refund", json!({"amount": "Rs 5"}))
         .await;
     assert_eq!((r.status, r.code()), (422, "VALIDATION_FAILED"));
-    assert_eq!(h.alert_rows(), 5);
+    assert_eq!(h.alert_rows(), 6);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1526,4 +1528,35 @@ mod offline_watch {
         }
         assert_eq!(h.alert_rows(), 0);
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_forced_standby_alert_names_the_manager_and_reaches_the_owner() {
+    let h = Harness::new().await;
+    let cafe = h.paid().await;
+    h.subscribe(&cafe, &endpoint(1)).await;
+    let token = h.pair_hub(&cafe).await;
+    let r = h
+        .hub_alert(
+            &token,
+            "FORCE1",
+            "standby_forced",
+            json!({"manager": "Asha"}),
+        )
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(h.alert_rows(), 1);
+    let sent = h.fake_push().sent();
+    assert_eq!(sent.len(), 1);
+    // The same post again raises nothing more.
+    let again = h
+        .hub_alert(
+            &token,
+            "FORCE1",
+            "standby_forced",
+            json!({"manager": "Asha"}),
+        )
+        .await;
+    assert_eq!(again.status, 200);
+    assert_eq!(h.alert_rows(), 1);
 }

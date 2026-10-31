@@ -2,7 +2,7 @@
 title: "Story 10.12: A lapse or downgrade never ends a running session, and over-cap devices go read-only"
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: 'c963f5c8'
 review_loop_iteration: 0
 context:
@@ -68,3 +68,7 @@ warnings: []
 Status: review. See Verification for what ran. Test results are recorded in the commit's run; baseline Windows failures listed in Story 10.6/10.11 are unchanged.
 
 Risks to know: an existing Hub with more devices than its cap is marked at the next licence change, not at upgrade time; the order of pairing is `devices_meta.created_at` then row order (same-millisecond pairings fall back to insertion order); `arena-e2e` and kiosk-svc discovery tests are Unix-only and were not run.
+
+## Code Review
+
+Reviewed the implementation commit; no blocking findings in the story's code. Fixed one pre-existing test defect: the proptest notification invariant treated Story 8.34 `owner_alert` outbox rows as player messages and failed intermittently (`proptest_apply.rs`). Fmt, clippy, unit/proptest, hub and kiosk Playwright specs, and string/tier-lock/generated checks pass.

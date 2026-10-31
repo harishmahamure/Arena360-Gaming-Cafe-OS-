@@ -1289,6 +1289,10 @@ fn assert_notifications_hold(hub: &Hub) -> Result<(), TestCaseError> {
     let orders = hub.reader.rows(Table::Orders).unwrap();
     let players = hub.reader.rows(Table::Players).unwrap();
     for r in hub.reader.rows(Table::NotifyOutbox).unwrap() {
+        // An owner alert (Story 8.34) is not a message to a player.
+        if text(&r, "purpose") == "owner_alert" {
+            continue;
+        }
         prop_assert_eq!(text(&r, "purpose"), "transactional");
         prop_assert!(
             players

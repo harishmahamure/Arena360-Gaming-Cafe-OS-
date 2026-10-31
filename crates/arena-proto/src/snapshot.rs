@@ -69,6 +69,17 @@ pub struct HubSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub restore_pending: Option<String>,
+    /// This Windows Hub paired with the code of a Hub move and waits for the Android Hub to hand
+    /// the branch over (Story 10.16): the name of the branch. The Hub UI shows "Waiting for your
+    /// Android Hub" and nothing else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub migration_wait: Option<String>,
+    /// The move this Android Hub is asked to hand over (Story 10.16): staff see a persistent
+    /// "Move this branch to <PC name>" item in the alert list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub move_notice: Option<crate::MigrationNotice>,
     /// The owner released the branch key to this waiting Hub and it holds the key (Story 9.10):
     /// "Restore from a file" is enabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -481,6 +492,8 @@ mod tests {
             paired: true,
             pairing_revoked: None,
             restore_pending: None,
+            migration_wait: None,
+            move_notice: None,
             restore_key_released: None,
             needs_repair: None,
             licence_unverified: None,

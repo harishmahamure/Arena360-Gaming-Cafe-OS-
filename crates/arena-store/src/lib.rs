@@ -2107,6 +2107,12 @@ impl Store {
         find_hub_identity(&self.conn)
     }
 
+    /// The branch name while this Windows Hub waits for the Android Hub of a Hub move to hand the
+    /// branch over (Story 10.16), if it does.
+    pub fn migration_wait(&self) -> Result<Option<String>, AppError> {
+        Ok(self.meta(MIGRATION_WAIT_KEY)?.filter(|n| !n.is_empty()))
+    }
+
     /// The restore a replacement Hub is waiting for, if any (Story 9.9).
     pub fn restore_pending(&self) -> Result<Option<RestorePending>, AppError> {
         if self.schema_version()? == 0 {
@@ -2179,6 +2185,11 @@ fn current_version(conn: &Connection) -> Result<u32, AppError> {
         .map_err(db_error)?;
     Ok(v.unwrap_or(0).clamp(0, i64::from(u32::MAX)) as u32)
 }
+
+/// The `hub_meta` key that holds the branch name while a Windows Hub waits for an Android Hub to
+/// hand its branch over (Story 10.16). It lives outside the change log, like the restore flag, so a
+/// restart finds the Hub still waiting; Story 10.18 clears it when the snapshot is imported.
+pub const MIGRATION_WAIT_KEY: &str = "migration_wait";
 
 /// Reads one `hub_meta` value.
 pub fn get_meta(conn: &Connection, key: &str) -> Result<Option<String>, AppError> {

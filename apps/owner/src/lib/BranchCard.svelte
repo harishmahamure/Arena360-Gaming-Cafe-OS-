@@ -169,6 +169,47 @@
     if (res.code === "STANDBY_EXISTS" || res.code === "TIER_LOCKED") await refresh();
   }
 
+  let moveIssued: PairingCodeIssued | null = $state(null);
+  let moveBusy = $state(false);
+  let moveError: MessageKey | null = $state(null);
+
+  /** The move to a Windows Hub (Story 10.16): offered while an Android Hub runs the branch. */
+  const movable = $derived(branch.hub.paired && branch.hub.platform === "android");
+  const move = $derived(branch.migration);
+  const movePath = $derived(`/branches/${encodeURIComponent(branch.id)}/hub-migration`);
+
+  async function startMove() {
+    moveBusy = true;
+    moveError = null;
+    const res = await send<PairingCodeIssued>("POST", movePath);
+    moveBusy = false;
+    if (res.ok) {
+      moveIssued = res.data;
+      await refresh();
+      return;
+    }
+    moveError =
+      res.code === "HUB_MIGRATION_ACTIVE"
+        ? "owner.branches.move.active"
+        : res.code === "TIER_LOCKED"
+          ? "owner.branches.move.locked"
+          : "owner.branches.error.generic";
+    if (res.code === "HUB_MIGRATION_ACTIVE" || res.code === "TIER_LOCKED") await refresh();
+  }
+
+  async function cancelMove() {
+    moveBusy = true;
+    moveError = null;
+    const res = await send("DELETE", movePath);
+    moveBusy = false;
+    if (res.ok || res.code === "NOT_FOUND") {
+      moveIssued = null;
+      await refresh();
+      return;
+    }
+    moveError = "owner.branches.error.generic";
+  }
+
   async function edit() {
     name = branch.name;
     timezone = branch.timezone;
@@ -387,6 +428,73 @@
         {#if standbyError}<p role="alert">{t(standbyError)}</p>{/if}
       {/if}
     </div>
+    {#if movable || move}
+      <div class="standby" data-testid="move">
+        <p class="type-hub-label">{t("owner.branches.move")}</p>
+        {#if !paid}
+          <TierLock tier="Basic" branch={branch.id} />
+        {:else}
+          {#if move?.phase === "awaiting_handover"}
+            <p data-testid="move-paired">
+              {t("owner.branches.move.paired", {
+                pc: move.target_hub_name ?? t("owner.branches.move.pc_fallback"),
+              })}
+            </p>
+          {:else if moveIssued}
+            <PairingCode
+              code={moveIssued.code}
+              expiresAt={moveIssued.expires_at}
+              serverNow={moveIssued.server_now}
+              onregenerate={startMove}
+              regenerating={moveBusy}
+            />
+          {:else if move?.code}
+            <p data-testid="move-waiting">
+              {t("owner.branches.move.waiting", {
+                time: formatTime(move.code.expires_at, branch.timezone),
+              })}
+            </p>
+          {/if}
+          {#if !move}
+            <ol class="steps">
+              <li>{t("owner.branches.move.step1")}</li>
+              <li>{t("owner.branches.move.step2")}</li>
+              <li>{t("owner.branches.move.step3")}</li>
+            </ol>
+            <p class="hint">{t("owner.branches.move.sessions")}</p>
+          {/if}
+          <div class="actions">
+            {#if !move}
+              <Button
+                label="owner.branches.move.start"
+                variant="secondary"
+                onclick={startMove}
+                disabled={moveBusy}
+                disabledReason="owner.branches.move.working"
+              />
+            {:else}
+              {#if move.phase === "awaiting_windows" && !moveIssued}
+                <Button
+                  label="owner.branches.move.new"
+                  variant="secondary"
+                  onclick={startMove}
+                  disabled={moveBusy}
+                  disabledReason="owner.branches.move.working"
+                />
+              {/if}
+              <Button
+                label="owner.branches.move.cancel"
+                variant="secondary"
+                onclick={cancelMove}
+                disabled={moveBusy}
+                disabledReason="owner.branches.move.working"
+              />
+            {/if}
+          </div>
+          {#if moveError}<p role="alert">{t(moveError)}</p>{/if}
+        {/if}
+      </div>
+    {/if}
     {#if branch.key_request}
       {@const ask = branch.key_request}
       {@const [ageKey, ageN] = age(new Date(ask.requested_at).toISOString())}
@@ -512,6 +620,11 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
+  }
+
+  .steps {
+    margin: 0;
+    padding-inline-start: var(--space-5);
   }
 
   .replaced {

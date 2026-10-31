@@ -27,4 +27,9 @@ export type HubPairResponse = {
    * Hub never runs `branch.bootstrap`.
    */
   role?: HubRole;
+  /**
+   * This Windows Hub paired with a `migrate` code (Story 10.16): it opens "Waiting for your
+   * Android Hub" and serves nothing. The response then carries no bootstrap.
+   */
+  migration?: boolean;
 };

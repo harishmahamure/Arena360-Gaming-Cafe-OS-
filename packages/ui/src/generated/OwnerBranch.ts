@@ -2,6 +2,7 @@
 import type { BranchHub } from "./BranchHub";
 import type { BranchSetupProgress } from "./BranchSetupProgress";
 import type { OwnerBackup } from "./OwnerBackup";
+import type { OwnerMigration } from "./OwnerMigration";
 import type { OwnerStandby } from "./OwnerStandby";
 import type { PendingKeyRequest } from "./PendingKeyRequest";
 import type { Tier } from "./Tier";
@@ -35,4 +36,9 @@ export type OwnerBranch = {
    * The branch's standby PC (Story 9.18): present while one is paired or its code is waiting.
    */
   standby?: OwnerStandby;
+  /**
+   * The move of this branch from its Android Hub to a Windows Hub (Story 10.16): present while
+   * one is under way.
+   */
+  migration?: OwnerMigration;
 };

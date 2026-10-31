@@ -355,11 +355,11 @@ pub use pairing::{
     BranchBootstrapCommand, HEARTBEAT_BOOT_INTERVAL_S, HEARTBEAT_LIVE_INTERVAL_S,
     HEARTBEAT_MIN_GAP_MS, HUB_TOKEN_PREFIX, HeartbeatBackup, HeartbeatFence, HeartbeatRequest,
     HeartbeatResponse, HubPairRequest, HubPairResponse, HubPlatform, HubRole, InstallHubState,
-    IssuePairingCode, OWNER_ROLE, PAIR_ATTEMPTS_PER_IP_PER_HOUR, PAIR_FAILURES_PER_CODE,
-    PAIRING_CODE_ALPHABET, PAIRING_CODE_LEN, PAIRING_CODE_TTL_MS, PairHubOk, PairHubRequest,
-    PairingCodeIssued, ResendUnavailable, SETUP_CODE_HUB_TTL_MS, SETUP_CODE_PLAINTEXT_TTL_MS,
-    SeqRange, SetupCodeReveal, check_bootstrap, format_pairing_code, normalize_pairing_code,
-    valid_pairing_code,
+    IssuePairingCode, MigrationNotice, MigrationPhase, OWNER_ROLE, OwnerMigration,
+    PAIR_ATTEMPTS_PER_IP_PER_HOUR, PAIR_FAILURES_PER_CODE, PAIRING_CODE_ALPHABET, PAIRING_CODE_LEN,
+    PAIRING_CODE_TTL_MS, PairHubOk, PairHubRequest, PairingCodeIssued, ResendUnavailable,
+    SETUP_CODE_HUB_TTL_MS, SETUP_CODE_PLAINTEXT_TTL_MS, SeqRange, SetupCodeReveal, check_bootstrap,
+    format_pairing_code, normalize_pairing_code, valid_pairing_code,
 };
 pub use pc_command::{
     DeviceMessage, DevicePower, DeviceScreen, LockReason, MessageScope, PC_MESSAGE_MAX, PcAck,

@@ -2292,6 +2292,38 @@ built by `upgradeUrl` in `@arena/ui`; each app says where the picker lives with 
   "Refund requested — usually processed within 2 working days", then the issued, processed and rejected sentences.
 - Not done here: operators who cannot find a payment id on an invoice (older rows) refund by hand in the dashboard.
 
+## Moving a Free Android Hub to a Windows Hub: the start (Story 10.16)
+
+- **Owner app.** Account -> Branches shows "Move to a Windows Hub" on a branch whose main Hub is Android: the steps (install on
+  the PC, type the code, confirm on the tablet), "Sessions keep running on the tablet until you confirm", then the
+  `pairing-code` card. On Free it is the `tier-lock` "Available on Basic". After the PC pairs the card names it ("<PC> has
+  paired. Confirm the move on the tablet.") and offers only "Cancel move"; while the code waits it offers "Get a new move code".
+- **Cloud.** `POST /v1/branches/{id}/hub-migration` (owner session) needs a paid plan (`TIER_LOCKED`), a live Android main Hub
+  (`STEP_NOT_READY`, `PLATFORM_UNSUPPORTED` for a Windows one) and writes a `hub_migrations` row (`awaiting_windows`) and a
+  `pairing_codes` row with `purpose = 'migrate'` (a branch keeps one live code per role and purpose, so a Hub code and a move code
+  wait side by side). Asking again while the move still waits for its PC replaces the code and keeps the one row; once the PC
+  has paired it is `HUB_MIGRATION_ACTIVE` (409). `DELETE` on the same path cancels: the row is `cancelled`, the code is
+  invalidated and the PC's token revoked (`404 NOT_FOUND` when there is nothing to cancel or the handover has begun, which is
+  Story 10.17).
+- **Pairing.** A `migrate` code only pairs through `pair_migration_hub`; the ordinary `pair_hub` and `redeem_pairing_code`
+  ignore it and it cannot pair a standby. An Android install is refused `FEATURE_NOT_ENTITLED` (and the failure counts toward the
+  code's five), a Windows install on a plan that went Free is refused as for any Hub code. Wrong, used and expired codes answer
+  as in Story 2.10. The response carries the token and a signed licence, no bootstrap and no owner sign-in code, and
+  `migration: true`. The Android Hub's token, fence and data are untouched; the move becomes `awaiting_handover` and names the
+  PC (`HubPairRequest.hub_name`, the Hub's host name, cleaned by `sanitise_pc_name`).
+- **Where the PC lives.** Its `hubs` row sits in the standby slot (an Android main Hub can have no standby) and carries
+  `hubs.migration_id`, so `standby_hub()` and a standby pairing's "replace the live standby" ignore it. It can refresh its
+  licence like a standby; it cannot beat as the main Hub (`FORBIDDEN`) or claim the fence to promote itself (`FORBIDDEN`).
+- **Android Hub.** `HeartbeatResponse.migration {id, target_hub_name}` is present while the move is `awaiting_handover` for
+  this Hub; the heartbeat task keeps it in `HubStatus::move_notice` and the alert list shows a persistent, silent branch row
+  "Move this branch to <PC name>". A cancelled move drops the field and the row goes at the next heartbeat.
+- **Windows Hub.** Pairing with a `migrate` code stores the identity and licence (`record_migration_pairing`), sets
+  `hub_meta.migration_wait` (outside the change log and the schema, so a restart still finds it waiting) and
+  `HubStatus::migration_wait`; every intent is refused (`RESTORE_PENDING`), the LAN serves no device, the heartbeat task does not
+  beat, and the Hub UI shows only "Waiting for your Android Hub". No branch key is made.
+- Not done here (Stories 10.17-10.19): the handover itself, the snapshot, the epoch claim, the branch key release and the
+  kiosks following the new Hub. `hub_migrations.state` already names those states because a CHECK cannot be widened later.
+
 ## Renewals that need approval, grace and lapse (Story 10.11)
 
 - **States** (AD-20): `active -> renewal_needs_approval -> grace -> lapsed`, every move in `subscription_history`. The

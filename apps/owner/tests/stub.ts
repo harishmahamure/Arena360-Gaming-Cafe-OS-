@@ -157,6 +157,8 @@ export function rangeOfBranch(id: string, over: Partial<OwnerRange> = {}): Owner
 }
 
 export type StubOptions = {
+  /** Answers `POST|DELETE /v1/branches/{id}/hub-migration` (Story 10.16); unset: a code, or 204. Each call is recorded in `calls.bodies["move"]` as its method. */
+  move?: (method: string) => { status: number; body: unknown } | undefined;
   /** Answers `POST /v1/wizard/install-hub/standby-code` (Story 9.18); unset: a code. Each body is recorded in `calls.bodies["standby"]`. */
   standby?: (body: { branch_id?: string }) => { status: number; body: unknown } | undefined;
   /** The `summary` answer per branch id; a function gets the request's query string. */
@@ -554,6 +556,13 @@ export async function stubCloud(
       const answer = opts.standby?.(body);
       if (answer) return json(answer.body, answer.status);
       return json({ code: "WXYZ6789", expires_at: Date.now() + 900_000, server_now: Date.now() });
+    }
+    if (/^\/v1\/branches\/[^/]+\/hub-migration$/.test(path)) {
+      (bodies["move"] ??= []).push(req.method());
+      const answer = opts.move?.(req.method());
+      if (answer) return json(answer.body, answer.status);
+      if (req.method() === "DELETE") return route.fulfill({ status: 204 });
+      return json({ code: "MOVE2345", expires_at: Date.now() + 900_000, server_now: Date.now() });
     }
     if (path === "/v1/signout") return json(null, 200);
     return json({ code: "NOT_FOUND", message: "" }, 404);

@@ -2,13 +2,13 @@ use std::sync::Arc;
 
 use arena_proto::{
     AppError, ErrorCode, HEARTBEAT_MIN_GAP_MS, HUB_TOKEN_PREFIX, HeartbeatFence, HeartbeatRequest,
-    HeartbeatResponse, HubPlatform, HubRole, LicenceClaims, STANDBY_LICENCE_PATH, SeqRange,
-    StandbyLicenceRequest, StandbyLicenceResponse, TUNNEL_FLAG, Tier, TunnelAnswer, TunnelReport,
-    tunnel_hostname,
+    HeartbeatResponse, HubPlatform, HubRole, LicenceClaims, MigrationNotice, STANDBY_LICENCE_PATH,
+    SeqRange, StandbyLicenceRequest, StandbyLicenceResponse, TUNNEL_FLAG, Tier, TunnelAnswer,
+    TunnelReport, tunnel_hostname,
 };
 use arena_store::control::{
-    AdMetric, Beat, BranchTunnel, FenceMove, HubRow, HubUploadView, NewBranchTunnel, RateRule,
-    TunnelRowState,
+    AdMetric, Beat, BranchTunnel, FenceMove, HubRow, HubUploadView, MigrationState,
+    NewBranchTunnel, RateRule, TunnelRowState,
 };
 use axum::extract::State;
 use axum::http::{HeaderMap, header::AUTHORIZATION};
@@ -260,7 +260,26 @@ async fn heartbeat(
         setup_template,
         resend,
         tunnel,
+        migration: migration_notice(&st, &hub).await,
     }))
+}
+
+/// The Hub move this Android Hub is asked to hand over, once its Windows Hub has paired
+/// (Story 10.16). Absent otherwise, so a cancelled move clears the item at the next heartbeat; a
+/// read that fails gives the Hub nothing to act on.
+async fn migration_notice(st: &AuthState, hub: &HubRow) -> Option<MigrationNotice> {
+    let m = st
+        .db
+        .live_migration_of_hub(&hub.id)
+        .await
+        .inspect_err(
+            |e| tracing::warn!(error = %e, hub_id = %hub.id, "heartbeat: no migration read"),
+        )
+        .ok()??;
+    (m.state == MigrationState::AwaitingHandover).then(|| MigrationNotice {
+        id: m.id,
+        target_hub_name: m.target_hub_name.unwrap_or_default(),
+    })
 }
 
 /// Settles the Hub's epoch against the branch fence (Story 9.3). `fence` is what the beat found

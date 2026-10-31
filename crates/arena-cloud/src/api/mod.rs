@@ -26,6 +26,7 @@ mod error;
 mod fence;
 pub mod gate;
 mod heartbeat;
+mod hub_migration;
 mod json;
 mod kek;
 mod live;
@@ -93,6 +94,7 @@ fn v1(dev: bool, auth: Option<&Arc<AuthState>>, commands_only: bool) -> Router {
             .merge(wizard_devices::router(Arc::clone(st)))
             .merge(wizard_golive::router(Arc::clone(st)))
             .merge(branches::router(Arc::clone(st)))
+            .merge(hub_migration::router(Arc::clone(st)))
             .merge(subscription::router(Arc::clone(st)))
             .merge(webhook::router(Arc::clone(st)))
             .merge(owner_read::router(Arc::clone(st)))

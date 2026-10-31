@@ -666,6 +666,8 @@ pub struct CloudPairer {
     platform: HubPlatform,
     hub_instance_id: String,
     version: String,
+    /// This PC's name, sent when it pairs so a Hub move can show it on the Android Hub.
+    hub_name: Option<String>,
     kek_store: Option<Arc<dyn Keystore>>,
     templates: Option<Arc<crate::SetupTemplateInbox>>,
     /// Where a replacement Hub keeps its one-time key, and the status it turns to "waiting".
@@ -694,11 +696,18 @@ impl CloudPairer {
             platform,
             hub_instance_id,
             version,
+            hub_name: None,
             kek_store: None,
             templates: None,
             restore: None,
             busy: tokio::sync::Mutex::new(()),
         }
+    }
+
+    /// The PC's own name, sent with the pairing request (Story 10.16).
+    pub fn with_hub_name(mut self, name: String) -> Self {
+        self.hub_name = Some(name);
+        self
     }
 
     /// Pairing also writes a fresh branch key here (the Android Hub, whose keystore holds the
@@ -778,6 +787,47 @@ impl CloudPairer {
         Ok(())
     }
 
+    /// Pairs the Windows Hub of a Hub move (Story 10.16): the token and licence are kept, no
+    /// bootstrap is applied and no branch key is made (Story 10.18 receives it). The Hub opens in
+    /// "Waiting for your Android Hub" and serves nothing.
+    async fn pair_for_migration(
+        &self,
+        identity: HubIdentity,
+        paired: HubPairResponse,
+    ) -> Result<(), UiError> {
+        let Some((_, status)) = &self.restore else {
+            return Err(internal("this hub cannot be paired for a move"));
+        };
+        let writer = self
+            .writer
+            .clone()
+            .ok_or_else(|| internal("no writer for the pairing"))?;
+        self.write_secret(
+            Arc::clone(&self.keystore),
+            paired.token.clone().into_bytes(),
+        )
+        .await?;
+        let written = writer
+            .record_migration_pairing(identity, paired.licence, &paired.branch_name)
+            .await
+            .map_err(|e| internal(&format!("{}: {}", e.code.as_str(), e.message)))?;
+        if !written {
+            return Err(ui_error(
+                ErrorCode::AlreadySet,
+                "this hub is already paired",
+            ));
+        }
+        status.send_modify(|s| s.migration_wait = Some(paired.branch_name.clone()));
+        self.gate.mark_paired();
+        tracing::info!(
+            hub_id = %paired.hub_id,
+            branch_id = %paired.branch_id,
+            tier = paired.tier.as_str(),
+            "hub paired for a move; waiting for the Android Hub"
+        );
+        Ok(())
+    }
+
     async fn run(&self, raw: &str) -> Result<(), UiError> {
         let _one_at_a_time = self.busy.lock().await;
         if self.gate.is_paired() {
@@ -806,6 +856,7 @@ impl CloudPairer {
                 // This install pairs as the main Hub; the standby install arrives with the
                 // standby Hub itself (Story 9.19).
                 role: HubRole::Main,
+                hub_name: self.hub_name.clone(),
             })
             .await
             .map_err(map_failure)?;
@@ -852,6 +903,9 @@ impl CloudPairer {
         }
         if paired.restore_pending {
             return self.pair_as_replacement(identity, paired).await;
+        }
+        if paired.migration {
+            return self.pair_for_migration(identity, paired).await;
         }
         if paired.bootstrap.is_none() {
             return Err(internal("the pair response has no bootstrap"));
@@ -983,6 +1037,7 @@ mod tests {
                 hub_instance_id: "i".into(),
                 version: "0".into(),
                 role: HubRole::Main,
+                hub_name: None,
             })
             .await
             .unwrap_err();

@@ -317,6 +317,8 @@ async fn run(
     initial.tls_fingerprint = Some(cert.fingerprint.clone());
     // A replacement Hub that restarts is still waiting: nothing is written until it is restored.
     initial.restore_pending = store.restore_pending()?.map(|r| r.branch_name);
+    // A Windows Hub that restarts is still waiting for the Android Hub's handover (Story 10.16).
+    initial.migration_wait = store.migration_wait()?;
     initial.restore_key_released = initial.restore_pending.is_some()
         && arena_tasks::restore_wait::holds_released_key(kek_store.as_ref());
     initial.lan_ports = Some((cfg.lan_port, cfg.web_port));
@@ -834,7 +836,9 @@ async fn run(
         instance_id,
         env!("CARGO_PKG_VERSION").to_owned(),
     );
-    cloud_pairer = cloud_pairer.with_templates(setup_templates);
+    cloud_pairer = cloud_pairer
+        .with_templates(setup_templates)
+        .with_hub_name(pc_name);
     cloud_pairer = cloud_pairer.with_restore(restore_key, status_tx.clone());
     if let Some(s) = &secrets {
         cloud_pairer = cloud_pairer.with_kek_store(Arc::clone(&s.kek));

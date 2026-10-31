@@ -9796,6 +9796,43 @@ mod onboarding {
     }
 
     #[tokio::test]
+    async fn a_hub_paired_for_a_move_waits_writes_no_branch_and_refuses_every_intent() {
+        let f = primary_long_lease();
+        assert!(
+            f.writer
+                .record_migration_pairing(identity(), "jwt".into(), "Pixel Arena Gaming")
+                .await
+                .unwrap()
+        );
+        let s = reopen(&f);
+        assert!(s.hub_identity().unwrap().is_some() && s.cached_licence().unwrap().is_some());
+        assert_eq!(
+            s.migration_wait().unwrap().as_deref(),
+            Some("Pixel Arena Gaming")
+        );
+        assert!(s.restore_pending().unwrap().is_none());
+        assert_nothing_written(&s);
+        // A second pairing changes nothing.
+        assert!(
+            !f.writer
+                .record_migration_pairing(identity(), "jwt2".into(), "Other")
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            reopen(&f).migration_wait().unwrap().as_deref(),
+            Some("Pixel Arena Gaming")
+        );
+
+        // Once the status says it waits, no intent is applied: the Hub serves nothing.
+        f.status
+            .send_modify(|s| s.migration_wait = Some("Pixel Arena Gaming".into()));
+        let e = expect_err(&f, bootstrap()).await;
+        assert_eq!(e.code, ErrorCode::RestorePending);
+        assert_nothing_written(&reopen(&f));
+    }
+
+    #[tokio::test]
     async fn pairing_with_a_bootstrap_is_all_or_nothing() {
         let mut f = primary_long_lease();
         let e = f

@@ -25,6 +25,7 @@ mod catalog;
 mod commands;
 mod dump;
 mod entitlement;
+mod hub_migration;
 mod hubs;
 mod invoice;
 mod kek_escrow;
@@ -66,6 +67,9 @@ pub use catalog::{
 pub use commands::{CommandBacklog, CommandRow, NewCommand, SweepReport};
 pub use dump::{DUMP_HEADER, DUMP_PAGE_ROWS, Dump, DumpManifest, RestoreReport, read_manifest};
 pub use entitlement::{CompGrant, Entitlement, FreeTierOutcome, GrantOutcome, OpsAuditRow};
+pub use hub_migration::{
+    HubMigration, MigrationStart, MigrationState, NewMigration, NewMigrationHub,
+};
 pub use hubs::{Beat, FenceMove, HubRow, HubUploadView, NewHub, PairOutcome};
 pub use invoice::{Invoice, NewInvoice};
 pub use key_requests::{KeyDecision, KeyDecisionOutcome, KeyFetch, KeyRefusal, KeyRequestRow};
@@ -81,7 +85,8 @@ pub use owner_alerts::{
 };
 pub use owner_commands::{OwnerCommandFilter, OwnerCommandRow};
 pub use pairing::{
-    IssueOutcome, NewPairingCode, PAIRING_HISTORY_MS, PairingCodeRow, RedeemInvalid, Redeemed,
+    CodePurpose, IssueOutcome, NewPairingCode, PAIRING_HISTORY_MS, PairingCodeRow, RedeemInvalid,
+    Redeemed,
 };
 pub use plan_change::{
     AppliedPlanChange, ChangeKind, ChangeStatus, ChangeSubject, NewPlanChange, PlanChange,
@@ -303,6 +308,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 43,
         sql: include_str!("../control-migrations/0043_subscription_refund.sql"),
+    },
+    ControlMigration {
+        version: 44,
+        sql: include_str!("../control-migrations/0044_hub_migration.sql"),
     },
 ];
 

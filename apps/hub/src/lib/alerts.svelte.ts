@@ -85,6 +85,7 @@ const labelOf = (a: SnapshotAlert): MessageKey =>
 const CONDITIONS = {
   licence: "hub.licence.unverified",
   clock: "hub.clock.wrong",
+  move: "hub.alerts.move",
 } as const satisfies Record<string, MessageKey>;
 
 type Condition = keyof typeof CONDITIONS;
@@ -109,6 +110,12 @@ export const alerts: { open: SnapshotAlert[]; conditions: Condition[] } = $state
   open: [],
   conditions: [],
 });
+
+/** The Windows PC the branch is asked to move to (Story 10.16): the "Move this branch" item names it. */
+const moveTarget: { pc: string } = $state({ pc: "" });
+
+const conditionParams = (c: Condition): Record<string, string> | undefined =>
+  c === "move" ? { pc: moveTarget.pc } : undefined;
 
 /** What a screen reader has been told since the last announcement (newest last). */
 export const announcements: { id: string; text: string }[] = $state([]);
@@ -172,6 +179,7 @@ export function listRows(): AlertRow[] {
       deviceId: null,
       href: null,
       label: CONDITIONS[c],
+      params: conditionParams(c),
       since: null,
     })),
   ];
@@ -264,7 +272,7 @@ function announce(snapshot: HubSnapshot) {
   for (const c of alerts.conditions) {
     now.add(c);
     if (told.has(c)) continue;
-    say(c, t("hub.alerts.branch"), t(CONDITIONS[c]));
+    say(c, t("hub.alerts.branch"), t(CONDITIONS[c], conditionParams(c)));
   }
   told = now;
   if (announcements.length > 5) announcements.splice(0, announcements.length - 5);
@@ -280,7 +288,9 @@ export function syncAlerts(snapshot: HubSnapshot | null) {
   alerts.conditions = [
     ...(usable?.licence_unverified ? (["licence"] as const) : []),
     ...(usable?.clock_wrong ? (["clock"] as const) : []),
+    ...(usable?.move_notice ? (["move"] as const) : []),
   ];
+  moveTarget.pc = usable?.move_notice?.target_hub_name ?? "";
   plan.tier = usable?.tier ?? null;
   takeTicketTags(usable);
   settleSound();

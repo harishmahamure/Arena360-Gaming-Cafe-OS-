@@ -33,6 +33,32 @@ pub struct PairingCodeRow {
     pub used_at: Option<i64>,
     pub invalidated_at: Option<i64>,
     pub role: HubRole,
+    /// `Migrate` for the code that pairs the Windows Hub of a Hub move (Story 10.16).
+    pub purpose: CodePurpose,
+}
+
+/// What a pairing code is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodePurpose {
+    /// A Hub code or a standby code (by role).
+    Pair,
+    /// The Windows Hub of a move from an Android Hub (Story 10.16).
+    Migrate,
+}
+
+impl CodePurpose {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pair => "pair",
+            Self::Migrate => "migrate",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        [Self::Pair, Self::Migrate]
+            .into_iter()
+            .find(|p| p.as_str() == s)
+    }
 }
 
 impl PairingCodeRow {
@@ -54,7 +80,7 @@ pub struct RedeemInvalid;
 pub const PAIRING_HISTORY_MS: i64 = 24 * 60 * 60 * 1000;
 
 const PAIRING_COLUMNS: &str = "id, branch_id, code_hash, tier_at_issue, created_at, expires_at, \
-     used_at, invalidated_at, role";
+     used_at, invalidated_at, role, purpose";
 
 fn tier_of(raw: &str) -> Result<Tier, ControlError> {
     Tier::parse(raw).ok_or_else(|| ControlError::Db(format!("unknown tier {raw:?}")))
@@ -74,6 +100,11 @@ fn pairing_from(row: &[SqlValue]) -> Result<PairingCodeRow, ControlError> {
             let role = col_text(row, 8)?;
             HubRole::parse(&role)
                 .ok_or_else(|| ControlError::Db(format!("unknown hub role {role:?}")))?
+        },
+        purpose: {
+            let purpose = col_text(row, 9)?;
+            CodePurpose::parse(&purpose)
+                .ok_or_else(|| ControlError::Db(format!("unknown code purpose {purpose:?}")))?
         },
     })
 }
@@ -102,7 +133,7 @@ impl ControlDb {
                 ),
                 Stmt::new(
                     "UPDATE pairing_codes SET invalidated_at = ? WHERE branch_id = ? AND role = ? \
-                     AND used_at IS NULL AND invalidated_at IS NULL",
+                     AND purpose = 'pair' AND used_at IS NULL AND invalidated_at IS NULL",
                     vec![
                         SqlValue::Integer(c.now),
                         text(c.branch_id),
@@ -187,7 +218,7 @@ impl ControlDb {
     ) -> Result<Option<PairingCodeRow>, ControlError> {
         let sql = format!(
             "SELECT {PAIRING_COLUMNS} FROM pairing_codes WHERE branch_id = ? AND role = ? \
-             AND used_at IS NULL AND invalidated_at IS NULL AND expires_at > ? \
+             AND purpose = 'pair' AND used_at IS NULL AND invalidated_at IS NULL AND expires_at > ? \
              ORDER BY created_at DESC, id DESC LIMIT 1"
         );
         let rows = self
@@ -242,7 +273,7 @@ impl ControlDb {
         let rows = self
             .transact_rows(vec![
                 Stmt::new(
-                    "UPDATE pairing_codes SET used_at = ? WHERE code_hash = ? \
+                    "UPDATE pairing_codes SET used_at = ? WHERE code_hash = ? AND purpose = 'pair' \
                      AND used_at IS NULL AND invalidated_at IS NULL AND expires_at > ?",
                     vec![
                         SqlValue::Integer(now),

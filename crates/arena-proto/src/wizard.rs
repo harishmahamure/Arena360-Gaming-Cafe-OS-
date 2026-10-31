@@ -370,6 +370,11 @@ pub struct OwnerBranch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub standby: Option<OwnerStandby>,
+    /// The move of this branch from its Android Hub to a Windows Hub (Story 10.16): present while
+    /// one is under way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub migration: Option<crate::OwnerMigration>,
 }
 
 /// A branch's second PC, as the owner sees it on Account -> Branches (Story 9.18).

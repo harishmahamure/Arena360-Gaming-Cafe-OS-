@@ -67,6 +67,7 @@ async fn row(st: &AuthState, b: &Branch) -> Result<OwnerBranch, ApiError> {
         _ => None,
     };
     let standby = standby_of(st, &b.id, now).await?;
+    let migration = super::hub_migration::migration_of(st, &b.id, now).await?;
     let states: Vec<_> = st
         .db
         .onboarding_progress(&b.id)
@@ -103,6 +104,7 @@ async fn row(st: &AuthState, b: &Branch) -> Result<OwnerBranch, ApiError> {
         key_request,
         backup,
         standby,
+        migration,
     })
 }
 

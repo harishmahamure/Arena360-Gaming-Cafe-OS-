@@ -5,10 +5,11 @@ use arena_proto::{
     AppError, BOOTSTRAP_DAY_START_MIN, BootstrapOwner, BootstrapProfile, BranchBootstrapCommand,
     ErrorCode, HUB_TOKEN_PREFIX, HubPairRequest, HubPairResponse, HubPlatform, HubRole, OWNER_ROLE,
     PAIR_ATTEMPTS_PER_IP_PER_HOUR, PAIR_FAILURES_PER_CODE, SETUP_CODE_HUB_TTL_MS, TaxSettings,
-    Tier, check_bootstrap, normalize_pairing_code, valid_pairing_code,
+    Tier, check_bootstrap, normalize_pairing_code, sanitise_pc_name, valid_pairing_code,
 };
 use arena_store::control::{
-    Branch, Entitlement, NewHub, NewSetupCode, Owner, PairOutcome, PairingCodeRow, RateRule,
+    Branch, CodePurpose, Entitlement, NewHub, NewMigrationHub, NewSetupCode, Owner, PairOutcome,
+    PairingCodeRow, RateRule,
 };
 use axum::extract::connect_info::ConnectInfo;
 use axum::extract::{Extension, State};
@@ -203,6 +204,16 @@ async fn classify(
             .into());
         }
     }
+    if code.purpose == CodePurpose::Migrate && platform != HubPlatform::Windows {
+        // The move goes to a Windows PC; an Android install typed the code by mistake.
+        record_failure(st, &code, now).await;
+        return Err(AppError::with_field(
+            ErrorCode::FeatureNotEntitled,
+            "platform",
+            "This code moves the branch to a Windows Hub. Enter it on the Windows PC.",
+        )
+        .into());
+    }
     if platform == HubPlatform::Windows && tier == Tier::Free {
         record_failure(st, &code, now).await;
         tracing::info!(
@@ -303,6 +314,9 @@ async fn pair(
     }
     let code_hash = st.pairing_code_hash(&code);
     let c = classify(&st, &code_hash, body.platform, body.role, now).await?;
+    if c.code.purpose == CodePurpose::Migrate {
+        return pair_migration(&st, &body, &code_hash, c, now).await;
+    }
 
     let hub_id = ulid::Ulid::generate().to_string();
     let secret = URL_SAFE_NO_PAD.encode(random_bytes::<32>().map_err(ApiError::internal)?);
@@ -479,6 +493,86 @@ async fn pair(
         restore_pending,
         branch_name: c.branch.name,
         role: body.role,
+        migration: false,
+    }))
+}
+
+/// A Windows PC pairs with the `migrate` code of a Hub move (Story 10.16). It gets a token and a
+/// licence as usual, but no bootstrap and no owner sign-in code; the Android Hub's token, fence and
+/// data are not touched. The PC waits for the handover.
+async fn pair_migration(
+    st: &AuthState,
+    body: &HubPairRequest,
+    code_hash: &str,
+    c: Candidate,
+    now: i64,
+) -> Result<Json<HubPairResponse>, ApiError> {
+    let hub_id = ulid::Ulid::generate().to_string();
+    let secret = URL_SAFE_NO_PAD.encode(random_bytes::<32>().map_err(ApiError::internal)?);
+    let token = format!("{HUB_TOKEN_PREFIX}{hub_id}.{secret}");
+    let token_hash = blocking(move || hash_secret(&secret)).await?;
+    let claims = crate::licence::claims_with_plan(
+        &st.db,
+        &c.branch.tenant_id,
+        &c.branch.id,
+        c.entitlement.as_ref(),
+        now,
+    )
+    .await
+    .map_err(ApiError::internal)?;
+    let licence = st.licence.sign(&claims).map_err(ApiError::internal)?;
+    let target_hub_name = body
+        .hub_name
+        .as_deref()
+        .and_then(sanitise_pc_name)
+        .unwrap_or_else(|| "the new Windows PC".to_owned());
+    let outcome = st
+        .db
+        .pair_migration_hub(&NewMigrationHub {
+            id: &hub_id,
+            branch_id: &c.branch.id,
+            hub_instance_id: &body.hub_instance_id,
+            version: &body.version,
+            token_hash: &token_hash,
+            code_hash,
+            target_hub_name: &target_hub_name,
+            now,
+        })
+        .await
+        .map_err(ApiError::internal)?;
+    if outcome == PairOutcome::CodeRefused {
+        tracing::info!(
+            branch_id = %c.branch.id,
+            pairing_code_id = %c.code.id,
+            "migration pairing lost to a concurrent use of the code, or the move is over"
+        );
+        return Err(classify(st, code_hash, body.platform, body.role, now)
+            .await
+            .err()
+            .unwrap_or_else(invalid));
+    }
+    tracing::info!(
+        hub_id = %hub_id,
+        tenant_id = %c.branch.tenant_id,
+        branch_id = %c.branch.id,
+        pairing_code_id = %c.code.id,
+        platform = body.platform.as_str(),
+        tier = c.tier.as_str(),
+        "windows hub paired for a hub move"
+    );
+    Ok(Json(HubPairResponse {
+        hub_id,
+        token,
+        tenant_id: c.branch.tenant_id,
+        branch_id: c.branch.id,
+        tier: claims.tier,
+        branch_code: c.branch.branch_code,
+        licence,
+        bootstrap: None,
+        restore_pending: false,
+        branch_name: c.branch.name,
+        role: body.role,
+        migration: true,
     }))
 }
 

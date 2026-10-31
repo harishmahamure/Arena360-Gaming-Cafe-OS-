@@ -3,6 +3,7 @@ import type { BillingCycle } from "./BillingCycle";
 import type { Connectivity } from "./Connectivity";
 import type { KitchenDisplayView } from "./KitchenDisplayView";
 import type { KitchenTicketView } from "./KitchenTicketView";
+import type { MigrationNotice } from "./MigrationNotice";
 import type { SetupStatus } from "./SetupStatus";
 import type { ShiftState } from "./ShiftState";
 import type { SnapshotAlert } from "./SnapshotAlert";
@@ -80,6 +81,17 @@ export type HubSnapshot = {
    * restores. The Hub UI shows "Restore this branch" and nothing else.
    */
   restore_pending?: string;
+  /**
+   * This Windows Hub paired with the code of a Hub move and waits for the Android Hub to hand
+   * the branch over (Story 10.16): the name of the branch. The Hub UI shows "Waiting for your
+   * Android Hub" and nothing else.
+   */
+  migration_wait?: string;
+  /**
+   * The move this Android Hub is asked to hand over (Story 10.16): staff see a persistent
+   * "Move this branch to <PC name>" item in the alert list.
+   */
+  move_notice?: MigrationNotice;
   /**
    * The owner released the branch key to this waiting Hub and it holds the key (Story 9.10):
    * "Restore from a file" is enabled.

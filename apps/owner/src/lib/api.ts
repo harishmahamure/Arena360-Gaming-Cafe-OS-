@@ -60,7 +60,7 @@ export type Sent<T> =
   | { ok: false; code: string; field?: string; message?: string; retryAfter?: number };
 
 export async function send<T>(
-  method: "POST" | "PATCH",
+  method: "POST" | "PATCH" | "DELETE",
   path: string,
   body: unknown = {},
 ): Promise<Sent<T>> {

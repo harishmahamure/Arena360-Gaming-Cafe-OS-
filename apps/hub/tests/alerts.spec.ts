@@ -17,6 +17,8 @@ type Stub = {
   alerts: SnapshotAlert[];
   bills: SnapshotBill[];
   licence: boolean;
+  /** The PC an Android Hub is asked to move the branch to (Story 10.16). */
+  move: string | null;
   acks: string[];
   queue: string[];
   locks: number;
@@ -26,7 +28,15 @@ const raised = (id: string, device_id: string, extra: Partial<SnapshotAlert> = {
   ({ id, kind: "fixture", device_id, raised_at: Date.now() - 2 * MIN, ...extra }) as SnapshotAlert;
 
 async function open(page: Page, alerts: SnapshotAlert[] = []): Promise<Stub> {
-  const hub: Stub = { alerts, bills: [], licence: false, acks: [], queue: [], locks: 0 };
+  const hub: Stub = {
+    alerts,
+    bills: [],
+    licence: false,
+    move: null,
+    acks: [],
+    queue: [],
+    locks: 0,
+  };
   await page.addInitScript(() => {
     sessionStorage.setItem("arena.hub.token", "manager-token");
     const w = window as unknown as { __plays: string[] };
@@ -46,6 +56,7 @@ async function open(page: Page, alerts: SnapshotAlert[] = []): Promise<Stub> {
         snap.alerts = hub.alerts;
         snap.bills = hub.bills;
         if (hub.licence) snap.licence_unverified = true;
+        if (hub.move) snap.move_notice = { id: "M1", target_hub_name: hub.move };
         return json(route, snap);
       }
       case "/ui/me":
@@ -383,6 +394,27 @@ test("licence trouble is a branch row with no sound, and it clears with the cond
   await expect(page.getByTestId("hub-status-slot")).toHaveCount(0);
   hub.licence = false;
   hub.queue.push("event: devices.changed\ndata: {}\n\n");
+  await expect(headerButton(page)).toHaveCount(0);
+});
+
+const DEVICES_CHANGED = "event: devices.changed\ndata: {}\n\n";
+
+test("a Hub move is a persistent branch row naming the PC, with no sound, until the cloud stops asking", async ({
+  page,
+}) => {
+  const hub = await open(page);
+  hub.move = "Front desk";
+  hub.queue.push(DEVICES_CHANGED);
+  await expect(headerButton(page)).toContainText("1");
+  await headerButton(page).click();
+  const row = page.getByTestId("alert-row");
+  await expect(row).toContainText(en["hub.alerts.branch"]);
+  await expect(row).toContainText("Move this branch to Front desk");
+  await expect(row.getByRole("button")).toHaveCount(0);
+  await page.clock.runFor(MIN);
+  expect(await plays(page)).toEqual([]);
+  hub.move = null;
+  hub.queue.push(DEVICES_CHANGED);
   await expect(headerButton(page)).toHaveCount(0);
 });
 

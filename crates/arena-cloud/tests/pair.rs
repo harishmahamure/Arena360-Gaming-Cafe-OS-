@@ -3246,3 +3246,326 @@ async fn a_standby_may_claim_only_to_promote_and_a_stale_claim_changes_nothing()
     h.advance(10_000);
     assert_eq!(h.beat(&main_token, "1:MAIN").await.status, 200);
 }
+
+// ---- Story 10.16: the owner starts moving a Free Android Hub to a Windows Hub ----
+
+impl Harness {
+    async fn start_move(&self, access: &str, branch: &str) -> Reply {
+        self.call(
+            "POST",
+            &format!("/v1/branches/{branch}/hub-migration"),
+            None,
+            access,
+        )
+        .await
+    }
+
+    async fn cancel_move(&self, access: &str, branch: &str) -> Reply {
+        self.call(
+            "DELETE",
+            &format!("/v1/branches/{branch}/hub-migration"),
+            None,
+            access,
+        )
+        .await
+    }
+
+    async fn pair_named(&self, code: &str, platform: &str, instance: &str, name: &str) -> Reply {
+        let body = json!({
+            "code": code,
+            "platform": platform,
+            "hub_instance_id": instance,
+            "version": "0.1.0",
+            "hub_name": name,
+        });
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/v1/pair")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::new(PEER.parse().unwrap(), 40000)));
+        reply(self.app.clone().oneshot(req).await.unwrap()).await
+    }
+
+    /// A café whose Free Android Hub is paired and beating, upgraded to Basic.
+    async fn basic_with_android(&self) -> (String, String, String) {
+        let (a, branch) = self.ready().await;
+        let (token, _) = self.paired_hub(&a).await;
+        assert_eq!(self.beat(&token, "1:HUBA").await.status, 200);
+        self.comp(&branch, Tier::Basic).await;
+        self.advance(10_000);
+        (a, branch, token)
+    }
+
+    fn migration_rows(&self) -> Vec<(String, Option<String>, Option<String>, String)> {
+        let c = rusqlite::Connection::open(self.dir.path().join("gz_control.db")).unwrap();
+        let mut st = c
+            .prepare(
+                "SELECT id, to_hub_id, target_hub_name, state FROM hub_migrations \
+                 ORDER BY created_at, id",
+            )
+            .unwrap();
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+}
+
+#[tokio::test]
+async fn the_move_is_refused_on_free_and_on_a_windows_hub_and_needs_a_hub() {
+    let h = Harness::new().await;
+    let (a, branch) = h.ready().await;
+    let none = h.start_move(&a, &branch).await;
+    assert_eq!(none.code(), "TIER_LOCKED", "{}", none.body);
+
+    h.comp(&branch, Tier::Basic).await;
+    let no_hub = h.start_move(&a, &branch).await;
+    assert_eq!(no_hub.code(), "STEP_NOT_READY");
+
+    let (code, _) = h.issue(&a).await;
+    assert_eq!(h.pair_as(&code, "windows", "WIN", None).await.status, 200);
+    let windows = h.start_move(&a, &branch).await;
+    assert_eq!(windows.code(), "PLATFORM_UNSUPPORTED");
+    assert!(h.migration_rows().is_empty());
+    assert!(h.owner_branch(&a).await.get("migration").is_none());
+}
+
+#[tokio::test]
+async fn an_owner_starts_the_move_and_a_windows_pc_pairs_beside_the_android_hub() {
+    let h = Harness::new().await;
+    let (a, branch, android) = h.basic_with_android().await;
+    assert!(h.owner_branch(&a).await.get("migration").is_none());
+
+    let started = h.start_move(&a, &branch).await;
+    assert_eq!(started.status, 200, "{}", started.body);
+    let code = code_of(&started);
+    assert_eq!(code.len(), 8);
+    let waiting = h.owner_branch(&a).await;
+    assert_eq!(
+        waiting["migration"],
+        json!({"phase": "awaiting_windows", "code": {"expires_at": started.body["expires_at"]}})
+    );
+    assert_eq!(h.migration_rows()[0].3, "awaiting_windows");
+    // The Android Hub is told nothing until the PC has paired.
+    let beat = h.beat(&android, "1:HUBA").await;
+    assert!(beat.body.get("migration").is_none(), "{}", beat.body);
+
+    let paired = h
+        .pair_named(&code, "windows", "FRONT-PC", " Front\u{7} desk ")
+        .await;
+    assert_eq!(paired.status, 200, "{}", paired.body);
+    assert_eq!(paired.body["migration"], true);
+    assert_eq!(paired.body["restore_pending"], false);
+    assert_eq!(paired.body["tier"], "basic");
+    assert!(paired.body.get("bootstrap").is_none(), "{}", paired.body);
+    verify(
+        paired.body["licence"].as_str().unwrap(),
+        DEV_LICENCE_VERIFY_KEYS,
+        T0,
+    )
+    .unwrap();
+    let windows_id = paired.body["hub_id"].as_str().unwrap().to_owned();
+
+    // The Android Hub keeps its token, its place and its fence; the PC is a second row.
+    let live = h.db.active_hub(&branch).await.unwrap().unwrap();
+    assert_eq!((live.platform.as_str(), live.revoked_at), ("android", None));
+    assert!(h.db.standby_hub(&branch).await.unwrap().is_none());
+    assert_eq!(h.hubs().len(), 2);
+    h.advance(10_000);
+    assert_eq!(h.beat(&android, "1:HUBA").await.status, 200);
+
+    // The code is spent and the move names the PC.
+    assert!(
+        h.db.pairing_codes_of(&branch)
+            .await
+            .unwrap()
+            .iter()
+            .all(|c| c.used_at.is_some())
+    );
+    let rows = h.migration_rows();
+    assert_eq!(rows[0].1.as_deref(), Some(windows_id.as_str()), "{rows:?}");
+    assert_eq!(
+        (rows[0].2.as_deref(), rows[0].3.as_str()),
+        (Some("Front desk"), "awaiting_handover")
+    );
+
+    let after = h.owner_branch(&a).await;
+    assert_eq!(
+        after["migration"],
+        json!({"phase": "awaiting_handover", "target_hub_name": "Front desk"})
+    );
+    assert!(after.get("standby").is_none(), "{after}");
+
+    // The Android Hub's next heartbeat carries the move.
+    h.advance(10_000);
+    let beat = h.beat(&android, "1:HUBA").await;
+    assert_eq!(
+        beat.body["migration"],
+        json!({"id": rows[0].0, "target_hub_name": "Front desk"})
+    );
+
+    // The PC cannot beat as the main Hub or promote itself.
+    let pc_token = paired.body["token"].as_str().unwrap();
+    let as_main = h.beat(pc_token, "1:WIN").await;
+    assert_eq!((as_main.status, as_main.code()), (403, "FORBIDDEN"));
+    let promote = h.claim(pc_token, claim_body("1:HUBA", "FRONT-PC", 1)).await;
+    assert_eq!((promote.status, promote.code()), (403, "FORBIDDEN"));
+
+    // A second start while the PC is waiting for the handover is refused.
+    let again = h.start_move(&a, &branch).await;
+    assert_eq!((again.status, again.code()), (409, "HUB_MIGRATION_ACTIVE"));
+}
+
+#[tokio::test]
+async fn a_move_code_that_is_wrong_used_or_typed_on_android_is_refused() {
+    let h = Harness::new().await;
+    let (a, branch, _) = h.basic_with_android().await;
+    let code = code_of(&h.start_move(&a, &branch).await);
+
+    let android = h.pair_named(&code, "android", "TAB2", "Tablet").await;
+    assert_eq!(android.code(), "FEATURE_NOT_ENTITLED", "{}", android.body);
+    // A standby install is refused too.
+    let standby = h.pair_as(&code, "windows", "WIN", Some("standby")).await;
+    assert_eq!(standby.code(), "PAIR_CODE_INVALID");
+    let wrong = h.pair_named("ZZZZZZZZ", "windows", "WIN", "PC").await;
+    assert_eq!((wrong.status, wrong.code()), (401, "PAIR_CODE_INVALID"));
+    assert!(h.migration_rows()[0].1.is_none(), "nothing paired");
+
+    let ok = h.pair_named(&code, "windows", "WIN", "PC").await;
+    assert_eq!(ok.status, 200, "{}", ok.body);
+    let used = h.pair_named(&code, "windows", "WIN2", "PC2").await;
+    assert_eq!((used.status, used.code()), (401, "PAIR_CODE_INVALID"));
+    assert_eq!(h.hubs().len(), 2);
+}
+
+#[tokio::test]
+async fn an_expired_move_code_pairs_nothing() {
+    let h = Harness::new().await;
+    let (a, branch, _) = h.basic_with_android().await;
+    let code = code_of(&h.start_move(&a, &branch).await);
+    h.advance(MIN15 + 1);
+    let late = h.pair_named(&code, "windows", "WIN", "PC").await;
+    assert_eq!((late.status, late.code()), (401, "PAIR_CODE_EXPIRED"));
+    let waiting = h.owner_branch(&a).await;
+    assert_eq!(waiting["migration"], json!({"phase": "awaiting_windows"}));
+}
+
+#[tokio::test]
+async fn a_hub_code_and_a_move_code_are_separate_codes() {
+    let h = Harness::new().await;
+    let (a, branch, _) = h.basic_with_android().await;
+    let code = code_of(&h.start_move(&a, &branch).await);
+    // Making a Hub code leaves the move code alive, and the Hub code is a normal pairing.
+    let (hub_code, _) = h.issue(&a).await;
+    assert_ne!(hub_code, code);
+    let now = h.now.load(Ordering::SeqCst);
+    assert!(
+        h.db.active_migration_code(&branch, now)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let normal = h.pair_named(&hub_code, "windows", "WIN", "PC").await;
+    assert_eq!(normal.status, 200, "{}", normal.body);
+    assert!(normal.body.get("migration").is_none(), "{}", normal.body);
+    assert!(h.migration_rows()[0].1.is_none());
+}
+
+#[tokio::test]
+async fn a_fresh_code_replaces_the_waiting_one_and_the_move_stays_one_row() {
+    let h = Harness::new().await;
+    let (a, branch, _) = h.basic_with_android().await;
+    let first = code_of(&h.start_move(&a, &branch).await);
+    h.advance(1_000);
+    let second = code_of(&h.start_move(&a, &branch).await);
+    assert_ne!(first, second);
+    assert_eq!(h.migration_rows().len(), 1);
+    let old = h.pair_named(&first, "windows", "WIN", "PC").await;
+    assert_eq!((old.status, old.code()), (401, "PAIR_CODE_INVALID"));
+    assert_eq!(
+        h.pair_named(&second, "windows", "WIN", "PC").await.status,
+        200
+    );
+}
+
+#[tokio::test]
+async fn the_owner_cancels_before_the_pc_pairs_and_the_code_dies() {
+    let h = Harness::new().await;
+    let (a, branch, _) = h.basic_with_android().await;
+    let code = code_of(&h.start_move(&a, &branch).await);
+    assert_eq!(h.cancel_move(&a, "nobranch").await.status, 403);
+    assert_eq!(h.cancel_move(&a, &branch).await.status, 204);
+    assert_eq!(h.migration_rows()[0].3, "cancelled");
+    assert!(h.owner_branch(&a).await.get("migration").is_none());
+    let late = h.pair_named(&code, "windows", "WIN", "PC").await;
+    assert_eq!((late.status, late.code()), (401, "PAIR_CODE_INVALID"));
+    assert_eq!(h.cancel_move(&a, &branch).await.status, 404);
+    // A new move can begin.
+    assert_eq!(h.start_move(&a, &branch).await.status, 200);
+    assert_eq!(h.migration_rows().len(), 2);
+}
+
+#[tokio::test]
+async fn cancelling_after_the_pc_paired_revokes_it_and_clears_the_android_item() {
+    let h = Harness::new().await;
+    let (a, branch, android) = h.basic_with_android().await;
+    let code = code_of(&h.start_move(&a, &branch).await);
+    let paired = h.pair_named(&code, "windows", "WIN", "Counter PC").await;
+    let pc_token = paired.body["token"].as_str().unwrap().to_owned();
+    h.advance(10_000);
+    assert!(
+        h.beat(&android, "1:HUBA")
+            .await
+            .body
+            .get("migration")
+            .is_some()
+    );
+
+    assert_eq!(h.cancel_move(&a, &branch).await.status, 204);
+    assert_eq!(h.migration_rows()[0].3, "cancelled");
+    let hubs = h.hubs();
+    assert_ne!(hubs[1][8], "", "the PC's token is revoked");
+    assert_eq!(hubs[0][8], "", "the Android Hub's is not");
+    let gone = h.beat(&pc_token, "1:WIN").await;
+    assert_eq!(gone.code(), "TOKEN_REVOKED", "{}", gone.body);
+
+    h.advance(10_000);
+    let beat = h.beat(&android, "1:HUBA").await;
+    assert_eq!(beat.status, 200);
+    assert!(beat.body.get("migration").is_none(), "{}", beat.body);
+    assert!(h.owner_branch(&a).await.get("migration").is_none());
+
+    // The move can begin again with a new code and a new PC.
+    let code = code_of(&h.start_move(&a, &branch).await);
+    assert_eq!(
+        h.pair_named(&code, "windows", "WIN", "Counter PC")
+            .await
+            .status,
+        200
+    );
+}
+
+#[tokio::test]
+async fn another_owner_cannot_start_or_cancel_this_branchs_move() {
+    let h = Harness::new().await;
+    let (_a, branch, _) = h.basic_with_android().await;
+    let b = h.owner("+919812345678", "Other Cafe").await;
+    assert_eq!(h.start_move(&b, &branch).await.status, 403);
+    assert_eq!(h.cancel_move(&b, &branch).await.status, 403);
+    assert!(h.migration_rows().is_empty());
+}
+
+#[tokio::test]
+async fn a_move_code_pairs_nothing_once_the_plan_is_free_again() {
+    let h = Harness::new().await;
+    let (a, branch, _) = h.basic_with_android().await;
+    let code = code_of(&h.start_move(&a, &branch).await);
+    // The comp ran 30 days; past it the branch is Free and a Windows Hub is refused.
+    h.advance(31 * 24 * 60 * 60 * 1000);
+    let late = h.pair_named(&code, "windows", "WIN", "PC").await;
+    assert!(late.status >= 400, "{}", late.body);
+    assert!(h.migration_rows()[0].1.is_none());
+}

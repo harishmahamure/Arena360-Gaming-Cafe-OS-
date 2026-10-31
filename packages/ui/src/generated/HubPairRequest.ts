@@ -12,4 +12,9 @@ export type HubPairRequest = {
    * code only a `main` one, so a code typed on the wrong PC is refused before it is used.
    */
   role?: HubRole;
+  /**
+   * The PC's own name, shown to staff on the Android Hub when this Windows Hub pairs with a
+   * `migrate` code (Story 10.16). Absent from an older Hub.
+   */
+  hub_name?: string;
 };

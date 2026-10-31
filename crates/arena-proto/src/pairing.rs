@@ -140,6 +140,11 @@ pub struct HubPairRequest {
     /// code only a `main` one, so a code typed on the wrong PC is refused before it is used.
     #[serde(default, skip_serializing_if = "is_main")]
     pub role: HubRole,
+    /// The PC's own name, shown to staff on the Android Hub when this Windows Hub pairs with a
+    /// `migrate` code (Story 10.16). Absent from an older Hub.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub hub_name: Option<String>,
 }
 
 impl std::fmt::Debug for HubPairRequest {
@@ -179,6 +184,10 @@ pub struct HubPairResponse {
     /// Hub never runs `branch.bootstrap`.
     #[serde(default, skip_serializing_if = "is_main")]
     pub role: HubRole,
+    /// This Windows Hub paired with a `migrate` code (Story 10.16): it opens "Waiting for your
+    /// Android Hub" and serves nothing. The response then carries no bootstrap.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub migration: bool,
 }
 
 pub const SETUP_CODE_HUB_TTL_MS: i64 = 72 * 60 * 60 * 1000;
@@ -511,6 +520,46 @@ pub struct HeartbeatResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub tunnel: Option<crate::TunnelAnswer>,
+    /// A Windows Hub has paired to take this branch over (Story 10.16): the Android Hub shows
+    /// staff a persistent "Move this branch to <PC name>" item while this is present, and clears
+    /// it when it is not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub migration: Option<MigrationNotice>,
+}
+
+/// The move the Android Hub is asked to hand over (Story 10.16).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct MigrationNotice {
+    pub id: String,
+    pub target_hub_name: String,
+}
+
+/// Where a Hub move stands, as the owner reads it (Story 10.16).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum MigrationPhase {
+    /// The code is waiting for the Windows Hub.
+    AwaitingWindows,
+    /// The Windows Hub paired; the Android Hub is asked to confirm the handover.
+    AwaitingHandover,
+}
+
+/// A branch's Hub move on Account -> Branches (Story 10.16).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct OwnerMigration {
+    pub phase: MigrationPhase,
+    /// The Windows PC that paired, once it has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub target_hub_name: Option<String>,
+    /// The `migrate` code that has not been used yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub code: Option<ActivePairingCode>,
 }
 
 impl std::fmt::Debug for HeartbeatResponse {
@@ -621,6 +670,7 @@ mod tests {
             hub_instance_id: "i".into(),
             version: "0.1.0".into(),
             role: HubRole::Main,
+            hub_name: None,
         };
         assert_eq!(HubRole::parse("standby"), Some(HubRole::Standby));
         assert_eq!(HubRole::parse("backup"), None);
@@ -659,6 +709,7 @@ mod tests {
             restore_pending: false,
             branch_name: "n".into(),
             role: HubRole::Main,
+            migration: false,
         };
         assert!(!format!("{res:?}").contains("secret"));
         let hub = PairHubRequest {

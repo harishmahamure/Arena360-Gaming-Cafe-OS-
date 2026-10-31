@@ -11,6 +11,7 @@
   import { backup, backupBehind, hubNow, watchBackup } from "../lib/backup-status.svelte";
   import Clock from "../lib/Clock.svelte";
   import RuleChips from "../lib/RuleChips.svelte";
+  import AwaitAndroid from "../lib/AwaitAndroid.svelte";
   import RestoreBranch from "../lib/RestoreBranch.svelte";
   import { nextRuleChange, ruleChips } from "../lib/rules";
   import DeviceGate from "../lib/DeviceGate.svelte";
@@ -95,6 +96,8 @@
   const unpaired = $derived(data.hub.ok && data.hub.snapshot.paired === false);
   /** A replacement Hub waiting for its branch to be restored: nothing else is shown (Story 9.9). */
   const restoring = $derived(data.hub.ok ? (data.hub.snapshot.restore_pending ?? null) : null);
+  /** A Windows Hub paired for a Hub move, waiting for the Android Hub's handover (Story 10.16). */
+  const awaitingAndroid = $derived(data.hub.ok ? (data.hub.snapshot.migration_wait ?? null) : null);
   const staff = $derived(data.session.state === "signed_in" ? data.session.staff : null);
   const signedOut = $derived(data.session.state === "signed_out");
   /** The Hub answered the snapshot and said who is signed in (an unknown session retries). */
@@ -308,7 +311,7 @@
       if (!onPair) void goto(PAIR_PATH, { replaceState: true });
       return;
     }
-    if (restoring !== null) return;
+    if (restoring !== null || awaitingAndroid !== null) return;
     if (onPair) {
       void goto("/floor", { replaceState: true });
       return;
@@ -805,6 +808,12 @@
         released={data.hub.ok && data.hub.snapshot.restore_key_released === true}
         tier={data.hub.ok ? (data.hub.snapshot.tier ?? null) : null}
       />
+    </main>
+  </div>
+{:else if awaitingAndroid !== null}
+  <div class="pair-screen" data-theme="dark">
+    <main class="hub-main" bind:this={mainEl}>
+      <AwaitAndroid branchName={awaitingAndroid} />
     </main>
   </div>
 {:else if unpaired}

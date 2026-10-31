@@ -64,6 +64,7 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::BandNotAvailable
         | ErrorCode::SubscriptionExists
         | ErrorCode::RefundNotAllowed
+        | ErrorCode::HubMigrationActive
         | ErrorCode::StepNotReady
         | ErrorCode::SetupCodeInvalid
         | ErrorCode::PairCodeInvalid

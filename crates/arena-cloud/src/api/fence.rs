@@ -93,6 +93,15 @@ async fn claim(
     let hub = authenticate_any(&st, &headers, now).await?;
     // A standby claims the fence only to promote itself (Story 9.21).
     let promote = match (hub.role, body.reason) {
+        // The Windows Hub of a Hub move sits in the standby slot but takes over only through the
+        // handover (Stories 10.17-10.18), never by promoting itself.
+        (HubRole::Standby, _) if hub.migration_id.is_some() => {
+            return Err(AppError::new(
+                ErrorCode::Forbidden,
+                "This Hub is waiting for the move from the Android Hub. It cannot claim the fence yet.",
+            )
+            .into());
+        }
         (HubRole::Standby, FenceClaimReason::Promote) => true,
         (HubRole::Standby, _) => {
             return Err(AppError::new(

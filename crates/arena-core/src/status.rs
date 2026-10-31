@@ -107,6 +107,12 @@ pub struct HubStatus {
     /// The branch name while this Hub replaces another and waits to be restored (Story 9.9): it
     /// writes nothing and serves no device until a restore completes.
     pub restore_pending: Option<String>,
+    /// The branch name while this Windows Hub waits for the Android Hub of a Hub move to hand the
+    /// branch over (Story 10.16): it serves no device and writes nothing until then.
+    pub migration_wait: Option<String>,
+    /// The move this Android Hub is asked to hand over (Story 10.16), as the last heartbeat said:
+    /// staff see a persistent "Move this branch to <PC name>" item while it is set.
+    pub move_notice: Option<arena_proto::MigrationNotice>,
     /// The owner released the branch key to this waiting Hub and it holds the key (Story 9.10):
     /// "Restore from a file" is offered. Never set while the Hub is not waiting.
     pub restore_key_released: bool,
@@ -182,6 +188,8 @@ impl HubStatus {
             licence_exp: None,
             pairing: PairingState::Active,
             restore_pending: None,
+            migration_wait: None,
+            move_notice: None,
             restore_key_released: false,
             cloud_time: None,
             live: false,

@@ -234,6 +234,11 @@ impl HeartbeatTask {
         } else {
             HEARTBEAT_BOOT_INTERVAL_S
         });
+        // A Windows Hub waiting for the Android Hub of a Hub move to hand over holds a token that
+        // is not the main Hub's: it does not beat (Story 10.16).
+        if self.status.borrow().migration_wait.is_some() {
+            return interval;
+        }
         let (Some(writer), Some(lease), Role::Primary) = (self.writer.clone(), lease, role) else {
             return interval;
         };
@@ -294,6 +299,15 @@ impl HeartbeatTask {
                     req.ad_impressions.as_ref().and(res.ad_impressions_through),
                     req.ad_requests.as_ref().and(res.ad_requests_through),
                 );
+                // The move this Hub is asked to hand over, or none: staff see the item while it is set
+                // (Story 10.16).
+                self.status.send_if_modified(|s| {
+                    if s.move_notice == res.migration {
+                        return false;
+                    }
+                    s.move_notice.clone_from(&res.migration);
+                    true
+                });
                 if let Some(inbox) = &self.resend {
                     if let Some(sent) = &req.resend_unavailable {
                         inbox.acknowledge(sent);
@@ -742,6 +756,46 @@ mod tests {
         assert!(
             inbox.take().is_none(),
             "an answer without a link leaves none"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_move_in_the_answer_sets_the_item_and_an_answer_without_one_clears_it() {
+        let (status, body) = answer(true, Tier::Basic);
+        let mut with = serde_json::from_str::<serde_json::Value>(&body).unwrap();
+        with["migration"] = serde_json::json!({"id": "M1", "target_hub_name": "Front desk"});
+        let port = serve(
+            vec![(status, with.to_string()), answer(true, Tier::Basic)],
+            false,
+        )
+        .await;
+        let mut f = fx(port).await;
+        assert!(f.status.borrow().move_notice.is_none());
+        f.task.beat().await;
+        assert_eq!(
+            f.status.borrow().move_notice,
+            Some(arena_proto::MigrationNotice {
+                id: "M1".into(),
+                target_hub_name: "Front desk".into()
+            })
+        );
+        f.task.beat().await;
+        assert!(
+            f.status.borrow().move_notice.is_none(),
+            "a cancelled move clears the item"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_windows_hub_waiting_for_a_move_does_not_beat() {
+        let port = serve(vec![answer(true, Tier::Basic)], false).await;
+        let mut f = fx(port).await;
+        f.status
+            .send_modify(|s| s.migration_wait = Some("Pixel Arena Gaming".into()));
+        f.task.beat().await;
+        assert!(
+            f.status.borrow().cloud_time.is_none(),
+            "no heartbeat was sent"
         );
     }
 

@@ -1058,6 +1058,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::BandNotAvailable
         | ErrorCode::SubscriptionExists
         | ErrorCode::RefundNotAllowed
+        | ErrorCode::HubMigrationActive
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::NotPrimary
         | ErrorCode::HubSlow

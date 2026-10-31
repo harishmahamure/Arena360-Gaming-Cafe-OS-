@@ -422,7 +422,8 @@ impl LanHub {
 
     /// The Hub replaces another and waits to be restored: it serves no device (Story 9.9).
     fn restore_pending(&self) -> bool {
-        self.status.borrow().restore_pending.is_some()
+        let s = self.status.borrow();
+        s.restore_pending.is_some() || s.migration_wait.is_some()
     }
 
     /// `RESTORE_PENDING` while the Hub waits to be restored.

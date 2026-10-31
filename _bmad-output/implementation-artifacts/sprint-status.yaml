@@ -312,7 +312,7 @@ development_status:
   10-13-a-lapse-or-downgrade-keeps-open-orders-signed-in-staff-and-t: done
   10-14-cancel-keeps-the-plan-to-the-end-of-the-period-then-the-bran: done
   10-15-full-refund-within-7-days-of-the-first-payment-issued-throug: done
-  10-16-owner-starts-moving-a-free-android-hub-to-a-windows-hub-afte: backlog
+  10-16-owner-starts-moving-a-free-android-hub-to-a-windows-hub-afte: review
   10-17-the-android-hub-hands-over-a-final-snapshot-and-steps-down: backlog
   10-18-the-windows-hub-imports-the-snapshot-as-the-next-epoch: backlog
   10-19-kiosks-follow-the-new-windows-hub-without-pairing-again: backlog

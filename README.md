@@ -2176,3 +2176,30 @@ built by `upgradeUrl` in `@arena/ui`; each app says where the picker lives with 
   `tab-control` (`?cycle=`), an Upgrade button on a Free branch (the Story 10.4 checkout for that branch) and the invoice
   list with branch and financial-year filters and Download PDF. A state change is announced once in a polite live region;
   the screen re-reads when the window regains focus (back from Checkout).
+
+## Change tier and add-ons mid-cycle (Story 10.9)
+
+- **Routes** (owner of the branch, billing on): `POST /v1/branches/{id}/subscription/change/preview` (nothing is written),
+  `POST .../change` (confirm) and `POST .../change/withdraw` ("Keep current plan"). Each carries the `rev` of the
+  subscription the owner looked at; a change from another device that moved it first answers `STALE` and reaches no
+  provider. Only an `active` subscription changes; `renewal_needs_approval`, `grace` and `pending_review` answer
+  "Settle the pending renewal first". One change is open at a time.
+- **Direction.** Every part of the plan the same or bigger (tier, +20 device packs, Tunnel; Premium counts as having Tunnel)
+  is an **upgrade**, every part the same or smaller is a **downgrade**; mixed is refused. Tunnel cannot be added on a branch
+  whose main Hub is Android (`BranchPlan.hub_platform`).
+- **Proration** (`plan_change::prorate`): `(new - old)` of the locked book's cycle amount x days left / days in the
+  period (calendar), rounded half up once, GST on band IN on top. The Razorpay subscription is moved to a plan priced at
+  the new renewal total (`schedule_change_at: now`). The entitlement, the subscription's tier/add-ons and a Story 10.7
+  invoice (one prorated line, for what Razorpay charged) are written by the `subscription.charged` webhook in the same
+  transaction; a charge that differs from the cloud's figure leaves a `proration_mismatch` ops task.
+- **Downgrade** is stored `scheduled` and sent to Razorpay with `schedule_change_at: cycle_end`; the entitlement is unchanged
+  until the renewal charge lands, which applies it and invoices the renewal at the new plan. "Keep current plan" moves the
+  provider back to the current plan and withdraws the change.
+- **Over the UPI limit.** An upgrade whose new renewal passes Rs 15,000 incl. GST on a UPI mandate is `held`: the cloud
+  creates a second Razorpay subscription (card/eNACH only, starting at the period end, the prorated charge as its upfront
+  add-on) and answers its Checkout. Nothing changes until its charge arrives; then the change applies, the new subscription
+  replaces the old and the old one is cancelled (an ops task stays open if that call fails). Closing Checkout leaves
+  everything as it was; "Keep current plan" cancels the unused mandate subscription.
+- **Owner app.** Account -> Subscription cards get "Change plan" (disabled with its reason while a renewal is unsettled),
+  the tier/add-ons form with the cloud's summary, and a pending-change block with "Keep current plan".
+- Prices come from the subscription's locked book; re-pricing only the changed items against the live book is not done here.

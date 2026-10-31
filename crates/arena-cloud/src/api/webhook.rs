@@ -88,8 +88,12 @@ async fn razorpay(
                     subscription_id,
                     branch_id,
                     review,
+                    replaced_razorpay_id,
                     ..
                 } => {
+                    if let Some(old) = replaced_razorpay_id {
+                        retire(&st, subscription_id, old);
+                    }
                     // Wakes the owner's wizard stream: the activation marked the plan step done.
                     let _ = st.wizard_tx.send(branch_id.clone());
                     if *review {
@@ -111,4 +115,40 @@ pub(super) fn router(st: Arc<AuthState>) -> Router {
     Router::new()
         .route("/webhooks/razorpay", post(razorpay))
         .with_state(st)
+}
+
+/// Cancels the Razorpay subscription a completed plan change replaced, so it never bills beside the
+/// new one (Story 10.9). A failure leaves the operator task the event left open.
+fn retire(st: &Arc<AuthState>, subscription_id: &str, razorpay_id: &str) {
+    let (st, subscription_id, razorpay_id) = (
+        st.clone(),
+        subscription_id.to_owned(),
+        razorpay_id.to_owned(),
+    );
+    tokio::spawn(async move {
+        let Some(provider) = st.billing.get() else {
+            return;
+        };
+        match provider.cancel_subscription(&razorpay_id).await {
+            Ok(crate::billing::CancelResult::Cancelled) => {
+                if let Err(e) = st
+                    .db
+                    .finish_ops_tasks(
+                        crate::subscription::TASK_CANCEL_SUBSCRIPTION,
+                        &subscription_id,
+                        st.now(),
+                    )
+                    .await
+                {
+                    tracing::error!(%subscription_id, error = %e, "could not close the cancel task");
+                }
+            }
+            Ok(crate::billing::CancelResult::Deferred) => {}
+            Err(e) => tracing::error!(
+                %subscription_id,
+                code = %e,
+                "could not cancel the replaced Razorpay subscription; an operator must"
+            ),
+        }
+    });
 }

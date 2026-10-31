@@ -576,10 +576,10 @@ pub use stock_report::{
     WASTE_REASONS, WasteProductRow, WasteReasonRow, WasteReport,
 };
 pub use subscription::{
-    AccountSubscription, AddOns, BranchPlan, CreateSubscription, InvoiceDownload, InvoiceKind,
-    InvoiceList, InvoiceRow, MandateMethod, PaymentMethodView, PlanPrice, PlanState,
-    QuoteSubscription, SubscriptionCheckout, SubscriptionQuote, SubscriptionState,
-    SubscriptionStatus,
+    AccountSubscription, AddOns, BranchPlan, ChangeConfirmed, ChangePlan, CreateSubscription,
+    InvoiceDownload, InvoiceKind, InvoiceList, InvoiceRow, MandateMethod, PaymentMethodView,
+    PendingPlanChange, PlanChangeKind, PlanChangePreview, PlanPrice, PlanState, QuoteSubscription,
+    SubscriptionCheckout, SubscriptionQuote, SubscriptionState, SubscriptionStatus,
 };
 pub use summary::{
     ATTENTION_ALERT, ATTENTION_CREDIT_OVERDUE, ATTENTION_LOW_STOCK, ATTENTION_SHIFT_VARIANCE,

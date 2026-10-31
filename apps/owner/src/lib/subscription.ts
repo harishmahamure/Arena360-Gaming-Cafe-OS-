@@ -6,16 +6,20 @@
 import { formatMoney, t } from "@arena/ui";
 import type {
   AccountSubscription,
+  AddOns,
   BranchPlan,
+  ChangeConfirmed,
   InvoiceDownload,
   InvoiceList,
   InvoiceRow,
   PaymentMethodView,
+  PlanChangePreview,
   PlanPrice,
   PlanState,
+  Tier,
 } from "@arena/ui/generated";
 import type { MessageKey } from "@arena/ui/messages";
-import { load, probe, type Loaded } from "./api";
+import { load, probe, send, type Loaded } from "./api";
 import { moneyLocale } from "./today.svelte";
 
 export type Cycle = "monthly" | "yearly";
@@ -124,3 +128,49 @@ export async function pdfLink(row: InvoiceRow): Promise<{ url: string } | "signe
   const body = res?.data as InvoiceDownload | null | undefined;
   return res?.status === 200 && typeof body?.url === "string" ? { url: body.url } : "failed";
 }
+
+/** Whether "Change plan" is offered: on an active plan it opens, while a renewal is unsettled it
+ * is shown disabled with its reason, and every other state has no plan to change. */
+export function changeOffer(plan: BranchPlan): "open" | "blocked" | "none" {
+  if (plan.pending_change) return "none";
+  if (plan.state === "active") return "open";
+  if (plan.state === "needs_approval" || plan.state === "grace" || plan.state === "pending_review")
+    return "blocked";
+  return "none";
+}
+
+/** The change the owner picked, as the cloud takes it. */
+export type Picked = { tier: Tier; add_ons: AddOns };
+
+const changePath = (branchId: string, step: string) =>
+  `/branches/${encodeURIComponent(branchId)}/subscription/change${step}`;
+
+/** What the change would cost and when it starts. Nothing is written. */
+export const previewChange = (plan: BranchPlan, picked: Picked) =>
+  send<PlanChangePreview>("POST", changePath(plan.branch_id, "/preview"), {
+    ...picked,
+    rev: plan.rev,
+  });
+
+/** Confirms the change the owner saw, against the `rev` they saw it at. */
+export const confirmChange = (plan: BranchPlan, picked: Picked) =>
+  send<ChangeConfirmed>("POST", changePath(plan.branch_id, ""), { ...picked, rev: plan.rev });
+
+/** "Keep current plan": withdraws a scheduled or held change. */
+export const keepPlan = (plan: BranchPlan) =>
+  send<null>("POST", changePath(plan.branch_id, "/withdraw"), { rev: plan.rev });
+
+/** The plan a pending change leads to, in words: "Premium · Monthly". */
+export const planName = (tier: Tier, cycle: Cycle | undefined) =>
+  t("owner.subscription.plan_name", {
+    tier: t(TIER_TEXT[tier]),
+    cycle: t(
+      cycle === "yearly" ? "owner.subscription.cycle.yearly" : "owner.subscription.cycle.monthly",
+    ),
+  });
+
+export const TIER_TEXT = {
+  free: "owner.tier.free",
+  basic: "owner.tier.basic",
+  premium: "owner.tier.premium",
+} as const satisfies Record<Tier, MessageKey>;

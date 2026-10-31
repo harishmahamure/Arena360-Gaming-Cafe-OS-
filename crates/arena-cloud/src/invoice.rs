@@ -245,7 +245,48 @@ pub fn draft(input: &DraftInput<'_>) -> Result<NewInvoice, QuoteError> {
     if subtotal != quote.amount_minor {
         return Err(QuoteError::NoPrice("the lines do not add up".to_owned()));
     }
+    Ok(finish(
+        input,
+        &lines,
+        subtotal,
+        quote.tax_minor,
+        quote.currency,
+    ))
+}
 
+/// The invoice of a prorated plan change (Story 10.9): one line for the amount charged for the
+/// rest of the period, with GST on band IN split the same way as a full charge. `amount_minor` is
+/// the charge with GST excluded and `tax_minor` the GST on it.
+pub fn draft_proration(
+    input: &DraftInput<'_>,
+    description: &str,
+    amount_minor: i64,
+    tax_minor: i64,
+) -> NewInvoice {
+    let line = Line {
+        description: description.to_owned(),
+        quantity: 1,
+        unit_minor: amount_minor,
+        amount_minor,
+    };
+    finish(
+        input,
+        &[line],
+        amount_minor,
+        tax_minor,
+        input.sub.currency.clone(),
+    )
+}
+
+/// Adds the buyer, the tax split and the seller to the lines of an invoice.
+fn finish(
+    input: &DraftInput<'_>,
+    lines: &[Line],
+    subtotal: i64,
+    tax_minor: i64,
+    currency: String,
+) -> NewInvoice {
+    let sub = input.sub;
     let (mut cgst, mut sgst, mut igst) = (0, 0, 0);
     let (mut buyer_gstin, mut buyer_state, mut note) = (None, None, None);
     if sub.band.gst_applicable() {
@@ -258,10 +299,10 @@ pub fn draft(input: &DraftInput<'_>) -> Result<NewInvoice, QuoteError> {
             .and_then(state_of)
             .unwrap_or_else(|| input.seller.state_code().to_owned());
         if state == input.seller.state_code() {
-            cgst = quote.tax_minor / 2;
-            sgst = quote.tax_minor - cgst;
+            cgst = tax_minor / 2;
+            sgst = tax_minor - cgst;
         } else {
-            igst = quote.tax_minor;
+            igst = tax_minor;
         }
         buyer_state = Some(state);
     } else {
@@ -269,7 +310,7 @@ pub fn draft(input: &DraftInput<'_>) -> Result<NewInvoice, QuoteError> {
     }
 
     let (period_start, period_end) = period(input.now, input.period_end, sub.cycle);
-    Ok(NewInvoice {
+    NewInvoice {
         id: input.id.clone(),
         fy: fy_of(input.now),
         tenant_id: sub.tenant_id.clone(),
@@ -279,8 +320,8 @@ pub fn draft(input: &DraftInput<'_>) -> Result<NewInvoice, QuoteError> {
         period_start,
         period_end,
         band: sub.band.as_str().to_owned(),
-        currency: quote.currency,
-        lines_json: serde_json::to_string(&lines).unwrap_or_default(),
+        currency,
+        lines_json: serde_json::to_string(lines).unwrap_or_default(),
         subtotal_minor: subtotal,
         cgst_minor: cgst,
         sgst_minor: sgst,
@@ -294,7 +335,7 @@ pub fn draft(input: &DraftInput<'_>) -> Result<NewInvoice, QuoteError> {
         seller_address: input.seller.address.clone(),
         seller_gstin: input.seller.gstin.clone(),
         note,
-    })
+    }
 }
 
 /// The invoice of one charge of `sub`, read from the data it is made of: the subscription's own
@@ -333,6 +374,45 @@ pub async fn for_charge(
         )),
         QuoteError::Db(m) => ControlError::Db(m),
     })
+}
+
+/// The invoice of the prorated charge for a plan change on `sub` (already holding the new tier and
+/// add-ons): one line of `amount_minor` (GST excluded) and `tax_minor` of GST, for the period that
+/// ends at `period_end`.
+pub async fn for_proration(
+    db: &ControlDb,
+    sub: &Subscription,
+    description: &str,
+    amount_minor: i64,
+    tax_minor: i64,
+    period_end: Option<i64>,
+    now: i64,
+) -> Result<NewInvoice, ControlError> {
+    let seller = seller().map_err(ControlError::Db)?;
+    let branch = db
+        .branch(&sub.branch_id)
+        .await?
+        .ok_or_else(|| ControlError::Db(format!("branch {} is gone", sub.branch_id)))?;
+    let tenant = db
+        .tenant(&sub.tenant_id)
+        .await?
+        .ok_or_else(|| ControlError::Db(format!("tenant {} is gone", sub.tenant_id)))?;
+    let buyer_gstin = branch.gstin.as_deref().filter(|_| branch.gst_registered);
+    Ok(draft_proration(
+        &DraftInput {
+            id: ulid::Ulid::generate().to_string(),
+            seller,
+            sub,
+            items: &[],
+            buyer_name: &tenant.name,
+            buyer_gstin,
+            period_end,
+            now,
+        },
+        description,
+        amount_minor,
+        tax_minor,
+    ))
 }
 
 /// `minor` units of `currency` as `1180.00`.

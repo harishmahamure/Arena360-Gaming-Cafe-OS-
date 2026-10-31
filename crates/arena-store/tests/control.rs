@@ -63,6 +63,7 @@ const ALL_TABLES: &[&str] = &[
     "send_ledger",
     "signin_challenges",
     "staff_invites",
+    "subscription_changes",
     "subscription_history",
     "subscriptions",
     "tenants",

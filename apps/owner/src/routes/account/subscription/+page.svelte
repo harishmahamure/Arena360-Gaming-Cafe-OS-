@@ -59,6 +59,12 @@
     loaded = true;
   }
 
+  // A change was stored, withdrawn or found stale: the cards are read again and the result said once.
+  async function changed(message: string) {
+    await fetchPlans();
+    if (message) announcement = message;
+  }
+
   async function retry() {
     await refresh();
     await fetchPlans();
@@ -82,7 +88,7 @@
   />
   <ul class="list">
     {#each branches as plan (plan.branch_id)}
-      <SubscriptionCard {plan} {cycle} current={plan.branch_id === wanted} />
+      <SubscriptionCard {plan} {cycle} current={plan.branch_id === wanted} onchanged={changed} />
     {/each}
   </ul>
   <InvoicesPanel announce={(text) => (announcement = text)} />

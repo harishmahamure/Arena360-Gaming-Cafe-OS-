@@ -2,7 +2,9 @@
 import type { AddOns } from "./AddOns";
 import type { Band } from "./Band";
 import type { BillingCycle } from "./BillingCycle";
+import type { HubPlatform } from "./HubPlatform";
 import type { PaymentMethodView } from "./PaymentMethodView";
+import type { PendingPlanChange } from "./PendingPlanChange";
 import type { PlanPrice } from "./PlanPrice";
 import type { PlanState } from "./PlanState";
 import type { Tier } from "./Tier";
@@ -40,4 +42,16 @@ export type BranchPlan = {
    * A sentence for states that need explaining.
    */
   message?: string;
+  /**
+   * The subscription's revision, sent back with a change of plan (Story 10.9).
+   */
+  rev: number;
+  /**
+   * The platform of the branch's main Hub, when it has one (Tunnel needs the Windows Hub).
+   */
+  hub_platform?: HubPlatform;
+  /**
+   * A change of plan that has not taken effect yet.
+   */
+  pending_change?: PendingPlanChange;
 };

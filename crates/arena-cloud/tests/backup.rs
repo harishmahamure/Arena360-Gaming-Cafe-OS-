@@ -97,6 +97,7 @@ fn expected_counts() -> BTreeMap<String, u64> {
         ),
         ("signin_challenges", 0),
         ("staff_invites", 0),
+        ("subscription_changes", 0),
         ("subscription_history", 0),
         ("subscriptions", 0),
         ("tenants", 0),
@@ -807,6 +808,7 @@ async fn restore_control_reads_a_plaintext_dump_from_stdin() {
             "send_ledger",
             "signin_challenges",
             "staff_invites",
+            "subscription_changes",
             "subscription_history",
             "subscriptions",
             "tenants"

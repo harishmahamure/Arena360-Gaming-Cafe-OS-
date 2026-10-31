@@ -35,6 +35,7 @@ mod owner;
 mod owner_alerts;
 mod owner_commands;
 mod pairing;
+mod plan_change;
 mod price_book;
 mod rate_limit;
 mod retention;
@@ -80,6 +81,9 @@ pub use owner_alerts::{
 pub use owner_commands::{OwnerCommandFilter, OwnerCommandRow};
 pub use pairing::{
     IssueOutcome, NewPairingCode, PAIRING_HISTORY_MS, PairingCodeRow, RedeemInvalid, Redeemed,
+};
+pub use plan_change::{
+    AppliedPlanChange, ChangeKind, ChangeStatus, NewPlanChange, PlanChange, ProposeOutcome,
 };
 pub use price_book::{
     BookAudit, DraftOutcome, MirroredPlan, NewOpsTask, OpsTaskRow, PriceBook, PriceBookItem,
@@ -272,6 +276,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 38,
         sql: include_str!("../control-migrations/0038_subscription_payment_detail.sql"),
+    },
+    ControlMigration {
+        version: 39,
+        sql: include_str!("../control-migrations/0039_subscription_changes.sql"),
     },
 ];
 

@@ -1570,6 +1570,7 @@ async fn the_sequence_restarts_each_financial_year_and_a_failed_issue_leaves_no_
             ops_task: None,
             audit: None,
             close_task_kind: None,
+            plan_change: None,
         };
         let event_id = format!("evt_fy_{n}");
         let record = |id: &'static str| EventRecord {
@@ -2053,4 +2054,485 @@ async fn another_tenants_branch_invoice_or_plan_answers_forbidden_and_reads_noth
             .len(),
         1
     );
+}
+
+// ---- Story 10.9: change tier and add-ons mid-cycle with proration ----
+
+impl Harness {
+    /// An owner with an `active` Basic monthly subscription paid by card 4242 (period end
+    /// `PERIOD_END`), on `add_ons`.
+    async fn active_with(add_ons: Value) -> (Self, String, String) {
+        let (h, a, branch, _id) = Harness::pending_with(json!({
+            "tier": "basic", "cycle": "monthly", "billing_country": "IN", "add_ons": add_ons,
+        }))
+        .await;
+        let r = h
+            .send(
+                "evt_first",
+                &paid_event("sub_fake_001", PERIOD_END, card("4242")),
+            )
+            .await;
+        assert_eq!(r.body["status"], "applied", "{}", r.body);
+        (h, a, branch)
+    }
+
+    async fn change(&self, branch: &str, access: &str, step: &str, body: Value) -> Reply {
+        self.call(
+            "POST",
+            &format!("/v1/branches/{branch}/subscription/change{step}"),
+            Some(body),
+            access,
+        )
+        .await
+    }
+
+    async fn rev(&self, branch: &str) -> i64 {
+        self.only(branch).await.rev
+    }
+
+    fn charged(&self, event_id: &str, period_end: i64, amount: i64) -> (String, Value) {
+        let mut payment = card("4242");
+        payment["amount"] = json!(amount);
+        (
+            event_id.to_owned(),
+            paid_event("sub_fake_001", period_end, payment),
+        )
+    }
+}
+
+// Basic monthly 20,000 to Premium monthly 199,900 with 30 of the period's 31 days left.
+const UP_CHARGE: i64 = 174_097;
+const UP_TAX: i64 = 31_337;
+
+#[tokio::test]
+async fn an_upgrade_is_previewed_prorated_charged_and_applied_when_razorpay_confirms() {
+    let (h, a, branch) = Harness::active_with(json!({})).await;
+    let rev = h.rev(&branch).await;
+    let r = h
+        .change(
+            &branch,
+            &a,
+            "/preview",
+            json!({"tier": "premium", "rev": rev}),
+        )
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["kind"], "now");
+    assert_eq!(
+        (
+            r.body["charge_amount_minor"].as_i64(),
+            r.body["charge_tax_minor"].as_i64(),
+            r.body["charge_total_minor"].as_i64(),
+            r.body["days_left"].as_i64(),
+        ),
+        (
+            Some(UP_CHARGE),
+            Some(UP_TAX),
+            Some(UP_CHARGE + UP_TAX),
+            Some(30)
+        )
+    );
+    // The new renewal: Premium monthly 199,900 + 18% GST.
+    assert_eq!(r.body["renewal_total_minor"], 235_882);
+    assert_eq!(r.body["needs_mandate"], false);
+    // A preview writes nothing and calls no provider.
+    assert!(h.fake().plan_changes().is_empty());
+    assert_eq!(h.rev(&branch).await, rev);
+
+    let r = h
+        .change(&branch, &a, "", json!({"tier": "premium", "rev": rev}))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["charge_total_minor"], UP_CHARGE + UP_TAX);
+    let sent = h.fake().plan_changes();
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0].now);
+    assert_eq!(
+        (sent[0].renewal_minor, sent[0].charge_minor),
+        (235_882, UP_CHARGE + UP_TAX)
+    );
+    // Nothing is entitled until the charge is confirmed, and the card shows the change.
+    assert_eq!(
+        h.db.entitlement(&branch).await.unwrap().unwrap().tier,
+        arena_proto::Tier::Basic
+    );
+    let plans = h.plans(&a, "").await;
+    assert_eq!(plans.body["branches"][0]["pending_change"]["kind"], "now");
+
+    let (id, body) = h.charged("evt_up", PERIOD_END, UP_CHARGE + UP_TAX);
+    let r = h.send(&id, &body).await;
+    assert_eq!(r.body["status"], "applied", "{}", r.body);
+    let sub = h.only(&branch).await;
+    assert_eq!(sub.tier, arena_proto::Tier::Premium);
+    assert_eq!(sub.state, SubscriptionState::Active);
+    // The period did not move: it was a charge inside it.
+    assert_eq!(sub.current_period_end, Some(PERIOD_END * 1000));
+    assert_eq!(
+        h.db.entitlement(&branch).await.unwrap().unwrap().tier,
+        arena_proto::Tier::Premium
+    );
+    let inv = &h.db.invoices_for_event("evt_up").await.unwrap()[0];
+    assert_eq!(
+        (inv.subtotal_minor, inv.total_minor),
+        (UP_CHARGE, UP_CHARGE + UP_TAX)
+    );
+    assert!(
+        inv.lines_json.contains("plan change to Premium"),
+        "{}",
+        inv.lines_json
+    );
+    assert_eq!(h.invoices().await.len(), 2);
+    assert_eq!(h.count("SELECT COUNT(*) FROM ops_tasks"), 0);
+    assert!(h.db.open_plan_change(&sub.id).await.unwrap().is_none());
+    let plans = h.plans(&a, "").await;
+    assert!(plans.body["branches"][0].get("pending_change").is_none());
+    // A repeat of the event changes nothing.
+    let r = h.send(&id, &body).await;
+    assert_eq!(r.body["status"], "duplicate");
+}
+
+#[tokio::test]
+async fn a_charge_that_differs_from_the_clouds_figure_is_invoiced_as_charged_and_logged_to_ops() {
+    let (h, a, branch) = Harness::active_with(json!({})).await;
+    let rev = h.rev(&branch).await;
+    let r = h
+        .change(&branch, &a, "", json!({"tier": "premium", "rev": rev}))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    // Razorpay prorates by seconds and charges 100 paise less than the cloud's whole days.
+    let charged = UP_CHARGE + UP_TAX - 100;
+    let (id, body) = h.charged("evt_up", PERIOD_END, charged);
+    let r = h.send(&id, &body).await;
+    assert_eq!(r.body["status"], "applied", "{}", r.body);
+    let inv = &h.db.invoices_for_event("evt_up").await.unwrap()[0];
+    assert_eq!(inv.total_minor, charged);
+    assert_eq!(
+        h.count("SELECT COUNT(*) FROM ops_tasks WHERE kind = 'proration_mismatch'"),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_downgrade_waits_for_the_period_end_and_keeps_the_entitlement_until_then() {
+    let (h, a, branch) = Harness::active_with(json!({"devices_20": 2})).await;
+    let rev = h.rev(&branch).await;
+    let body = json!({"tier": "basic", "add_ons": {"devices_20": 1}, "rev": rev});
+    let r = h.change(&branch, &a, "/preview", body.clone()).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["kind"], "period_end");
+    assert_eq!(
+        (
+            r.body["charge_total_minor"].as_i64(),
+            r.body["effective_at"].as_i64()
+        ),
+        (Some(0), Some(PERIOD_END * 1000))
+    );
+    // Basic 20,000 + one pack 5,000 + GST.
+    assert_eq!(r.body["renewal_total_minor"], 29_500);
+
+    let r = h.change(&branch, &a, "", body).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(!h.fake().plan_changes()[0].now);
+    let sub = h.only(&branch).await;
+    assert_eq!(sub.addon_devices_20, 2);
+    let e = h.db.entitlement(&branch).await.unwrap().unwrap();
+    assert_eq!(e.addons, vec!["devices_20:2".to_owned()]);
+    let plans = h.plans(&a, "").await;
+    let pending = &plans.body["branches"][0]["pending_change"];
+    assert_eq!(pending["kind"], "period_end");
+    assert_eq!(pending["add_ons"]["devices_20"], 1);
+
+    // A charge inside the period applies nothing.
+    let (id, body) = h.charged("evt_inside", PERIOD_END, 1);
+    h.send(&id, &body).await;
+    assert_eq!(h.only(&branch).await.addon_devices_20, 2);
+
+    // The renewal lands: the change takes effect and the renewal is invoiced at the new plan.
+    let (id, body) = h.charged("evt_renew", PERIOD_END + 2_678_400, 29_500);
+    let r = h.send(&id, &body).await;
+    assert_eq!(r.body["status"], "applied", "{}", r.body);
+    assert_eq!(h.only(&branch).await.addon_devices_20, 1);
+    let e = h.db.entitlement(&branch).await.unwrap().unwrap();
+    assert_eq!(e.addons, vec!["devices_20:1".to_owned()]);
+    let inv = &h.db.invoices_for_event("evt_renew").await.unwrap()[0];
+    assert_eq!(inv.total_minor, 29_500);
+}
+
+#[tokio::test]
+async fn keep_current_plan_withdraws_a_scheduled_change_and_the_period_end_changes_nothing() {
+    let (h, a, branch) = Harness::active_with(json!({"devices_20": 2})).await;
+    let rev = h.rev(&branch).await;
+    let r = h
+        .change(
+            &branch,
+            &a,
+            "",
+            json!({"tier": "basic", "add_ons": {"devices_20": 1}, "rev": rev}),
+        )
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let rev = h.rev(&branch).await;
+    let r = h
+        .change(&branch, &a, "/withdraw", json!({"rev": rev}))
+        .await;
+    assert_eq!(r.status, 204, "{}", r.body);
+    // The provider was moved back to the current plan (2 packs: 30,000 + GST).
+    let sent = h.fake().plan_changes();
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[1].renewal_minor, 35_400);
+    let plans = h.plans(&a, "").await;
+    assert!(plans.body["branches"][0].get("pending_change").is_none());
+    let (id, body) = h.charged("evt_renew", PERIOD_END + 2_678_400, 35_400);
+    h.send(&id, &body).await;
+    assert_eq!(h.only(&branch).await.addon_devices_20, 2);
+    // Withdrawing twice finds nothing to withdraw.
+    let rev = h.rev(&branch).await;
+    let r = h
+        .change(&branch, &a, "/withdraw", json!({"rev": rev}))
+        .await;
+    assert_eq!(r.status, 422, "{}", r.body);
+}
+
+#[tokio::test]
+async fn a_second_change_from_another_device_fails_stale_and_reaches_no_provider() {
+    let (h, a, branch) = Harness::active_with(json!({})).await;
+    let rev = h.rev(&branch).await;
+    let body = json!({"tier": "premium", "rev": rev});
+    let first = h.change(&branch, &a, "", body.clone()).await;
+    assert_eq!(first.status, 200, "{}", first.body);
+    let second = h
+        .change(
+            &branch,
+            &a,
+            "",
+            json!({"tier": "premium", "add_ons": {"devices_20": 3}, "rev": rev}),
+        )
+        .await;
+    assert_eq!((second.status, second.code()), (409, "STALE"));
+    assert_eq!(h.fake().plan_changes().len(), 1);
+    // With a change open, another one (even on the new `rev`) waits for it.
+    let rev = h.rev(&branch).await;
+    let r = h
+        .change(
+            &branch,
+            &a,
+            "",
+            json!({"tier": "premium", "add_ons": {"devices_20": 3}, "rev": rev}),
+        )
+        .await;
+    assert_eq!(r.status, 422, "{}", r.body);
+    assert_eq!(h.fake().plan_changes().len(), 1);
+}
+
+#[tokio::test]
+async fn a_provider_that_fails_leaves_no_change_open() {
+    let (h, a, branch) = Harness::active_with(json!({})).await;
+    h.fake().fail_changes(true);
+    let rev = h.rev(&branch).await;
+    let r = h
+        .change(&branch, &a, "", json!({"tier": "premium", "rev": rev}))
+        .await;
+    assert_eq!(r.status, 503, "{}", r.body);
+    let sub = h.only(&branch).await;
+    assert!(h.db.open_plan_change(&sub.id).await.unwrap().is_none());
+    assert_eq!(sub.tier, arena_proto::Tier::Basic);
+    // The owner can try again once the provider is back.
+    h.fake().fail_changes(false);
+    let rev = h.rev(&branch).await;
+    let r = h
+        .change(&branch, &a, "", json!({"tier": "premium", "rev": rev}))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+}
+
+#[tokio::test]
+async fn an_unsettled_renewal_a_mixed_change_and_no_change_are_refused_with_a_reason() {
+    let (h, a, branch) = Harness::active_with(json!({"devices_20": 1})).await;
+    let rev = h.rev(&branch).await;
+    // Raising one part while lowering another is not one change.
+    let r = h
+        .change(
+            &branch,
+            &a,
+            "/preview",
+            json!({"tier": "premium", "add_ons": {"devices_20": 0}, "rev": rev}),
+        )
+        .await;
+    assert_eq!(r.status, 422, "{}", r.body);
+    // The same plan changes nothing.
+    let r = h
+        .change(
+            &branch,
+            &a,
+            "/preview",
+            json!({"tier": "basic", "add_ons": {"devices_20": 1}, "rev": rev}),
+        )
+        .await;
+    assert_eq!(r.status, 422, "{}", r.body);
+    for state in ["renewal_needs_approval", "grace", "pending_review"] {
+        h.sql(&format!("UPDATE subscriptions SET state = '{state}'"));
+        let r = h
+            .change(
+                &branch,
+                &a,
+                "/preview",
+                json!({"tier": "premium", "rev": rev}),
+            )
+            .await;
+        assert_eq!(r.status, 422, "{state}: {}", r.body);
+        assert_eq!(r.body["message"], "Settle the pending renewal first");
+        let r = h
+            .change(&branch, &a, "", json!({"tier": "premium", "rev": rev}))
+            .await;
+        assert_eq!(r.status, 422, "{state}: {}", r.body);
+    }
+    assert!(h.fake().plan_changes().is_empty());
+}
+
+#[tokio::test]
+async fn tunnel_cannot_be_added_on_an_android_hub_and_is_included_on_premium() {
+    let (h, a, branch) = Harness::active_with(json!({})).await;
+    h.hub_token(&a).await;
+    let rev = h.rev(&branch).await;
+    let r = h
+        .change(
+            &branch,
+            &a,
+            "/preview",
+            json!({"tier": "basic", "add_ons": {"tunnel": 1}, "rev": rev}),
+        )
+        .await;
+    assert_eq!(r.status, 422, "{}", r.body);
+    assert_eq!(r.body["field"], "add_ons.tunnel");
+    let plans = h.plans(&a, "").await;
+    assert_eq!(plans.body["branches"][0]["hub_platform"], "android");
+    // Premium with Tunnel is refused: it is included.
+    let r = h
+        .change(
+            &branch,
+            &a,
+            "/preview",
+            json!({"tier": "premium", "add_ons": {"tunnel": 1}, "rev": rev}),
+        )
+        .await;
+    assert_eq!(r.status, 422, "{}", r.body);
+}
+
+#[tokio::test]
+async fn an_upgrade_over_the_upi_limit_is_held_for_a_new_mandate_and_charges_nothing() {
+    let (h, a, branch, _id) = Harness::pending_with(json!({
+        "tier": "basic", "cycle": "yearly", "billing_country": "IN",
+    }))
+    .await;
+    let upi = json!({"id": "pay_1", "method": "upi", "vpa": "someone@upi"});
+    h.send("evt_first", &paid_event("sub_fake_001", PERIOD_END, upi))
+        .await;
+    assert_eq!(
+        h.only(&branch).await.mandate_method,
+        Some(arena_proto::MandateMethod::Upi)
+    );
+    let rev = h.rev(&branch).await;
+    let body = json!({"tier": "premium", "rev": rev});
+    // Premium yearly Rs 19,990 + GST = Rs 23,588.20: no UPI.
+    let r = h.change(&branch, &a, "/preview", body.clone()).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body["needs_mandate"], true);
+    assert_eq!(r.body["renewal_total_minor"], 2_358_820);
+    assert_eq!(r.body["methods"], json!(["card", "emandate"]));
+    let charge = r.body["charge_total_minor"].as_i64().unwrap();
+
+    let r = h.change(&branch, &a, "", body).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let checkout = &r.body["checkout"];
+    assert_eq!(checkout["razorpay_subscription_id"], "sub_fake_m001");
+    assert_eq!(checkout["methods"], json!(["card", "emandate"]));
+    // The live subscription was not touched; only the mandate subscription was created.
+    assert!(h.fake().plan_changes().is_empty());
+    let mandates = h.fake().mandates();
+    assert_eq!(mandates.len(), 1);
+    assert_eq!(mandates[0].change.charge_minor, charge);
+    assert_eq!(mandates[0].start_at_ms, PERIOD_END * 1000);
+    let sub = h.only(&branch).await;
+    assert_eq!(sub.tier, arena_proto::Tier::Basic);
+    assert_eq!(
+        sub.razorpay_subscription_id.as_deref(),
+        Some("sub_fake_001")
+    );
+    assert_eq!(
+        h.db.entitlement(&branch).await.unwrap().unwrap().tier,
+        arena_proto::Tier::Basic
+    );
+    let plans = h.plans(&a, "").await;
+    assert_eq!(
+        plans.body["branches"][0]["pending_change"]["needs_mandate"],
+        true
+    );
+
+    // Authorising the mandate charges the prorated amount, applies the change and swaps the
+    // Razorpay subscription; the old one is cancelled so it never bills beside the new one.
+    let mut payment = card("1111");
+    payment["amount"] = json!(charge);
+    let r = h
+        .send(
+            "evt_mandate",
+            &paid_event("sub_fake_m001", PERIOD_END + 31_536_000, payment),
+        )
+        .await;
+    assert_eq!(r.body["status"], "applied", "{}", r.body);
+    let sub = h.only(&branch).await;
+    assert_eq!(sub.tier, arena_proto::Tier::Premium);
+    assert_eq!(
+        sub.razorpay_subscription_id.as_deref(),
+        Some("sub_fake_m001")
+    );
+    assert_eq!(sub.mandate_method, Some(arena_proto::MandateMethod::Card));
+    assert_eq!(sub.mandate_detail.as_deref(), Some("1111"));
+    assert_eq!(
+        h.db.entitlement(&branch).await.unwrap().unwrap().tier,
+        arena_proto::Tier::Premium
+    );
+    let inv = &h.db.invoices_for_event("evt_mandate").await.unwrap()[0];
+    assert_eq!(inv.total_minor, charge);
+    // The old subscription is cancelled in the background, and its task closed once it is.
+    for _ in 0..100 {
+        if h.fake().cancelled() == vec!["sub_fake_001".to_owned()] {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(h.fake().cancelled(), vec!["sub_fake_001".to_owned()]);
+}
+
+#[tokio::test]
+async fn cancelling_checkout_leaves_a_held_change_inert_and_keep_current_plan_cancels_its_mandate()
+{
+    let (h, a, branch, _id) = Harness::pending_with(json!({
+        "tier": "basic", "cycle": "yearly", "billing_country": "IN",
+    }))
+    .await;
+    let upi = json!({"id": "pay_1", "method": "upi"});
+    h.send("evt_first", &paid_event("sub_fake_001", PERIOD_END, upi))
+        .await;
+    let rev = h.rev(&branch).await;
+    let r = h
+        .change(&branch, &a, "", json!({"tier": "premium", "rev": rev}))
+        .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    // Nobody pays: the plan is as it was.
+    assert_eq!(h.only(&branch).await.tier, arena_proto::Tier::Basic);
+    let rev = h.rev(&branch).await;
+    let r = h
+        .change(&branch, &a, "/withdraw", json!({"rev": rev}))
+        .await;
+    assert_eq!(r.status, 204, "{}", r.body);
+    assert_eq!(h.fake().cancelled(), vec!["sub_fake_m001".to_owned()]);
+    // A late charge on the withdrawn mandate applies nothing.
+    let r = h
+        .send(
+            "evt_late",
+            &paid_event("sub_fake_m001", PERIOD_END, card("1111")),
+        )
+        .await;
+    assert_ne!(r.body["status"], "applied", "{}", r.body);
+    assert_eq!(h.only(&branch).await.tier, arena_proto::Tier::Basic);
 }

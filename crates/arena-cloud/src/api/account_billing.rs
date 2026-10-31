@@ -95,7 +95,13 @@ async fn subscription(
             .subscriptions_of_branch(&b.id)
             .await
             .map_err(ApiError::internal)?;
-        let plan = account_plan::plan_of(&st.db, b, tier, &subs)
+        let platform = st
+            .db
+            .active_hub(&b.id)
+            .await
+            .map_err(ApiError::internal)?
+            .map(|h| h.platform);
+        let plan = account_plan::plan_of(&st.db, b, tier, platform, &subs)
             .await
             .map_err(|PlanError::Db(e)| ApiError::internal(e))?;
         out.push(plan);

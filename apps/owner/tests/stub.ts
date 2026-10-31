@@ -186,6 +186,11 @@ export type StubOptions = {
   plans?: BranchPlan[] | (() => BranchPlan[]);
   /** The invoices the cloud holds, newest first. Each `GET` is recorded in `calls.bodies["invoices"]`. */
   invoices?: InvoiceRow[];
+  /** Answers the plan change routes (Story 10.9). Each body is recorded in `calls.bodies["change"]`; unset: 404. */
+  change?: (
+    step: "preview" | "confirm" | "withdraw",
+    body: Record<string, unknown>,
+  ) => { status: number; body: unknown };
   /** Answers `GET /v1/account/invoices/{id}/pdf`; unset: a signed link. */
   pdf?: (id: string) => { status: number; body: unknown };
   /** Answers a command post instead of the default (queue one row per branch that can take it). */
@@ -240,6 +245,7 @@ export function planOf(b: Branch, over: Partial<BranchPlan> = {}): BranchPlan {
       add_ons: { devices_20: 0, tunnel: 0, owner_login: 0 },
       gst_percent: 0,
       prices: [],
+      rev: 7,
       ...over,
     };
   return {
@@ -258,6 +264,7 @@ export function planOf(b: Branch, over: Partial<BranchPlan> = {}): BranchPlan {
       { cycle: "yearly", amount_minor: 1_499_000, tax_minor: 269_820, total_minor: 1_768_820 },
     ],
     payment_method: { method: "card", detail: "4242" },
+    rev: 7,
     ...over,
   };
 }
@@ -338,6 +345,19 @@ export async function stubCloud(
           (!q.get("fy") || i.fy === q.get("fy")),
       );
       return json({ invoices: rows, years: [...new Set(all.map((i) => i.fy))].sort().reverse() });
+    }
+    const change = path.match(
+      /^\/v1\/branches\/([^/]+)\/subscription\/change(\/preview|\/withdraw)?$/,
+    );
+    if (change && req.method() === "POST") {
+      const step =
+        change[2] === "/preview" ? "preview" : change[2] === "/withdraw" ? "withdraw" : "confirm";
+      const body = (req.postDataJSON() ?? {}) as Record<string, unknown>;
+      (bodies["change"] ??= []).push({ step, branch: change[1], ...body });
+      const answer = opts.change?.(step, body) ?? { status: 404, body: { code: "NOT_FOUND" } };
+      return answer.status === 204
+        ? route.fulfill({ status: 204 })
+        : json(answer.body, answer.status);
     }
     const pdf = path.match(/^\/v1\/account\/invoices\/([^/]+)\/pdf$/);
     if (pdf && req.method() === "GET") {

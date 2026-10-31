@@ -6,6 +6,7 @@
 use arena_proto::{MandateMethod, SubscriptionState, Tier};
 
 use super::invoice::{NewInvoice, issue_stmt};
+use super::plan_change::{AppliedPlanChange, apply_stmts};
 use super::price_book::NewOpsTask;
 use super::subscription::{COLUMNS, Subscription, subscription_from};
 use super::{
@@ -80,6 +81,8 @@ pub struct SubscriptionChange<'a> {
     pub audit: Option<NewOpsAudit<'a>>,
     /// Marks the open operator tasks of this kind for this subscription done.
     pub close_task_kind: Option<&'a str>,
+    /// A tier or add-on change this event completes (Story 10.9).
+    pub plan_change: Option<AppliedPlanChange<'a>>,
 }
 
 /// What recording an event did.
@@ -191,6 +194,9 @@ fn change_stmts(c: &SubscriptionChange<'_>, now: i64) -> Vec<Stmt> {
             )
             .expect(1),
         );
+    }
+    if let Some(p) = &c.plan_change {
+        stmts.extend(apply_stmts(p, c.subscription_id, now));
     }
     stmts.push(
         Stmt::new(

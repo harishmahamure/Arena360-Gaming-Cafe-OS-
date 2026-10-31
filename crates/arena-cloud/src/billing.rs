@@ -117,6 +117,60 @@ pub enum CancelResult {
     Deferred,
 }
 
+/// A change of tier or add-ons on a live Razorpay subscription (Story 10.9): the subscription is
+/// moved to a plan priced at the new renewal total, at once (an upgrade, which Razorpay charges
+/// the prorated difference for) or at the end of the cycle (a downgrade).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanChangeSpec {
+    pub subscription_id: String,
+    pub razorpay_subscription_id: String,
+    pub change_id: String,
+    pub book_id: String,
+    pub band: Band,
+    /// `basic` or `premium`.
+    pub item: PriceItem,
+    pub cycle: BillingCycle,
+    pub currency: String,
+    /// What each renewal debits after the change, GST included.
+    pub renewal_minor: i64,
+    /// The prorated charge the cloud computed, GST included; 0 at the cycle end.
+    pub charge_minor: i64,
+    /// `true`: switch now. `false`: at the end of the cycle.
+    pub now: bool,
+}
+
+impl PlanChangeSpec {
+    fn plan_name(&self) -> String {
+        format!(
+            "Arena 360 {} {} ({}) {} {}",
+            self.item.as_str(),
+            self.cycle.as_str(),
+            self.band.as_str(),
+            self.subscription_id,
+            self.change_id
+        )
+    }
+}
+
+/// A new Razorpay subscription that only authorises a card or eNACH mandate for a change whose
+/// renewal debit is too big for the current UPI mandate (Story 10.9). It starts at the end of the
+/// current period, so the renewal moves to it, and carries the prorated charge as an upfront add-on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MandateSpec {
+    pub change: PlanChangeSpec,
+    /// When the new subscription's first renewal debits (epoch ms): the end of the paid period.
+    pub start_at_ms: i64,
+    pub methods: Vec<MandateMethod>,
+}
+
+/// What a plan change call did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChangeResult {
+    Updated,
+    /// The provider is `manual`: nothing was called, so nothing was charged.
+    Deferred,
+}
+
 /// The key id the fake hands to Checkout.
 pub const FAKE_KEY_ID: &str = "rzp_test_fake";
 
@@ -266,6 +320,9 @@ struct FakeState {
     fail_subscriptions: bool,
     /// Razorpay subscription id -> what a test says Razorpay holds for it.
     remote: BTreeMap<String, RemoteSubscription>,
+    plan_changes: Vec<PlanChangeSpec>,
+    mandates: Vec<MandateSpec>,
+    fail_changes: bool,
 }
 
 /// The recorded fake: keeps the plans it "created" in memory, answers a repeat of the same row
@@ -317,6 +374,42 @@ impl FakeRazorpay {
     /// The Razorpay subscription ids cancelled so far, in order.
     pub fn cancelled(&self) -> Vec<String> {
         self.with(|s| s.cancelled.clone())
+    }
+
+    /// Makes every plan change call fail with `FAKE_CHANGE_FAILED`, or succeed again.
+    pub fn fail_changes(&self, fail: bool) {
+        self.with(|s| s.fail_changes = fail);
+    }
+
+    /// The plan changes sent to the provider so far, in order.
+    pub fn plan_changes(&self) -> Vec<PlanChangeSpec> {
+        self.with(|s| s.plan_changes.clone())
+    }
+
+    /// The mandate subscriptions created for held changes so far, in order.
+    pub fn mandates(&self) -> Vec<MandateSpec> {
+        self.with(|s| s.mandates.clone())
+    }
+
+    fn change_plan(&self, spec: &PlanChangeSpec) -> Result<(), BillingError> {
+        self.with(|s| {
+            if s.fail_changes {
+                return Err(BillingError("FAKE_CHANGE_FAILED".to_owned()));
+            }
+            s.plan_changes.push(spec.clone());
+            Ok(())
+        })
+    }
+
+    fn create_mandate(&self, spec: &MandateSpec) -> Result<String, BillingError> {
+        self.with(|s| {
+            if s.fail_changes {
+                return Err(BillingError("FAKE_CHANGE_FAILED".to_owned()));
+            }
+            let id = format!("sub_fake_m{:03}", s.mandates.len() + 1);
+            s.mandates.push(spec.clone());
+            Ok(id)
+        })
     }
 
     fn create_subscription(&self, spec: &SubscriptionSpec) -> Result<String, BillingError> {
@@ -481,6 +574,78 @@ impl RazorpayClient {
         Self::id_of(&self.post("/subscriptions", &sub).await?)
     }
 
+    /// Creates the plan priced at the new renewal total.
+    async fn plan_for_change(&self, spec: &PlanChangeSpec) -> Result<String, BillingError> {
+        let plan = json!({
+            "period": spec.cycle.as_str(),
+            "interval": 1,
+            "item": {
+                "name": spec.plan_name(),
+                "amount": spec.renewal_minor,
+                "currency": spec.currency,
+            },
+            "notes": {
+                "subscription_id": spec.subscription_id,
+                "change_id": spec.change_id,
+                "price_book": spec.book_id,
+                "band": spec.band.as_str(),
+                "tier": spec.item.as_str(),
+                "cycle": spec.cycle.as_str(),
+            },
+        });
+        Self::id_of(&self.post("/plans", &plan).await?)
+    }
+
+    /// Moves the live subscription to the new plan: Razorpay charges the prorated difference at
+    /// once for `now`, and switches at the end of the cycle otherwise.
+    async fn change_plan(&self, spec: &PlanChangeSpec) -> Result<(), BillingError> {
+        if !plain_id(&spec.razorpay_subscription_id) {
+            return Err(BillingError("RAZORPAY_BAD_ID".to_owned()));
+        }
+        let plan_id = self.plan_for_change(spec).await?;
+        let body = json!({
+            "plan_id": plan_id,
+            "schedule_change_at": if spec.now { "now" } else { "cycle_end" },
+            "customer_notify": 1,
+        });
+        self.patch(
+            &format!("/subscriptions/{}", spec.razorpay_subscription_id),
+            &body,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// A subscription that starts at the end of the paid period and charges the prorated amount
+    /// when the owner authorises its mandate.
+    async fn create_mandate(&self, spec: &MandateSpec) -> Result<String, BillingError> {
+        let plan_id = self.plan_for_change(&spec.change).await?;
+        let total_count = match spec.change.cycle {
+            BillingCycle::Monthly => 120,
+            BillingCycle::Yearly => 10,
+        };
+        let mut sub = json!({
+            "plan_id": plan_id,
+            "total_count": total_count,
+            "customer_notify": 1,
+            "start_at": spec.start_at_ms / 1000,
+            "notes": {
+                "subscription_id": spec.change.subscription_id,
+                "change_id": spec.change.change_id,
+            },
+        });
+        if spec.change.charge_minor > 0 {
+            sub["addons"] = json!([{
+                "item": {
+                    "name": "Arena 360 plan change (prorated)",
+                    "amount": spec.change.charge_minor,
+                    "currency": spec.change.currency,
+                },
+            }]);
+        }
+        Self::id_of(&self.post("/subscriptions", &sub).await?)
+    }
+
     /// Cancels at once, not at the end of the cycle.
     async fn cancel_subscription(
         &self,
@@ -569,6 +734,17 @@ impl RazorpayClient {
         self.send(
             self.client
                 .post(format!("{}{path}", self.base))
+                .header("content-type", "application/json")
+                .body(body.to_string()),
+        )
+        .await
+    }
+
+    /// PATCHes `body` to `path`, with the same stable error codes as [`Self::post`].
+    async fn patch(&self, path: &str, body: &Value) -> Result<Value, BillingError> {
+        self.send(
+            self.client
+                .patch(format!("{}{path}", self.base))
                 .header("content-type", "application/json")
                 .body(body.to_string()),
         )
@@ -682,6 +858,30 @@ impl BillingProvider {
                 .await
                 .map(|()| CancelResult::Cancelled),
             Self::Manual => Ok(CancelResult::Deferred),
+        }
+    }
+
+    /// Moves a live subscription to the plan of a change (Story 10.9).
+    pub async fn change_plan(&self, spec: &PlanChangeSpec) -> Result<ChangeResult, BillingError> {
+        match self {
+            Self::Fake(f) => f.change_plan(spec).map(|()| ChangeResult::Updated),
+            Self::Razorpay(r) => r.change_plan(spec).await.map(|()| ChangeResult::Updated),
+            Self::Manual => Ok(ChangeResult::Deferred),
+        }
+    }
+
+    /// Creates the subscription that authorises the new mandate of a held change (Story 10.9).
+    pub async fn create_mandate(
+        &self,
+        spec: &MandateSpec,
+    ) -> Result<SubscriptionResult, BillingError> {
+        match self {
+            Self::Fake(f) => f.create_mandate(spec).map(SubscriptionResult::Created),
+            Self::Razorpay(r) => r
+                .create_mandate(spec)
+                .await
+                .map(SubscriptionResult::Created),
+            Self::Manual => Ok(SubscriptionResult::Deferred),
         }
     }
 

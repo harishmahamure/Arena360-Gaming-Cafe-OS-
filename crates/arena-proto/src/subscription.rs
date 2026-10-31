@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::{Band, BillingCycle, Tier};
+use crate::{Band, BillingCycle, HubPlatform, Tier};
 
 /// Where a subscription is in its life.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -284,6 +284,115 @@ pub struct BranchPlan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub message: Option<String>,
+    /// The subscription's revision, sent back with a change of plan (Story 10.9).
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub rev: i64,
+    /// The platform of the branch's main Hub, when it has one (Tunnel needs the Windows Hub).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub hub_platform: Option<HubPlatform>,
+    /// A change of plan that has not taken effect yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pending_change: Option<PendingPlanChange>,
+}
+
+/// When a change of plan takes effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub enum PlanChangeKind {
+    /// An upgrade: today, paid by a prorated charge for the rest of the period.
+    Now,
+    /// A downgrade or a removal: at the end of the paid period, with no partial refund.
+    PeriodEnd,
+}
+
+/// `POST /v1/branches/:id/subscription/change/preview` and `.../change` (Story 10.9): the tier and
+/// add-ons the owner wants, and the `rev` of the subscription they were looking at. A change from
+/// another device that moved `rev` first makes this one `STALE`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ChangePlan {
+    pub tier: Tier,
+    #[serde(default)]
+    pub add_ons: AddOns,
+    #[ts(type = "number")]
+    pub rev: i64,
+}
+
+/// What a change of plan will cost and when it starts, made by the cloud from the subscription's
+/// own locked price book. The prorated charge is `(new daily rate - old daily rate) x days left`
+/// (GST on band IN on top); a change at the period end charges nothing now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PlanChangePreview {
+    #[ts(type = "number")]
+    pub rev: i64,
+    pub kind: PlanChangeKind,
+    pub currency: String,
+    pub tier: Tier,
+    pub add_ons: AddOns,
+    pub gst_percent: u32,
+    /// The prorated charge for the rest of the period, GST excluded; 0 for a change at the period end.
+    #[ts(type = "number")]
+    pub charge_amount_minor: i64,
+    #[ts(type = "number")]
+    pub charge_tax_minor: i64,
+    #[ts(type = "number")]
+    pub charge_total_minor: i64,
+    /// What each renewal debits after the change.
+    #[ts(type = "number")]
+    pub renewal_amount_minor: i64,
+    #[ts(type = "number")]
+    pub renewal_tax_minor: i64,
+    #[ts(type = "number")]
+    pub renewal_total_minor: i64,
+    /// When the change starts: now for an upgrade, the end of the paid period otherwise.
+    #[ts(type = "number")]
+    pub effective_at: i64,
+    /// The days of the paid period the charge covers; 0 for a change at the period end.
+    pub days_left: u32,
+    /// The renewal needs a card or eNACH mandate the subscription does not have: Checkout must
+    /// authorise one before anything is charged.
+    pub needs_mandate: bool,
+    pub methods: Vec<MandateMethod>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub notice: Option<String>,
+}
+
+/// What confirming a change did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct ChangeConfirmed {
+    pub kind: PlanChangeKind,
+    #[ts(type = "number")]
+    pub effective_at: i64,
+    #[ts(type = "number")]
+    pub charge_total_minor: i64,
+    #[ts(type = "number")]
+    pub renewal_total_minor: i64,
+    /// Present when a new mandate must be authorised first; the plan is unchanged until it exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub checkout: Option<SubscriptionCheckout>,
+}
+
+/// A change waiting on a branch's card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[cfg_attr(feature = "export-ts", ts(export))]
+pub struct PendingPlanChange {
+    pub kind: PlanChangeKind,
+    pub tier: Tier,
+    pub add_ons: AddOns,
+    #[ts(type = "number")]
+    pub effective_at: i64,
+    #[ts(type = "number")]
+    pub renewal_total_minor: i64,
+    /// Waiting for the owner to authorise a card or eNACH mandate.
+    pub needs_mandate: bool,
 }
 
 /// `GET /v1/account/subscription`: every branch of the owner's café with its plan.

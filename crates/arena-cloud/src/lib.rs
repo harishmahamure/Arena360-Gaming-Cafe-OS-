@@ -42,6 +42,7 @@ pub mod owner_alerts;
 pub mod owner_read;
 pub mod pairing_code;
 pub mod passwords;
+pub mod plan_change;
 pub mod presign;
 pub mod price_book;
 pub mod push;

@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use arena_proto::{MandateMethod, SubscriptionState};
 use arena_store::control::{
-    ControlDb, ControlError, EntitlementWrite, EventOutcome, EventRecord, NewOpsAudit, NewOpsTask,
-    Subscription, SubscriptionChange,
+    AppliedPlanChange, ControlDb, ControlError, EntitlementWrite, EventOutcome, EventRecord,
+    NewOpsAudit, NewOpsTask, Subscription, SubscriptionChange,
 };
 use hmac::{Hmac, Mac};
 use serde_json::{Value, json};
@@ -20,6 +20,8 @@ use sha2::{Digest, Sha256};
 
 use crate::billing::{PaymentInfo, PaymentOrigin, RemoteSubscription, payment_info_from};
 use crate::config::get_env;
+use crate::plan_change;
+use crate::subscription::TASK_CANCEL_SUBSCRIPTION;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -165,6 +167,8 @@ pub struct ParsedEvent {
     /// When Razorpay says the event happened.
     pub created_at_ms: Option<i64>,
     pub payment: Option<PaymentInfo>,
+    /// What the payment charged, in minor units (GST included), when the event carries one.
+    pub amount_minor: Option<i64>,
 }
 
 /// Why a verified body is not an event.
@@ -195,6 +199,10 @@ pub fn parse(body: &[u8]) -> Result<ParsedEvent, BadEvent> {
         current_end_ms: seconds_ms(subscription.and_then(|s| s.get("current_end"))),
         created_at_ms: seconds_ms(v.get("created_at")),
         payment: entity("payment").map(payment_info_from),
+        amount_minor: entity("payment")
+            .and_then(|p| p.get("amount"))
+            .and_then(Value::as_i64)
+            .filter(|a| *a >= 0),
     })
 }
 
@@ -224,6 +232,7 @@ pub fn from_remote(
             current_end_ms: remote.current_end_ms,
             created_at_ms: None,
             payment: remote.payment.clone(),
+            amount_minor: None,
         },
     )
 }
@@ -374,6 +383,9 @@ pub enum Handled {
         state: SubscriptionState,
         /// A first payment was held for review.
         review: bool,
+        /// The Razorpay subscription a completed plan change replaced: to be cancelled so it never
+        /// bills beside the new one (Story 10.9).
+        replaced_razorpay_id: Option<String>,
     },
     /// Recorded, nothing to change (an older period, `authenticated`, a kind we do not act on).
     Recorded,
@@ -396,11 +408,102 @@ pub async fn handle(
     now: i64,
 ) -> Result<Handled, ControlError> {
     for _ in 0..ATTEMPTS {
-        let sub = match &ev.razorpay_subscription_id {
+        let rid = ev.razorpay_subscription_id.as_deref();
+        let mut sub = match rid {
             Some(rid) => db.subscription_by_razorpay_id(rid).await?,
             None => None,
         };
-        let decision = sub.as_ref().and_then(|s| decide(s, ev, now));
+        // A charge on the new Razorpay subscription that authorises a held change's mandate.
+        let mut held = None;
+        if sub.is_none()
+            && let Some(rid) = rid
+            && let Some(change) = db.held_plan_change_by_razorpay_id(rid).await?
+        {
+            sub = db.subscription(&change.subscription_id).await?;
+            held = Some(change);
+        }
+        let open_change = match (&sub, &held) {
+            (_, Some(change)) => Some(change.clone()),
+            (Some(s), None) => db.open_plan_change(&s.id).await?,
+            (None, None) => None,
+        };
+        let mut decision = match (&sub, &held) {
+            (Some(s), None) => decide(s, ev, now),
+            _ => None,
+        };
+        // A tier or add-on change this charge completes (Story 10.9).
+        let charged = ev.kind == "subscription.charged";
+        let newer = decision
+            .as_ref()
+            .is_some_and(|d| d.charged && d.period_end.is_some());
+        let completes = match (&sub, &open_change) {
+            (Some(s), Some(change)) if s.state == SubscriptionState::Active || newer => {
+                plan_change::completion(change, charged, held.is_some(), newer)
+            }
+            _ => None,
+        };
+        if completes.is_some()
+            && let Some(s) = &sub
+        {
+            match &mut decision {
+                Some(d) => d.issue_entitlement = true,
+                None => {
+                    decision = Some(Decision {
+                        new_state: s.state,
+                        period_end: None,
+                        first_paid_at: None,
+                        payment_country: None,
+                        mandate: ev.payment.as_ref().and_then(|p| p.method),
+                        mandate_detail: ev.payment.as_ref().and_then(|p| p.detail.clone()),
+                        issue_entitlement: true,
+                        review: false,
+                        charged: true,
+                    });
+                }
+            }
+        }
+        // The subscription as it reads once the change has taken effect: its tier and add-ons
+        // grant the entitlement and price the invoice.
+        let effective = match (&sub, &open_change, completes) {
+            (Some(s), Some(change), Some(_)) => Some(plan_change::with_change(s, change)),
+            _ => None,
+        };
+        // The old Razorpay subscription a completed mandate replaces: it is cancelled so it never
+        // bills beside the new one, and left to an operator when that call fails.
+        let replaced = match (&sub, completes) {
+            (Some(s), Some(plan_change::Completion::Mandate)) => s.razorpay_subscription_id.clone(),
+            _ => None,
+        };
+        let replaced_details = replaced.as_ref().zip(sub.as_ref()).map(|(rid, s)| {
+            json!({
+                "razorpay_subscription_id": rid,
+                "branch_id": s.branch_id,
+            })
+            .to_string()
+        });
+        // What Razorpay charged for a prorated change, against what the cloud computed.
+        let charge_total = match (&open_change, completes) {
+            (
+                Some(change),
+                Some(plan_change::Completion::Prorated | plan_change::Completion::Mandate),
+            ) => Some(ev.amount_minor.unwrap_or(change.charge_minor)),
+            _ => None,
+        };
+        let mismatch = match (&open_change, charge_total) {
+            (Some(change), Some(charged)) if charged != change.charge_minor => Some(
+                json!({
+                    "subscription_id": change.subscription_id,
+                    "change_id": change.id,
+                    "computed_minor": change.charge_minor,
+                    "charged_minor": charged,
+                })
+                .to_string(),
+            ),
+            _ => None,
+        };
+        if let Some(m) = &mismatch {
+            tracing::error!(detail = %m, "Razorpay charged another amount than the cloud computed for a plan change");
+        }
         let record_id = new_id();
         let record = EventRecord {
             id: &record_id,
@@ -413,8 +516,9 @@ pub async fn handle(
         };
         let history_id = new_id();
         let task_id = new_id();
-        let addons = sub
+        let addons = effective
             .as_ref()
+            .or(sub.as_ref())
             .map(|s| json!(addons_of(s)).to_string())
             .unwrap_or_default();
         let task_details = sub.as_ref().map(|s| {
@@ -440,31 +544,85 @@ pub async fn handle(
                 payment_country: d.payment_country.as_deref(),
                 mandate_method: d.mandate,
                 mandate_detail: d.mandate_detail.as_deref(),
-                entitlement: d.issue_entitlement.then_some(EntitlementWrite {
-                    tier: s.tier,
+                entitlement: d.issue_entitlement.then(|| EntitlementWrite {
+                    tier: effective.as_ref().unwrap_or(s).tier,
                     addons_json: &addons,
                 }),
                 history_id: &history_id,
                 cause: event_id,
-                ops_task: d.review.then(|| NewOpsTask {
-                    id: &task_id,
-                    kind: TASK_REVIEW,
-                    target: &s.id,
-                    details_json: task_details.as_deref().unwrap_or("{}"),
-                }),
+                ops_task: if d.review {
+                    Some(NewOpsTask {
+                        id: &task_id,
+                        kind: TASK_REVIEW,
+                        target: &s.id,
+                        details_json: task_details.as_deref().unwrap_or("{}"),
+                    })
+                } else if let Some(details) = &replaced_details {
+                    Some(NewOpsTask {
+                        id: &task_id,
+                        kind: TASK_CANCEL_SUBSCRIPTION,
+                        target: &s.id,
+                        details_json: details,
+                    })
+                } else {
+                    mismatch.as_deref().map(|details| NewOpsTask {
+                        id: &task_id,
+                        kind: plan_change::TASK_PRORATION_MISMATCH,
+                        target: &s.id,
+                        details_json: details,
+                    })
+                },
                 audit: None,
                 close_task_kind: None,
+                plan_change: open_change
+                    .as_ref()
+                    .filter(|_| completes.is_some())
+                    .map(|ch| AppliedPlanChange {
+                        change_id: &ch.id,
+                        tier: ch.tier,
+                        addon_devices_20: ch.addon_devices_20,
+                        addon_tunnel: ch.addon_tunnel,
+                        addon_owner_login: ch.addon_owner_login,
+                        razorpay_subscription_id: held
+                            .as_ref()
+                            .and_then(|h| h.razorpay_subscription_id.as_deref()),
+                    }),
             }),
             _ => None,
         };
         // A charge is invoiced in the same transaction. A price the subscription's book lacks, or
         // a seller that is misconfigured, fails the call before anything is recorded, so the
-        // webhook is retried.
+        // webhook is retried. A prorated charge is invoiced for what was charged.
         let invoice = match (&sub, &decision, &change) {
-            (Some(s), Some(d), Some(c)) if d.charged => Some(
-                crate::invoice::for_charge(db, s, c.period_end.or(s.current_period_end), now)
-                    .await?,
-            ),
+            (Some(s), Some(d), Some(c)) if d.charged => {
+                let billed = effective.as_ref().unwrap_or(s);
+                let period_end = c.period_end.or(s.current_period_end);
+                match (completes, charge_total) {
+                    (
+                        Some(plan_change::Completion::Prorated | plan_change::Completion::Mandate),
+                        Some(total),
+                    ) => {
+                        if total > 0 {
+                            let (amount, tax) = plan_change::split_total(total, s.band);
+                            Some(
+                                crate::invoice::for_proration(
+                                    db,
+                                    billed,
+                                    &plan_change::proration_line(billed.tier),
+                                    amount,
+                                    tax,
+                                    period_end,
+                                    now,
+                                )
+                                .await?,
+                            )
+                        } else {
+                            None
+                        }
+                    }
+                    _ => Some(crate::invoice::for_charge(db, billed, period_end, now).await?),
+                }
+            }
             _ => None,
         };
         match db
@@ -478,6 +636,7 @@ pub async fn handle(
                         branch_id: s.branch_id.clone(),
                         state: d.new_state,
                         review: d.review,
+                        replaced_razorpay_id: replaced.clone(),
                     },
                     (Some(_), None) => Handled::Recorded,
                     (None, _) => Handled::Unmatched,
@@ -580,6 +739,7 @@ pub async fn approve_review(
                 details_json: &details,
             }),
             close_task_kind: Some(TASK_REVIEW),
+            plan_change: None,
         };
         if db
             .apply_subscription_change(&change, now)
@@ -640,6 +800,7 @@ mod tests {
                 origin,
                 detail: None,
             }),
+            amount_minor: None,
         }
     }
 

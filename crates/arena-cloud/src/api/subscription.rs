@@ -7,9 +7,11 @@
 use std::sync::Arc;
 
 use arena_proto::{
-    AppError, CreateSubscription, ErrorCode, QuoteSubscription, SubscriptionCheckout,
-    SubscriptionQuote, SubscriptionState, SubscriptionStatus,
+    AppError, ChangeConfirmed, ChangePlan, CreateSubscription, ErrorCode, HubPlatform,
+    PlanChangePreview, QuoteSubscription, SubscriptionCheckout, SubscriptionQuote,
+    SubscriptionState, SubscriptionStatus,
 };
+use arena_store::control::Subscription;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::post;
@@ -19,6 +21,7 @@ use super::error::ApiError;
 use super::json::ApiJson;
 use super::owned::OwnedBranch;
 use crate::auth::AuthState;
+use crate::plan_change::{self, ChangeError};
 use crate::subscription::{self, SubscriptionError};
 
 fn billing_disabled() -> ApiError {
@@ -108,9 +111,109 @@ async fn status(
     }))
 }
 
+fn change_error(e: ChangeError) -> ApiError {
+    match e {
+        ChangeError::Invalid(i) => ApiError::validation(i.field, i.message),
+        ChangeError::Blocked(reason) => ApiError::validation("tier", reason),
+        ChangeError::Stale => AppError::new(
+            ErrorCode::Stale,
+            "This plan changed while you were looking. Review it and try again.",
+        )
+        .into(),
+        ChangeError::Provider(d) => ApiError::unavailable(format!("billing provider: {d}")),
+        ChangeError::Pricing(d) => ApiError::unavailable(format!("pricing: {d}")),
+        ChangeError::Db(d) => ApiError::internal(d),
+    }
+}
+
+/// The branch's subscription and the platform of its main Hub, for a change of plan.
+async fn changing(
+    st: &AuthState,
+    owned: &OwnedBranch,
+) -> Result<(Subscription, Option<HubPlatform>), ApiError> {
+    if !st.billing_enabled {
+        return Err(billing_disabled());
+    }
+    let sub = st
+        .db
+        .subscription_of_branch(&owned.branch.id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(ApiError::not_found)?;
+    let platform = st
+        .db
+        .active_hub(&owned.branch.id)
+        .await
+        .map_err(ApiError::internal)?
+        .map(|h| h.platform);
+    Ok((sub, platform))
+}
+
+/// `POST /v1/branches/{id}/subscription/change/preview` (Story 10.9): the prorated charge, the new
+/// renewal amount and when the change starts. Nothing is written and no provider is called.
+async fn preview_change(
+    State(st): State<Arc<AuthState>>,
+    owned: OwnedBranch,
+    ApiJson(body): ApiJson<ChangePlan>,
+) -> Result<Json<PlanChangePreview>, ApiError> {
+    let (sub, platform) = changing(&st, &owned).await?;
+    let plan = plan_change::plan(&st.db, &sub, platform, &body, st.now())
+        .await
+        .map_err(change_error)?;
+    Ok(Json(plan_change::preview_of(&sub, &plan)))
+}
+
+/// `POST /v1/branches/{id}/subscription/change`: confirms a change against the `rev` the owner saw.
+async fn confirm_change(
+    State(st): State<Arc<AuthState>>,
+    owned: OwnedBranch,
+    ApiJson(body): ApiJson<ChangePlan>,
+) -> Result<Json<ChangeConfirmed>, ApiError> {
+    let (sub, platform) = changing(&st, &owned).await?;
+    let provider = st
+        .billing
+        .get()
+        .ok_or_else(|| ApiError::unavailable("no billing provider"))?;
+    let done = plan_change::confirm(&st.db, provider, &sub, platform, &body, st.now())
+        .await
+        .map_err(change_error)?;
+    Ok(Json(done))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct KeepPlan {
+    rev: i64,
+}
+
+/// `POST /v1/branches/{id}/subscription/change/withdraw`: "Keep current plan".
+async fn withdraw_change(
+    State(st): State<Arc<AuthState>>,
+    owned: OwnedBranch,
+    ApiJson(body): ApiJson<KeepPlan>,
+) -> Result<StatusCode, ApiError> {
+    let (sub, _) = changing(&st, &owned).await?;
+    let provider = st
+        .billing
+        .get()
+        .ok_or_else(|| ApiError::unavailable("no billing provider"))?;
+    plan_change::withdraw(&st.db, provider, &sub, body.rev, st.now())
+        .await
+        .map_err(change_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub(super) fn router(st: Arc<AuthState>) -> Router {
     Router::new()
         .route("/branches/{id}/subscription", post(create).get(status))
         .route("/branches/{id}/subscription/quote", post(quote))
+        .route(
+            "/branches/{id}/subscription/change/preview",
+            post(preview_change),
+        )
+        .route("/branches/{id}/subscription/change", post(confirm_change))
+        .route(
+            "/branches/{id}/subscription/change/withdraw",
+            post(withdraw_change),
+        )
         .with_state(st)
 }

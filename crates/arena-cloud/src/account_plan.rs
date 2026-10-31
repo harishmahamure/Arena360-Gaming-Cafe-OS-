@@ -4,8 +4,8 @@
 //! book, so a later publish changes nothing the owner reads here.
 
 use arena_proto::{
-    AddOns, BillingCycle, BranchPlan, InvoiceKind, InvoiceRow, PaymentMethodView, PlanPrice,
-    PlanState, PriceItem, SubscriptionState, Tier,
+    AddOns, BillingCycle, BranchPlan, HubPlatform, InvoiceKind, InvoiceRow, PaymentMethodView,
+    PlanPrice, PlanState, PriceItem, SubscriptionState, Tier,
 };
 use arena_store::control::{Branch, ControlDb, Invoice, Subscription};
 
@@ -58,7 +58,7 @@ fn price_item(tier: Tier) -> Option<PriceItem> {
 }
 
 /// The card of a branch with no paid plan.
-fn free(branch: &Branch, tier: Tier) -> BranchPlan {
+fn free(branch: &Branch, tier: Tier, platform: Option<HubPlatform>) -> BranchPlan {
     BranchPlan {
         branch_id: branch.id.clone(),
         branch_name: branch.name.clone(),
@@ -73,6 +73,9 @@ fn free(branch: &Branch, tier: Tier) -> BranchPlan {
         prices: Vec::new(),
         payment_method: None,
         message: None,
+        rev: 0,
+        hub_platform: platform,
+        pending_change: None,
     }
 }
 
@@ -82,11 +85,17 @@ pub async fn plan_of(
     db: &ControlDb,
     branch: &Branch,
     tier: Tier,
+    platform: Option<HubPlatform>,
     subs: &[Subscription],
 ) -> Result<BranchPlan, PlanError> {
     let Some(sub) = current(subs) else {
-        return Ok(free(branch, tier));
+        return Ok(free(branch, tier, platform));
     };
+    let pending_change = db
+        .open_plan_change(&sub.id)
+        .await
+        .map_err(|e| PlanError::Db(e.to_string()))?
+        .map(|c| crate::plan_change::pending_of(&c));
     let add_ons = AddOns {
         devices_20: sub.addon_devices_20,
         tunnel: sub.addon_tunnel,
@@ -131,6 +140,9 @@ pub async fn plan_of(
         }),
         message: (state == PlanState::PendingReview)
             .then(|| crate::webhook::REVIEW_MESSAGE.to_owned()),
+        rev: sub.rev,
+        hub_platform: platform,
+        pending_change,
     })
 }
 

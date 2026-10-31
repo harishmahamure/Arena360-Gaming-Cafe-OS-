@@ -2,7 +2,7 @@
 title: 'Story 9.22: Force promote after a data-loss warning'
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: '051c3775'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -104,3 +104,5 @@ The alert is queued inside the `lease.promote` transaction, like the other Hub a
 - `cargo test -p arena-proto -p arena-store -p arena-core -p arena-tasks -p arena-api -p arena-kiosk-core -p arena-cloud`, `cargo clippy --workspace --all-targets -- -D warnings` (minus `arena-e2e`, `arena-kiosk-svc`), `cargo fmt --check`
 - `pnpm run gen:types`, `pnpm run check:strings`, `pnpm run check:protocol`
 - `ARENA_UPDATE_DOCS=1 cargo test -p arena-store --test export_reference` after a migration
+
+- Code review (2026-10-31): blind, edge-case and acceptance passes over `5b50e80d` found nothing blocking. Checked: the acknowledgement check runs after the session is authenticated and before the PIN; `SCHEMA_BEHIND` is checked before the lease, and `FENCED` never gets an offer or a forced claim; `force_reason` is set exactly when `force` is; the alert is queued in the `lease.promote` transaction; `SeenEpochs` demotes within one tick. `cargo fmt --check`, clippy `-D warnings` and tests for arena-proto, arena-store, arena-core, arena-tasks and arena-api pass.

@@ -2,7 +2,7 @@
 title: 'Story 10.2: A branch subscription is created at a PPP band that is locked to it'
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: '0512df91f64d3fa6b94661b4c21e01cefad35bda'
 review_loop_iteration: 0
 followup_review_recommended: false
@@ -98,3 +98,7 @@ Implemented: `subscriptions` table (migration 0035), store module, proto types a
 Verification: `cargo test -p arena-cloud --test subscription --test config` (15 + 24 pass), `--lib` (136), `arena-proto` (363), `arena-store --features control --test control` (24); `cargo fmt --check` and clippy `-D warnings` clean. Known unrelated failure: `binary.rs::unreachable_at_start_retries_then_exits_1_without_logging_the_token` (Windows connect timeout, listed in spec 10.1).
 
 Residual risks: a crash after Razorpay accepts the subscription but before its id is stored leaves an orphan at Razorpay; a cancel answered with HTTP 400 is retried each sweep; a sweep with provider failures still exits success (logs a warning); no HTTP-stub test for the new Razorpay client calls; validation errors use the existing `VALIDATION_FAILED` code; `tunnel` add-on is refused on Premium (included).
+
+## Code Review Result
+
+Reviewed 2026-10-31: no blocking findings. fmt, clippy `-D warnings` and the listed test suites pass. Non-blocking, left as noted in residual risks: a Razorpay cancel answered with HTTP 400 is retried each sweep (oldest rows could crowd the 1000-row batch), and an orphaned Razorpay subscription is possible after a crash before its id is stored.

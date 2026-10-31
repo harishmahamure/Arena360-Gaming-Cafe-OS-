@@ -61,6 +61,7 @@ const ALL_TABLES: &[&str] = &[
     "send_ledger",
     "signin_challenges",
     "staff_invites",
+    "subscriptions",
     "tenants",
 ];
 
@@ -251,6 +252,66 @@ mod local {
             .unwrap()
             .map(Result::unwrap)
             .collect()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn subscriptions_hold_one_open_row_per_branch_and_copy_the_book() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gz_control.db");
+        let db = ControlDb::open_local(&path).await.unwrap();
+        db.migrate(1_000).await.unwrap();
+        let c = rusqlite::Connection::open(&path).unwrap();
+        c.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+        let columns: Vec<String> = c
+            .prepare("SELECT name FROM pragma_table_info('subscriptions') ORDER BY cid")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        for want in [
+            "id",
+            "tenant_id",
+            "branch_id",
+            "state",
+            "tier",
+            "cycle",
+            "band",
+            "currency",
+            "price_book_id",
+            "razorpay_subscription_id",
+            "rev",
+            "grace_until",
+            "first_paid_at",
+            "cancel_at_period_end",
+        ] {
+            assert!(columns.iter().any(|c| c == want), "missing {want}");
+        }
+        let insert = |id: &str, branch: &str, state: &str| {
+            c.execute(
+                "INSERT INTO subscriptions (id, tenant_id, branch_id, state, tier, cycle, band, \
+                 currency, price_book_id, created_at, updated_at) \
+                 VALUES (?, 't1', ?, ?, 'basic', 'monthly', 'IN', 'INR', 'pb_v1', 1, 1)",
+                [id, branch, state],
+            )
+        };
+        insert("s1", "b1", "pending").unwrap();
+        assert!(
+            insert("s2", "b1", "active").is_err(),
+            "one open row per branch"
+        );
+        insert("s3", "b2", "active").unwrap();
+        for (i, over) in ["abandoned", "cancelled", "lapsed"].into_iter().enumerate() {
+            c.execute("UPDATE subscriptions SET state = ? WHERE id = 's1'", [over])
+                .unwrap();
+            insert(&format!("n{i}"), "b1", "pending").unwrap();
+            c.execute(
+                "UPDATE subscriptions SET state = 'abandoned' WHERE id = ?",
+                [format!("n{i}")],
+            )
+            .unwrap();
+        }
+        assert!(insert("bad", "b3", "paused").is_err(), "unknown state");
     }
 
     #[tokio::test(flavor = "multi_thread")]

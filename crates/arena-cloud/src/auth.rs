@@ -38,6 +38,9 @@ pub struct AuthState {
     /// Creates and removes the Cloudflare Tunnels of entitled branches (Story 8.39); set once by
     /// `auth_state`. Unset: no tunnel is made and a heartbeat answers `off`.
     pub tunnels: std::sync::OnceLock<crate::tunnel::TunnelProvider>,
+    /// Creates and cancels Razorpay subscriptions (Story 10.2); set once by `auth_state`. Unset:
+    /// the subscription route answers 503.
+    pub billing: std::sync::OnceLock<crate::billing::BillingProvider>,
     pub clock: Clock,
     pepper: Vec<u8>,
     /// Exact browser origins allowed with credentials.
@@ -89,6 +92,7 @@ impl AuthState {
             notifier: std::sync::OnceLock::new(),
             push: std::sync::OnceLock::new(),
             tunnels: std::sync::OnceLock::new(),
+            billing: std::sync::OnceLock::new(),
             clock,
             pepper: cfg.pepper.clone(),
             web_origins: cfg.web_origins.clone(),

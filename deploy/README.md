@@ -354,6 +354,14 @@ outage never blocks the rest of the cloud. `--dev` uses the recorded fake. MY, S
 sale (`billing_bands.enabled = 0`, `GET /v1/pricing?band=MY` answers `BAND_NOT_AVAILABLE`) until
 `price-book band` switches them on.
 
+Subscriptions (Story 10.2): `POST /v1/branches/{id}/subscription` creates a Razorpay subscription
+at the band the billing country fixes and locks the live book to it. An owner who never pays leaves
+a `pending` row; schedule `arena-cloud --role jobs --task subscription-sweep` every 15 minutes (it
+cancels each subscription older than 24 hours at Razorpay, then marks it `abandoned`; a Razorpay
+failure leaves it for the next run, and under `manual` it opens a `razorpay_cancel_subscription`
+ops task). The job needs the same `ARENA_BILLING_PROVIDER` and `ARENA_RAZORPAY_KEY_*` variables as
+the `control` role, plus the database variables.
+
 `GET /v1/pricing?band=IN` (public, cached 5 minutes) serves the live book's lines for a band. The
 web apps read `packages/ui/src/pricing.snapshot.ts`, generated from the seed book; regenerate it
 with `UPDATE_PRICING_SNAPSHOT=1 cargo test -p arena-cloud --test pricing_snapshot` (CI fails when

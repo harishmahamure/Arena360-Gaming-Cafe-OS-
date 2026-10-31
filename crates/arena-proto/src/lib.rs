@@ -98,6 +98,7 @@ mod staff_invite;
 mod staff_list;
 mod stock;
 mod stock_report;
+mod subscription;
 mod summary;
 mod tax;
 mod test_session;
@@ -573,6 +574,9 @@ pub use stock::{
 pub use stock_report::{
     STOCK_MOVES_LIMIT, StockLevel, StockMoveLine, StockMoves, StockReport, WASTE_EXPIRED,
     WASTE_REASONS, WasteProductRow, WasteReasonRow, WasteReport,
+};
+pub use subscription::{
+    AddOns, CreateSubscription, MandateMethod, SubscriptionCheckout, SubscriptionState,
 };
 pub use summary::{
     ATTENTION_ALERT, ATTENTION_CREDIT_OVERDUE, ATTENTION_LOW_STOCK, ATTENTION_SHIFT_VARIANCE,

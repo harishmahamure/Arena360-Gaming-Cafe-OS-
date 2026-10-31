@@ -1055,6 +1055,7 @@ pub fn status_of(code: ErrorCode) -> StatusCode {
         | ErrorCode::LeaseFresh
         | ErrorCode::PriceBookImmutable
         | ErrorCode::BandNotAvailable
+        | ErrorCode::SubscriptionExists
         | ErrorCode::DeviceUnassigned => StatusCode::CONFLICT,
         ErrorCode::NotPrimary
         | ErrorCode::HubSlow

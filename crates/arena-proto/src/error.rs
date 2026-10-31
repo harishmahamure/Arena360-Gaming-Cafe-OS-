@@ -222,6 +222,8 @@ pub enum ErrorCode {
     PriceBookImmutable,
     /// Paid plans are not on sale in this band yet (Story 10.1).
     BandNotAvailable,
+    /// The branch already has a subscription that is not over (Story 10.2).
+    SubscriptionExists,
 }
 
 /// An error returned to a client: a code, a message and optionally the offending field.
@@ -352,6 +354,7 @@ impl ErrorCode {
             Self::LeaseFresh => "LEASE_FRESH",
             Self::PriceBookImmutable => "PRICE_BOOK_IMMUTABLE",
             Self::BandNotAvailable => "BAND_NOT_AVAILABLE",
+            Self::SubscriptionExists => "SUBSCRIPTION_EXISTS",
         }
     }
 }
@@ -543,6 +546,7 @@ mod tests {
             (ErrorCode::LeaseFresh, "LEASE_FRESH"),
             (ErrorCode::PriceBookImmutable, "PRICE_BOOK_IMMUTABLE"),
             (ErrorCode::BandNotAvailable, "BAND_NOT_AVAILABLE"),
+            (ErrorCode::SubscriptionExists, "SUBSCRIPTION_EXISTS"),
         ];
         for (code, text) in cases {
             let json = serde_json::to_string(&code).unwrap();

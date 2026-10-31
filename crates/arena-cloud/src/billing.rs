@@ -1,8 +1,9 @@
 //! The billing provider (Story 10.1, AD-34): the one place the cloud talks to Razorpay. A
 //! [`BillingProvider`] is the recorded [`FakeRazorpay`] (dev and tests), the real
 //! [`RazorpayClient`], or `Manual`, where every call is a no-op that leaves an operator task so
-//! a Razorpay outage never blocks the rest of the cloud. This story needs only plans; the later
-//! billing stories add subscriptions, payments, refunds and webhooks to the same adapter.
+//! a Razorpay outage never blocks the rest of the cloud. It creates plans (Story 10.1) and
+//! creates and cancels subscriptions (Story 10.2); the later billing stories add payments,
+//! refunds and webhooks to the same adapter.
 //! Errors carry a stable code, never a key, a secret or a response body.
 
 use std::collections::BTreeMap;
@@ -10,7 +11,7 @@ use std::ffi::OsString;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use arena_proto::{Band, BillingCycle, PriceItem};
+use arena_proto::{Band, BillingCycle, MandateMethod, PriceItem};
 use serde_json::{Value, json};
 
 use crate::config::get_env;
@@ -68,6 +69,57 @@ pub enum PlanResult {
     Deferred,
 }
 
+/// One Razorpay subscription to create for a branch. `total_minor` is what each renewal debits,
+/// GST included on band IN.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubscriptionSpec {
+    /// Our subscription id; the fake answers a repeat of it with the same Razorpay id.
+    pub subscription_id: String,
+    pub branch_id: String,
+    pub book_id: String,
+    pub band: Band,
+    /// `basic` or `premium`.
+    pub item: PriceItem,
+    pub cycle: BillingCycle,
+    pub currency: String,
+    pub total_minor: i64,
+    /// The payment methods the renewal may use.
+    pub methods: Vec<MandateMethod>,
+}
+
+impl SubscriptionSpec {
+    /// The name the per-subscription plan carries in the Razorpay dashboard.
+    pub fn plan_name(&self) -> String {
+        format!(
+            "Arena 360 {} {} ({}) {}",
+            self.item.as_str(),
+            self.cycle.as_str(),
+            self.band.as_str(),
+            self.subscription_id
+        )
+    }
+}
+
+/// What a subscription call did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubscriptionResult {
+    /// The Razorpay subscription id.
+    Created(String),
+    /// The provider is `manual`: nothing was called, so there is nothing to pay through.
+    Deferred,
+}
+
+/// What a cancel call did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CancelResult {
+    Cancelled,
+    /// The provider is `manual`: nothing was called, an operator cancels it.
+    Deferred,
+}
+
+/// The key id the fake hands to Checkout.
+pub const FAKE_KEY_ID: &str = "rzp_test_fake";
+
 /// Why a provider call failed: a stable code and no secret.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BillingError(pub String);
@@ -86,6 +138,11 @@ struct FakeState {
     plans: BTreeMap<String, String>,
     created: Vec<PlanSpec>,
     fail_after: Option<u32>,
+    /// Our subscription id -> the Razorpay subscription id handed out for it.
+    subscriptions: BTreeMap<String, String>,
+    subscription_specs: Vec<SubscriptionSpec>,
+    cancelled: Vec<String>,
+    fail_subscriptions: bool,
 }
 
 /// The recorded fake: keeps the plans it "created" in memory, answers a repeat of the same row
@@ -121,6 +178,50 @@ impl FakeRazorpay {
     /// The plans created so far, in order (a repeat of a row creates nothing).
     pub fn created(&self) -> Vec<PlanSpec> {
         self.with(|s| s.created.clone())
+    }
+
+    /// Makes every subscription call (create and cancel) fail with `FAKE_SUBSCRIPTION_FAILED`, or
+    /// succeed again.
+    pub fn fail_subscriptions(&self, fail: bool) {
+        self.with(|s| s.fail_subscriptions = fail);
+    }
+
+    /// The subscriptions created so far, in order (a repeat of one creates nothing).
+    pub fn subscriptions(&self) -> Vec<SubscriptionSpec> {
+        self.with(|s| s.subscription_specs.clone())
+    }
+
+    /// The Razorpay subscription ids cancelled so far, in order.
+    pub fn cancelled(&self) -> Vec<String> {
+        self.with(|s| s.cancelled.clone())
+    }
+
+    fn create_subscription(&self, spec: &SubscriptionSpec) -> Result<String, BillingError> {
+        self.with(|s| {
+            if s.fail_subscriptions {
+                return Err(BillingError("FAKE_SUBSCRIPTION_FAILED".to_owned()));
+            }
+            if let Some(id) = s.subscriptions.get(&spec.subscription_id) {
+                return Ok(id.clone());
+            }
+            let id = format!("sub_fake_{:03}", s.subscription_specs.len() + 1);
+            s.subscriptions
+                .insert(spec.subscription_id.clone(), id.clone());
+            s.subscription_specs.push(spec.clone());
+            Ok(id)
+        })
+    }
+
+    fn cancel_subscription(&self, razorpay_subscription_id: &str) -> Result<(), BillingError> {
+        self.with(|s| {
+            if s.fail_subscriptions {
+                return Err(BillingError("FAKE_SUBSCRIPTION_FAILED".to_owned()));
+            }
+            if !s.cancelled.iter().any(|c| c == razorpay_subscription_id) {
+                s.cancelled.push(razorpay_subscription_id.to_owned());
+            }
+            Ok(())
+        })
     }
 
     fn create_plan(&self, spec: &PlanSpec) -> Result<String, BillingError> {
@@ -198,9 +299,79 @@ impl RazorpayClient {
                 "cycle": spec.cycle.as_str(),
             },
         });
+        Self::id_of(&self.post("/plans", &body).await?)
+    }
+
+    /// Razorpay bills one plan per subscription and charges add-ons once, so the subscription
+    /// gets a plan priced at the locked total (tier and add-ons, GST included), then subscribes
+    /// to it.
+    async fn create_subscription(&self, spec: &SubscriptionSpec) -> Result<String, BillingError> {
+        let notes = json!({
+            "subscription_id": spec.subscription_id,
+            "branch_id": spec.branch_id,
+            "price_book": spec.book_id,
+            "band": spec.band.as_str(),
+            "tier": spec.item.as_str(),
+            "cycle": spec.cycle.as_str(),
+        });
+        let plan = json!({
+            "period": spec.cycle.as_str(),
+            "interval": 1,
+            "item": {
+                "name": spec.plan_name(),
+                "amount": spec.total_minor,
+                "currency": spec.currency,
+            },
+            "notes": notes,
+        });
+        let plan_id = Self::id_of(&self.post("/plans", &plan).await?)?;
+        let total_count = match spec.cycle {
+            BillingCycle::Monthly => 120,
+            BillingCycle::Yearly => 10,
+        };
+        let sub = json!({
+            "plan_id": plan_id,
+            "total_count": total_count,
+            "customer_notify": 1,
+            "notes": notes,
+        });
+        Self::id_of(&self.post("/subscriptions", &sub).await?)
+    }
+
+    /// Cancels at once, not at the end of the cycle.
+    async fn cancel_subscription(
+        &self,
+        razorpay_subscription_id: &str,
+    ) -> Result<(), BillingError> {
+        let plain = !razorpay_subscription_id.is_empty()
+            && razorpay_subscription_id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !plain {
+            return Err(BillingError("RAZORPAY_BAD_ID".to_owned()));
+        }
+        self.post(
+            &format!("/subscriptions/{razorpay_subscription_id}/cancel"),
+            &json!({ "cancel_at_cycle_end": 0 }),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    fn id_of(json: &Value) -> Result<String, BillingError> {
+        json.get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty() && id.len() <= 64)
+            .map(str::to_owned)
+            .ok_or_else(|| BillingError("RAZORPAY_BAD_ANSWER".to_owned()))
+    }
+
+    /// POSTs `body` to `path` and answers the JSON reply. The error is a stable code: never the
+    /// key, a secret or the response body.
+    async fn post(&self, path: &str, body: &Value) -> Result<Value, BillingError> {
         let res = self
             .client
-            .post(format!("{}/plans", self.base))
+            .post(format!("{}{path}", self.base))
             .basic_auth(&self.key_id, Some(&self.key_secret))
             .header("content-type", "application/json")
             .body(body.to_string())
@@ -217,15 +388,10 @@ impl RazorpayClient {
         if !(200..300).contains(&status) {
             return Err(BillingError(format!("RAZORPAY_HTTP_{status}")));
         }
-        let json: Value = match res.bytes().await {
+        Ok(match res.bytes().await {
             Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or(Value::Null),
             Err(_) => Value::Null,
-        };
-        json.get("id")
-            .and_then(Value::as_str)
-            .filter(|id| !id.is_empty() && id.len() <= 64)
-            .map(str::to_owned)
-            .ok_or_else(|| BillingError("RAZORPAY_BAD_ANSWER".to_owned()))
+        })
     }
 }
 
@@ -250,6 +416,47 @@ impl BillingProvider {
             Self::Fake(_) => "fake",
             Self::Razorpay(_) => "razorpay",
             Self::Manual => "manual",
+        }
+    }
+
+    /// The public key id Razorpay Checkout opens with; `None` while the provider is `manual`.
+    pub fn key_id(&self) -> Option<&str> {
+        match self {
+            Self::Fake(_) => Some(FAKE_KEY_ID),
+            Self::Razorpay(r) => Some(&r.key_id),
+            Self::Manual => None,
+        }
+    }
+
+    /// Creates the Razorpay subscription for one branch.
+    pub async fn create_subscription(
+        &self,
+        spec: &SubscriptionSpec,
+    ) -> Result<SubscriptionResult, BillingError> {
+        match self {
+            Self::Fake(f) => f.create_subscription(spec).map(SubscriptionResult::Created),
+            Self::Razorpay(r) => r
+                .create_subscription(spec)
+                .await
+                .map(SubscriptionResult::Created),
+            Self::Manual => Ok(SubscriptionResult::Deferred),
+        }
+    }
+
+    /// Cancels a Razorpay subscription at once.
+    pub async fn cancel_subscription(
+        &self,
+        razorpay_subscription_id: &str,
+    ) -> Result<CancelResult, BillingError> {
+        match self {
+            Self::Fake(f) => f
+                .cancel_subscription(razorpay_subscription_id)
+                .map(|()| CancelResult::Cancelled),
+            Self::Razorpay(r) => r
+                .cancel_subscription(razorpay_subscription_id)
+                .await
+                .map(|()| CancelResult::Cancelled),
+            Self::Manual => Ok(CancelResult::Deferred),
         }
     }
 
@@ -377,6 +584,70 @@ mod tests {
             unreachable!()
         };
         assert_eq!(f.created().len(), 2);
+    }
+
+    fn sub_spec(id: &str) -> SubscriptionSpec {
+        SubscriptionSpec {
+            subscription_id: id.to_owned(),
+            branch_id: "b1".to_owned(),
+            book_id: "pb_v1".to_owned(),
+            band: Band::In,
+            item: PriceItem::Basic,
+            cycle: BillingCycle::Yearly,
+            currency: "INR".to_owned(),
+            total_minor: 236_000,
+            methods: vec![MandateMethod::Card],
+        }
+    }
+
+    #[tokio::test]
+    async fn the_fake_creates_one_subscription_per_ours_and_records_cancels() {
+        let p = BillingProvider::Fake(FakeRazorpay::new());
+        assert_eq!(p.key_id(), Some("rzp_test_fake"));
+        let a = p.create_subscription(&sub_spec("s1")).await.unwrap();
+        let again = p.create_subscription(&sub_spec("s1")).await.unwrap();
+        let b = p.create_subscription(&sub_spec("s2")).await.unwrap();
+        assert_eq!(a, SubscriptionResult::Created("sub_fake_001".to_owned()));
+        assert_eq!(a, again);
+        assert_eq!(b, SubscriptionResult::Created("sub_fake_002".to_owned()));
+        assert_eq!(
+            p.cancel_subscription("sub_fake_001").await,
+            Ok(CancelResult::Cancelled)
+        );
+        let BillingProvider::Fake(f) = &p else {
+            unreachable!()
+        };
+        assert_eq!(f.subscriptions().len(), 2);
+        assert_eq!(f.cancelled(), ["sub_fake_001"]);
+        f.fail_subscriptions(true);
+        let err = p.create_subscription(&sub_spec("s3")).await.unwrap_err();
+        assert_eq!(err.0, "FAKE_SUBSCRIPTION_FAILED");
+        assert!(p.cancel_subscription("sub_fake_002").await.is_err());
+        assert_eq!(f.cancelled(), ["sub_fake_001"]);
+        f.fail_subscriptions(false);
+        assert!(p.create_subscription(&sub_spec("s3")).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn manual_defers_subscription_calls_and_has_no_key() {
+        let p = BillingProvider::Manual;
+        assert_eq!(p.key_id(), None);
+        assert_eq!(
+            p.create_subscription(&sub_spec("s1")).await,
+            Ok(SubscriptionResult::Deferred)
+        );
+        assert_eq!(
+            p.cancel_subscription("sub_1").await,
+            Ok(CancelResult::Deferred)
+        );
+    }
+
+    #[tokio::test]
+    async fn the_razorpay_client_refuses_an_unsafe_subscription_id_before_any_call() {
+        let c = RazorpayClient::new("rzp_test_1", "s3cret", Some("http://127.0.0.1:1")).unwrap();
+        let err = c.cancel_subscription("sub_1/../x").await.unwrap_err();
+        assert_eq!(err.0, "RAZORPAY_BAD_ID");
+        assert_eq!(BillingProvider::Razorpay(c).key_id(), Some("rzp_test_1"));
     }
 
     #[tokio::test]

@@ -369,6 +369,21 @@ fn the_retention_sweep_is_a_jobs_task() {
 }
 
 #[test]
+fn the_subscription_sweep_is_a_jobs_task() {
+    assert_eq!(
+        parse(
+            args(&["--role", "jobs", "--task", "subscription-sweep"]),
+            env_of(&[])
+        ),
+        Ok(Command::Job(JobConfig {
+            task: Task::SubscriptionSweep,
+            dev_data_dir: None,
+        }))
+    );
+    assert_eq!(Task::SubscriptionSweep.as_str(), "subscription-sweep");
+}
+
+#[test]
 fn jobs_run_one_task_and_read_no_env_at_parse_time() {
     assert_eq!(
         parse(

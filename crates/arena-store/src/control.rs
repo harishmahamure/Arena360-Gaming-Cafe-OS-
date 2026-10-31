@@ -42,6 +42,7 @@ mod setup_codes;
 mod setup_status;
 mod signin;
 mod staff_invites;
+mod subscription;
 mod template_choice;
 mod tenant;
 mod tunnels;
@@ -90,6 +91,7 @@ pub use signin::{
     SigninFactor, SigninFailure,
 };
 pub use staff_invites::{NewStaffInvite, StaffInviteRow};
+pub use subscription::{NewSubscription, ReserveOutcome, Subscription};
 pub use template_choice::TemplateChoice;
 pub use tenant::{Branch, BranchCodeOutcome, BranchProfile, NewTenantBranch, ProgressRow, Tenant};
 pub use tunnels::{BranchTunnel, NewBranchTunnel, TunnelRowState};
@@ -247,6 +249,10 @@ pub const CONTROL_MIGRATIONS: &[ControlMigration] = &[
     ControlMigration {
         version: 34,
         sql: include_str!("../control-migrations/0034_price_books.sql"),
+    },
+    ControlMigration {
+        version: 35,
+        sql: include_str!("../control-migrations/0035_subscriptions.sql"),
     },
 ];
 

@@ -46,6 +46,7 @@ pub mod push;
 pub mod retention;
 pub mod rollups;
 pub mod store;
+pub mod subscription;
 pub mod templates;
 pub mod totp;
 pub mod tunnel;
@@ -60,6 +61,7 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 
 use crate::auth::AuthState;
+use crate::billing::{BillingProvider, FakeRazorpay, provider_from_env};
 use crate::config::{AuthConfig, Config, Database, Role, SmsProviderConfig};
 pub use crate::health::CHECK_INTERVAL;
 use crate::health::{CHECK_TIMEOUT, Reachability};
@@ -241,7 +243,20 @@ pub fn auth_state(
             }
         },
     };
+    let billing = match &cfg.sms {
+        SmsProviderConfig::Fake => Some(BillingProvider::Fake(FakeRazorpay::new())),
+        SmsProviderConfig::Gupshup(_) => match provider_from_env(false, &|k| std::env::var_os(k)) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                tracing::warn!(error = %e, "no billing provider: subscriptions answer 503");
+                None
+            }
+        },
+    };
     let st = Arc::new(AuthState::new(db, sms, clock, cfg));
+    if let Some(b) = billing {
+        let _ = st.billing.set(b);
+    }
     if let Some(t) = tunnels {
         let _ = st.tunnels.set(t);
     }

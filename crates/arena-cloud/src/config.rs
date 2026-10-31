@@ -9,7 +9,7 @@ use std::time::Duration;
 pub const USAGE: &str =
     "usage: arena-cloud --role control|command|builder|all [--listen <addr:port>] [--help] [--version]
        arena-cloud --role control|command|builder|all --dev [--data-dir <dir>] [--listen <loopback addr:port>]
-       arena-cloud --role jobs --task control-backup|command-sweep|offline-watch|retention-sweep [--dev [--data-dir <dir>]]
+       arena-cloud --role jobs --task control-backup|command-sweep|offline-watch|retention-sweep|subscription-sweep [--dev [--data-dir <dir>]]
        arena-cloud ops restore-control (--from-key <key> | --from-file <path|->)
                                        (--identity <file> | --plaintext) [--dev [--data-dir <dir>]]
        arena-cloud ops grant-comp --branch <id> --tier basic|premium --until <YYYY-MM-DD>
@@ -39,6 +39,8 @@ pub const USAGE: &str =
                should be open, and when it is back (run every 5 minutes)
                retention-sweep: delete backups past the plan's retention and GST archives 8 years
                after their financial year (run daily)
+               subscription-sweep: cancel at Razorpay and abandon subscriptions left unpaid for 24 hours
+               (run every 15 minutes; needs the billing keys)
   --dev        local dev mode: gz_control is <data-dir>/gz_control.db (SQLite), no env or
                token needed, loopback only (default 127.0.0.1:8080), dev routes under /v1/dev
   --data-dir   dev data directory, created if missing (default ./.arena-cloud-dev)
@@ -183,6 +185,8 @@ pub enum Task {
     OfflineWatch,
     /// The backup retention sweep (Story 9.15).
     RetentionSweep,
+    /// Abandons subscriptions left unpaid for 24 hours (Story 10.2).
+    SubscriptionSweep,
 }
 
 impl Task {
@@ -192,6 +196,7 @@ impl Task {
             Self::CommandSweep => "command-sweep",
             Self::OfflineWatch => "offline-watch",
             Self::RetentionSweep => "retention-sweep",
+            Self::SubscriptionSweep => "subscription-sweep",
         }
     }
 }
@@ -743,7 +748,7 @@ pub fn parse(
         let task = match task.as_deref() {
             None => {
                 return Err(
-                    "--role jobs needs --task (control-backup, command-sweep, offline-watch or retention-sweep)"
+                    "--role jobs needs --task (control-backup, command-sweep, offline-watch, retention-sweep or subscription-sweep)"
                         .to_owned(),
                 );
             }
@@ -751,6 +756,7 @@ pub fn parse(
             Some("command-sweep") => Task::CommandSweep,
             Some("offline-watch") => Task::OfflineWatch,
             Some("retention-sweep") => Task::RetentionSweep,
+            Some("subscription-sweep") => Task::SubscriptionSweep,
             Some(other) => return Err(format!("unknown --task {other}")),
         };
         if listen.is_some() {

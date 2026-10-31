@@ -62,6 +62,7 @@ pub fn is_deterministic(code: ErrorCode) -> bool {
         | ErrorCode::OneFreeBranch
         | ErrorCode::PriceBookImmutable
         | ErrorCode::BandNotAvailable
+        | ErrorCode::SubscriptionExists
         | ErrorCode::StepNotReady
         | ErrorCode::SetupCodeInvalid
         | ErrorCode::PairCodeInvalid

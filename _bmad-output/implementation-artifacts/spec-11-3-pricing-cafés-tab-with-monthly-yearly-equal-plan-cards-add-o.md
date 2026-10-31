@@ -2,7 +2,7 @@
 title: 'Story 11.3: Pricing — Cafés tab with Monthly · Yearly, equal plan cards, add-ons and FAQ'
 type: 'feature'
 created: '2026-10-31'
-status: 'review'
+status: 'done'
 baseline_revision: '97d7b3c1'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'

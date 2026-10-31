@@ -1,0 +1,38 @@
+---
+import { SiteThemeToggle, t } from "@arena/ui";
+
+const links = [
+  { href: "/help", label: t("site.nav.help") },
+  { href: "/faq", label: t("site.nav.faq") },
+  { href: "/downloads", label: t("site.nav.downloads") },
+];
+const legal = [
+  { href: "/legal/terms", label: t("site.legal.terms") },
+  { href: "/legal/privacy", label: t("site.legal.privacy") },
+  { href: "/legal/data-processing", label: t("site.legal.dpa") },
+  { href: "/legal/ad-policy", label: t("site.legal.ads") },
+];
+---
+
+<footer class="site-footer">
+  <nav aria-label={t("site.nav.footer")}>
+    <ul>
+      {links.map((link) => (
+        <li>
+          <a href={link.href}>{link.label}</a>
+        </li>
+      ))}
+    </ul>
+  </nav>
+  <nav aria-label={t("site.nav.legal")}>
+    <ul>
+      {legal.map((link) => (
+        <li>
+          <a href={link.href}>{link.label}</a>
+        </li>
+      ))}
+    </ul>
+  </nav>
+  <SiteThemeToggle client:load />
+  <p class="rights">{t("site.footer.rights")}</p>
+</footer>

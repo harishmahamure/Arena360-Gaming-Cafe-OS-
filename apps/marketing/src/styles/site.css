@@ -1,0 +1,120 @@
+/* The marketing shell: skip link, sticky header, main column and footer, all on theme tokens. */
+
+body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+  margin: 0;
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--type-web-body-family), system-ui, sans-serif;
+  font-size: var(--type-web-body-size);
+  font-weight: var(--type-web-body-weight);
+  line-height: var(--type-web-body-line-height);
+  overflow-wrap: anywhere;
+}
+
+.skip-link {
+  position: absolute;
+  inset-block-start: var(--space-2);
+  inset-inline-start: var(--space-2);
+  z-index: 200;
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-full);
+  background-color: var(--bg);
+  color: var(--text);
+  transform: translateY(-300%);
+}
+
+.skip-link:focus {
+  transform: none;
+}
+
+.site-header {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 50;
+  border-block-end: 1px solid var(--line);
+  background-color: var(--bg);
+}
+
+main {
+  flex: 1;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 1440px;
+  margin-inline: auto;
+  padding: var(--space-web-section-gap-phone) var(--space-web-gutter-phone);
+}
+
+main:focus {
+  outline: none;
+}
+
+main h1 {
+  margin: 0 0 var(--space-5);
+  font-size: var(--type-web-display-size);
+  font-weight: var(--type-web-display-weight);
+  line-height: var(--type-web-display-line-height);
+}
+
+/* Links in body text are underlined (base.css) and, in light mode, in the accent text colour. */
+[data-theme="light"] main a:not(.link-button) {
+  color: var(--accent-text);
+}
+
+.site-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-5) var(--space-6);
+  box-sizing: border-box;
+  width: 100%;
+  padding: var(--space-6) var(--space-web-gutter-phone);
+  border-block-start: 1px solid var(--line);
+  background-color: var(--bg);
+}
+
+.site-footer ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.site-footer li a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--space-touch-min);
+  min-width: var(--space-touch-min);
+}
+
+.site-footer .rights {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--text-muted);
+}
+
+[data-theme="hc"] .site-footer .rights {
+  color: var(--text);
+}
+
+.not-found-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-block-start: var(--space-5);
+}
+
+@media (min-width: 768px) {
+  main {
+    padding: var(--space-web-section-gap) var(--space-web-gutter);
+  }
+
+  .site-footer {
+    padding-inline: var(--space-web-gutter);
+  }
+}

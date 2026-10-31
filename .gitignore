@@ -27,3 +27,4 @@ apps/kiosk/src-tauri/binaries/
 .arena-cloud-dev/
 
 dev.db
+dist-pseudo/

@@ -1,15 +1,9 @@
 ---
-import "@arena/ui/base.css";
-import { Placeholder, t } from "@arena/ui";
+import { t } from "@arena/ui";
+import Layout from "../layouts/Layout.astro";
 ---
 
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{t("app.name")}</title>
-  </head>
-  <body>
-    <Placeholder surface={t("surface.marketing")} />
-  </body>
-</html>
+<Layout title={t("site.home.title")} description={t("site.home.description")}>
+  <h1>{t("site.home.heading")}</h1>
+  <p>{t("site.home.lede")}</p>
+</Layout>

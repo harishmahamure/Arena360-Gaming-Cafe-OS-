@@ -6,13 +6,17 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
-    "preview": "astro preview"
+    "build:staging": "astro build --mode staging",
+    "preview": "astro preview",
+    "test": "playwright test"
   },
   "dependencies": {
     "@arena/ui": "workspace:*"
   },
   "devDependencies": {
     "@astrojs/svelte": "catalog:",
+    "@axe-core/playwright": "catalog:",
+    "@playwright/test": "catalog:",
     "astro": "catalog:",
     "svelte": "catalog:",
     "typescript": "catalog:"

@@ -35,7 +35,18 @@ export {
 } from "./format.js";
 export { default as CodeField } from "./components/CodeField.svelte";
 export { default as ThemeToggle } from "./components/ThemeToggle.svelte";
-export { THEME_KEY, readThemeChoice, resolveTheme, storeThemeChoice } from "./theme.js";
+export {
+  CONTRAST_KEY,
+  THEME_KEY,
+  readContrastChoice,
+  readThemeChoice,
+  resolveSiteTheme,
+  resolveTheme,
+  storeContrastChoice,
+  storeThemeChoice,
+} from "./theme.js";
+export { default as SiteThemeToggle } from "./components/SiteThemeToggle.svelte";
+export { default as SiteNav } from "./components/SiteNav.svelte";
 export { default as PasswordField } from "./components/PasswordField.svelte";
 export { default as WizardProgress } from "./components/WizardProgress.svelte";
 export { default as PairingCode } from "./components/PairingCode.svelte";
@@ -48,3 +59,5 @@ export {
   planPrice,
   priceFor,
 } from "./pricing.ts";
+export { default as LinkButton } from "./components/LinkButton.svelte";
+export { default as ContrastSwitch } from "./components/ContrastSwitch.svelte";

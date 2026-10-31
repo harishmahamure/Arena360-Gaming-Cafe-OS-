@@ -412,6 +412,12 @@ importers:
       '@astrojs/svelte':
         specifier: 'catalog:'
         version: 9.1.1(astro@7.4.2(esbuild@0.28.2)(yaml@2.9.1))(esbuild@0.28.2)(svelte@5.57.2)(typescript@6.0.3)(yaml@2.9.1)
+      '@axe-core/playwright':
+        specifier: 'catalog:'
+        version: 4.14.0(playwright-core@1.64.1)
+      '@playwright/test':
+        specifier: 'catalog:'
+        version: 1.64.1
       astro:
         specifier: 'catalog:'
         version: 7.4.2(esbuild@0.28.2)(yaml@2.9.1)

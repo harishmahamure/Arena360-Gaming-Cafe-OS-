@@ -1,0 +1,71 @@
+---
+import "@arena/ui/base.css";
+import "../styles/site.css";
+import { SiteNav, t } from "@arena/ui";
+import SiteFooter from "../components/SiteFooter.astro";
+import { canonicalUrl, isStaging, startUrl } from "../lib/site";
+
+interface Props {
+  title: string;
+  description: string;
+}
+
+const { title, description } = Astro.props;
+const canonical = canonicalUrl(Astro.url.pathname);
+const current = Astro.url.pathname;
+---
+
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    {isStaging() && <meta name="robots" content="noindex, nofollow" />}
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content={t("app.name")} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta name="twitter:card" content="summary" />
+    <script is:inline>
+      // Before first paint: the colour mode (`arena.theme`: light, dark or absent for System) and
+      // the High contrast switch (`arena.contrast`: on, off or absent, which follows
+      // `prefers-contrast: more`). Repeats `resolveSiteTheme` in @arena/ui theme.js.
+      (function () {
+        var mode = "system";
+        var contrast = null;
+        try {
+          mode = localStorage.getItem("arena.theme") || "system";
+          contrast = localStorage.getItem("arena.contrast");
+        } catch (e) {}
+        var media = function (q) {
+          return !!window.matchMedia && window.matchMedia(q).matches;
+        };
+        var hc =
+          mode === "hc" ||
+          (contrast === "on"
+            ? true
+            : contrast === "off"
+              ? false
+              : media("(prefers-contrast: more)"));
+        var dark = mode === "dark" || (mode !== "light" && media("(prefers-color-scheme: dark)"));
+        document.documentElement.setAttribute("data-theme", hc ? "hc" : dark ? "dark" : "light");
+      })();
+    </script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">
+      {t("site.skip")}
+    </a>
+    <header class="site-header">
+      <SiteNav client:load startHref={startUrl()} current={current} />
+    </header>
+    <main id="main" tabindex="-1">
+      <slot />
+    </main>
+    <SiteFooter />
+  </body>
+</html>

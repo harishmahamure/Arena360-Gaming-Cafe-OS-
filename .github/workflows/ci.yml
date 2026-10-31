@@ -346,7 +346,7 @@ jobs:
           retention-days: 14
 
   a11y:
-    name: a11y (gallery, hub shell, kiosk ui, onboarding)
+    name: a11y (gallery, hub shell, kiosk ui, onboarding, marketing)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -370,6 +370,7 @@ jobs:
       - run: pnpm --filter @arena/onboarding check
       - run: pnpm --filter @arena/onboarding build
       - run: pnpm --filter @arena/onboarding test
+      - run: pnpm --filter @arena/marketing test
       - name: Upload the Playwright report
         if: failure()
         uses: actions/upload-artifact@v4
@@ -384,6 +385,8 @@ jobs:
             apps/kiosk/test-results/
             apps/onboarding/playwright-report/
             apps/onboarding/test-results/
+            apps/marketing/playwright-report/
+            apps/marketing/test-results/
           retention-days: 14
 
   # Story 1.22: every Epic 1 flow inside a network namespace with no route out, under strace

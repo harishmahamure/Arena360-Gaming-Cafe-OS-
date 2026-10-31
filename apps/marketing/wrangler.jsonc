@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "arena-marketing",
+  "compatibility_date": "2026-10-01",
+  // Static assets only (no Worker script): `pnpm build` for production, `pnpm build:staging` for staging.
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "404-page",
+  },
+  "routes": [{ "pattern": "arena360.cloud", "custom_domain": true }],
+  "env": {
+    "staging": {
+      "name": "arena-marketing-staging",
+      "routes": [{ "pattern": "staging.arena360.cloud", "custom_domain": true }],
+    },
+  },
+}

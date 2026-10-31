@@ -1,0 +1,13 @@
+---
+import { LinkButton, t } from "@arena/ui";
+import Layout from "../layouts/Layout.astro";
+---
+
+<Layout title={t("site.notfound.title")} description={t("site.notfound.description")}>
+  <h1>{t("site.notfound.heading")}</h1>
+  <p>{t("site.notfound.body")}</p>
+  <div class="not-found-links">
+    <LinkButton href="/" label="site.notfound.home" />
+    <LinkButton href="/help" label="site.notfound.help" variant="secondary" />
+  </div>
+</Layout>

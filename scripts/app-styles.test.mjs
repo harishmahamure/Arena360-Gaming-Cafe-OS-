@@ -7,10 +7,10 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const IMPORT = /^\s*import\s+["']@arena\/ui\/base\.css["'];?\s*$/m;
 
-/** The root entry of each app: SvelteKit's root layout, or Astro's index page. */
+/** The root entry of each app: SvelteKit's root layout, or the Astro layout. */
 export function rootEntry(app) {
   return app === "marketing"
-    ? `apps/${app}/src/pages/index.astro`
+    ? `apps/${app}/src/layouts/Layout.astro`
     : `apps/${app}/src/routes/+layout.svelte`;
 }
 
